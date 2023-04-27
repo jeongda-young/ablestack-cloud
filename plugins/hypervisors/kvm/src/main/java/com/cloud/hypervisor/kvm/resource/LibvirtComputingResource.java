@@ -842,8 +842,6 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
             s_logger.error("tpm properties file not found due to: " + e.getLocalizedMessage());
         }
 
-        params.putIfAbsent("guest.cpu.mode", "host-passthrough");
-
         _storage = new JavaStorageLayer();
         _storage.configure("StorageLayer", params);
 
@@ -1177,6 +1175,9 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
             }
             params.put("guest.cpu.mode", _guestCpuMode);
             params.put("guest.cpu.model", _guestCpuModel);
+        } else {
+            params.put("guest.cpu.mode", "host-passthrough");
+            _guestCpuMode = "host-passthrough";
         }
 
         final String cpuFeatures = AgentPropertiesFileHandler.getPropertyValue(AgentProperties.GUEST_CPU_FEATURES);
@@ -3327,7 +3328,7 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
     }
 
     protected String getIoUringCheckCommand() {
-        String[] qemuPaths = { "/usr/bin/qemu-system-x86_64", "/usr/libexec/qemu-kvm", "/usr/bin/qemu-kvm" };
+        String[] qemuPaths = { "/usr/local/bin/qemu-system-x86_64" };
         for (String qemuPath : qemuPaths) {
             File file = new File(qemuPath);
             if (file.exists()) {
@@ -4197,7 +4198,7 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
             return DiskDef.DiskBus.SCSI;
         } else if (platformEmulator.contains("Ubuntu") ||
             StringUtils.startsWithAny(platformEmulator,
-                        "Fedora", "CentOS", "Red Hat Enterprise Linux", "Debian GNU/Linux", "FreeBSD", "Oracle", "Other PV", "Windows")) {
+                        "Fedora", "CentOS", "Red Hat Enterprise Linux", "Debian GNU/Linux", "FreeBSD", "Oracle", "Other PV", "Windows", "Rocky”, “Alma")) {
             return DiskDef.DiskBus.SCSI;
         } else if (isUefiEnabled && StringUtils.startsWithAny(platformEmulator, "Other")) {
             return DiskDef.DiskBus.SATA;
