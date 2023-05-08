@@ -16,48 +16,29 @@
 // under the License.
 
 import { shallowRef, defineAsyncComponent } from 'vue'
-import store from '@/store'
 
 export default {
   name: 'ssv',
   title: 'label.shared storage vm',
-  icon: 'thunderbolt-outlined',
-  docHelp: 'adminguide/systemvm.html',
-  permission: ['listSystemVms'],
-  columns: ['name', 'state', 'agentstate', 'systemvmtype', 'publicip', 'privateip', 'linklocalip', 'hostname', 'zonename'],
-  details: ['name', 'id', 'agentstate', 'systemvmtype', 'publicip', 'privateip', 'linklocalip', 'gateway', 'hostname', 'zonename', 'created', 'activeviewersessions', 'isdynamicallyscalable', 'hostcontrolstate'],
-  resourceType: 'SystemVm',
-  tabs: [
-    {
-      name: 'details',
-      component: shallowRef(defineAsyncComponent(() => import('@/components/view/DetailsTab.vue')))
-    },
-    {
-      name: 'metrics',
-      resourceType: 'SystemVm',
-      component: shallowRef(defineAsyncComponent(() => import('@/components/view/StatsTab.vue'))),
-      show: () => { return store.getters.features.instancesstatsuseronly === false }
-    },
-    {
-      name: 'volume',
-      component: shallowRef(defineAsyncComponent(() => import('@/components/view/VolumesTab.vue')))
-    },
-    {
-      name: 'nics',
-      component: shallowRef(defineAsyncComponent(() => import('@/views/network/NicsTable.vue')))
-    },
-    {
-      name: 'events',
-      resourceType: 'SystemVm',
-      component: shallowRef(defineAsyncComponent(() => import('@/components/view/EventsTab.vue'))),
-      show: () => { return 'listEvents' in store.getters.apis }
-    },
-    {
-      name: 'comments',
-      component: shallowRef(defineAsyncComponent(() => import('@/components/view/AnnotationsTab.vue')))
-    }
-  ],
+  icon: 'DeploymentUnitOutlined',
+  docHelp: 'adminguide/ssv.html',
+  permission: ['ListAdminSSV'],
+  columns: ['name', 'state', 'networktype', 'publicip', 'serviceofferingname', 'hostname', 'zonename'],
+  details: ['name', 'id', 'agentstate', 'publicip', 'privateip', 'gateway', 'hostname', 'zonename', 'created', 'activeviewersessions', 'hostcontrolstate'],
+  resourceType: 'AdminSSV',
+  tabs: [{
+    component: shallowRef(defineAsyncComponent(() => import('@/views/compute/KubernetesServiceTab copy.vue')))
+  }],
   actions: [
+    {
+      api: 'createVolume',
+      icon: 'plus-outlined',
+      docHelp: '',
+      label: 'label.Create.SSV.VM',
+      listView: true,
+      popup: true,
+      component: shallowRef(defineAsyncComponent(() => import('@/views/network/CreateVolume.vue')))
+    },
     {
       api: 'startSystemVm',
       icon: 'caret-right-outlined',

@@ -442,56 +442,151 @@ export default {
       ]
     },
     {
-      name: 'backup',
-      title: 'label.backup',
-      icon: 'cloud-upload-outlined',
-      permission: ['listBackups'],
-      columns: [{ name: (record) => { return record.virtualmachinename } }, 'virtualmachinename', 'status', 'type', 'created', 'account', 'zone'],
-      details: ['virtualmachinename', 'id', 'type', 'externalid', 'size', 'virtualsize', 'volumes', 'backupofferingname', 'zone', 'account', 'domain', 'created'],
+      name: 'ssv',
+      title: 'label.shared storage vm',
+      icon: 'DeploymentUnitOutlined',
+      docHelp: 'adminguide/ssv.html',
+      permission: ['ListAdminSSV'],
+      columns: ['name', 'state', 'networktype', 'publicip', 'serviceofferingname', 'hostname', 'zonename'],
+      details: ['name', 'id', 'agentstate', 'publicip', 'privateip', 'gateway', 'hostname', 'zonename', 'created', 'activeviewersessions', 'hostcontrolstate'],
+      resourceType: 'AdminSSV',
+      tabs: [{
+        component: shallowRef(defineAsyncComponent(() => import('@/views/compute/KubernetesServiceTab copy.vue')))
+      }],
       actions: [
         {
-          api: 'restoreBackup',
-          icon: 'sync-outlined',
-          docHelp: 'adminguide/virtual_machines.html#restoring-vm-backups',
-          label: 'label.backup.restore',
-          message: 'message.backup.restore',
-          dataView: true,
-          show: (record) => { return record.state !== 'Destroyed' }
-        },
-        {
-          api: 'restoreVolumeFromBackupAndAttachToVM',
-          icon: 'paper-clip-outlined',
-          label: 'label.backup.attach.restore',
-          message: 'message.backup.attach.restore',
-          dataView: true,
-          show: (record) => { return record.state !== 'Destroyed' },
+          api: 'createVolume',
+          icon: 'plus-outlined',
+          docHelp: '',
+          label: 'label.Create.SSV.VM',
+          listView: true,
           popup: true,
-          component: shallowRef(defineAsyncComponent(() => import('@/views/storage/RestoreAttachBackupVolume.vue')))
+          component: shallowRef(defineAsyncComponent(() => import('@/views/network/CreateVolume.vue')))
         },
         {
-          api: 'removeVirtualMachineFromBackupOffering',
-          icon: 'scissor-outlined',
-          label: 'label.backup.offering.remove',
-          message: 'message.backup.offering.remove',
+          api: 'startSystemVm',
+          icon: 'caret-right-outlined',
+          label: 'label.action.start.systemvm',
+          message: 'message.action.start.systemvm',
           dataView: true,
-          show: (record) => { return record.state !== 'Destroyed' },
-          args: ['forced', 'virtualmachineid'],
+          show: (record) => { return record.state === 'Stopped' },
+          groupAction: true,
+          popup: true,
+          groupMap: (selection) => { return selection.map(x => { return { id: x } }) }
+        },
+        {
+          api: 'stopSystemVm',
+          icon: 'poweroff-outlined',
+          label: 'label.action.stop.systemvm',
+          message: 'message.action.stop.systemvm',
+          dataView: true,
+          show: (record) => { return record.state === 'Running' },
+          args: ['forced'],
+          groupAction: true,
+          popup: true,
+          groupMap: (selection, values) => { return selection.map(x => { return { id: x, forced: values.forced } }) }
+        },
+        {
+          api: 'rebootSystemVm',
+          icon: 'sync-outlined',
+          label: 'label.action.reboot.systemvm',
+          message: 'message.action.reboot.systemvm',
+          dataView: true,
+          show: (record) => { return record.state === 'Running' },
+          args: ['forced'],
+          groupAction: true,
+          popup: true,
+          groupMap: (selection, values) => { return selection.map(x => { return { id: x, forced: values.forced } }) }
+        },
+        {
+          api: 'scaleSystemVm',
+          icon: 'arrows-alt-outlined',
+          label: 'label.change.service.offering',
+          message: 'message.confirm.scale.up.system.vm',
+          dataView: true,
+          show: (record) => { return record.state === 'Running' && record.hypervisor === 'VMware' || record.state === 'Stopped' },
+          args: ['serviceofferingid'],
           mapping: {
-            forced: {
-              value: (record) => { return true }
-            },
-            virtualmachineid: {
-              value: (record) => { return record.virtualmachineid }
+            serviceofferingid: {
+              api: 'listServiceOfferings',
+              params: (record) => { return { virtualmachineid: record.id, issystem: true, systemvmtype: record.systemvmtype } }
             }
           }
         },
         {
-          api: 'deleteBackup',
-          icon: 'delete-outlined',
-          label: 'label.delete.backup',
-          message: 'message.delete.backup',
+          api: 'migrateSystemVm',
+          icon: 'drag-outlined',
+          label: 'label.action.migrate.systemvm',
+          message: 'message.migrate.systemvm.confirm',
           dataView: true,
-          show: (record) => { return record.state !== 'Destroyed' }
+          show: (record, store) => { return record.state === 'Running' && ['Admin'].includes(store.userInfo.roletype) },
+          disabled: (record) => { return record.hostcontrolstate === 'Offline' },
+          component: shallowRef(defineAsyncComponent(() => import('@/views/compute/MigrateWizard'))),
+          popup: true
+        },
+        {
+          api: 'migrateSystemVm',
+          icon: 'drag-outlined',
+          label: 'label.action.migrate.systemvm.to.ps',
+          dataView: true,
+          show: (record, store) => { return ['Stopped'].includes(record.state) && ['VMware', 'KVM'].includes(record.hypervisor) },
+          disabled: (record) => { return record.hostcontrolstate === 'Offline' },
+          component: shallowRef(defineAsyncComponent(() => import('@/views/compute/MigrateVMStorage'))),
+          popup: true
+        },
+        {
+          api: 'runDiagnostics',
+          icon: 'reconciliation-outlined',
+          label: 'label.action.run.diagnostics',
+          dataView: true,
+          show: (record) => { return record.state === 'Running' },
+          args: ['targetid', 'type', 'ipaddress', 'params'],
+          mapping: {
+            targetid: {
+              value: (record) => { return record.id }
+            },
+            type: {
+              options: ['ping', 'traceroute', 'arping']
+            }
+          },
+          response: (result) => { return result && result.diagnostics ? `<strong>Output</strong>:<br/>${result.diagnostics.stdout}<br/><strong>Error</strong>: ${result.diagnostics.stderr}<br/><strong>Exit Code</strong>: ${result.diagnostics.exitcode}` : 'Invalid response' }
+        },
+        {
+          api: 'getDiagnosticsData',
+          icon: 'download-outlined',
+          label: 'label.action.get.diagnostics',
+          dataView: true,
+          show: (record) => { return record.state === 'Running' },
+          args: ['targetid', 'files'],
+          mapping: {
+            targetid: {
+              value: (record) => { return record.id }
+            }
+          },
+          response: (result) => { return result && result.diagnostics && result.diagnostics.url ? `Please click the link to download the retrieved diagnostics: <p><a href='${result.diagnostics.url}'>${result.diagnostics.url}</a></p>` : 'Invalid response' }
+        },
+        {
+          api: 'patchSystemVm',
+          icon: 'diff-outlined',
+          label: 'label.action.patch.systemvm',
+          message: 'message.action.patch.systemvm',
+          dataView: true,
+          show: (record) => { return ['Running'].includes(record.state) },
+          args: ['forced'],
+          groupAction: true,
+          popup: true,
+          groupMap: (selection) => { return selection.map(x => { return { id: x } }) }
+        },
+        {
+          api: 'destroySystemVm',
+          icon: 'delete-outlined',
+          label: 'label.action.destroy.systemvm',
+          message: 'message.action.destroy.systemvm',
+          dataView: true,
+          show: (record) => { return ['Running', 'Error', 'Stopped'].includes(record.state) },
+          groupAction: true,
+          popup: true,
+          groupMap: (selection) => { return selection.map(x => { return { id: x } }) }
         }
       ]
     }
