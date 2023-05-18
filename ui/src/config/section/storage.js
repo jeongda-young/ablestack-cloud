@@ -443,145 +443,56 @@ export default {
     },
     {
       name: 'ssv',
-      title: 'label.shared storage vm',
+      title: 'label.shared.storage.vm',
       icon: 'DeploymentUnitOutlined',
-      docHelp: 'adminguide/ssv.html',
-      permission: ['ListAdminSSV'],
-      columns: ['name', 'state', 'networktype', 'publicip', 'serviceofferingname', 'hostname', 'zonename'],
+      docHelp: '',
+      permission: ['listUserSSV'],
+      columns: ['name', 'state', 'displayname', 'sharedstoragevmtype', 'serviceofferingname', 'hostname', 'zonename'],
       details: ['name', 'id', 'agentstate', 'publicip', 'privateip', 'gateway', 'hostname', 'zonename', 'created', 'activeviewersessions', 'hostcontrolstate'],
-      resourceType: 'AdminSSV',
-      tabs: [{
-        component: shallowRef(defineAsyncComponent(() => import('@/views/compute/KubernetesServiceTab copy.vue')))
-      }],
+      searchFilters: ['name', 'domainid', 'account', 'tags'],
+      resourceType: 'listUserSSV',
+      tabs: [
+        {
+          component: shallowRef(defineAsyncComponent(() => import('@/views/infra/SsvTabs.vue')))
+        }
+      ],
       actions: [
         {
-          api: 'createVolume',
+          api: 'createSSV',
           icon: 'plus-outlined',
           docHelp: '',
           label: 'label.Create.SSV.VM',
           listView: true,
           popup: true,
-          component: shallowRef(defineAsyncComponent(() => import('@/views/network/CreateVolume.vue')))
+          component: shallowRef(defineAsyncComponent(() => import('@/views/infra/CreateSsv.vue')))
         },
         {
-          api: 'startSystemVm',
+          api: 'startSSV',
           icon: 'caret-right-outlined',
-          label: 'label.action.start.systemvm',
-          message: 'message.action.start.systemvm',
+          label: 'label.action.start.shared.storage.vm',
+          message: 'message.action.start.shared.storage.vm',
           dataView: true,
-          show: (record) => { return record.state === 'Stopped' },
           groupAction: true,
           popup: true,
-          groupMap: (selection) => { return selection.map(x => { return { id: x } }) }
+          groupMap: (selection) => { return selection.map(x => { return { id: x } }) },
+          show: (record) => { return ['Stopped'].includes(record.state) }
         },
         {
-          api: 'stopSystemVm',
+          api: 'stopSSV',
           icon: 'poweroff-outlined',
-          label: 'label.action.stop.systemvm',
-          message: 'message.action.stop.systemvm',
+          label: 'label.action.stop.shared.storage.vm',
+          message: 'message.action.stop.shared.storage.vm',
           dataView: true,
-          show: (record) => { return record.state === 'Running' },
-          args: ['forced'],
           groupAction: true,
           popup: true,
-          groupMap: (selection, values) => { return selection.map(x => { return { id: x, forced: values.forced } }) }
+          groupMap: (selection, values) => { return selection.map(x => { return { id: x, forced: values.forced } }) },
+          show: (record) => { return ['Running'].includes(record.state) }
         },
         {
-          api: 'rebootSystemVm',
-          icon: 'sync-outlined',
-          label: 'label.action.reboot.systemvm',
-          message: 'message.action.reboot.systemvm',
-          dataView: true,
-          show: (record) => { return record.state === 'Running' },
-          args: ['forced'],
-          groupAction: true,
-          popup: true,
-          groupMap: (selection, values) => { return selection.map(x => { return { id: x, forced: values.forced } }) }
-        },
-        {
-          api: 'scaleSystemVm',
-          icon: 'arrows-alt-outlined',
-          label: 'label.change.service.offering',
-          message: 'message.confirm.scale.up.system.vm',
-          dataView: true,
-          show: (record) => { return record.state === 'Running' && record.hypervisor === 'VMware' || record.state === 'Stopped' },
-          args: ['serviceofferingid'],
-          mapping: {
-            serviceofferingid: {
-              api: 'listServiceOfferings',
-              params: (record) => { return { virtualmachineid: record.id, issystem: true, systemvmtype: record.systemvmtype } }
-            }
-          }
-        },
-        {
-          api: 'migrateSystemVm',
-          icon: 'drag-outlined',
-          label: 'label.action.migrate.systemvm',
-          message: 'message.migrate.systemvm.confirm',
-          dataView: true,
-          show: (record, store) => { return record.state === 'Running' && ['Admin'].includes(store.userInfo.roletype) },
-          disabled: (record) => { return record.hostcontrolstate === 'Offline' },
-          component: shallowRef(defineAsyncComponent(() => import('@/views/compute/MigrateWizard'))),
-          popup: true
-        },
-        {
-          api: 'migrateSystemVm',
-          icon: 'drag-outlined',
-          label: 'label.action.migrate.systemvm.to.ps',
-          dataView: true,
-          show: (record, store) => { return ['Stopped'].includes(record.state) && ['VMware', 'KVM'].includes(record.hypervisor) },
-          disabled: (record) => { return record.hostcontrolstate === 'Offline' },
-          component: shallowRef(defineAsyncComponent(() => import('@/views/compute/MigrateVMStorage'))),
-          popup: true
-        },
-        {
-          api: 'runDiagnostics',
-          icon: 'reconciliation-outlined',
-          label: 'label.action.run.diagnostics',
-          dataView: true,
-          show: (record) => { return record.state === 'Running' },
-          args: ['targetid', 'type', 'ipaddress', 'params'],
-          mapping: {
-            targetid: {
-              value: (record) => { return record.id }
-            },
-            type: {
-              options: ['ping', 'traceroute', 'arping']
-            }
-          },
-          response: (result) => { return result && result.diagnostics ? `<strong>Output</strong>:<br/>${result.diagnostics.stdout}<br/><strong>Error</strong>: ${result.diagnostics.stderr}<br/><strong>Exit Code</strong>: ${result.diagnostics.exitcode}` : 'Invalid response' }
-        },
-        {
-          api: 'getDiagnosticsData',
-          icon: 'download-outlined',
-          label: 'label.action.get.diagnostics',
-          dataView: true,
-          show: (record) => { return record.state === 'Running' },
-          args: ['targetid', 'files'],
-          mapping: {
-            targetid: {
-              value: (record) => { return record.id }
-            }
-          },
-          response: (result) => { return result && result.diagnostics && result.diagnostics.url ? `Please click the link to download the retrieved diagnostics: <p><a href='${result.diagnostics.url}'>${result.diagnostics.url}</a></p>` : 'Invalid response' }
-        },
-        {
-          api: 'patchSystemVm',
-          icon: 'diff-outlined',
-          label: 'label.action.patch.systemvm',
-          message: 'message.action.patch.systemvm',
-          dataView: true,
-          show: (record) => { return ['Running'].includes(record.state) },
-          args: ['forced'],
-          groupAction: true,
-          popup: true,
-          groupMap: (selection) => { return selection.map(x => { return { id: x } }) }
-        },
-        {
-          api: 'destroySystemVm',
+          api: 'deleteSSV',
           icon: 'delete-outlined',
-          label: 'label.action.destroy.systemvm',
-          message: 'message.action.destroy.systemvm',
+          label: 'label.action.destroy.shared.storage.vm',
+          message: 'message.action.destroy.shared.storage.vm',
           dataView: true,
           show: (record) => { return ['Running', 'Error', 'Stopped'].includes(record.state) },
           groupAction: true,
