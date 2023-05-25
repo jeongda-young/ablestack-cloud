@@ -145,10 +145,7 @@
       <router-link :to="{ path: $route.path + '/' + record.id }">{{ text }}</router-link>
     </template>
     <template #ssvmname="{record}">
-      {{ record.sharedstoragevm[0].displayname }}
-    </template>
-    <template #templatename="{record}">
-      {{ record.sharedstoragevm[0].templatename }}
+      {{ record.sharedstoragevm === undefined ? '': record.sharedstoragevm[0].displayname }}
     </template>
     <template #username="{text, record}">
       <span v-if="$showIcon() && !['vm'].includes($route.path.split('/')[1])" style="margin-right: 5px">

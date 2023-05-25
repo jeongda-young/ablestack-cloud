@@ -51,9 +51,6 @@
               <router-link :to="{ path: '/template/' + dctemplate.id }">{{ dctemplate.name }}</router-link>
             </div>
           </div>
-          <div v-else-if="$route.meta.name === 'sharedstoragevmtemplate' && item === 'templatename'">
-            <router-link :to="{ path: '/template/' + dataResource.templateid }">{{ dataResource.templatename }} </router-link>
-          </div>
           <div v-else-if="$route.meta.name === 'controllertemplate' && item === 'workstemplate'">
             <div v-for="(workstemplate, idx) in dataResource[item]" :key="idx">
               <router-link :to="{ path: '/template/' + workstemplate.id }">{{ workstemplate.name }}</router-link>

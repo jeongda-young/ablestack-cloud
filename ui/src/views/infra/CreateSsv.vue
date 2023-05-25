@@ -77,8 +77,7 @@
             </template>
             <a-radio-group
               v-model:value="form.sharedstoragevmtype"
-              buttonStyle="solid"
-              @change="selected => { handleAccessTypeChange(selected.target.value) }">
+              buttonStyle="solid">
               <a-radio-button value="NFS">
                 {{ $t('label.nfs') }}
               </a-radio-button>

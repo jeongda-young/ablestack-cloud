@@ -448,7 +448,7 @@ export default {
       docHelp: '',
       permission: ['listUserSSV'],
       columns: ['name', 'state', 'ssvmname', 'sharedstoragevmtype', 'serviceofferingname', 'hostname', 'zonename'],
-      details: ['name', 'id', 'state', 'sharedstoragevmtype', 'templatename', 'hostname', 'zonename', 'created', 'activeviewersessions', 'hostcontrolstate'],
+      details: ['name', 'id', 'state', 'sharedstoragevmtype', 'hostname', 'zonename', 'created', 'activeviewersessions', 'hostcontrolstate'],
       searchFilters: ['name', 'domainid', 'account', 'tags'],
       resourceType: 'listUserSSV',
       tabs: [
@@ -468,10 +468,9 @@ export default {
         },
         {
           api: 'createVolume',
-          icon: 'plus-outlined',
-          docHelp: 'adminguide/storage.html#creating-a-new-volume',
+          icon: 'fullscreen-outlined',
           label: 'label.action.create.volume',
-          listView: true,
+          dataView: true,
           popup: true,
           component: shallowRef(defineAsyncComponent(() => import('@/views/storage/CreateVolume.vue')))
         },

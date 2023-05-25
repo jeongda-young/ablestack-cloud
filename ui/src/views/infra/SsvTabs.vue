@@ -26,101 +26,293 @@
         <DetailsTab :resource="resource" :loading="loading" />
       </a-tab-pane>
       <a-tab-pane :tab="$t('label.access')" key="access">
-        <!-- <a-card :title="$t('label.nfs')" :loading="versionLoading">
-          <div v-if="NFSConfig !== ''">
-            <a-textarea :value="NFSConfig" :rows="5" readonly />
-            <div :span="24" class="action-button">
-            </div>
-          </div>
-          <div v-else>
-            <p>{{ $t('message.kubeconfig.cluster.not.available') }}</p>
-          </div>
-        </a-card> -->
-        <a-card :title="$t('label.nfs')" :loading="versionLoading">
+        <div v-if="resource.sharedstoragevmtype =='NFS'">
+          <a-card :title="$t('label.nfs.host')" :loading="versionLoading">
+            <a-timeline>
+              <a-timeline-item>
+                  <p v-html="$t('label.nfs.package')"></p>
+                  <code><b>sudo dnf install -y nfs-utils nfs4-acl-tools</b></code>
+              </a-timeline-item>
+              <a-timeline-item>
+              <p v-html="$t('label.nfs.server.service')"></p>
+                  <code><b>mkdir -p /var/nfs/share</b></code>
+                  <code><b>echo "/var/nfs/share 10.10.254.136(rw,sync,no_subtree_check)" >> /etc/exports</b></code><br>
+                  <code><b>echo "/home 10.10.254.136(rw,sync,no_root_squash,no_subtree_check)" >> /etc/exports</b></code><br>
+                  <code><b>echo "/dev/sdb1 /data1 10.10.254.136(rw,sync,no_subtree_check)" >> /etc/exports</b></code><br>
+                  <code><b>systemctl enable nfs-server.service</b></code>
+              </a-timeline-item>
+              <a-timeline-item>
+                <p v-html="$t('label.nfs.firewall')"></p>
+                <code><b>firewall-cmd --zone=public --permanent --add-service={nfs,mountd,rpc-bind}</b></code><br>
+                <code><b>firewall-cmd --reload</b></code>
+            </a-timeline-item>
+              <a-timeline-item>
+              <p v-html="$t('label.use.nfs.reboot')"></p>
+                <p>
+                  <code><b>systemctl enable nfs-server.service</b></code>
+                  <code><b>systemctl start nfs-server.service</b></code>
+                </p>
+              </a-timeline-item>
+            </a-timeline>
+          </a-card>
+          <a-card :title="$t('label.nfs.client')">
+            <a-timeline>
+              <a-timeline-item>
+                <p>
+                  {{ $t('label.nfs-utils.nfs4-acl-tools') }}<br><br>
+                  <code><b>sudo dnf install nfs-utils nfs4-acl-tools -y</b></code>
+                </p>
+              </a-timeline-item>
+              <a-timeline-item>
+                <p>
+                  {{ $t('label.nfs.mount.dir') }}<br><br>
+                  <code><b>sudo mkdir -p /nfs/share</b></code>
+                    <code><b>sudo mkdir -p /nfs/home</b></code>
+                </p>
+              </a-timeline-item>
+              <a-timeline-item>
+                <p>
+                  {{ $t('label.nfs.mount') }}<br><br>
+                  <code><b>sudo mount host_ip:/var/nfs/share /nfs/share</b></code>
+                  <code><b>sudo mount host_ip:/home /nfs/home</b></code>
+                </p>
+              </a-timeline-item>
+              <a-timeline-item>
+                <p>
+                  {{ $t('label.nfs.test.file') }}<br><br>
+                  <code><b>sudo touch /nfs/share/test.txt</b></code>
+                  <code><b>sudo touch /nfs/home/home.txt</b></code>
+                </p>
+              </a-timeline-item>
+              <a-timeline-item>
+                <p>
+                  {{ $t('label.nfs.client.fstab') }}<br><br>
+                  <code><b>echo "host_ip:/var/nfs/share /nfs/share nfs auto,nofail,noatime,nolock,intr,tcp,actimeo=1800 0 0" /etc/fstab</b></code><br><br>
+                  <code><b>echo "host_ip:/home /nfs/home nfs auto,nofail,noatime,nolock,intr,tcp,actimeo=1800 0 0" /etc/fstab</b></code>
+                </p>
+              </a-timeline-item>
+              <a-timeline-item>
+              <p>{{ $t('label.nfs.client.etc') }}</p>
+                <p>
+                  {{ $t('label.nfs.umount') }}: <code><b>umount_nfs</b></code>
+                </p>
+              </a-timeline-item>
+            </a-timeline>
+          </a-card>
+          <a-card :title="$t('label.disk.mount')">
+            <a-timeline>
+              <a-timeline-item>
+          <p v-html="$t('label.mount.parted')"></p>
+            <code><b>parted /dev/sdb mklabel gpt mkpart primary 0% 100%</b></code><br><br>
+              </a-timeline-item>
+              <a-timeline-item>
+          <p v-html="$t('label.nfs.mount')"></p>
+            <code><b>sudo mkfs.xfs /dev/sdb1</b></code><br>
+            <code><b>sudo mkdir /data1</b></code><br>
+            <code><b>sudo mount /dev/sdb1 /data1</b></code><br><br>
+            </a-timeline-item>
+            <a-timeline-item>
+          <p v-html="$t('label.mkfs.mount')"></p>
+            <code><b>echo "/mnt/data *(rw,sync,no_root_squash)" >> /etc/exports</b></code><br>
+            <code><b>exportfs -a</b></code><br><br>
+            </a-timeline-item>
+            <a-timeline-item>
+          <p v-html="$t('label.nfs.restart')"></p>
+            <code><b>systemctl start nfs-utils</b></code><br>
+            <code><b>systemctl enable nfs-utils</b></code><br>
+            <code><b>systemctl restart nfs-utils</b></code>
+            </a-timeline-item>
+            </a-timeline>
+          </a-card>
+      </div>
+      <div v-if="resource.sharedstoragevmtype =='SMB'">
+        <a-card :title="$t('label.smb.host')" :loading="versionLoading">
           <a-timeline>
             <a-timeline-item>
-              <p v-html="$t('label.nfs.service')"></p>
-                <p v-html="$t('label.nfs.Package')"></p>
-                <p>sudo dnf install -y nfs-utils nfs4-acl-tools</p>
+                <p v-html="$t('label.smb.package')"></p>
+                <code><b>dnf -y install samba</b></code>
             </a-timeline-item>
             <a-timeline-item>
-            <p v-html="$t('label.nfs.server.service')"></p>
-                <p>mkdir -p /var/nfs/share</p>
-                <p>echo "/var/nfs/share 10.10.254.136(rw,sync,no_subtree_check)" >> /etc/exports</p>
-                <p>echo "/home 10.10.254.136(rw,sync,no_root_squash,no_subtree_check)" >> /etc/exports</p>
-                <p>echo "/dev/sdb1 /data1 10.10.254.136(rw,sync,no_subtree_check)" >> /etc/exports</p>
-                <p>exportfs -arv</p>
+            <p v-html="$t('label.nfs.folder')"></p>
+                <code><b>mkdir -p /mnt/sdb1/smb</b></code>
+                <code><b>chmod -R 777 /mnt/sdb1/smb</b></code><br>
             </a-timeline-item>
             <a-timeline-item>
-             <p v-html="$t('label.use.nfs.reboot')"></p>
+            <p v-html="$t('label.smb.user')"></p>
               <p>
-                <code><b>systemctl enable nfs-server.service</b></code>
-                <code><b>systemctl start nfs-server.service</b></code>
-              </p>
-            </a-timeline-item>
-          </a-timeline>
-        </a-card>
-        <a-card :title="$t('label.nfs.client')">
-          <a-timeline>
-            <a-timeline-item>
-              <p>
-                {{ $t('label.nfs-utils.nfs4-acl-tools') }}<br><br>
-                <code><b>sudo dnf install nfs-utils nfs4-acl-tools -y</b></code>
+                <code><b>useradd user1</b></code><br>
+                <code><b>echo 'user1' | passwd --stdin user1</b></code>
               </p>
             </a-timeline-item>
             <a-timeline-item>
-              <p>
-                {{ $t('label.nfs.mount.dir') }}<br><br>
-                <code><b>sudo mkdir -p /nfs/share</b></code>
-                  <code><b>sudo mkdir -p /nfs/home</b></code>
-              </p>
-            </a-timeline-item>
-            <a-timeline-item>
-              <p>
-                {{ $t('label.nfs.mount') }}<br><br>
-                <code><b>sudo mount host_ip:/var/nfs/share /nfs/share</b></code>
-                <code><b>sudo mount host_ip:/home /nfs/home</b></code>
-              </p>
-            </a-timeline-item>
-            <a-timeline-item>
-              <p>
-                {{ $t('label.nfs.test.file') }}<br><br>
-                <code><b>sudo touch /nfs/share/test.txt</b></code>
-                <code><b>sudo touch /nfs/home/home.txt</b></code>
-              </p>
-            </a-timeline-item>
-            <a-timeline-item>
-              <p>
-                {{ $t('label.nfs.client.fstab') }}<br><br>
-                <code><b>echo "host_ip:/var/nfs/share /nfs/share nfs auto,nofail,noatime,nolock,intr,tcp,actimeo=1800 0 0" /etc/fstab</b></code><br><br>
-                <code><b>echo "host_ip:/home /nfs/home nfs auto,nofail,noatime,nolock,intr,tcp,actimeo=1800 0 0" /etc/fstab</b></code>
-              </p>
-            </a-timeline-item>
-            <a-timeline-item>
-            <p>{{ $t('label.nfs.client.etc') }}</p>
-              <p>
-                {{ $t('label.nfs.mount') }}: <code><b>mount_nfs</b></code><br>
-                {{ $t('label.nfs.fstab') }}: <code><b>set_fstab</b></code><br>
-                {{ $t('label.nfs.umount') }}: <code><b>umount_nfs</b></code>
-              </p>
-             </a-timeline-item>
+              <p v-html="$t('label.smb.user.create')"></p>
+                <p>
+                  <code><b>echo -e 'user1\nuser1' | smbpasswd -s -a user1</b></code><br>
+                  <code><b>echo 'user1' | passwd --stdin user1</b></code>
+                </p>
+              </a-timeline-item>
+              <a-timeline-item>
+                <p v-html="$t('label.smb.user.settings')"></p>
+                  <p>
+                    <code><b>touch /etc/samba/smb.conf</b></code><br>
+                    <code><b>echo "</b></code><br>
+                    <code><b>[user1]</b></code><br>
+                    <code><b>path = /mnt/sdb1/smb</b></code><br>
+                    <code><b>browseable = yes</b></code><br>
+                    <code><b>writable = yes</b></code><br>
+                    <code><b>write list = user1</b></code><br>
+                    <code><b>force create mode = 0777</b></code><br>
+                    <code><b>force directory mode = 2770</b></code><br>
+                    <code><b>public = yes" >> /etc/samba/smb.conf</b></code>
+                  </p>
+                </a-timeline-item>
+                <a-timeline-item>
+                  <p v-html="$t('label.smb.selinux.settings')"></p>
+                    <p>
+                      <code><b>setsebool -P samba_enable_home_dirs on</b></code><br>
+                      <code><b>setsebool -P samba_export_all_rw on </b></code><br>
+                      <code><b>chcon -R -t samba_share_t /mnt/sdb1/smb </b></code>
+                    </p>
+                  </a-timeline-item>
+                  <a-timeline-item>
+                    <p v-html="$t('label.smb.firewall')"></p>
+                      <p>
+                        <code><b>firewall-cmd --zone=public --permanent --add-service=samba</b></code><br>
+                        <code><b>firewall-cmd --reload </b></code>
+                      </p>
+                    </a-timeline-item>
+                  <a-timeline-item>
+                    <p v-html="$t('label.smb.service.start')"></p>
+                      <p>
+                        <code><b>systemctl enable smb</b></code><br>
+                        <code><b>systemctl start smb </b></code>
+                      </p>
+                    </a-timeline-item>
           </a-timeline>
         </a-card>
         <a-card :title="$t('label.disk.mount')">
+          <a-timeline>
+            <a-timeline-item>
         <p v-html="$t('label.mount.parted')"></p>
-          <code><b>parted /dev/sdb mklabel gpt mkpart primary 0% 100%</b></code>
+          <code><b>parted /dev/sdb mklabel gpt mkpart primary 0% 100%</b></code><br><br>
+            </a-timeline-item>
+            <a-timeline-item>
+        <p v-html="$t('label.nfs.mount')"></p>
+          <code><b>sudo mkfs.xfs /dev/sdb1</b></code><br>
+          <code><b>sudo mkdir /data1</b></code><br>
+          <code><b>sudo mount /dev/sdb1 /data1</b></code><br><br>
+          </a-timeline-item>
+          <a-timeline-item>
         <p v-html="$t('label.mkfs.mount')"></p>
-          <code><b>sudo mkfs.xfs /dev/sdb1</b></code>
-          <code><b>sudo mkdir /data1</b></code>
-          <code><b>sudo mount /dev/sdb1 /data1</b></code>
-        <p v-html="$t('label.mkfs.mount')"></p>
-          <code><b>echo "/mnt/data *(rw,sync,no_root_squash)" >> /etc/exports</b></code>
-          <code><b>exportfs -a</b></code>
-        <p v-html="$t('label.nfs.restart')"></p>
-          <code><b>systemctl start nfs-utils</b></code>
-          <code><b>systemctl enable nfs-utils</b></code>
-          <code><b>systemctl restart nfs-utils</b></code>
+          <code><b>echo "/mnt/data *(rw,sync,no_root_squash)" >> /etc/exports</b></code><br>
+          <code><b>exportfs -a</b></code><br><br>
+          </a-timeline-item>
+          <a-timeline-item>
+        <p v-html="$t('label.smb.restart')"></p>
+          <code><b>systemctl start smb-utils</b></code><br>
+          <code><b>systemctl enable smb-utils</b></code><br>
+          <code><b>systemctl restart smb-utils</b></code>
+          </a-timeline-item>
+          </a-timeline>
         </a-card>
+    </div>
+    <div v-if="resource.sharedstoragevmtype =='ISCSI'">
+      <a-card :title="$t('label.iscsi.host')" :loading="versionLoading">
+        <a-timeline>
+          <a-timeline-item>
+              <p v-html="$t('label.iscsi.package')"></p>
+              <code><b>dnf install -y targetcli xfsprogs</b></code>
+          </a-timeline-item>
+          <a-timeline-item>
+          <p v-html="$t('label.iscsi.firewall')"></p>
+              <code><b>firewall-cmd --zone=public --permanent --add-port=3260/tcp</b></code><br>
+              <code><b>firewall-cmd --reload</b></code>
+          </a-timeline-item>
+          <a-timeline-item>
+          <p v-html="$t('label.iscsi.targetcli')"></p>
+            <p>
+              <code><b>targetcli /backstores/block create iscsi_store /dev/sdb1</b></code><br>
+              <code><b>targetcli /iscsi create ${TG_IQN_NAME}</b></code><br>
+              <code><b>targetcli /iscsi/${TG_IQN_NAME}/tpg1/luns create /backstores/block/iscsi_store</b></code><br>
+              <code><b>targetcli /iscsi/${TG_IQN_NAME}/tpg1/acls create ${IN_IQN_NAME}</b></code>
+            </p>
+          </a-timeline-item>
+          <a-timeline-item>
+            <p v-html="$t('label.iscsi.start')"></p>
+                <code><b>systemctl start target</b></code><br>
+                <code><b>systemctl enable target</b></code>
+            </a-timeline-item>
+        </a-timeline>
+      </a-card>
+      <a-card :title="$t('label.iscsi.client')">
+        <a-timeline>
+          <a-timeline-item>
+            <p>
+              {{ $t('label.iscsi.iscsiadm.discovery') }}<br><br>
+              <code><b>iscsiadm -m discovery -t st -p 10.10.254.140</b></code>
+            </p>
+          </a-timeline-item>
+          <a-timeline-item>
+            <p>
+              {{ $t('label.iscsi.initiator') }}<br><br>
+              <code><b>echo "InitiatorName=iqn.2023-04.com.example:storage.initiator01" > /etc/iscsi/initiatorname.iscsi</b></code>
+            </p>
+          </a-timeline-item>
+          <a-timeline-item>
+            <p>
+              {{ $t('label.iscsi.service.start') }}<br><br>
+              <code><b>systemctl enable iscsid</b></code><br>
+              <code><b>systemctl restart iscsid</b></code>
+            </p>
+          </a-timeline-item>
+          <a-timeline-item>
+            <p>
+              {{ $t('label.iscsi.connect.settings') }}<br><br>
+              <code><b>iscsiadm -m node -T ${TG_IQN_NAME} -p ${ISCSI_SERVER_IP}:3260,1 --login</b></code>
+            </p>
+          </a-timeline-item>
+          <a-timeline-item>
+              <p>
+                {{ $t('label.iscsi.mount.format') }}<br><br>
+                 <code><b>mkdir /mnt/iscsi_store</b></code><br>
+                 <code><b>mkfs -t ext4 /dev/sdc</b></code><br>
+                 <code><b>mount /dev/sdc /mnt/iscsi_store</b></code>
+              </p>
+            </a-timeline-item>
+          <a-timeline-item>
+            <p>
+              {{ $t('label.iscsi.client.fstab') }}<br><br>
+              <code><b>echo "/dev/sdc /mnt/iscsi_store/ xfs _netdev 0 0" | sudo tee -a /etc/fstab</b></code>
+            </p>
+          </a-timeline-item>
+        </a-timeline>
+      </a-card>
+      <a-card :title="$t('label.disk.mount')">
+        <a-timeline>
+          <a-timeline-item>
+      <p v-html="$t('label.mount.parted')"></p>
+        <code><b>parted /dev/sdb mklabel gpt mkpart primary 0% 100%</b></code><br><br>
+          </a-timeline-item>
+          <a-timeline-item>
+      <p v-html="$t('label.nfs.mount')"></p>
+        <code><b>sudo mkfs.xfs /dev/sdb1</b></code><br>
+        <code><b>sudo mkdir /data1</b></code><br>
+        <code><b>sudo mount /dev/sdb1 /data1</b></code><br><br>
+        </a-timeline-item>
+        <a-timeline-item>
+      <p v-html="$t('label.mkfs.mount')"></p>
+        <code><b>echo "/mnt/data *(rw,sync,no_root_squash)" >> /etc/exports</b></code><br>
+        <code><b>exportfs -a</b></code><br><br>
+        </a-timeline-item>
+        <a-timeline-item>
+      <p v-html="$t('label.iscsi.restart')"></p>
+        <code><b>systemctl start iscsi-utils</b></code><br>
+        <code><b>systemctl enable iscsi-utils</b></code><br>
+        <code><b>systemctl restart iscsi-utils</b></code>
+        </a-timeline-item>
+        </a-timeline>
+      </a-card>
+  </div>
       </a-tab-pane>
       <a-tab-pane :tab="$t('label.networks')" key="networks" >
         <SsvNicsTab :resource="networks" :loading="loading"/>
