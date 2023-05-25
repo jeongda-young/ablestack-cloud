@@ -144,6 +144,12 @@
         @exec-action="$parent.execAction"/>
       <router-link :to="{ path: $route.path + '/' + record.id }">{{ text }}</router-link>
     </template>
+    <template #ssvmname="{record}">
+      {{ record.sharedstoragevm[0].displayname }}
+    </template>
+    <template #templatename="{record}">
+      {{ record.sharedstoragevm[0].templatename }}
+    </template>
     <template #username="{text, record}">
       <span v-if="$showIcon() && !['vm'].includes($route.path.split('/')[1])" style="margin-right: 5px">
         <resource-icon v-if="$showIcon() && record.icon && record.icon.base64image" :image="record.icon.base64image" size="1x"/>

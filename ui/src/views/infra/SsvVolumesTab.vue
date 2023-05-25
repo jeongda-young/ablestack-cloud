@@ -21,7 +21,6 @@
     size="small"
     :columns="volumeColumns"
     :dataSource="volumes"
-    :rowKey="item => item.id"
     :pagination="false"
   >
     <template #name="{ text, record }">
@@ -47,7 +46,7 @@ import { api } from '@/api'
 import Status from '@/components/widgets/Status'
 
 export default {
-  name: 'VolumesTab',
+  name: 'SsvVolumesTab',
   components: {
     Status
   },
@@ -55,16 +54,12 @@ export default {
     resource: {
       type: Object,
       required: true
-    },
-    items: {
-      type: Array,
-      default: () => []
     }
   },
   inject: ['parentFetchData'],
   data () {
     return {
-      vm: {},
+      sharedstoragevm: [],
       volumes: [],
       volumeColumns: [
         {
@@ -90,30 +85,28 @@ export default {
     }
   },
   created () {
-    this.vm = this.resource
+    this.sharedstoragevm = this.resource
     this.fetchData()
-    console.log(this.resource.volumes)
+    // console.log(this.sharedstoragevm[0].id)
   },
-  watch: {
-    resource: function (newItem) {
-      this.vm = newItem
-      this.fetchData()
-    }
-  },
+  // watch: {
+  //   resource: function (newItem) {
+  //     this.sharedstoragevm = newItem
+  //     this.fetchData()
+  //   }
+  // },
   methods: {
     fetchData () {
       this.volumes = []
-      if (!this.vm?.id) {
-        return
-      }
-      if (this.items.length) {
-        this.volumes = this.items
+      if (!this.sharedstoragevm[0].id) {
+        return false
       } else {
         this.getVolumes()
       }
     },
     getVolumes () {
-      api('listVolumes', { listall: true, listsystemvms: true, virtualmachineid: this.vm.id }).then(json => {
+      api('listVolumes', { listall: true, listsystemvms: true, virtualmachineid: this.sharedstoragevm[0].id }).then(json => {
+        // console.log(json.listvolumesresponse.volume)
         this.volumes = json.listvolumesresponse.volume
         if (this.volumes) {
           this.volumes.sort((a, b) => { return a.deviceid - b.deviceid })

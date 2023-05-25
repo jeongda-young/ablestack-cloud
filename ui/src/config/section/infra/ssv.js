@@ -24,7 +24,7 @@ export default {
   docHelp: 'adminguide/ssv.html',
   permission: ['listAdminSSV'],
   columns: ['name', 'state', 'displayname', 'sharedstoragevmtype', 'serviceofferingname', 'hostname', 'zonename'],
-  details: ['name', 'id', 'agentstate', 'publicip', 'privateip', 'gateway', 'hostname', 'zonename', 'created', 'activeviewersessions', 'hostcontrolstate'],
+  details: ['name', 'id', 'state', 'sharedstoragevmtype', 'templatename', 'hostname', 'zonename', 'created', 'activeviewersessions', 'hostcontrolstate'],
   resourceType: 'AdminSSV',
   tabs: [{
     component: shallowRef(defineAsyncComponent(() => import('@/views/infra/SsvTabs.vue')))

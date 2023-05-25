@@ -16,7 +16,7 @@
 // under the License.
 
 <template>
-  <a-spin :spinning="networkLoading">
+  <a-spin :spinning="loading">
     <a-tabs
       :activeKey="currentTab"
       :tabPosition="device === 'mobile' ? 'top' : 'left'"
@@ -26,27 +26,114 @@
         <DetailsTab :resource="resource" :loading="loading" />
       </a-tab-pane>
       <a-tab-pane :tab="$t('label.access')" key="access">
-        <a-card :title="$t('label.cluster')" :loading="versionLoading">
+        <!-- <a-card :title="$t('label.nfs')" :loading="versionLoading">
+          <div v-if="NFSConfig !== ''">
+            <a-textarea :value="NFSConfig" :rows="5" readonly />
+            <div :span="24" class="action-button">
+            </div>
+          </div>
+          <div v-else>
+            <p>{{ $t('message.kubeconfig.cluster.not.available') }}</p>
+          </div>
+        </a-card> -->
+        <a-card :title="$t('label.nfs')" :loading="versionLoading">
+          <a-timeline>
+            <a-timeline-item>
+              <p v-html="$t('label.nfs.service')"></p>
+                <p v-html="$t('label.nfs.Package')"></p>
+                <p>sudo dnf install -y nfs-utils nfs4-acl-tools</p>
+            </a-timeline-item>
+            <a-timeline-item>
+            <p v-html="$t('label.nfs.server.service')"></p>
+                <p>mkdir -p /var/nfs/share</p>
+                <p>echo "/var/nfs/share 10.10.254.136(rw,sync,no_subtree_check)" >> /etc/exports</p>
+                <p>echo "/home 10.10.254.136(rw,sync,no_root_squash,no_subtree_check)" >> /etc/exports</p>
+                <p>echo "/dev/sdb1 /data1 10.10.254.136(rw,sync,no_subtree_check)" >> /etc/exports</p>
+                <p>exportfs -arv</p>
+            </a-timeline-item>
+            <a-timeline-item>
+             <p v-html="$t('label.use.nfs.reboot')"></p>
+              <p>
+                <code><b>systemctl enable nfs-server.service</b></code>
+                <code><b>systemctl start nfs-server.service</b></code>
+              </p>
+            </a-timeline-item>
+          </a-timeline>
         </a-card>
-        <a-card :title="$t('label.using.cli')" :loading="versionLoading">
+        <a-card :title="$t('label.nfs.client')">
+          <a-timeline>
+            <a-timeline-item>
+              <p>
+                {{ $t('label.nfs-utils.nfs4-acl-tools') }}<br><br>
+                <code><b>sudo dnf install nfs-utils nfs4-acl-tools -y</b></code>
+              </p>
+            </a-timeline-item>
+            <a-timeline-item>
+              <p>
+                {{ $t('label.nfs.mount.dir') }}<br><br>
+                <code><b>sudo mkdir -p /nfs/share</b></code>
+                  <code><b>sudo mkdir -p /nfs/home</b></code>
+              </p>
+            </a-timeline-item>
+            <a-timeline-item>
+              <p>
+                {{ $t('label.nfs.mount') }}<br><br>
+                <code><b>sudo mount host_ip:/var/nfs/share /nfs/share</b></code>
+                <code><b>sudo mount host_ip:/home /nfs/home</b></code>
+              </p>
+            </a-timeline-item>
+            <a-timeline-item>
+              <p>
+                {{ $t('label.nfs.test.file') }}<br><br>
+                <code><b>sudo touch /nfs/share/test.txt</b></code>
+                <code><b>sudo touch /nfs/home/home.txt</b></code>
+              </p>
+            </a-timeline-item>
+            <a-timeline-item>
+              <p>
+                {{ $t('label.nfs.client.fstab') }}<br><br>
+                <code><b>echo "host_ip:/var/nfs/share /nfs/share nfs auto,nofail,noatime,nolock,intr,tcp,actimeo=1800 0 0" /etc/fstab</b></code><br><br>
+                <code><b>echo "host_ip:/home /nfs/home nfs auto,nofail,noatime,nolock,intr,tcp,actimeo=1800 0 0" /etc/fstab</b></code>
+              </p>
+            </a-timeline-item>
+            <a-timeline-item>
+            <p>{{ $t('label.nfs.client.etc') }}</p>
+              <p>
+                {{ $t('label.nfs.mount') }}: <code><b>mount_nfs</b></code><br>
+                {{ $t('label.nfs.fstab') }}: <code><b>set_fstab</b></code><br>
+                {{ $t('label.nfs.umount') }}: <code><b>umount_nfs</b></code>
+              </p>
+             </a-timeline-item>
+          </a-timeline>
         </a-card>
-        <a-card :title="$t('label.dashboard')">
-        </a-card>
-        <a-card :title="$t('label.access.nodes')">
+        <a-card :title="$t('label.disk.mount')">
+        <p v-html="$t('label.mount.parted')"></p>
+          <code><b>parted /dev/sdb mklabel gpt mkpart primary 0% 100%</b></code>
+        <p v-html="$t('label.mkfs.mount')"></p>
+          <code><b>sudo mkfs.xfs /dev/sdb1</b></code>
+          <code><b>sudo mkdir /data1</b></code>
+          <code><b>sudo mount /dev/sdb1 /data1</b></code>
+        <p v-html="$t('label.mkfs.mount')"></p>
+          <code><b>echo "/mnt/data *(rw,sync,no_root_squash)" >> /etc/exports</b></code>
+          <code><b>exportfs -a</b></code>
+        <p v-html="$t('label.nfs.restart')"></p>
+          <code><b>systemctl start nfs-utils</b></code>
+          <code><b>systemctl enable nfs-utils</b></code>
+          <code><b>systemctl restart nfs-utils</b></code>
         </a-card>
       </a-tab-pane>
       <a-tab-pane :tab="$t('label.networks')" key="networks" >
         <SsvNicsTab :resource="networks" :loading="loading"/>
       </a-tab-pane>
-      <a-tab-pane :tab="$t('label.volumes')" key="volumes" >
-        <SsvVolumesTab :resource="volumes" :loading="loading"/>
+      <a-tab-pane :tab="$t('label.volumes')" key="volumes">
+        <SsvVolumesTab :resource="sharedstoragevm" :loading="loading" />
       </a-tab-pane>
       <a-tab-pane :tab="$t('label.instance')" key="sharedstoragevm">
         <a-table
           class="table"
           size="small"
-          :columns="vmColumns"
-          :dataSource="virtualmachines"
+          :columns="ssvVmColumns"
+          :dataSource="sharedstoragevm"
           :rowKey="item => item.id"
           :pagination="false"
         >
@@ -56,30 +143,14 @@
           <template #state="{ text }">
             <status :text="text ? text : ''" displayText />
           </template>
-          <template #port="{ text, record, index }" :name="text" :record="record">
-            {{ cksSshStartingPort + index }}
+          <template #instancename="{text}">
+            <status :text="text ? text : ''" />{{ text }}
           </template>
-          <template #action="{record}">
-            <a-tooltip placement="bottom" >
-              <template #title>
-                {{ $t('label.action.delete.node') }}
-              </template>
-              <a-popconfirm
-                :title="$t('message.action.delete.node')"
-                @confirm="deleteNode(record)"
-                :okText="$t('label.yes')"
-                :cancelText="$t('label.no')"
-                :disabled="!['Created', 'Running'].includes(resource.state) || resource.autoscalingenabled"
-              >
-                <a-button
-                  danger
-                  type="primary"
-                  shape="circle"
-                  :disabled="!['Created', 'Running'].includes(resource.state) || resource.autoscalingenabled">
-                  <template #icon><delete-outlined /></template>
-                </a-button>
-              </a-popconfirm>
-            </a-tooltip>
+          <template #ipaddress="{text}">
+            <status :text="text ? text : ''" />{{ text }}
+          </template>
+          <template #hostname="{record}">
+            <router-link :to="{ path: '/host/' + record.hostid }">{{ record.hostname }}</router-link>
           </template>
         </a-table>
       </a-tab-pane>
@@ -121,21 +192,23 @@ export default {
   data () {
     return {
       versionLoading: false,
-      sharedstoragevm: false,
+      sharedstoragevm: {},
       networkLoading: false,
       networks: [],
-      volumes: [],
-      networkip: null,
+      networkip: '',
       currentTab: 'details',
+      instanceLoading: false,
+      virtualmachines: [],
+      ssvVmColumns: [],
       annotations: []
     }
   },
   created () {
-    this.vmColumns = [
+    this.ssvVmColumns = [
       {
         title: this.$t('label.name'),
-        dataIndex: 'displayname',
-        slots: { customRender: 'displayname' }
+        dataIndex: 'name',
+        slots: { customRender: 'name' }
       },
       {
         title: this.$t('label.state'),
@@ -144,7 +217,16 @@ export default {
       },
       {
         title: this.$t('label.instancename'),
-        dataIndex: 'sharedstoragevm'
+        dataIndex: 'instancename'
+      },
+      // {
+      //   title: this.$t('label.ip'),
+      //   dataIndex: 'ipaddress'
+      // },
+      {
+        title: this.$t('label.hostid'),
+        dataIndex: 'hostname',
+        slots: { customRender: 'hostname' }
       },
       {
         title: this.$t('label.zonename'),
@@ -152,29 +234,27 @@ export default {
       }
     ]
     if (!isAdmin()) {
-      this.vmColumns = this.vmColumns.filter(x => x.dataIndex !== 'sharedstoragevm')
+      this.ssvVmColumns = this.ssvVmColumns.filter(x => x.dataIndex !== 'sharedstoragevm')
     }
     this.handleFetchData()
     const self = this
     window.addEventListener('popstate', function () {
       self.setCurrentTab()
     })
+    const userInfo = this.$store.getters.userInfo
+    if (!['Admin'].includes(userInfo.roletype) &&
+      (userInfo.account !== this.resource.account || userInfo.domain !== this.resource.domain)) {
+      this.ssvVmColumns = this.ssvVmColumns.filter(col => { return col.dataIndex !== 'hostname' })
+    }
+    this.sharedstoragevm = this.resource
+    this.fetchData()
   },
   watch: {
-    resource: {
-      deep: true,
-      handler (newData, oldData) {
-        if (newData && newData !== oldData) {
-          this.handleFetchData()
-          if (this.resource.ipaddress) {
-            this.vmColumns = this.vmColumns.filter(x => x.dataIndex !== 'ipaddress')
-          } else {
-            this.vmColumns = this.vmColumns.filter(x => x.dataIndex !== 'port')
-          }
-        }
-      }
+    resource: function (newItem, oldItem) {
+      this.sharedstoragevm = newItem
+      this.fetchData()
     },
-    '$route.fullPath': function () {
+    $route: function (newItem, oldItem) {
       this.setCurrentTab()
     }
   },
@@ -213,48 +293,58 @@ export default {
       this.fetchInstances()
     },
     fetchData () {
-      this.networks = []
-      this.iprange = []
-      if (!this.vm || !this.vm.id) {
-        return
+      this.sharedstoragevm = this.resource.sharedstoragevm || []
+      this.sharedstoragevm.map(x => { x.ipaddress = x.nic[0].ipaddress })
+      this.networks = this.resource.network
+
+      if (!this.sharedstoragevm || !this.sharedstoragevm.id) {
+        // return
       }
-      api('listNetworks', { id: this.resource.networkid }).then(json => {
-        this.networks = json.listnetworksresponse.network
-        if (this.networks) {
-          this.networks.sort((a, b) => { return a.deviceid - b.deviceid })
-        }
-      }).finally(() => {
-      })
-    },
-    fetchDiskOfferings (zoneId) {
-      api('listDiskOfferings', {
-        zoneid: zoneId,
-        listall: true
-      }).then(json => {
-        this.offerings = json.listdiskofferingsresponse.diskoffering || []
-        if (!this.createVolumeFromSnapshot) {
-          this.form.diskofferingid = this.offerings[0].id || ''
-        }
-        this.customDiskOffering = this.offerings[0].iscustomized || false
-        this.isCustomizedDiskIOps = this.offerings[0]?.iscustomizediops || false
-      })
+      // api('listNetworks', { id: this.resource.networkid }).then(json => {
+      //   console.log(json.listnetworksresponse.network)
+      //   this.ssvnetworks = json.listnetworksresponse.network
+      //   if (this.ssvnetworks) {
+      //     this.ssvnetworks.sort((a, b) => { return a.deviceid - b.deviceid })
+      //   }
+      //   // this.$set(this.resource, 'desktopnetworks', this.desktopnetworks)
+      // }).finally(() => {
+      // })
     },
     fetchInstances () {
-      this.sharedstoragevm = true
-      this.virtualmachines = this.resource.virtualmachines || []
-      this.virtualmachines.map(x => { x.ipaddress = x.nic[0].ipaddress })
-      this.sharedstoragevm = false
+      this.instanceLoading = true
+      this.sharedstoragevm = this.resource.sharedstoragevm || []
+      this.sharedstoragevm.map(x => { x.ipaddress = x.nic[0].ipaddress })
+      this.instanceLoading = false
     },
-    listNetworks () {
-      api('listNetworks', {
-        listAll: 'true',
-        showicon: true,
-        zoneid: this.vm.zoneid
-      }).then(response => {
-        this.addNetworkData.allNetworks = response.listnetworksresponse.network.filter(network => !this.vm.nic.map(nic => nic.networkid).includes(network.id))
-        this.addNetworkData.network = this.addNetworkData.allNetworks[0].id
-      })
-    },
+    // fetchPublicIpAddress () {
+    //   this.networkLoading = true
+    //   var params = {
+    //     listAll: true,
+    //     forvirtualnetwork: true
+    //   }
+    //   if (!this.isObjectEmpty(this.resource)) {
+    //     if (this.isValidValueForKey(this.resource, 'projectid') &&
+    //       this.resource.projectid !== '') {
+    //       params.projectid = this.resource.projectid
+    //     }
+    //     if (this.isValidValueForKey(this.resource, 'networkid')) {
+    //       params.associatednetworkid = this.resource.networkid
+    //     }
+    //   }
+    //   if (this.resource.networkid !== undefined) {
+    //     api('listPublicIpAddresses', params).then(json => {
+    //       let ips = json.listpublicipaddressesresponse.publicipaddress
+    //       if (this.arrayHasItems(ips)) {
+    //         ips = ips.filter(x => x.issourcenat)
+    //         this.publicIpAddress = ips.length > 0 ? ips[0] : null
+    //       }
+    //     }).catch(error => {
+    //       this.$notifyError(error)
+    //     }).finally(() => {
+    //       this.networkLoading = false
+    //     })
+    //   }
+    // },
     deleteNode (node) {
       const params = {
         id: this.resource.id,

@@ -19,11 +19,11 @@
   <a-table
     size="small"
     :columns="SsvnicColumns"
-    :dataSource="resource.nic"
+    :dataSource="resource"
     :rowKey="item => item.id"
     :pagination="false"
   >
-    <template #expandedRowRender="{ record }">
+     <template #expandedRowRender="{ record }">
       <slot name="actions" :nic="record" />
       <a-descriptions style="margin-top: 10px" layout="vertical" :column="1" :bordered="false" size="small">
         <a-descriptions-item :label="$t('label.id')">
@@ -32,11 +32,8 @@
         <a-descriptions-item :label="$t('label.networkid')" v-if="record.networkid">
           {{ record.networkid }}
         </a-descriptions-item>
-        <a-descriptions-item :label="$t('label.networkname')" v-if="record.networkname">
-          {{ record.networkname }}
-        </a-descriptions-item>
-        <a-descriptions-item :label="$t('label.networktype')" v-if="record.accessType">
-          {{ record.accessType }}
+        <a-descriptions-item :label="$t('label.type')" v-if="record.natworktype">
+          {{ record.type }}
         </a-descriptions-item>
         <a-descriptions-item :label="$t('label.traffictype')" v-if="record.traffictype">
           {{ record.traffictype }}
@@ -44,7 +41,7 @@
         <a-descriptions-item :label="$t('label.secondaryips')" v-if="record.secondaryip && record.secondaryip.length > 0 && record.type !== 'L2'">
           {{ record.secondaryip.map(x => x.ipaddress).join(', ') }}
         </a-descriptions-item>
-        <a-descriptions-item :label="$t('label.ip6address')" v-if="record.networkip">
+        <a-descriptions-item :label="$t('label.ipaddress')" v-if="record.networkip">
           {{ record.networkip }}
         </a-descriptions-item>
         <template v-if="['Admin', 'DomainAdmin'].includes($store.getters.userInfo.roletype)">
@@ -98,13 +95,17 @@ export default {
           dataIndex: 'networkname',
           slots: { customRender: 'networkname' }
         },
+        // {
+        //   title: this.$t('label.state'),
+        //   dataIndex: 'state'
+        // },
         {
           title: this.$t('label.ipaddress'),
           dataIndex: 'networkip'
         },
         {
           title: this.$t('label.networktype'),
-          dataIndex: 'accessType'
+          dataIndex: 'networktype'
         }
       ],
       networkicon: {},
@@ -146,6 +147,7 @@ export default {
           id: networkid,
           showicon: true
         }).then(json => {
+          // console.log(json.listnetworksresponse?.network)
           const network = json.listnetworksresponse?.network || []
           if (network?.[0]?.icon) {
             this.networkicon[id] = network[0]?.icon?.base64image
