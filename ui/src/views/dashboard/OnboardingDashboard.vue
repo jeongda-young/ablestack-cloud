@@ -34,22 +34,8 @@
       </div>
     </div>
     <a-modal
-      :title="$t('message.change.password')"
-      :visible="step === 1"
-      :closable="true"
-      :maskClosable="false"
-      :footer="null"
-      @cancel="closeAction"
-      centered
-      width="auto">
-      <change-user-password
-        :resource="resource"
-        @close-action="() => { if (step !== 2) step = 0 }"
-        @refresh-data="() => { step = 2 }" />
-    </a-modal>
-    <a-modal
       :title="$t('label.installwizard.addzoneintro.title')"
-      :visible="step === 2"
+      :visible="step === 1"
       :closable="true"
       :maskClosable="false"
       :footer="null"
@@ -64,24 +50,18 @@
 </template>
 
 <script>
-import ChangeUserPassword from '@/views/iam/ChangeUserPassword.vue'
 import ZoneWizard from '@/views/infra/zone/ZoneWizard.vue'
 
 export default {
   name: 'OnboardingDashboard',
   components: {
-    ChangeUserPassword,
     ZoneWizard
   },
   inject: ['parentFetchData'],
   data () {
     return {
       step: 0,
-      cloudstackminorversion: this.$store.getters.features.cloudstackversion.split('-')[0],
-      resource: {
-        id: this.$store.getters.userInfo.id,
-        username: this.$store.getters.userInfo.username
-      }
+      cloudstackminorversion: this.$store.getters.features.cloudstackversion.split('-')[0]
     }
   },
   methods: {

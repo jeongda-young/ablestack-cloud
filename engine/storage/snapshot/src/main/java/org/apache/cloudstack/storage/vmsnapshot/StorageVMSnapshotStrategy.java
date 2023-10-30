@@ -59,7 +59,6 @@ import com.cloud.storage.DataStoreRole;
 import com.cloud.storage.GuestOSVO;
 import com.cloud.storage.Snapshot;
 import com.cloud.storage.SnapshotVO;
-import com.cloud.storage.Storage;
 import com.cloud.storage.VolumeApiService;
 import com.cloud.storage.VolumeVO;
 import com.cloud.storage.dao.SnapshotDao;
@@ -177,7 +176,7 @@ public class StorageVMSnapshotStrategy extends DefaultVMSnapshotStrategy {
                         thawAnswer = (FreezeThawVMAnswer) agentMgr.send(hostId, thawCmd);
                         throw new CloudRuntimeException("Could not take snapshot for volume with id=" + vol.getId());
                     }
-                    s_logger.info(String.format("Snapshot with id=%s, took  %s miliseconds", snapInfo.getId(),
+                    s_logger.info(String.format("Snapshot with id=%s, took  %s milliseconds", snapInfo.getId(),
                             TimeUnit.MILLISECONDS.convert(elapsedTime(startSnapshtot), TimeUnit.NANOSECONDS)));
                 }
                 answer = new CreateVMSnapshotAnswer(ccmd, true, "");
@@ -185,7 +184,7 @@ public class StorageVMSnapshotStrategy extends DefaultVMSnapshotStrategy {
                 thawAnswer = (FreezeThawVMAnswer) agentMgr.send(hostId, thawCmd);
                 if (thawAnswer != null && thawAnswer.getResult()) {
                     s_logger.info(String.format(
-                            "Virtual machne is thawed. The freeze of virtual machine took %s miliseconds.",
+                            "Virtual machne is thawed. The freeze of virtual machine took %s milliseconds.",
                             TimeUnit.MILLISECONDS.convert(elapsedTime(startFreeze), TimeUnit.NANOSECONDS)));
                 }
             } else {
@@ -219,7 +218,7 @@ public class StorageVMSnapshotStrategy extends DefaultVMSnapshotStrategy {
             throw new CloudRuntimeException(e.getMessage());
         } finally {
             if (thawAnswer == null && freezeAnswer != null) {
-                s_logger.info(String.format("Freeze of virtual machine took %s miliseconds.", TimeUnit.MILLISECONDS
+                s_logger.info(String.format("Freeze of virtual machine took %s milliseconds.", TimeUnit.MILLISECONDS
                                                 .convert(elapsedTime(startFreeze), TimeUnit.NANOSECONDS)));
                 try {
                     thawAnswer = (FreezeThawVMAnswer) agentMgr.send(hostId, thawCmd);
@@ -360,10 +359,6 @@ public class StorageVMSnapshotStrategy extends DefaultVMSnapshotStrategy {
 
     @Override
     public StrategyPriority canHandle(Long vmId, Long rootPoolId, boolean snapshotMemory) {
-        //This check could be removed when PR #5297 is merged
-        if (vmHasNFSOrLocalVolumes(vmId)) {
-            return StrategyPriority.CANT_HANDLE;
-        }
         if (SnapshotManager.VmStorageSnapshotKvm.value() && !snapshotMemory) {
             UserVmVO vm = userVmDao.findById(vmId);
             if (vm.getState() == VirtualMachine.State.Running) {
@@ -464,18 +459,5 @@ public class StorageVMSnapshotStrategy extends DefaultVMSnapshotStrategy {
         payload.setAsyncBackup(false);
         payload.setQuiescevm(false);
         return payload;
-    }
-
-    private boolean vmHasNFSOrLocalVolumes(long vmId) {
-        List<VolumeObjectTO> volumeTOs = vmSnapshotHelper.getVolumeTOList(vmId);
-
-        for (VolumeObjectTO volumeTO : volumeTOs) {
-            Long poolId = volumeTO.getPoolId();
-            Storage.StoragePoolType poolType = vmSnapshotHelper.getStoragePoolType(poolId);
-            if (poolType == Storage.StoragePoolType.NetworkFilesystem || poolType == Storage.StoragePoolType.Filesystem) {
-                return true;
-            }
-        }
-        return false;
     }
 }

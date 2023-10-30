@@ -143,7 +143,7 @@ public interface StorageManager extends StorageService {
     ConfigKey<String> STORAGE_POOL_IO_POLICY = new ConfigKey<>(String.class,
             "kvm.storage.pool.io.policy",
             "Storage",
-            null,
+            "io_uring",
             "IO driver policy - 'threads', 'native' or 'io_uring'. If the IO policy is set for a specific storage and enabled in the VM settings this option will override be overridden from the VM's setting",
             false,
             ConfigKey.Scope.StoragePool,
@@ -355,5 +355,7 @@ public interface StorageManager extends StorageService {
     boolean isStoragePoolDatastoreClusterParent(StoragePool pool);
 
     void syncDatastoreClusterStoragePool(long datastoreClusterPoolId, List<ModifyStoragePoolAnswer> childDatastoreAnswerList, long hostId);
+
+    void validateChildDatastoresToBeAddedInUpState(StoragePoolVO datastoreClusterPool, List<ModifyStoragePoolAnswer> childDatastoreAnswerList);
 
 }

@@ -69,6 +69,7 @@
     <bean id="apiServer" class="com.cloud.api.ApiServer">
         <property name="apiAccessCheckers" value="#{apiCheckersRegistry.registered}" />
         <property name="pluggableServices" value="#{apiCommandsRegistry.registered}" />
+        <property name="userPasswordEncoders" value="#{userPasswordEncodersRegistry.registered}" />
     </bean>
 
     <bean id="cloudZonesStartupProcessor" class="com.cloud.hypervisor.CloudZonesStartupProcessor" />

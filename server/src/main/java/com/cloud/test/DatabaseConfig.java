@@ -239,6 +239,7 @@ public class DatabaseConfig {
         s_configurationDescriptions.put("publish.resource.state.events", "enable or disable to control the publishing of resource state events on the event bus");
         s_configurationDescriptions.put("publish.usage.events", "enable or disable to control the publishing of usage events on the event bus");
         s_configurationDescriptions.put("publish.async.job.events", "enable or disable to control the publishing of async job events on the event bus");
+        s_configurationDescriptions.put("event.delete.enabled", "enable or disable to control the publishing of async job events on the event bus");
 
         s_configurationComponents.put("host.stats.interval", "management-server");
         s_configurationComponents.put("storage.stats.interval", "management-server");
@@ -311,6 +312,7 @@ public class DatabaseConfig {
         s_configurationComponents.put("publish.resource.state.events", "management-server");
         s_configurationComponents.put("publish.usage.events", "management-server");
         s_configurationComponents.put("publish.async.job.events", "management-server");
+        s_configurationComponents.put("event.delete.enabled", "management-server");
 
         s_defaultConfigurationValues.put("host.stats.interval", "60000");
         s_defaultConfigurationValues.put("storage.stats.interval", "60000");
@@ -353,6 +355,7 @@ public class DatabaseConfig {
         s_defaultConfigurationValues.put("publish.resource.state.events", "true");
         s_defaultConfigurationValues.put("publish.usage.events", "true");
         s_defaultConfigurationValues.put("publish.async.job.events", "true");
+        s_defaultConfigurationValues.put("event.delete.enabled", "true");
     }
 
     protected DatabaseConfig() {

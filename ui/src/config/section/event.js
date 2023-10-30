@@ -15,6 +15,8 @@
 // specific language governing permissions and limitations
 // under the License.
 
+import store from '@/store'
+
 export default {
   name: 'event',
   title: 'label.events',
@@ -29,6 +31,9 @@ export default {
     title: 'label.event.timeline',
     param: 'startid'
   }],
+  filters: () => {
+    return ['active', 'archived']
+  },
   actions: [
     {
       api: 'archiveEvents',
@@ -45,6 +50,12 @@ export default {
         ids: {
           value: (record) => { return record.id }
         }
+      },
+      show: (record) => {
+        return !(record.archived)
+      },
+      groupShow: (selectedItems) => {
+        return selectedItems.filter(x => { return !(x.archived) }).length > 0
       }
     },
     {
@@ -72,7 +83,8 @@ export default {
       docHelp: 'adminguide/events.html#deleting-and-archiving-events-and-alerts',
       dataView: true,
       successMessage: 'label.event.deleted',
-      groupAction: true,
+      groupAction: false,
+      show: () => { return (store.getters.features.eventdeleteenabled) },
       groupMap: (selection) => { return [{ ids: selection.join(',') }] },
       args: ['ids'],
       mapping: {

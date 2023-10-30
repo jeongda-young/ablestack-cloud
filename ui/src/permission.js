@@ -26,7 +26,7 @@ import 'nprogress/nprogress.css' // progress bar style
 import message from 'ant-design-vue/es/message'
 import notification from 'ant-design-vue/es/notification'
 import { setDocumentTitle } from '@/utils/domUtil'
-import { ACCESS_TOKEN, APIS, SERVER_MANAGER } from '@/store/mutation-types'
+import { ACCESS_TOKEN, APIS, SERVER_MANAGER, CURRENT_PROJECT } from '@/store/mutation-types'
 
 NProgress.configure({ showSpinner: false }) // NProgress Configuration
 
@@ -59,6 +59,14 @@ router.beforeEach((to, from, next) => {
     if (to.path === '/user/login') {
       next({ path: '/dashboard' })
       NProgress.done()
+    } else if (to.path === '/firstLogin') {
+      const firstLogin = JSON.parse(Cookies.get('firstlogin') || Cookies.get('firstlogin', { path: '/client' }) || false)
+      if (store.getters.firstLogin === true || firstLogin === true) {
+        next()
+      } else {
+        next({ path: '/dashboard' })
+        NProgress.done()
+      }
     } else if (to.path === '/verify2FA' || to.path === '/setup2FA') {
       const isSAML = JSON.parse(Cookies.get('isSAML') || Cookies.get('isSAML', { path: '/client' }) || false)
       const twoFaEnabled = JSON.parse(Cookies.get('twoFaEnabled') || Cookies.get('twoFaEnabled', { path: '/client' }) || false)
@@ -86,6 +94,11 @@ router.beforeEach((to, from, next) => {
         }
         store.commit('SET_LOGIN_FLAG', true)
       }
+      if (Cookies.get('firstlogin') === 'true' && to.path !== '/firstlogin') {
+        store.dispatch('Logout').then(() => {
+          next({ path: '/user/login', query: { redirect: to.fullPath } })
+        })
+      }
       if (Object.keys(store.getters.apis).length === 0) {
         const cachedApis = vueProps.$localStorage.get(APIS, {})
         if (Object.keys(cachedApis).length > 0) {
@@ -104,7 +117,8 @@ router.beforeEach((to, from, next) => {
               } else {
                 next({ path: redirect })
               }
-              store.dispatch('ToggleTheme', 'light')
+              const project = vueProps.$localStorage.get(CURRENT_PROJECT)
+              store.dispatch('ToggleTheme', project.id === undefined ? 'light' : 'dark')
             })
           })
           .catch(() => {

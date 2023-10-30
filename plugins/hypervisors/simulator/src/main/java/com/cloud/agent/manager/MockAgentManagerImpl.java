@@ -220,7 +220,7 @@ public class MockAgentManagerImpl extends ManagerBase implements MockAgentManage
     @Override
     public boolean configure(String name, Map<String, Object> params) throws ConfigurationException {
         try {
-            random = SecureRandom.getInstance("SHA1PRNG");
+            random = SecureRandom.getInstance("DRBG");
             _executor = new ThreadPoolExecutor(1, 5, 1, TimeUnit.DAYS, new LinkedBlockingQueue<Runnable>(), new NamedThreadFactory("Simulator-Agent-Mgr"));
         } catch (NoSuchAlgorithmException e) {
             s_logger.debug("Failed to initialize random:" + e.toString());

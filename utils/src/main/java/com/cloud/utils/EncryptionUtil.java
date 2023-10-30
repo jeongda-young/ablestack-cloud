@@ -53,8 +53,8 @@ public class EncryptionUtil {
 
     public static String generateSignature(String data, String key) {
         try {
-            final Mac mac = Mac.getInstance("HmacSHA1");
-            final SecretKeySpec keySpec = new SecretKeySpec(key.getBytes("UTF-8"), "HmacSHA1");
+            final Mac mac = Mac.getInstance("HmacSHA256");
+            final SecretKeySpec keySpec = new SecretKeySpec(key.getBytes("UTF-8"), "HmacSHA256");
             mac.init(keySpec);
             mac.update(data.getBytes("UTF-8"));
             final byte[] encryptedBytes = mac.doFinal();

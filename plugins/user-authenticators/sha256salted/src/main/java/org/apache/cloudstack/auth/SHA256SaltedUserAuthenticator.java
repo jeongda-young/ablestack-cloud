@@ -38,6 +38,8 @@ public class SHA256SaltedUserAuthenticator extends AdapterBase implements UserAu
     public static final Logger s_logger = Logger.getLogger(SHA256SaltedUserAuthenticator.class);
     private static final String s_defaultPassword = "000000000000000000000000000=";
     private static final String s_defaultSalt = "0000000000000000000000000000000=";
+    private static final int s_rounds = 9999;
+
     @Inject
     private UserAccountDao _userAccountDao;
     private static final int s_saltlen = 32;
@@ -97,7 +99,7 @@ public class SHA256SaltedUserAuthenticator extends AdapterBase implements UserAu
         // 1. Generate the salt
         SecureRandom randomGen;
         try {
-            randomGen = SecureRandom.getInstance("SHA1PRNG");
+            randomGen = SecureRandom.getInstance("DRBG");
 
             byte[] salt = new byte[s_saltlen];
             randomGen.nextBytes(salt);
@@ -122,7 +124,9 @@ public class SHA256SaltedUserAuthenticator extends AdapterBase implements UserAu
         MessageDigest md = MessageDigest.getInstance("SHA-256");
         md.update(hashSource);
         byte[] digest = md.digest();
-
+        for (int a = 0; a < s_rounds; a++) {
+            digest = md.digest(digest);
+        }
         return new String(Base64.encode(digest));
     }
 

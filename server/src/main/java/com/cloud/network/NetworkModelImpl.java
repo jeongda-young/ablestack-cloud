@@ -35,8 +35,6 @@ import java.util.stream.Collectors;
 import javax.inject.Inject;
 import javax.naming.ConfigurationException;
 
-import com.cloud.domain.Domain;
-import com.cloud.vm.VirtualMachineManager;
 import org.apache.cloudstack.acl.ControlledEntity.ACLType;
 import org.apache.cloudstack.context.CallContext;
 import org.apache.cloudstack.engine.orchestration.service.NetworkOrchestrationService;
@@ -61,6 +59,7 @@ import com.cloud.dc.VlanVO;
 import com.cloud.dc.dao.DataCenterDao;
 import com.cloud.dc.dao.PodVlanMapDao;
 import com.cloud.dc.dao.VlanDao;
+import com.cloud.domain.Domain;
 import com.cloud.domain.DomainVO;
 import com.cloud.domain.dao.DomainDao;
 import com.cloud.exception.InsufficientAddressCapacityException;
@@ -82,7 +81,6 @@ import com.cloud.network.dao.IPAddressVO;
 import com.cloud.network.dao.NetworkAccountDao;
 import com.cloud.network.dao.NetworkAccountVO;
 import com.cloud.network.dao.NetworkDao;
-import com.cloud.network.dao.NetworkDetailsDao;
 import com.cloud.network.dao.NetworkDomainDao;
 import com.cloud.network.dao.NetworkDomainVO;
 import com.cloud.network.dao.NetworkServiceMapDao;
@@ -143,6 +141,7 @@ import com.cloud.vm.NicVO;
 import com.cloud.vm.VMInstanceVO;
 import com.cloud.vm.VirtualMachine;
 import com.cloud.vm.VirtualMachine.Type;
+import com.cloud.vm.VirtualMachineManager;
 import com.cloud.vm.dao.NicDao;
 import com.cloud.vm.dao.NicSecondaryIpDao;
 import com.cloud.vm.dao.VMInstanceDao;
@@ -172,8 +171,6 @@ public class NetworkModelImpl extends ManagerBase implements NetworkModel, Confi
     NetworkOfferingDao _networkOfferingDao = null;
     @Inject
     NetworkDao _networksDao = null;
-    @Inject
-    NetworkDetailsDao networkDetailsDao;
     @Inject
     NicDao _nicDao = null;
     @Inject
@@ -594,11 +591,22 @@ public class NetworkModelImpl extends ManagerBase implements NetworkModel, Confi
     @Override
     public String getNextAvailableMacAddressInNetwork(long networkId) throws InsufficientAddressCapacityException {
         NetworkVO network = _networksDao.findById(networkId);
-        String mac = _networksDao.getNextAvailableMacAddress(networkId, MACIdentifier.value());
-        if (mac == null) {
-            throw new InsufficientAddressCapacityException("Unable to create another mac address", Network.class, networkId);
+        Integer zoneIdentifier = MACIdentifier.value();
+        if (zoneIdentifier.intValue() == 0) {
+            zoneIdentifier = Long.valueOf(network.getDataCenterId()).intValue();
         }
+        String mac;
+        do {
+            mac = _networksDao.getNextAvailableMacAddress(networkId, zoneIdentifier);
+            if (mac == null) {
+                throw new InsufficientAddressCapacityException("Unable to create another mac address", Network.class, networkId);
+            }
+        } while(! isMACUnique(mac));
         return mac;
+    }
+
+    private boolean isMACUnique(String mac) {
+        return (_nicDao.findByMacAddress(mac) == null);
     }
 
     @Override
@@ -2675,6 +2683,11 @@ public class NetworkModelImpl extends ManagerBase implements NetworkModel, Confi
             vmData.add(new String[]{METATDATA_DIR, CLOUD_DOMAIN_ID_FILE, domain.getUuid()});
         }
 
+        String customCloudName = VirtualMachineManager.MetadataCustomCloudName.valueIn(datacenterId);
+        if (org.apache.commons.lang3.StringUtils.isNotBlank(customCloudName)) {
+            vmData.add(new String[]{METATDATA_DIR, CLOUD_NAME_FILE, customCloudName});
+        }
+
         return vmData;
     }
 
@@ -2684,10 +2697,8 @@ public class NetworkModelImpl extends ManagerBase implements NetworkModel, Confi
             String[] keyValuePairs = userDataDetails.split(",");
             for(String pair : keyValuePairs)
             {
-                String[] entry = pair.split("=");
-                String key = entry[0].trim();
-                String value = entry[1].trim();
-                vmData.add(new String[]{METATDATA_DIR, key, StringUtils.unicodeEscape(value)});
+                final Pair<String, String> keyValue = StringUtils.getKeyValuePairWithSeparator(pair, "=");
+                vmData.add(new String[]{METATDATA_DIR, keyValue.first(), StringUtils.unicodeEscape(keyValue.second())});
             }
         }
     }

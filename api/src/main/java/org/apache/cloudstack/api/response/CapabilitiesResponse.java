@@ -100,6 +100,10 @@ public class CapabilitiesResponse extends BaseResponse {
     @Param(description = "true if experimental features for Kubernetes cluster such as Docker private registry are enabled, false otherwise")
     private boolean kubernetesClusterExperimentalFeaturesEnabled;
 
+    @SerializedName("customhypervisordisplayname")
+    @Param(description = "Display name for custom hypervisor", since = "4.19.0")
+    private String customHypervisorDisplayName;
+
     @SerializedName("desktopserviceenabled")
     @Param(description = "true if Desktop Service plugin is enabled, false otherwise")
     private boolean desktopServiceEnabled;
@@ -132,6 +136,10 @@ public class CapabilitiesResponse extends BaseResponse {
     @Param(description = "Monitoring Service Wall Portal for VM Uri setting")
     private String wallPortalVmUri;
 
+    @SerializedName("securityfeaturesenabled")
+    @Param(description = "A setting that enables/disables features developed for security features.")
+    private boolean securityFeaturesEnabled;
+
     @SerializedName("host")
     @Param(description = "Management Server Host Ip")
     private String host;
@@ -143,6 +151,10 @@ public class CapabilitiesResponse extends BaseResponse {
     @SerializedName("balancingserviceenabled")
     @Param(description = "true if Balancing Service plugin is enabled, false otherwise")
     private boolean balancingServiceEnabled;
+
+    @SerializedName("eventdeleteenabled")
+    @Param(description = "true if Event Delete Button is enabled, false otherwise")
+    private boolean eventDeleteEnabled;
 
     @SerializedName(ApiConstants.INSTANCES_STATS_RETENTION_TIME)
     @Param(description = "the retention time for Instances stats", since = "4.18.0")
@@ -268,6 +280,10 @@ public class CapabilitiesResponse extends BaseResponse {
         this.wallPortalVmUri = wallPortalVmUri;
     }
 
+    public void setSecurityFeaturesEnabled(boolean securityFeaturesEnabled) {
+        this.securityFeaturesEnabled = securityFeaturesEnabled;
+    }
+
     public void setHost(String host) {
         this.host = host;
     }
@@ -277,6 +293,10 @@ public class CapabilitiesResponse extends BaseResponse {
 
     public void setBalancingServiceEnabled(boolean balancingServiceEnabled) {
         this.balancingServiceEnabled = balancingServiceEnabled;
+    }
+
+    public void setEventDeleteEnabled(boolean eventDeleteEnabled) {
+        this.eventDeleteEnabled = eventDeleteEnabled;
     }
 
     public void setInstancesStatsRetentionTime(Integer instancesStatsRetentionTime) {
@@ -293,5 +313,9 @@ public class CapabilitiesResponse extends BaseResponse {
 
     public void setInstancesDisksStatsRetentionTime(Integer instancesDisksStatsRetentionTime) {
         this.instancesDisksStatsRetentionTime = instancesDisksStatsRetentionTime;
+    }
+
+    public void setCustomHypervisorDisplayName(String customHypervisorDisplayName) {
+        this.customHypervisorDisplayName = customHypervisorDisplayName;
     }
 }

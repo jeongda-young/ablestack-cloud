@@ -32,7 +32,7 @@ import org.apache.commons.lang3.StringUtils;
 public class CloudianUtils {
 
     private static final Logger LOG = Logger.getLogger(CloudianUtils.class);
-    private static final String HMAC_SHA1_ALGORITHM = "HmacSHA1";
+    private static final String HMAC_SHA256_ALGORITHM = "HmacSHA256";
 
     /**
      * Generates RFC-2104 compliant HMAC signature
@@ -45,8 +45,8 @@ public class CloudianUtils {
             return null;
         }
         try {
-            final SecretKeySpec signingKey = new SecretKeySpec(key.getBytes(), HMAC_SHA1_ALGORITHM);
-            final Mac mac = Mac.getInstance(HMAC_SHA1_ALGORITHM);
+            final SecretKeySpec signingKey = new SecretKeySpec(key.getBytes(), HMAC_SHA256_ALGORITHM);
+            final Mac mac = Mac.getInstance(HMAC_SHA256_ALGORITHM);
             mac.init(signingKey);
             byte[] rawHmac = mac.doFinal(data.getBytes());
             return Base64.encodeBase64String(rawHmac);

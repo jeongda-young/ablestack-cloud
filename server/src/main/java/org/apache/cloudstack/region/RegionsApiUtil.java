@@ -296,8 +296,8 @@ public class RegionsApiUtil {
      */
     private static String signRequest(String request, String key) {
         try {
-            Mac mac = Mac.getInstance("HmacSHA1");
-            SecretKeySpec keySpec = new SecretKeySpec(key.getBytes(), "HmacSHA1");
+            Mac mac = Mac.getInstance("HmacSHA256");
+            SecretKeySpec keySpec = new SecretKeySpec(key.getBytes(), "HmacSHA256");
             mac.init(keySpec);
             mac.update(request.getBytes());
             byte[] encryptedBytes = mac.doFinal();

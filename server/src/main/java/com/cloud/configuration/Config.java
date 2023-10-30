@@ -136,6 +136,22 @@ public enum Config {
             "0.75",
             "Percentage (as a value between 0 and 1) of local storage utilization above which alerts will be sent about low local storage available.",
             null),
+    ManagementServerLocalStorageCapacityThreshold(
+            "Alert",
+            ManagementServer.class,
+            Float.class,
+            "management.server.localStorage.capacity.notificationthreshold",
+            "0.75",
+            "Percentage (as a value between 0 and 1) of management server local storage utilization above which alerts will be sent about low local storage available.",
+            null),
+    ManagementServerDatabaseStorageCapacityThreshold(
+            "Alert",
+            ManagementServer.class,
+            Float.class,
+            "management.server.database.capacity.notificationthreshold",
+            "0.75",
+            "Percentage (as a value between 0 and 1) of management server database storage utilization above which alerts will be sent about low database storage available",
+            null),
 
     // Storage
 
@@ -678,7 +694,7 @@ public enum Config {
             ManagementServer.class,
             Integer.class,
             "event.purge.delay",
-            "15",
+            "0",
             "Events older than specified number days will be purged. Set this value to 0 to never delete events",
             null),
     SecStorageVmMTUSize(
@@ -844,7 +860,7 @@ public enum Config {
             "The interval (in milliseconds) when vm stats are retrieved from agents.",
             null),
     VmDiskStatsInterval("Advanced", ManagementServer.class, Integer.class, "vm.disk.stats.interval", "0", "Interval (in seconds) to report vm disk statistics.", null),
-    VolumeStatsInterval("Advanced", ManagementServer.class, Integer.class, "volume.stats.interval", "60000", "Interval (in miliseconds) to report volume statistics.", null),
+    VolumeStatsInterval("Advanced", ManagementServer.class, Integer.class, "volume.stats.interval", "60000", "Interval (in milliseconds) to report volume statistics.", null),
     VmTransitionWaitInterval(
             "Advanced",
             ManagementServer.class,
@@ -1621,7 +1637,7 @@ public enum Config {
             String.class,
             "implicit.host.tags",
             "GPU",
-            "Tag hosts at the time of host disovery based on the host properties/capabilities",
+            "Tag hosts at the time of host discovery based on the host properties/capabilities",
             null),
     VpcCleanupInterval(
             "Advanced",
@@ -1805,6 +1821,7 @@ public enum Config {
     PublishResourceStateEvent("Advanced", ManagementServer.class, Boolean.class, "publish.resource.state.events", "true", "enable or disable publishing of alert events on the event bus", null),
     PublishUsageEvent("Advanced", ManagementServer.class, Boolean.class, "publish.usage.events", "true", "enable or disable publishing of usage events on the event bus", null),
     PublishAsynJobEvent("Advanced", ManagementServer.class, Boolean.class, "publish.async.job.events", "true", "enable or disable publishing of usage events on the event bus", null),
+    EventDeleteEnabled("Advanced", ManagementServer.class, Boolean.class, "event.delete.enabled", "true", "If set to true, the delete event button is enabled", null),
 
     // StatsCollector
     StatsOutPutGraphiteHost("Advanced", ManagementServer.class, String.class, "stats.output.uri", "", "URI to additionally send StatsCollector statistics to", null),

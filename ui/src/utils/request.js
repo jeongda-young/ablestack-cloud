@@ -126,11 +126,38 @@ const err = (error) => {
       })
       router.push({ path: '/exception/404' })
     }
+    // if (response.status === 531) {
+    //   console.log('request.js 531')
+    //   console.log(response.data.loginresponse.errortext)
+    //   console.log('response.status :>> ', response.status)
+    //   for (const key in response.data) {
+    //     console.log('key :>> ', key)
+    //     console.log('key.includes(loginresponse) :>> ', response.data.loginresponse.errortext)
+    //     if (key.includes('loginresponse')) {
+    //       if (response.data.loginresponse.errortext.includes('simultaneous access is not allowed')) {
+    //         console.log(response.data.loginresponse.errortext.includes('simultaneous access is not allowed'))
+    //         countNotify++
+    //         store.commit('SET_COUNT_NOTIFY', countNotify)
+    //         notification.error({
+    //           top: '65px',
+    //           message: i18n.global.t('label.session.connect.failed'),
+    //           description: i18n.global.t('message.session.connect.failed'),
+    //           onClose: () => {
+    //             let countNotify = store.getters.countNotify
+    //             countNotify > 0 ? countNotify-- : countNotify = 0
+    //             store.commit('SET_COUNT_NOTIFY', countNotify)
+    //           }
+    //         })
+    //         return
+    //       }
+    //     }
+    //   }
+    // }
   }
   if (error.isAxiosError && !error.response) {
     countNotify++
     store.commit('SET_COUNT_NOTIFY', countNotify)
-    notification.warn({
+    notification.error({
       top: '65px',
       message: error.message || i18n.global.t('message.network.error'),
       description: i18n.global.t('message.network.error.description'),
@@ -141,6 +168,12 @@ const err = (error) => {
         store.commit('SET_COUNT_NOTIFY', countNotify)
       }
     })
+    const originalPath = router.currentRoute.value.fullPath
+    if (originalPath !== '/user/login' && originalPath.includes('/user/login') === false) {
+      store.dispatch('Logout').then(() => {
+        router.push({ path: '/user/login', query: { redirect: originalPath } })
+      })
+    }
   }
   return Promise.reject(error)
 }
@@ -192,7 +225,12 @@ const sourceToken = {
   },
   cancel: () => {
     if (!source) sourceToken.init()
-    source.cancel()
+    if (source) {
+      source.cancel()
+      source = null
+    } else {
+      console.log('Source token failed to be cancelled')
+    }
   }
 }
 

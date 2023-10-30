@@ -384,6 +384,7 @@ public class DatabaseUpgradeChecker implements SystemIntegrityChecker {
                 ///////////////////// Ablestack 업그레이드 //////////////////////////
                 beforeUpgradeAblestack("Bronto");
                 beforeUpgradeAblestack("Cerato");
+                beforeUpgradeAblestack("Diplo");
                 ///////////////////// Ablestack 업그레이드 //////////////////////////
 
                 if (StringUtils.isBlank(currentVersionValue)) {
@@ -412,6 +413,7 @@ public class DatabaseUpgradeChecker implements SystemIntegrityChecker {
                 ///////////////////// Ablestack 업그레이드 //////////////////////////
                 afterUpgradeAblestack("Bronto");
                 afterUpgradeAblestack("Cerato");
+                afterUpgradeAblestack("Diplo");
                 ///////////////////// Ablestack 업그레이드 //////////////////////////
                 lock.unlock();
             }
@@ -524,10 +526,11 @@ public class DatabaseUpgradeChecker implements SystemIntegrityChecker {
     }
 
     @VisibleForTesting
-    protected static final class NoopDbUpgrade implements DbUpgrade {
+    protected static final class NoopDbUpgrade implements DbUpgrade, DbUpgradeSystemVmTemplate {
 
         private final String upgradedVersion;
         private final String[] upgradeRange;
+        private SystemVmTemplateRegistration systemVmTemplateRegistration;
 
         private NoopDbUpgrade(final CloudStackVersion fromVersion, final CloudStackVersion toVersion) {
 
@@ -568,5 +571,23 @@ public class DatabaseUpgradeChecker implements SystemIntegrityChecker {
             return new InputStream[0];
         }
 
+        private void initSystemVmTemplateRegistration() {
+            systemVmTemplateRegistration = new SystemVmTemplateRegistration("");
+        }
+
+        @Override
+        public void updateSystemVmTemplates(Connection conn) {
+            s_logger.debug("Updating System Vm template IDs");
+            initSystemVmTemplateRegistration();
+            try {
+                systemVmTemplateRegistration.updateSystemVmTemplates(conn);
+            } catch (Exception e) {
+                throw new CloudRuntimeException("Failed to find / register SystemVM template(s)");
+            }
+        }
+    }
+
+    public CloudStackVersion getLatestVersion() {
+        return hierarchy.getLatestVersion();
     }
 }

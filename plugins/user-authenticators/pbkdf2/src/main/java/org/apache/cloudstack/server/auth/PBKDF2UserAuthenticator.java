@@ -131,7 +131,7 @@ public class PBKDF2UserAuthenticator extends AdapterBase implements UserAuthenti
     }
 
     public static byte[] makeSalt() throws NoSuchAlgorithmException {
-        SecureRandom sr = SecureRandom.getInstance("SHA1PRNG");
+        SecureRandom sr = SecureRandom.getInstance("DRBG");
         byte[] salt = new byte[s_saltlen];
         sr.nextBytes(salt);
         return salt;

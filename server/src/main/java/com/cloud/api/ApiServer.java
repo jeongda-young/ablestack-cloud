@@ -57,6 +57,7 @@ import javax.servlet.http.HttpSession;
 
 import org.apache.cloudstack.acl.APIChecker;
 import org.apache.cloudstack.api.APICommand;
+import org.apache.cloudstack.api.ApiCommandResourceType;
 import org.apache.cloudstack.api.ApiConstants;
 import org.apache.cloudstack.api.ApiErrorCode;
 import org.apache.cloudstack.api.ApiServerService;
@@ -91,6 +92,8 @@ import org.apache.cloudstack.api.response.CreateCmdResponse;
 import org.apache.cloudstack.api.response.ExceptionResponse;
 import org.apache.cloudstack.api.response.ListResponse;
 import org.apache.cloudstack.api.response.LoginCmdResponse;
+import org.apache.cloudstack.auth.UserAuthenticator;
+import org.apache.cloudstack.auth.UserAuthenticator.ActionOnFailedAuthentication;
 import org.apache.cloudstack.config.ApiServiceConfiguration;
 import org.apache.cloudstack.context.CallContext;
 import org.apache.cloudstack.framework.config.ConfigKey;
@@ -105,6 +108,7 @@ import org.apache.cloudstack.framework.messagebus.MessageDispatcher;
 import org.apache.cloudstack.framework.messagebus.MessageHandler;
 import org.apache.cloudstack.managed.context.ManagedContextRunnable;
 import org.apache.commons.codec.binary.Base64;
+import org.apache.commons.lang3.BooleanUtils;
 import org.apache.http.ConnectionClosedException;
 import org.apache.http.HttpException;
 import org.apache.http.HttpRequest;
@@ -137,9 +141,11 @@ import org.bouncycastle.jce.provider.BouncyCastleProvider;
 import org.springframework.beans.factory.NoSuchBeanDefinitionException;
 import org.springframework.stereotype.Component;
 
+import com.cloud.alert.AlertManager;
 import com.cloud.api.dispatch.DispatchChainFactory;
 import com.cloud.api.dispatch.DispatchTask;
 import com.cloud.api.response.ApiResponseSerializer;
+import com.cloud.dc.DataCenterVO;
 import com.cloud.domain.Domain;
 import com.cloud.domain.DomainVO;
 import com.cloud.domain.dao.DomainDao;
@@ -161,10 +167,13 @@ import com.cloud.storage.VolumeApiService;
 import com.cloud.user.Account;
 import com.cloud.user.AccountManager;
 import com.cloud.user.AccountManagerImpl;
+import com.cloud.user.AccountVO;
 import com.cloud.user.DomainManager;
 import com.cloud.user.User;
 import com.cloud.user.UserAccount;
 import com.cloud.user.UserVO;
+import com.cloud.user.dao.AccountDao;
+import com.cloud.user.dao.UserDao;
 import com.cloud.utils.ConstantTimeComparator;
 import com.cloud.utils.DateUtil;
 import com.cloud.utils.HttpUtils;
@@ -188,6 +197,8 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
     private static final Logger s_logger = Logger.getLogger(ApiServer.class.getName());
     private static final Logger s_accessLogger = Logger.getLogger("apiserver." + ApiServer.class.getName());
 
+    private static final String SANITIZATION_REGEX = "[\n\r]";
+
     private static boolean encodeApiResponse = false;
 
     /**
@@ -206,6 +217,10 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
     @Inject
     private DomainDao domainDao;
     @Inject
+    private UserDao userDao;
+    @Inject
+    private AccountDao accountDao;
+    @Inject
     private UUIDManager uuidMgr;
     @Inject
     private AsyncJobManager asyncMgr;
@@ -215,6 +230,8 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
     private APIAuthenticationManager authManager;
     @Inject
     private ProjectDao projectDao;
+    @Inject
+    private AlertManager alertMgr;
 
     private List<PluggableService> pluggableServices;
 
@@ -222,6 +239,8 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
 
     @Inject
     private ApiAsyncJobDispatcher asyncDispatcher;
+
+    protected List<UserAuthenticator> _userPasswordEncoders;
 
     private static int s_workerCount = 0;
     private static Map<String, List<Class<?>>> s_apiNameCmdClassMap = new HashMap<String, List<Class<?>>>();
@@ -274,13 +293,33 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
             , "Http response content type for JSON"
             , false
             , ConfigKey.Scope.Global);
-
-    private static final ConfigKey<Boolean> UseEventAccountInfo = new ConfigKey<Boolean>( "advanced"
+    private static final ConfigKey<Boolean> UseEventAccountInfo = new ConfigKey<Boolean>( "Advanced"
             , Boolean.class
             , "event.accountinfo"
             , "false"
             , "use account info in event logging"
             , true
+            , ConfigKey.Scope.Global);
+    static final ConfigKey<Boolean> ConcurrentConnectEnabled = new ConfigKey<Boolean>( "Advanced"
+            , Boolean.class
+            , "concurrent.connect.enabled"
+            , "false"
+            , "If set to true, simultaneous access is possible using the same account."
+            , true
+            , ConfigKey.Scope.Global);
+    static final ConfigKey<Boolean> BlockExistConnection = new ConfigKey<Boolean>( "Advanced"
+            , Boolean.class
+            , "block.exist.connection"
+            , "true"
+            , "When simultaneous access is not allowed('concurrent.connect.enabled : false'), existing sessions are blocked if true, and new sessions are blocked if false."
+            , true
+            , ConfigKey.Scope.Global);
+    static final ConfigKey<Boolean> SecurityFeaturesEnabled = new ConfigKey<Boolean>( "Advanced"
+            , Boolean.class
+            , "security.features.enabled"
+            , "true"
+            , "A setting that enables/disables features developed for security features."
+            , false
             , ConfigKey.Scope.Global);
 
     @Override
@@ -371,7 +410,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
         try {
             eventBus.publish(event);
         } catch (EventBusException evx) {
-            String errMsg = "Failed to publish async job event on the the event bus.";
+            String errMsg = "Failed to publish async job event on the event bus.";
             s_logger.warn(errMsg, evx);
         }
     }
@@ -738,6 +777,9 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
             params.put("ctxStartEventId", String.valueOf(startEventId));
             params.put("cmdEventType", asyncCmd.getEventType().toString());
             params.put("ctxDetails", ApiGsonHelper.getBuilder().create().toJson(ctx.getContextParameters()));
+            if (asyncCmd.getHttpMethod() != null) {
+                params.put(ApiConstants.HTTPMETHOD, asyncCmd.getHttpMethod().toString());
+            }
 
             Long instanceId = (objectId == null) ? asyncCmd.getApiResourceId() : objectId;
 
@@ -919,7 +961,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
             if ("3".equals(signatureVersion)) {
                 // New signature authentication. Check for expire parameter and its validity
                 if (expires == null) {
-                    s_logger.debug("Missing Expires parameter -- ignoring request. Signature: " + signature + ", apiKey: " + apiKey);
+                    s_logger.debug("Missing Expires parameter -- ignoring request.");
                     return false;
                 }
 
@@ -932,7 +974,9 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
 
                 final Date now = new Date(System.currentTimeMillis());
                 if (expiresTS.before(now)) {
-                    s_logger.debug("Request expired -- ignoring ...sig: " + signature + ", apiKey: " + apiKey);
+                    signature = signature.replaceAll(SANITIZATION_REGEX, "_");
+                    apiKey = apiKey.replaceAll(SANITIZATION_REGEX, "_");
+                    s_logger.debug(String.format("Request expired -- ignoring ...sig [%s], apiKey [%s].", signature, apiKey));
                     return false;
                 }
             }
@@ -969,8 +1013,8 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
 
             unsignedRequest = unsignedRequest.toLowerCase();
 
-            final Mac mac = Mac.getInstance("HmacSHA1");
-            final SecretKeySpec keySpec = new SecretKeySpec(secretKey.getBytes(), "HmacSHA1");
+            final Mac mac = Mac.getInstance("HmacSHA256");
+            final SecretKeySpec keySpec = new SecretKeySpec(secretKey.getBytes(), "HmacSHA256");
             mac.init(keySpec);
             mac.update(unsignedRequest.getBytes());
 
@@ -979,7 +1023,8 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
             final boolean equalSig = ConstantTimeComparator.compareStrings(signature, computedSignature);
 
             if (!equalSig) {
-                s_logger.info("User signature: " + signature + " is not equaled to computed signature: " + computedSignature);
+                signature = signature.replaceAll(SANITIZATION_REGEX, "_");
+                s_logger.info(String.format("User signature [%s] is not equaled to computed signature [%s].", signature, computedSignature));
             } else {
                 CallContext.register(user, account);
             }
@@ -1082,6 +1127,9 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
                 if (ApiConstants.ISSUER_FOR_2FA.equalsIgnoreCase(attrName)) {
                     response.setIssuerFor2FA(attrObj.toString());
                 }
+                if (ApiConstants.FIRST_LOGIN.equalsIgnoreCase(attrName)) {
+                    response.setFirstLogin(attrObj.toString());
+                }
             }
         }
         response.setResponseName("loginresponse");
@@ -1099,9 +1147,38 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
         } else {
             domainId = userDomain.getId();
         }
-
         final UserAccount userAcct = accountMgr.authenticateUser(username, password, domainId, loginIpAddress, requestParameters);
+        List<String> sessionIds = new ArrayList<>();
         if (userAcct != null) {
+            if (ApiServer.SecurityFeaturesEnabled.value()) { // 보안기능용 : 하나의 세션만 접속
+                if (ApiSessionListener.getSessionCount() > 1) { // 존재하는 세션이 있으면 기존 세션 차단
+                    ApiSessionListener.deleteAllExistSessionIds(session.getId()); // 접속하려는 세션 제외한 기존의 모든 세션 차단
+                    ActionEventUtils.onActionEvent(userAcct.getId(), userAcct.getAccountId(), domainId, EventTypes.EVENT_USER_SESSION_BLOCK,
+                                                    "All previously connected sessions have been blocked.", User.UID_SYSTEM, ApiCommandResourceType.User.toString());
+                    alertMgr.sendAlert(AlertManager.AlertType.EVENT_USER_SESSION_BLOCK, 0, new Long(0), "All previously connected sessions have been blocked.", "");
+                }
+            } else {
+                sessionIds = ApiSessionListener.listExistSessionIds(username, session.getId()); // 기존에 접속된 동일한 사용자의 세션 확인
+                if (!ApiServer.ConcurrentConnectEnabled.value() && sessionIds != null && sessionIds.size() > 0) { //동시접속 불가일 경우
+                    if (ApiServer.BlockExistConnection.value()) { //기존 세션 차단
+                        ApiSessionListener.deleteSessionIds(sessionIds);
+                        ActionEventUtils.onActionEvent(userAcct.getId(), userAcct.getAccountId(), domainId, EventTypes.EVENT_USER_SESSION_BLOCK,
+                                                        "Sessions previously connected to account [" + username + "] have been disconnected.", User.UID_SYSTEM, ApiCommandResourceType.User.toString());
+                        alertMgr.sendAlert(AlertManager.AlertType.EVENT_USER_SESSION_BLOCK, 0, new Long(0), "Sessions previously connected to account [" + username + "] have been disconnected.", "");
+                    } else { //신규 세션 차단
+                        if (session != null) {
+                            sessionIds.clear();
+                            sessionIds.add(session.getId());
+                            ApiSessionListener.deleteSessionIds(sessionIds);
+                            ActionEventUtils.onActionEvent(userAcct.getId(), userAcct.getAccountId(), domainId, EventTypes.EVENT_USER_SESSION_BLOCK,
+                                                            "A session connected to account [" + username + "] exists. Block new connections.", User.UID_SYSTEM, ApiCommandResourceType.User.toString());
+                            alertMgr.sendAlert(AlertManager.AlertType.EVENT_USER_SESSION_BLOCK, 0, new Long(0), "A session connected to account [" + username + "] exists. Block new connections.", "");
+                            throw new CloudAuthenticationException("You are already connecting with the same account and simultaneous access is not allowed.");
+                        }
+                    }
+                }
+            }
+
             final String timezone = userAcct.getTimezone();
             float offsetInHrs = 0f;
             if (timezone != null) {
@@ -1159,6 +1236,15 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
             session.setAttribute(ApiConstants.PROVIDER_FOR_2FA, userAcct.getUser2faProvider());
             session.setAttribute(ApiConstants.ISSUER_FOR_2FA, issuerFor2FA);
 
+            User _user = userDao.getUserByName(username, domainId);
+            List<DataCenterVO> dcList = new ArrayList<>();
+            dcList = ApiDBUtils.listZones();
+            if (validatePassword(_user, "password") && "admin".equals(username) && (dcList == null || dcList.size() == 0)) {
+                session.setAttribute(ApiConstants.FIRST_LOGIN, true);
+            } else {
+                session.setAttribute(ApiConstants.FIRST_LOGIN, false);
+            }
+
             // (bug 5483) generate a session key that the user must submit on every request to prevent CSRF, add that
             // to the login response so that session-based authenticators know to send the key back
             final SecureRandom sesssionKeyRandom = new SecureRandom();
@@ -1170,6 +1256,24 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
             return createLoginResponse(session);
         }
         throw new CloudAuthenticationException("Failed to authenticate user " + username + " in domain " + domainId + "; please provide valid credentials");
+    }
+
+    protected boolean validatePassword(User user, String password) {
+        AccountVO userAccount = accountDao.findById(user.getAccountId());
+        boolean passwordMatchesFirstLogin = false;
+        for (UserAuthenticator userAuthenticator : _userPasswordEncoders) {
+            Pair<Boolean, ActionOnFailedAuthentication> authenticationResult = userAuthenticator.authenticate(user.getUsername(), password, userAccount.getDomainId(), null);
+            if (authenticationResult == null) {
+                s_logger.trace(String.format("Authenticator [%s] is returning null for the authenticate mehtod.", userAuthenticator.getClass()));
+                continue;
+            }
+            if (BooleanUtils.toBoolean(authenticationResult.first())) {
+                s_logger.debug(String.format("User [id=%s] re-authenticated [authenticator=%s] during password update.", user.getUuid(), userAuthenticator.getName()));
+                passwordMatchesFirstLogin = true;
+                break;
+            }
+        }
+        return passwordMatchesFirstLogin;
     }
 
     @Override
@@ -1200,15 +1304,16 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
         }
 
         final Account account = accountMgr.getAccount(user.getAccountId());
-        final String accessAllowedCidrs = ApiServiceConfiguration.ApiAllowedSourceCidrList.valueIn(account.getId()).replaceAll("\\s","");
+        final String ApiAllowedSourceIp = ApiServiceConfiguration.ApiAllowedSourceIp.valueIn(account.getId()).replaceAll("\\s","");
+        final String accessAllowedCidr = ApiServiceConfiguration.ApiAllowedSourceCidr.valueIn(account.getId()).replaceAll("\\s", "");
         final Boolean apiSourceCidrChecksEnabled = ApiServiceConfiguration.ApiSourceCidrChecksEnabled.value();
 
         if (apiSourceCidrChecksEnabled) {
-            s_logger.debug("CIDRs from which account '" + account.toString() + "' is allowed to perform API calls: " + accessAllowedCidrs);
-            if (!NetUtils.isIpInCidrList(remoteAddress, accessAllowedCidrs.split(","))) {
-                s_logger.warn("Request by account '" + account.toString() + "' was denied since " + remoteAddress + " does not match " + accessAllowedCidrs);
+            s_logger.debug("CIDRs from which account '" + account.toString() + "' is allowed to perform API calls: " + ApiAllowedSourceIp  + "/" + accessAllowedCidr);
+            if (!NetUtils.isIpInCidrList(remoteAddress, (ApiAllowedSourceIp + "/" + accessAllowedCidr).split(","))) {
+                s_logger.warn("Request by account '" + account.toString() + "' was denied since " + remoteAddress + " does not match " + ApiAllowedSourceIp  + "/" + accessAllowedCidr);
                 throw new OriginDeniedException("Calls from disallowed origin", account, remoteAddress);
-                }
+            }
         }
 
 
@@ -1479,6 +1584,14 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
         ApiServer.encodeApiResponse = encodeApiResponse;
     }
 
+    public List<UserAuthenticator> getUserPasswordEncoders() {
+        return _userPasswordEncoders;
+    }
+
+    public void setUserPasswordEncoders(List<UserAuthenticator> encoders) {
+        _userPasswordEncoders = encoders;
+    }
+
     @Override
     public String getConfigComponentName() {
         return ApiServer.class.getSimpleName();
@@ -1491,7 +1604,10 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
                 ConcurrentSnapshotsThresholdPerHost,
                 EncodeApiResponse,
                 EnableSecureSessionCookie,
-                JSONDefaultContentType
+                JSONDefaultContentType,
+                ConcurrentConnectEnabled,
+                BlockExistConnection,
+                SecurityFeaturesEnabled
         };
     }
 }

@@ -243,7 +243,7 @@ public class LdapImportUsersCmd extends BaseListCmd {
 
     private String generatePassword() throws ServerApiException {
         try {
-            final SecureRandom randomGen = SecureRandom.getInstance("SHA1PRNG");
+            final SecureRandom randomGen = SecureRandom.getInstance("DRBG");
             final byte bytes[] = new byte[20];
             randomGen.nextBytes(bytes);
             return new String(Base64.encode(bytes), "UTF-8");

@@ -25,21 +25,21 @@
       <p class="form__label">{{ $t('label.operation') }}</p>
       <a-select
         v-model:value="selectedOperation"
-        :defaultValue="$t('label.add')"
+        :defaultValue="'add'"
         @change="fetchData"
         v-focus="true"
         showSearch
-        optionFilterProp="label"
+        optionFilterProp="value"
         :filterOption="(input, option) => {
-          return option.children[0].children.toLowerCase().indexOf(input.toLowerCase()) >= 0
+          return option.value.toLowerCase().indexOf(input.toLowerCase()) >= 0
         }" >
-        <a-select-option :value="$t('label.add')">{{ $t('label.add') }}</a-select-option>
-        <a-select-option :value="$t('label.remove')">{{ $t('label.remove') }}</a-select-option>
-        <a-select-option :value="$t('label.reset')">{{ $t('label.reset') }}</a-select-option>
+        <a-select-option :value="'add'">{{ $t('label.add') }}</a-select-option>
+        <a-select-option :value="'remove'">{{ $t('label.remove') }}</a-select-option>
+        <a-select-option :value="'reset'">{{ $t('label.reset') }}</a-select-option>
       </a-select>
     </div>
 
-    <template v-if="selectedOperation !== $t('label.reset')">
+    <template v-if="selectedOperation !== 'reset'">
       <div class="form__item">
         <p class="form__label">
           <span class="required">*</span>
@@ -47,19 +47,19 @@
         </p>
         <a-select
           v-model:value="selectedShareWith"
-          :defaultValue="$t('label.account')"
+          :defaultValue="'Account'"
           @change="fetchData"
           showSearch
-          optionFilterProp="label"
+          optionFilterProp="value"
           :filterOption="(input, option) => {
-            return option.children[0].children.toLowerCase().indexOf(input.toLowerCase()) >= 0
+            return option.value.toLowerCase().indexOf(input.toLowerCase()) >= 0
           }">
-          <a-select-option :value="$t('label.account')">{{ $t('label.account') }}</a-select-option>
-          <a-select-option :value="$t('label.project')">{{ $t('label.project') }}</a-select-option>
+          <a-select-option :value="'Account'">{{ $t('label.account') }}</a-select-option>
+          <a-select-option :value="'Project'">{{ $t('label.project') }}</a-select-option>
         </a-select>
       </div>
 
-      <template v-if="selectedShareWith === $t('label.account')">
+      <template v-if="selectedShareWith === 'Account'">
         <div class="form__item">
           <p class="form__label">
             {{ $t('label.account') }}
@@ -150,8 +150,8 @@ export default {
       selectedAccounts: [],
       selectedProjects: [],
       selectedAccountsList: '',
-      selectedOperation: this.$t('label.add'),
-      selectedShareWith: this.$t('label.account'),
+      selectedOperation: 'add',
+      selectedShareWith: 'Account',
       accountError: false,
       projectError: false,
       showAccountSelect: true,
@@ -163,7 +163,7 @@ export default {
     accountsList () {
       return this.accounts.length > 0 ? this.accounts
         .filter(a =>
-          this.selectedOperation === this.$t('label.add')
+          this.selectedOperation === 'add'
             ? !this.permittedAccounts.includes(a.name)
             : this.permittedAccounts.includes(a.name)
         ) : this.accounts
@@ -171,7 +171,7 @@ export default {
     projectsList () {
       return this.projects > 0 ? this.projects
         .filter(p =>
-          this.selectedOperation === this.$t('label.add')
+          this.selectedOperation === 'add'
             ? !this.permittedProjects.includes(p.id)
             : this.permittedProjects.includes(p.id)
         ) : this.projects
@@ -188,7 +188,7 @@ export default {
       } else {
         this.fetchTemplatePermissions()
       }
-      if (this.selectedShareWith === this.$t('label.account')) {
+      if (this.selectedShareWith === 'Account') {
         this.selectedAccounts = []
         this.fetchAccounts()
       } else {
@@ -252,8 +252,8 @@ export default {
       })
     },
     handleChange (selectedItems) {
-      if (this.selectedOperation === this.$t('label.add') || this.selectedOperation === this.$t('label.remove')) {
-        if (this.selectedShareWith === this.$t('label.account')) {
+      if (this.selectedOperation === 'add' || this.selectedOperation === 'remove') {
+        if (this.selectedShareWith === 'Account') {
           this.selectedAccounts = selectedItems
         } else {
           this.selectedProjects = selectedItems
@@ -267,7 +267,7 @@ export default {
       if (this.loading) return
       let variableKey = ''
       let variableValue = ''
-      if (this.selectedShareWith === this.$t('label.account')) {
+      if (this.selectedShareWith === 'Account') {
         variableKey = 'accounts'
         if (this.showAccountSelect) {
           variableValue = this.selectedAccounts.map(account => account).join(',')

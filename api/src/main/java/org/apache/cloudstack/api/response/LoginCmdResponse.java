@@ -86,6 +86,10 @@ public class LoginCmdResponse extends AuthenticationCmdResponse {
     @Param(description = "Two factor authentication issuer", since = "4.18.0.0")
     private String issuerFor2FA;
 
+    @SerializedName(value = ApiConstants.FIRST_LOGIN)
+    @Param(description = "first login")
+    private String firstLogin;
+
     public String getUsername() {
         return username;
     }
@@ -210,5 +214,13 @@ public class LoginCmdResponse extends AuthenticationCmdResponse {
 
     public void setIssuerFor2FA(String issuerFor2FA) {
         this.issuerFor2FA = issuerFor2FA;
+    }
+
+    public String getFirstLogin() {
+        return firstLogin;
+    }
+
+    public void setFirstLogin(String firstLogin) {
+        this.firstLogin = firstLogin;
     }
 }

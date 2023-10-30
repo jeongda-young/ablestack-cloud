@@ -97,7 +97,7 @@ import com.cloud.storage.dao.DiskOfferingDao;
 import com.cloud.test.IPRangeConfig;
 import com.cloud.user.Account;
 import com.cloud.user.AccountVO;
-import com.cloud.user.User;
+// import com.cloud.user.User;
 import com.cloud.user.dao.AccountDao;
 import com.cloud.utils.Pair;
 import com.cloud.utils.PasswordGenerator;
@@ -235,15 +235,15 @@ public class ConfigurationServerImpl extends ManagerBase implements Configuratio
             s_logger.debug("Configuration server excluded plaintext authenticator");
 
             // Save default service offerings
-            createServiceOffering(User.UID_SYSTEM, "1C-2GB-RBD-HA", 1, 2048, 500, "1Core 2GB", ProvisioningType.THIN, false, true, null);
-            createServiceOffering(User.UID_SYSTEM, "2C-4GB-RBD-HA", 2, 4096, 2000, "2Core 4GB", ProvisioningType.THIN, false, true, null);
-            createServiceOffering(User.UID_SYSTEM, "4C-8GB-RBD-HA", 4, 8192, 2000, "4Core 8GB", ProvisioningType.THIN, false, true, null);
-            createServiceOffering(User.UID_SYSTEM, "Custom-RBD-HA", 0, 0, 0, "Custom", ProvisioningType.THIN, false, true, null);
+            // createServiceOffering(User.UID_SYSTEM, "1C-2GB-RBD-HA", 1, 2048, 500, "1Core 2GB", ProvisioningType.THIN, false, true, null);
+            // createServiceOffering(User.UID_SYSTEM, "2C-4GB-RBD-HA", 2, 4096, 2000, "2Core 4GB", ProvisioningType.THIN, false, true, null);
+            // createServiceOffering(User.UID_SYSTEM, "4C-8GB-RBD-HA", 4, 8192, 2000, "4Core 8GB", ProvisioningType.THIN, false, true, null);
+            // createServiceOffering(User.UID_SYSTEM, "Custom-RBD-HA", 0, 0, 0, "Custom", ProvisioningType.THIN, false, true, null);
             // Save default disk offerings
-            createDefaultDiskOffering("50GB-WB-RBD", "RBD Disk, 50 GB", ProvisioningType.THIN, 50, null, false, false, DiskCacheMode.WRITEBACK);
-            createDefaultDiskOffering("100GB-WB-RBD", "RBD Disk, 100 GB", ProvisioningType.THIN, 100, null, false, false, DiskCacheMode.WRITEBACK);
-            createDefaultDiskOffering("1TB-WB-RBD", "RBD Disk, 1 TB", ProvisioningType.THIN, 1024, null, false, false, DiskCacheMode.WRITEBACK);
-            createDefaultDiskOffering("Custom-WB", "Custom Disk", ProvisioningType.THIN, 0, null, true, false, DiskCacheMode.WRITEBACK);
+            // createDefaultDiskOffering("50GB-WB-RBD", "RBD Disk, 50 GB", ProvisioningType.THIN, 50, null, false, false, DiskCacheMode.WRITEBACK);
+            // createDefaultDiskOffering("100GB-WB-RBD", "RBD Disk, 100 GB", ProvisioningType.THIN, 100, null, false, false, DiskCacheMode.WRITEBACK);
+            // createDefaultDiskOffering("1TB-WB-RBD", "RBD Disk, 1 TB", ProvisioningType.THIN, 1024, null, false, false, DiskCacheMode.WRITEBACK);
+            // createDefaultDiskOffering("Custom-WB", "Custom Disk", ProvisioningType.THIN, 0, null, true, false, DiskCacheMode.WRITEBACK);
 
             // Save the mount parent to the configuration table
             String mountParent = getMountParent();
@@ -858,7 +858,7 @@ public class ConfigurationServerImpl extends ManagerBase implements Configuratio
     private String getPrivateKey() throws NoSuchAlgorithmException {
         String encodedKey = null;
         // Algorithm for generating Key is SHA1, should this be configurable?
-        KeyGenerator generator = KeyGenerator.getInstance("HmacSHA1");
+        KeyGenerator generator = KeyGenerator.getInstance("HmacSHA256");
         SecretKey key = generator.generateKey();
         encodedKey = Base64.encodeBase64URLSafeString(key.getEncoded());
         return encodedKey;
@@ -1321,22 +1321,9 @@ public class ConfigurationServerImpl extends ManagerBase implements Configuratio
         List<ResourceCountVO> domainResourceCount = _resourceCountDao.listResourceCountByOwnerType(ResourceOwnerType.Domain);
         List<ResourceCountVO> accountResourceCount = _resourceCountDao.listResourceCountByOwnerType(ResourceOwnerType.Account);
 
-        final List<ResourceType> accountSupportedResourceTypes = new ArrayList<ResourceType>();
-        final List<ResourceType> domainSupportedResourceTypes = new ArrayList<ResourceType>();
+        final int expectedCount = resourceTypes.length;
 
-        for (ResourceType resourceType : resourceTypes) {
-            if (resourceType.supportsOwner(ResourceOwnerType.Account)) {
-                accountSupportedResourceTypes.add(resourceType);
-            }
-            if (resourceType.supportsOwner(ResourceOwnerType.Domain)) {
-                domainSupportedResourceTypes.add(resourceType);
-            }
-        }
-
-        final int accountExpectedCount = accountSupportedResourceTypes.size();
-        final int domainExpectedCount = domainSupportedResourceTypes.size();
-
-        if ((domainResourceCount.size() < domainExpectedCount * domains.size())) {
+        if ((domainResourceCount.size() < expectedCount * domains.size())) {
             s_logger.debug("resource_count table has records missing for some domains...going to insert them");
             for (final DomainVO domain : domains) {
                 // Lock domain
@@ -1350,8 +1337,8 @@ public class ConfigurationServerImpl extends ManagerBase implements Configuratio
                             domainCountStr.add(domainCount.getType().toString());
                         }
 
-                        if (domainCountStr.size() < domainExpectedCount) {
-                            for (ResourceType resourceType : domainSupportedResourceTypes) {
+                        if (domainCountStr.size() < expectedCount) {
+                            for (ResourceType resourceType : resourceTypes) {
                                 if (!domainCountStr.contains(resourceType.toString())) {
                                     ResourceCountVO resourceCountVO = new ResourceCountVO(resourceType, 0, domain.getId(), ResourceOwnerType.Domain);
                                     s_logger.debug("Inserting resource count of type " + resourceType + " for domain id=" + domain.getId());
@@ -1365,7 +1352,7 @@ public class ConfigurationServerImpl extends ManagerBase implements Configuratio
             }
         }
 
-        if ((accountResourceCount.size() < accountExpectedCount * accounts.size())) {
+        if ((accountResourceCount.size() < expectedCount * accounts.size())) {
             s_logger.debug("resource_count table has records missing for some accounts...going to insert them");
             for (final AccountVO account : accounts) {
                 // lock account
@@ -1379,8 +1366,8 @@ public class ConfigurationServerImpl extends ManagerBase implements Configuratio
                             accountCountStr.add(accountCount.getType().toString());
                         }
 
-                        if (accountCountStr.size() < accountExpectedCount) {
-                            for (ResourceType resourceType : accountSupportedResourceTypes) {
+                        if (accountCountStr.size() < expectedCount) {
+                            for (ResourceType resourceType : resourceTypes) {
                                 if (!accountCountStr.contains(resourceType.toString())) {
                                     ResourceCountVO resourceCountVO = new ResourceCountVO(resourceType, 0, account.getId(), ResourceOwnerType.Account);
                                     s_logger.debug("Inserting resource count of type " + resourceType + " for account id=" + account.getId());

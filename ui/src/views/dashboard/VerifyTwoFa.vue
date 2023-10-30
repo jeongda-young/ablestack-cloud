@@ -20,8 +20,12 @@
     <a-form>
       <img
         v-if="$config.banner"
+        :style="{
+          width: $config.theme['@banner-width'],
+          height: $config.theme['@banner-height'],
+        }"
         :src="$config.banner"
-        class="user-layout-logo"
+        class="center-align"
         alt="logo">
       <h1 style="text-align: center; font-size: 24px; color: gray"> {{ $t('label.two.factor.authentication') }} </h1>
       <p v-if="$store.getters.twoFaProvider === 'totp'" style="text-align: center; font-size: 16px;" v-html="$t('message.two.fa.auth.totp')"></p>

@@ -239,6 +239,8 @@ public class CapacityVO implements Capacity {
         capacityNames.put(CAPACITY_TYPE_VLAN, "VLAN");
         capacityNames.put(CAPACITY_TYPE_DIRECT_ATTACHED_PUBLIC_IP, "DIRECT_ATTACHED_PUBLIC_IP");
         capacityNames.put(CAPACITY_TYPE_LOCAL_STORAGE, "LOCAL_STORAGE");
+        capacityNames.put(CAPACITY_TYPE_MANAGEMENT_LOCAL_STORAGE, "MANAGEMENT_LOCAL_STORAGE");
+        capacityNames.put(CAPACITY_TYPE_MANAGEMENT_DATABASE_STORAGE, "MANAGEMENT_DATABASE_STORAGE");
         capacityNames.put(CAPACITY_TYPE_GPU, "GPU");
         capacityNames.put(CAPACITY_TYPE_CPU_CORE, "CPU_CORE");
         capacityNames.put(CAPACITY_TYPE_VIRTUAL_NETWORK_IPV6_SUBNET, "VIRTUAL_NETWORK_IPV6_SUBNET");

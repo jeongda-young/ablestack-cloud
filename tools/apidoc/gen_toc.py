@@ -260,7 +260,10 @@ known_categories = {
     'Rolling': 'Rolling Maintenance',
     'importVsphereStoragePolicies' : 'vSphere storage policies',
     'listVsphereStoragePolicies' : 'vSphere storage policies',
-    'ConsoleEndpoint': 'Console Endpoint'
+    'ConsoleEndpoint': 'Console Endpoint',
+    'Shutdown': 'Shutdown',
+    'SecurityCheck': 'Security',
+    'IntegrityVerification': 'Security'
 }
 
 

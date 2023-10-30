@@ -45,6 +45,7 @@ import org.eclipse.jetty.server.handler.MovedContextHandler;
 import org.eclipse.jetty.server.handler.RequestLogHandler;
 import org.eclipse.jetty.server.handler.gzip.GzipHandler;
 import org.eclipse.jetty.server.session.SessionHandler;
+import org.eclipse.jetty.util.ssl.KeyStoreScanner;
 import org.eclipse.jetty.util.ssl.SslContextFactory;
 import org.eclipse.jetty.util.thread.QueuedThreadPool;
 import org.eclipse.jetty.util.thread.ScheduledExecutorScheduler;
@@ -88,7 +89,7 @@ public class ServerDaemon implements Daemon {
     private boolean httpEnable = true;
     private int httpPort = 8080;
     private int httpsPort = 8443;
-    private int sessionTimeout = 30;
+    private int sessionTimeout = 10;
     private boolean httpsEnable = false;
     private String accessLogFile = "access.log";
     private String bindInterface = null;
@@ -134,7 +135,7 @@ public class ServerDaemon implements Daemon {
             setKeystorePassword(properties.getProperty(KEYSTORE_PASSWORD));
             setWebAppLocation(properties.getProperty(WEBAPP_DIR));
             setAccessLogFile(properties.getProperty(ACCESS_LOG, "access.log"));
-            setSessionTimeout(Integer.valueOf(properties.getProperty(SESSION_TIMEOUT, "30")));
+            setSessionTimeout(Integer.valueOf(properties.getProperty(SESSION_TIMEOUT, "10")));
         } catch (final IOException e) {
             LOG.warn("Failed to read configuration from server.properties file", e);
         } finally {
@@ -241,6 +242,14 @@ public class ServerDaemon implements Daemon {
             sslConnector.setPort(httpsPort);
             sslConnector.setHost(bindInterface);
             server.addConnector(sslConnector);
+
+            // add scanner to auto-reload certs
+            try {
+                KeyStoreScanner scanner = new KeyStoreScanner(sslContextFactory);
+                server.addBean(scanner);
+            } catch (Exception ex) {
+                LOG.error("failed to set up keystore scanner, manual refresh of certificates will be required", ex);
+            }
         }
     }
 

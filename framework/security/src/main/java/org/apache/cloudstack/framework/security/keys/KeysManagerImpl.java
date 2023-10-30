@@ -90,7 +90,7 @@ public class KeysManagerImpl implements KeysManager, Configurable {
     private static String getBase64EncodedRandomKey(int nBits) {
         SecureRandom random;
         try {
-            random = SecureRandom.getInstance("SHA1PRNG");
+            random = SecureRandom.getInstance("DRBG");
             byte[] keyBytes = new byte[nBits / 8];
             random.nextBytes(keyBytes);
             return Base64.encodeBase64URLSafeString(keyBytes);

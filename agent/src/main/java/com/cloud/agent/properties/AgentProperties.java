@@ -312,6 +312,9 @@ public class AgentProperties{
      */
     public static final Property<String> OPENVSWITCH_DPDK_OVS_PATH = new Property<>("openvswitch.dpdk.ovs.path", null, String.class);
 
+    public static final Property<String> HEALTH_CHECK_SCRIPT_PATH =
+            new Property<>("agent.health.check.script.path", null, String.class);
+
     /**
      * Sets the hypervisor type.<br>
      * Possible values: kvm | lxc <br>
@@ -498,6 +501,15 @@ public class AgentProperties{
      * Default value: <code>1024</code>
      */
     public static final Property<Integer> HOST_RESERVED_MEM_MB = new Property<>("host.reserved.mem.mb", 1024);
+
+    /**
+     * How many host CPUs to reserve for non-allocation.<br>
+     * This can be used to set aside CPU cores on the host for other tasks, such as running hyperconverged storage<br>
+     * processes, etc.
+     * Data type: Integer.<br>
+     * Default value: <code>0</code>
+     */
+    public static final Property<Integer> HOST_RESERVED_CPU_CORE_COUNT = new Property<>("host.reserved.cpu.count", 0);
 
     /**
      * The model of Watchdog timer to present to the Guest.<br>
@@ -720,6 +732,13 @@ public class AgentProperties{
      * Default value: <code>1</code>
      */
     public static final Property<Integer> IOTHREADS = new Property<>("iothreads", 1);
+
+    /**
+     * BGP controll CIDR
+     * Data type: String.<br>
+     * Default value: <code>169.254.0.0/16</code>
+     */
+    public static final Property<String> CONTROL_CIDR = new Property<>("control.cidr", "169.254.0.0/16");
 
     public static class Property <T>{
         private String name;

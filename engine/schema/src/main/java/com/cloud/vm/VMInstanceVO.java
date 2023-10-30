@@ -220,7 +220,7 @@ public class VMInstanceVO implements VirtualMachine, FiniteStateObject<State, Vi
         this.userId = userId;
         limitCpuUse = false;
         try {
-            SecureRandom random = SecureRandom.getInstance("SHA1PRNG");
+            SecureRandom random = SecureRandom.getInstance("DRBG");
             byte[] randomBytes = new byte[16];
             random.nextBytes(randomBytes);
             vncPassword = Base64.encodeBase64URLSafeString(randomBytes);

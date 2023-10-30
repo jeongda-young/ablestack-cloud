@@ -41,7 +41,7 @@ import com.cloud.utils.script.Script;
 public class SwiftUtil {
     private static Logger logger = Logger.getLogger(SwiftUtil.class);
     protected static final long SWIFT_MAX_SIZE = 5L * 1024L * 1024L * 1024L;
-    private static final String HMAC_SHA1_ALGORITHM = "HmacSHA1";
+    private static final String HMAC_SHA256_ALGORITHM = "HmacSHA256";
     private static final String CD_SRC = "cd %s;";
     private static final String SWIFT_CMD= "/usr/bin/python %s -A %s -U %s:%s -K %s %s";
     private static final String WITH_STORAGE_POLICY = " --storage-policy \"%s\"";
@@ -231,8 +231,8 @@ public class SwiftUtil {
     static String calculateRFC2104HMAC(String data, String key)
             throws SignatureException, NoSuchAlgorithmException, InvalidKeyException {
 
-        SecretKeySpec signingKey = new SecretKeySpec(key.getBytes(), HMAC_SHA1_ALGORITHM);
-        Mac mac = Mac.getInstance(HMAC_SHA1_ALGORITHM);
+        SecretKeySpec signingKey = new SecretKeySpec(key.getBytes(), HMAC_SHA256_ALGORITHM);
+        Mac mac = Mac.getInstance(HMAC_SHA256_ALGORITHM);
         mac.init(signingKey);
         return toHexString(mac.doFinal(data.getBytes()));
 

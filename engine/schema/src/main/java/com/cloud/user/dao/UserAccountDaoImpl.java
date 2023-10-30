@@ -21,6 +21,7 @@ import com.cloud.user.UserAccountVO;
 import com.cloud.utils.db.GenericDaoBase;
 import com.cloud.utils.db.SearchBuilder;
 import com.cloud.utils.db.SearchCriteria;
+
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -73,6 +74,13 @@ public class UserAccountDaoImpl extends GenericDaoBase<UserAccountVO, Long> impl
         SearchCriteria<UserAccountVO> sc = userAccountSearch.create();
         sc.setParameters("apiKey", apiKey);
         return findOneBy(sc);
+    }
+
+    @Override
+    public List<UserAccountVO> getAllUsersByAccountType(long type) {
+        SearchCriteria<UserAccountVO> sc = createSearchCriteria();
+        sc.addAnd("type", SearchCriteria.Op.EQ, type);
+        return listBy(sc);
     }
 
 }

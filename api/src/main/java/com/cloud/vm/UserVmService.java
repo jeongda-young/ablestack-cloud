@@ -20,8 +20,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import com.cloud.storage.VolumeApiService;
-import com.cloud.storage.snapshot.SnapshotApiService;
 import org.apache.cloudstack.api.BaseCmd.HTTPMethod;
 import org.apache.cloudstack.api.command.admin.vm.AssignVMCmd;
 import org.apache.cloudstack.api.command.admin.vm.RecoverVMCmd;
@@ -58,6 +56,8 @@ import com.cloud.network.Network.IpAddresses;
 import com.cloud.offering.DiskOffering;
 import com.cloud.offering.ServiceOffering;
 import com.cloud.storage.StoragePool;
+import com.cloud.storage.VolumeApiService;
+import com.cloud.storage.snapshot.SnapshotApiService;
 import com.cloud.template.VirtualMachineTemplate;
 import com.cloud.user.Account;
 import com.cloud.uservm.UserVm;
@@ -420,10 +420,7 @@ public interface UserVmService {
     /**
      * Creates a vm group.
      *
-     * @param name
-     *            - name of the group
-     * @param accountId
-     *            - accountId
+     * @param cmd The command specifying domain ID, account name, group name, and project ID
      */
     InstanceGroup createVmGroup(CreateVMGroupCmd cmd);
 
@@ -450,6 +447,13 @@ public interface UserVmService {
 
     UserVm recordVirtualMachineToDB(CloneVMCmd cmd, long templateId) throws InsufficientCapacityException, ResourceUnavailableException, ConcurrentOperationException,
             StorageUnavailableException, ResourceAllocationException;
+    /**
+     * This API is mostly to trigger VM.CREATE event for deployVirtualMachine with startvm=false, because there is no code in "execute" part of VM creation.
+     * However, it can be used for additional VM customization in the future.
+     * @param vmId - Virtual Machine Id
+     * @return - Virtual Machine
+     */
+    UserVm finalizeCreateVirtualMachine(long vmId);
 
     UserVm getUserVm(long vmId);
 
@@ -457,16 +461,10 @@ public interface UserVmService {
 
     /**
      * Migrate the given VM to the destination host provided. The API returns the migrated VM if migration succeeds.
-     * Only Root
-     * Admin can migrate a VM.
+     * Only Root Admin can migrate a VM.
      *
-     * @param destinationStorage
-     *            TODO
-     * @param Long
-     *            vmId
-     *            vmId of The VM to migrate
-     * @param Host
-     *            destinationHost to migrate the VM
+     * @param vmId The ID of the VM to be migrated
+     * @param destinationHost The destination host to where the VM will be migrated
      *
      * @return VirtualMachine migrated VM
      * @throws ManagementServerException
@@ -485,14 +483,9 @@ public interface UserVmService {
      * Migrate the given VM with its volumes to the destination host. The API returns the migrated VM if it succeeds.
      * Only root admin can migrate a VM.
      *
-     * @param destinationStorage
-     *            TODO
-     * @param Long
-     *            vmId of The VM to migrate
-     * @param Host
-     *            destinationHost to migrate the VM
-     * @param Map
-     *            A map of volume to which pool it should be migrated
+     * @param vmId The ID of the VM to be migrated
+     * @param destinationHost The destination host to where the VM will be migrated
+     * @param volumeToPool A map of volume to which pool it should be migrated
      *
      * @return VirtualMachine migrated VM
      * @throws ManagementServerException
@@ -526,7 +519,7 @@ public interface UserVmService {
     /**
      * Finds and returns an encrypted password for a VM.
      *
-     * @param  userVmId
+     * @param  vmId
      * @return Base64 encoded userdata
      */
     String getVmUserData(long vmId);

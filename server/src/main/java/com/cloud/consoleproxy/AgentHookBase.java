@@ -204,7 +204,7 @@ public abstract class AgentHookBase implements AgentHook {
         StartConsoleProxyAgentHttpHandlerCommand cmd = null;
 
         try {
-            SecureRandom random = SecureRandom.getInstance("SHA1PRNG");
+            SecureRandom random = SecureRandom.getInstance("DRBG");
 
             byte[] randomBytes = new byte[16];
             random.nextBytes(randomBytes);

@@ -21,7 +21,7 @@ import store from '@/store'
 export default {
   name: 'storage',
   title: 'label.storage',
-  icon: 'database-outlined',
+  icon: 'hdd-outlined',
   children: [
     {
       name: 'volume',
@@ -38,7 +38,7 @@ export default {
         }
       },
       columns: () => {
-        const fields = ['name', 'state', 'type', 'vmname', 'sizegb']
+        const fields = ['name', 'state', 'sizegb', 'type', 'vmname']
         const metricsFields = ['diskkbsread', 'diskkbswrite', 'diskiopstotal']
 
         if (store.getters.userInfo.roletype === 'Admin') {
@@ -108,6 +108,7 @@ export default {
           icon: 'cloud-upload-outlined',
           docHelp: 'adminguide/storage.html#uploading-an-existing-volume-to-a-virtual-machine',
           label: 'label.upload.volume.from.local',
+          show: () => { return 'getUploadParamsForVolume' in store.getters.apis },
           listView: true,
           popup: true,
           component: shallowRef(defineAsyncComponent(() => import('@/views/storage/UploadLocalVolume.vue')))
@@ -307,14 +308,15 @@ export default {
       permission: ['listSnapshots'],
       resourceType: 'Snapshot',
       columns: () => {
-        var fields = ['name', 'state', 'volumename', 'intervaltype', 'created']
+        var fields = ['name', 'state', 'volumename', 'intervaltype', 'physicalsize', 'created']
         if (['Admin', 'DomainAdmin'].includes(store.getters.userInfo.roletype)) {
-          fields.push('domain')
           fields.push('account')
+          fields.push('domain')
         }
+        fields.push('zonename')
         return fields
       },
-      details: ['name', 'id', 'volumename', 'intervaltype', 'account', 'domain', 'created'],
+      details: ['name', 'id', 'volumename', 'volumetype', 'snapshottype', 'intervaltype', 'physicalsize', 'virtualsize', 'account', 'domain', 'created'],
       tabs: [
         {
           name: 'details',
@@ -380,8 +382,8 @@ export default {
       columns: () => {
         const fields = ['displayname', 'state', 'name', 'type', 'current', 'parentName', 'created']
         if (['Admin', 'DomainAdmin'].includes(store.getters.userInfo.roletype)) {
-          fields.push('domain')
           fields.push('account')
+          fields.push('domain')
         }
         return fields
       },
@@ -442,20 +444,7 @@ export default {
       ]
     },
     {
-      name: 'ssv',
-      title: 'label.shared.storage.vm',
-      icon: 'DeploymentUnitOutlined',
-      docHelp: '',
-      permission: ['listUserSSV'],
-      columns: ['name', 'state', 'ssvmname', 'sharedstoragevmtype', 'serviceofferingname', 'hostname', 'zonename'],
-      details: ['name', 'id', 'state', 'sharedstoragevmtype', 'hostname', 'zonename', 'created', 'activeviewersessions', 'hostcontrolstate'],
-      searchFilters: ['name', 'domainid', 'account', 'tags'],
-      resourceType: 'listUserSSV',
-      tabs: [
-        {
-          component: shallowRef(defineAsyncComponent(() => import('@/views/infra/SsvTabs.vue')))
-        }
-      ],
+
       actions: [
         {
           api: 'createSSV',

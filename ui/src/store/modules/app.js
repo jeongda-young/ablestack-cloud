@@ -15,25 +15,26 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { vueProps } from '@/vue-app'
 import {
-  SIDEBAR_TYPE,
-  DEFAULT_THEME,
-  DEFAULT_LAYOUT_MODE,
+  CUSTOM_COLUMNS,
   DEFAULT_COLOR,
   DEFAULT_COLOR_INVERTED,
-  DEFAULT_FIXED_HEADER,
-  DEFAULT_FIXED_SIDEMENU,
-  DEFAULT_FIXED_HEADER_HIDDEN,
   DEFAULT_CONTENT_WIDTH_TYPE,
+  DEFAULT_FIXED_HEADER,
+  DEFAULT_FIXED_HEADER_HIDDEN,
+  DEFAULT_FIXED_SIDEMENU,
+  DEFAULT_LAYOUT_MODE,
   DEFAULT_MULTI_TAB,
-  USE_BROWSER_TIMEZONE,
-  SERVER_MANAGER,
-  VUE_VERSION,
-  CUSTOM_COLUMNS,
+  DEFAULT_THEME,
+  FAVICON_STATE_CAPACITY,
   FAVICON_STATE_INTERVAL,
-  FAVICON_STATE_CAPACITY
+  RELOAD_ALL_PROJECTS,
+  SERVER_MANAGER,
+  SIDEBAR_TYPE,
+  USE_BROWSER_TIMEZONE,
+  VUE_VERSION
 } from '@/store/mutation-types'
+import { vueProps } from '@/vue-app'
 
 const app = {
   state: {
@@ -54,7 +55,8 @@ const app = {
     server: '',
     vueVersion: '',
     faviconStateInterval: '',
-    faviconStateCapacity: ''
+    faviconStateCapacity: '',
+    allProjects: []
   },
   mutations: {
     SET_SIDEBAR_TYPE: (state, type) => {
@@ -133,6 +135,16 @@ const app = {
     SET_FAVICON_STATE_CAPACITY: (state, faviconStateCapacity) => {
       vueProps.$localStorage.set(FAVICON_STATE_CAPACITY, faviconStateCapacity)
       state.faviconStateCapacity = faviconStateCapacity
+    },
+    RELOAD_ALL_PROJECTS: (state, allProjects = []) => {
+      vueProps.$localStorage.set(RELOAD_ALL_PROJECTS, allProjects)
+      state.allProjects = allProjects
+    },
+    SET_SHUTDOWN_TRIGGERED: (state, shutdownTriggered) => {
+      state.shutdownTriggered = shutdownTriggered
+    },
+    SET_READY_FOR_SHUTDOWN_POLLING_JOB: (state, readyForShutdownPollingJob) => {
+      state.readyForShutdownPollingJob = readyForShutdownPollingJob
     }
   },
   actions: {
@@ -195,6 +207,15 @@ const app = {
     },
     SetFaviconStateCapacity ({ commit }, faviconStateCapacity) {
       commit('SET_FAVICON_STATE_CAPACITY', faviconStateCapacity)
+    },
+    ReloadAllProjects ({ commit, allProjects }) {
+      commit('RELOAD_ALL_PROJECTS', allProjects)
+    },
+    SetShutdownTriggered ({ commit }, bool) {
+      commit('SET_SHUTDOWN_TRIGGERED', bool)
+    },
+    SetReadyForShutdownPollingJob ({ commit }, job) {
+      commit('SET_READY_FOR_SHUTDOWN_POLLING_JOB', job)
     }
   }
 }

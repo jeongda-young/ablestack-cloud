@@ -53,6 +53,7 @@ intelligent IaaS cloud implementation.
 %package management
 Summary:   CloudStack management server UI
 Requires: java-11-openjdk
+Requires: (tzdata-java or timezone-java)
 Requires: python3
 Requires: bash
 Requires: gawk
@@ -98,6 +99,7 @@ The Apache CloudStack files shared between agent and management server
 Summary: CloudStack Agent for KVM hypervisors
 Requires: (openssh-clients or openssh)
 Requires: java-11-openjdk
+Requires: tzdata-java
 Requires: %{name}-common = %{_ver}
 Requires: libvirt
 Requires: ebtables
@@ -134,6 +136,7 @@ The CloudStack baremetal agent
 %package usage
 Summary: CloudStack Usage calculation server
 Requires: java-11-openjdk
+Requires: tzdata-java
 Group: System Environment/Libraries
 %description usage
 The CloudStack usage calculation service
@@ -200,7 +203,8 @@ if [ \"%{_temp}\" != "" ]; then
 fi
 
 mvn -Psystemvm,developer -DskipTests $FLAGS clean package
-cd ui && npm install && node build.js && npm run build && cd ..
+# cd ui && npm install && node build.js && npm run build && cd ..
+cd ui && npm install vue@3.2.31 && npm install && node build.js && npm run build && cd ..
 
 %install
 [ ${RPM_BUILD_ROOT} != "/" ] && rm -rf ${RPM_BUILD_ROOT}
@@ -221,6 +225,7 @@ mkdir -p ${RPM_BUILD_ROOT}%{_sysconfdir}/sudoers.d
 mkdir -p ${RPM_BUILD_ROOT}%{_datadir}/%{name}-common/scripts
 mkdir -p ${RPM_BUILD_ROOT}%{_datadir}/%{name}-common/vms
 mkdir -p ${RPM_BUILD_ROOT}%{_datadir}/%{name}-common/python-site
+mkdir -p ${RPM_BUILD_ROOT}%{_datadir}/%{name}-common/lib
 mkdir -p ${RPM_BUILD_ROOT}/usr/bin
 cp -r scripts/* ${RPM_BUILD_ROOT}%{_datadir}/%{name}-common/scripts
 install -D systemvm/dist/* ${RPM_BUILD_ROOT}%{_datadir}/%{name}-common/vms/
@@ -230,6 +235,7 @@ python3 -m py_compile ${RPM_BUILD_ROOT}%{_datadir}/%{name}-common/python-site/cl
 python3 -m compileall ${RPM_BUILD_ROOT}%{_datadir}/%{name}-common/python-site/cloudutils
 cp build/gitrev.txt ${RPM_BUILD_ROOT}%{_datadir}/%{name}-common/scripts
 cp packaging/centos8/cloudstack-sccs ${RPM_BUILD_ROOT}/usr/bin
+cp utils/target/lib/*jar ${RPM_BUILD_ROOT}%{_datadir}/%{name}-common/lib/
 
 mkdir -p ${RPM_BUILD_ROOT}%{_datadir}/%{name}-common/scripts/network/cisco
 cp -r plugins/network-elements/cisco-vnmc/src/main/scripts/network/cisco/* ${RPM_BUILD_ROOT}%{_datadir}/%{name}-common/scripts/network/cisco
@@ -256,6 +262,8 @@ install -D client/target/utilities/bin/cloud-setup-management ${RPM_BUILD_ROOT}%
 install -D client/target/utilities/bin/cloud-setup-baremetal ${RPM_BUILD_ROOT}%{_bindir}/%{name}-setup-baremetal
 install -D client/target/utilities/bin/cloud-sysvmadm ${RPM_BUILD_ROOT}%{_bindir}/%{name}-sysvmadm
 install -D client/target/utilities/bin/cloud-update-xenserver-licenses ${RPM_BUILD_ROOT}%{_bindir}/%{name}-update-xenserver-licenses
+install -D client/target/utilities/bin/mold ${RPM_BUILD_ROOT}%{_bindir}/mold
+install -D client/target/utilities/bin/mold-update-dbpassword ${RPM_BUILD_ROOT}%{_bindir}/mold-update-dbpassword
 
 cp -r client/target/utilities/scripts/db/* ${RPM_BUILD_ROOT}%{_datadir}/%{name}-management/setup
 
@@ -281,7 +289,8 @@ ln -sf log4j-cloud.xml  ${RPM_BUILD_ROOT}%{_sysconfdir}/%{name}/management/log4j
 
 install python/bindir/cloud-external-ipallocator.py ${RPM_BUILD_ROOT}%{_bindir}/%{name}-external-ipallocator.py
 install -D client/target/pythonlibs/jasypt-1.9.3.jar ${RPM_BUILD_ROOT}%{_datadir}/%{name}-common/lib/jasypt-1.9.3.jar
-install -D utils/target/cloud-utils-%{_maventag}.jar ${RPM_BUILD_ROOT}%{_datadir}/%{name}-common/lib/%{name}-utils.jar
+install -D utils/target/cloud-utils-%{_maventag}-bundled.jar ${RPM_BUILD_ROOT}%{_datadir}/%{name}-common/lib/%{name}-utils.jar
+install -D utils/target/cloud-utils-%{_maventag}-tests.jar ${RPM_BUILD_ROOT}%{_datadir}/%{name}-common/lib/%{name}-utils-test.jar
 
 install -D packaging/centos8/cloud-ipallocator.rc ${RPM_BUILD_ROOT}%{_initrddir}/%{name}-ipallocator
 install -D packaging/centos8/cloud.limits ${RPM_BUILD_ROOT}%{_sysconfdir}/security/limits.d/cloud
@@ -389,6 +398,7 @@ install -D tools/whisker/LICENSE ${RPM_BUILD_ROOT}%{_defaultdocdir}/%{name}-inte
 
 %posttrans common
 
+unalias cp
 python_dir=$(python3 -c "from distutils.sysconfig import get_python_lib; print(get_python_lib(1))")
 if [ ! -z $python_dir ];then
   cp -f -r /usr/share/cloudstack-common/python-site/* $python_dir/
@@ -583,6 +593,8 @@ pip install --upgrade /usr/share/cloudstack-marvin/Marvin-*.tar.gz
 %attr(0755,root,root) %{_bindir}/%{name}-set-guest-sshkey
 %attr(0755,root,root) %{_bindir}/%{name}-sysvmadm
 %attr(0755,root,root) %{_bindir}/%{name}-setup-encryption
+%attr(0755,root,root) %{_bindir}/mold
+%attr(0755,root,root) %{_bindir}/mold-update-dbpassword
 %{_datadir}/%{name}-management/setup/*.sql
 %{_datadir}/%{name}-management/setup/*.sh
 %{_datadir}/%{name}-management/setup/server-setup.xml
@@ -625,8 +637,7 @@ pip install --upgrade /usr/share/cloudstack-marvin/Marvin-*.tar.gz
 %attr(0644,root,root) %{_datadir}/%{name}-common/python-site/cloud_utils.py
 %attr(0644,root,root) %{_datadir}/%{name}-common/python-site/__pycache__/*
 %attr(0644,root,root) %{_datadir}/%{name}-common/python-site/cloudutils/*
-%attr(0644, root, root) %{_datadir}/%{name}-common/lib/jasypt-1.9.3.jar
-%attr(0644, root, root) %{_datadir}/%{name}-common/lib/%{name}-utils.jar
+%attr(0644, root, root) %{_datadir}/%{name}-common/lib/*.jar
 %{_defaultdocdir}/%{name}-common-%{version}/LICENSE
 %{_defaultdocdir}/%{name}-common-%{version}/NOTICE
 

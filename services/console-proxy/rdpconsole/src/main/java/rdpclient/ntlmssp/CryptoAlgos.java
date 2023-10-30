@@ -134,7 +134,7 @@ public class CryptoAlgos implements NtlmConstants {
      */
     public static byte[] HMAC_MD5(byte[] k, byte[] m) {
         try {
-            String algorithm = "HMacMD5";
+            String algorithm = "HmacSHA256";
             Mac hashMac = Mac.getInstance(algorithm);
 
             Key secretKey = new SecretKeySpec(k, 0, k.length, algorithm);
