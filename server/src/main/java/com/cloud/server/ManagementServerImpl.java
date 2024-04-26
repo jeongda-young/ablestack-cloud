@@ -525,6 +525,7 @@ import org.apache.cloudstack.api.command.user.vm.AllocateVbmcToVMCmd;
 import org.apache.cloudstack.api.command.user.vm.RemoveVbmcToVMCmd;
 import org.apache.cloudstack.api.command.user.vm.CloneVMCmd;
 import org.apache.cloudstack.api.command.user.vm.DeployVMCmd;
+import org.apache.cloudstack.api.command.user.vm.DeployVMVolumeCmd;
 import org.apache.cloudstack.api.command.user.vm.DestroyVMCmd;
 import org.apache.cloudstack.api.command.user.vm.GetVMPasswordCmd;
 import org.apache.cloudstack.api.command.user.vm.ListNicsCmd;
@@ -3832,6 +3833,7 @@ public class ManagementServerImpl extends ManagerBase implements ManagementServe
         cmdList.add(UpdateTemplatePermissionsCmd.class);
         cmdList.add(AddNicToVMCmd.class);
         cmdList.add(DeployVMCmd.class);
+        cmdList.add(DeployVMVolumeCmd.class);
         cmdList.add(DestroyVMCmd.class);
         cmdList.add(ExpungeVMCmd.class);
         cmdList.add(GetVMPasswordCmd.class);

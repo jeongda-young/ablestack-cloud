@@ -194,7 +194,7 @@
               <a-button
                 type="primary"
                 size="medium"
-                shape="round"
+                shape="circle"
                 :tooltip="$t('label.create')"
                 @click="showAddTyModal"
                 :loading="loading"
@@ -221,10 +221,10 @@
               :visible="showAddTypeModal"
               :title="$t('label.volumetype')"
               @cancel="closeModals"
-              @ok="createVolume(record.name, record.size, record.volumeType)">
+              @ok="createVolume(record.name, record.size)">
               <div class="title">{{ $t('label.create.type.rbd.image') }}</div>
-              <a-form-item ref="root" name="root">
-                <a-select v-model="volumetype" @change="volumeTypeChange">
+              <a-form-item ref="volumetype" name="volumetype">
+                <a-select v-model:value="volumetype" @change="volumeTypeChange">
                   <a-select-option value='ROOT'>{{ $t('label.rootdisk') }}</a-select-option>
                   <a-select-option value='DATADISK'>{{ $t('label.data.disk') }}</a-select-option>
                 </a-select>
@@ -294,7 +294,7 @@ export default {
     if (this.resourceType === 'PrimaryStorage' && this.resource.type === 'RBD') {
       columns.push({
         key: 'deleteactions',
-        title: this.$t('label.create.delete')
+        title: this.$t('label.actions')
       })
     }
     return {
@@ -325,11 +325,6 @@ export default {
     initForm () {
       this.formRef = ref()
       this.form = reactive({
-        // name: this.resource.name,
-        // path: this.resource.path,
-        // account: this.resource.account,
-        // domainid: this.resource.domainid,
-        // type: this.resource.type
       })
       this.rules = reactive({})
     },
@@ -444,6 +439,7 @@ export default {
     closeModals () {
       this.showAddVolumeModal = false
       this.showAddTypeModal = false
+      this.fetchData()
     },
     fetchData () {
       this.dataSource = []

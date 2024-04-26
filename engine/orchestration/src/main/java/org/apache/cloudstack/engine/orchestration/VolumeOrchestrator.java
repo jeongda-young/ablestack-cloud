@@ -172,6 +172,7 @@ import com.cloud.vm.dao.SecondaryStorageVmDao;
 import com.cloud.vm.dao.UserVmCloneSettingDao;
 import com.cloud.vm.dao.UserVmDao;
 import com.cloud.vm.dao.UserVmDetailsDao;
+// import com.fasterxml.jackson.annotation.JsonTypeInfo.Id;
 
 public class VolumeOrchestrator extends ManagerBase implements VolumeOrchestrationService, Configurable {
 
@@ -865,6 +866,11 @@ public class VolumeOrchestrator extends ManagerBase implements VolumeOrchestrati
         vol.setFormat(getSupportedImageFormatForCluster(vm.getHypervisorType()));
         vol = _volsDao.persist(vol);
 
+
+        // VolumeVO volVO = _volsDao.findByUuid(vol.getId());
+        // volVO.setInstanceId(vm.getId());
+        // _volsDao.update(volVO.getId(), volVO);
+
         List<VolumeDetailVO> volumeDetailsVO = new ArrayList<VolumeDetailVO>();
         DiskOfferingDetailVO bandwidthLimitDetail = _diskOfferingDetailDao.findDetail(offering.getId(), Volume.BANDWIDTH_LIMIT_IN_MBPS);
         if (bandwidthLimitDetail != null) {
@@ -890,6 +896,225 @@ public class VolumeOrchestrator extends ManagerBase implements VolumeOrchestrati
 
         return diskProfile;
     }
+
+    @ActionEvent(eventType = EventTypes.EVENT_VOLUME_CREATE, eventDescription = "creating volume", create = true)
+    // @Override
+    public DiskProfile allocateRootVolumes(Type type, String name, DiskOffering offering, Long size, Long minIops, Long maxIops, VirtualMachine vm, Volume volume, Account owner,
+                                         Long deviceId) {
+        if (size == null) {
+            size = offering.getDiskSize();
+        } else {
+            size = (size * 1024 * 1024 * 1024);
+        }
+
+        minIops = minIops != null ? minIops : offering.getMinIops();
+        maxIops = maxIops != null ? maxIops : offering.getMaxIops();
+
+
+        VolumeVO volVO =_volsDao.findById(volume.getId());
+        volVO.setInstanceId(vm.getId());
+        _volsDao.update(volVO.getId(), volVO);
+        // VolumeVO vol = new VolumeVO(type, name, vm.getDataCenterId(), owner.getDomainId(), owner.getId(), offering.getId(), offering.getProvisioningType(), size, minIops, maxIops, null);
+        // if (vm != null) {
+        //     vol.setInstanceId(vm.getId());
+        // }
+
+        // if (deviceId != null) {
+        //     vol.setDeviceId(deviceId);
+        // } else if (type.equals(Type.ROOT)) {
+        //     vol.setDeviceId(0l);
+        // } else {
+        //     vol.setDeviceId(1l);
+        // }
+        // if (template.getFormat() == ImageFormat.ISO) {
+        //     vol.setIsoId(template.getId());
+        // } else if (template.getTemplateType().equals(Storage.TemplateType.DATADISK)) {
+        //     vol.setTemplateId(template.getId());
+        // }
+        // // display flag matters only for the User vms
+        // if (vm.getType() == VirtualMachine.Type.User) {
+        //     UserVmVO userVm = _userVmDao.findById(vm.getId());
+        //     vol.setDisplayVolume(userVm.isDisplayVm());
+        // }
+
+        // vol.setFormat(getSupportedImageFormatForCluster(vm.getHypervisorType()));
+        // vol = _volsDao.persist(vol);
+
+        // List<VolumeDetailVO> volumeDetailsVO = new ArrayList<VolumeDetailVO>();
+        // DiskOfferingDetailVO bandwidthLimitDetail = _diskOfferingDetailDao.findDetail(offering.getId(), Volume.BANDWIDTH_LIMIT_IN_MBPS);
+        // if (bandwidthLimitDetail != null) {
+        //     volumeDetailsVO.add(new VolumeDetailVO(vol.getId(), Volume.BANDWIDTH_LIMIT_IN_MBPS, bandwidthLimitDetail.getValue(), false));
+        // }
+        // DiskOfferingDetailVO iopsLimitDetail = _diskOfferingDetailDao.findDetail(offering.getId(), Volume.IOPS_LIMIT);
+        // if (iopsLimitDetail != null) {
+        //     volumeDetailsVO.add(new VolumeDetailVO(vol.getId(), Volume.IOPS_LIMIT, iopsLimitDetail.getValue(), false));
+        // }
+        // if (!volumeDetailsVO.isEmpty()) {
+        //     _volDetailDao.saveDetails(volumeDetailsVO);
+        // }
+
+        // // Save usage event and update resource count for user vm volumes
+        // if (vm.getType() == VirtualMachine.Type.User) {
+        //     UsageEventUtils.publishUsageEvent(EventTypes.EVENT_VOLUME_CREATE, vol.getAccountId(), vol.getDataCenterId(), vol.getId(), vol.getName(), offering.getId(), null, size,
+        //             Volume.class.getName(), vol.getUuid(), vol.isDisplayVolume());
+        //     _resourceLimitMgr.incrementVolumeResourceCount(vm.getAccountId(), vol.isDisplayVolume(), vol.getSize(), offering);
+        // }
+        DiskProfile diskProfile = toDiskProfile(volVO, offering);
+        updateRootDiskVolumeEventDetails(type, vm, List.of(diskProfile));
+
+        return diskProfile;
+    }
+    // private DiskProfile allocateRootVolume(Type type, String name, DiskOffering offering, Long rootDisksize, Long minIops, Long maxIops, Volume volume, VirtualMachine vm,
+    //                                             Account owner, long deviceId, String configurationId, Long rootVolumeId) {
+    //     assert (volume.getFormat() != ImageFormat.ISO) : "ISO is not a template.";
+
+    //     Long size = _tmpltMgr.getTemplateSize(volume.getId(), vm.getDataCenterId());
+    //     if (rootDisksize != null) {
+    //         if (volume.isDeployAsIs()) {
+    //             // Volume size specified from template deploy-as-is
+    //             size = rootDisksize;
+    //         } else {
+    //             rootDisksize = rootDisksize * 1024 * 1024 * 1024;
+    //             if (rootDisksize > size) {
+    //                 logger.debug(String.format("Using root disk size of [%s] bytes for the volume [%s].", toHumanReadableSize(rootDisksize), name));
+    //                 size = rootDisksize;
+    //             } else {
+    //                 logger.debug(String.format("The specified root disk size of [%s] bytes is smaller than the template. Using root disk size of [%s] bytes for the volume [%s].",
+    //                         toHumanReadableSize(rootDisksize), size, name));
+    //             }
+    //         }
+    //     }
+
+    //     minIops = minIops != null ? minIops : offering.getMinIops();
+    //     maxIops = maxIops != null ? maxIops : offering.getMaxIops();
+
+    //     VolumeVO vol = new VolumeVO(type, name, vm.getDataCenterId(), owner.getDomainId(), owner.getId(), offering.getId(), offering.getProvisioningType(), size, minIops, maxIops, null, rootVolumeId);
+    //     // vol.setFormat(getSupportedImageFormatForCluster(volume.getHypervisorType()));
+    //     if (vm != null) {
+    //         vol.setInstanceId(vm.getId());
+    //     }
+    //     vol.getUuid();
+
+    //     vol.setDeviceId(deviceId);
+    //     if (type.equals(Type.ROOT) && !vm.getType().equals(VirtualMachine.Type.User)) {
+    //         vol.setRecreatable(true);
+    //     }
+
+    //     if (vm.getType() == VirtualMachine.Type.User) {
+    //         UserVmVO userVm = _userVmDao.findById(vm.getId());
+    //         vol.setDisplayVolume(userVm.isDisplayVm());
+    //     }
+    //     vol.setId(rootVolumeId);
+    //     // vol = _volsDao.persist(vol);
+
+    //     List<VolumeDetailVO> volumeDetailsVO = new ArrayList<VolumeDetailVO>();
+    //     DiskOfferingDetailVO bandwidthLimitDetail = _diskOfferingDetailDao.findDetail(offering.getId(), Volume.BANDWIDTH_LIMIT_IN_MBPS);
+    //     if (bandwidthLimitDetail != null) {
+    //         volumeDetailsVO.add(new VolumeDetailVO(vol.getId(), Volume.BANDWIDTH_LIMIT_IN_MBPS, bandwidthLimitDetail.getValue(), false));
+    //     }
+    //     DiskOfferingDetailVO iopsLimitDetail = _diskOfferingDetailDao.findDetail(offering.getId(), Volume.IOPS_LIMIT);
+    //     if (iopsLimitDetail != null) {
+    //         volumeDetailsVO.add(new VolumeDetailVO(vol.getId(), Volume.IOPS_LIMIT, iopsLimitDetail.getValue(), false));
+    //     }
+    //     if (!volumeDetailsVO.isEmpty()) {
+    //         _volDetailDao.saveDetails(volumeDetailsVO);
+    //     }
+
+    //     if (StringUtils.isNotBlank(configurationId)) {
+    //         VolumeDetailVO deployConfigurationDetail = new VolumeDetailVO(vol.getId(), VmDetailConstants.DEPLOY_AS_IS_CONFIGURATION, configurationId, false);
+    //         _volDetailDao.persist(deployConfigurationDetail);
+    //     }
+
+    //     // Create event and update resource count for volumes if vm is a user vm
+    //     if (vm.getType() == VirtualMachine.Type.User) {
+
+    //         Long offeringId = null;
+
+    //         if (!offering.isComputeOnly()) {
+    //             offeringId = offering.getId();
+    //         }
+
+    //         UsageEventUtils.publishUsageEvent(EventTypes.EVENT_VOLUME_CREATE, vol.getAccountId(), vol.getDataCenterId(), vol.getId(), vol.getName(), offeringId, vol.getTemplateId(), size,
+    //                 Volume.class.getName(), vol.getUuid(), vol.isDisplayVolume());
+
+    //         _resourceLimitMgr.incrementVolumeResourceCount(vm.getAccountId(), vol.isDisplayVolume(), vol.getSize(), offering);
+    //     }
+    //     return toDiskProfile(vol, offering);
+    // }
+
+
+    // @ActionEvent(eventType = EventTypes.EVENT_VOLUME_CREATE, eventDescription = "creating volume", create = true)
+    // // @Override
+    // public DiskProfile allocateRootVolumes(Type type, String name, DiskOffering offering, Long rootDisksize, Long minIops, Long maxIops, Volume volume, VirtualMachine vm,
+    //                                        Account owner) {
+    //     String volumeToString = getReflectOnlySelectedFields(volume);
+
+    //     int volumesNumber = 1;
+    //     List<DatadiskTO> volumeAsIsDisks = null;
+    //     String configurationId = null;
+    //     boolean deployVmAsIs = false;
+
+    //     Long rootVolumeId = null;
+
+    //     VolumeVO volVO = _volsDao.findByUuid(vol.getId());
+
+
+    //     if (volume.isDeployAsIs() && vm.getType() != VirtualMachine.Type.SecondaryStorageVm) {
+    //         List<SecondaryStorageVmVO> runningSSVMs = secondaryStorageVmDao.getSecStorageVmListInStates(null, vm.getDataCenterId(), State.Running);
+    //         if (CollectionUtils.isEmpty(runningSSVMs)) {
+    //             logger.info(String.format("Could not find a running SSVM in datacenter [%s] for deploying VM as is. Not deploying VM [%s] as is.",
+    //                     vm.getDataCenterId(), vm));
+    //         } else {
+    //             UserVmDetailVO configurationDetail = userVmDetailsDao.findDetail(vm.getId(), VmDetailConstants.DEPLOY_AS_IS_CONFIGURATION);
+    //             if (configurationDetail != null) {
+    //                 configurationId = configurationDetail.getValue();
+    //             }
+    //             volumeAsIsDisks = _tmpltMgr.getTemplateDisksOnImageStore(volume.getId(), DataStoreRole.Image, configurationId);
+    //             if (CollectionUtils.isNotEmpty(volumeAsIsDisks)) {
+    //                 volumeAsIsDisks = volumeAsIsDisks.stream()
+    //                         .filter(x -> !x.isIso())
+    //                         .sorted(Comparator.comparing(DatadiskTO::getDiskNumber))
+    //                         .collect(Collectors.toList());
+    //             }
+    //             volumesNumber = volumeAsIsDisks.size();
+    //             deployVmAsIs = true;
+
+    //             if (CollectionUtils.isNotEmpty(volumeAsIsDisks)) {
+    //                 rootVolumeId = volumeAsIsDisks.get(0).getDiskId();
+    //             }
+    //         }
+    //     }
+
+    //     if (volumesNumber < 1) {
+    //         throw new CloudRuntimeException(String.format("Unable to create any volume from template [%s].", volumeToString));
+    //     }
+
+    //     List<DiskProfile> profiles = new ArrayList<>();
+
+    //     for (int number = 0; number < volumesNumber; number++) {
+    //         String volumeName = name;
+    //         Long volumeSize = rootDisksize;
+    //         long deviceId = type.equals(Type.ROOT) ? 0L : 1L;
+    //         if (deployVmAsIs) {
+    //             int volumeNameSuffix = volumeAsIsDisks.get(number).getDiskNumber();
+    //             volumeName = String.format("%s-%d", volumeName, volumeNameSuffix);
+    //             volumeSize = volumeAsIsDisks.get(number).getVirtualSize();
+    //             deviceId = volumeAsIsDisks.get(number).getDiskNumber();
+    //         }
+    //         logger.info(String.format("111Adding disk object [%s] to VM [%s]", volumeName, vm));
+    //         DiskProfile diskProfile = allocateRootVolume(type, volumeName, offering, volumeSize, minIops, maxIops,
+    //                 volume, vm, owner, deviceId, configurationId, rootVolumeId);
+    //         profiles.add(diskProfile);
+    //     }
+
+    //     updateRootDiskVolumeEventDetails(type, vm, profiles);
+
+    //     handleRootDiskControllerTpeForDeployAsIs(volumeAsIsDisks, vm);
+    //     return (DiskProfile) profiles;
+    // }
+
+
+
 
     private DiskProfile allocateTemplatedVolume(Type type, String name, DiskOffering offering, Long rootDisksize, Long minIops, Long maxIops, VirtualMachineTemplate template, VirtualMachine vm,
                                                 Account owner, long deviceId, String configurationId) {

@@ -52,6 +52,7 @@ import com.cloud.service.dao.ServiceOfferingDao;
 import com.cloud.storage.DiskOfferingVO;
 import com.cloud.storage.dao.DiskOfferingDao;
 import com.cloud.storage.dao.VMTemplateDao;
+import com.cloud.storage.dao.VolumeDao;
 import com.cloud.user.dao.AccountDao;
 import com.cloud.utils.component.ComponentContext;
 import com.cloud.vm.NicProfile;
@@ -96,6 +97,9 @@ public class CloudOrchestrator implements OrchestrationService {
 
     @Inject
     VolumeOrchestrationService _volumeMgr;
+
+    @Inject
+    private VolumeDao _volsDao;
 
     public CloudOrchestrator() {
     }
@@ -335,4 +339,107 @@ public class CloudOrchestrator implements OrchestrationService {
         return vmEntity;
     }
 
-}
+    // @Override
+    public VirtualMachineEntity createVirtualMachineVolume(String id, String owner, String volumeId, String hostName,
+            String displayName, String hypervisor, int cpu, int speed, long memory, Long diskSize,
+            List<String> computeTags, List<String> rootDiskTags, Map<String, List<NicProfile>> networkNicMap,
+            DeploymentPlan plan, Long rootDiskSize, Map<String, Map<Integer, String>> extraDhcpOptionMap,
+            Long diskOfferingId, Long rootDiskOfferingId) throws InsufficientCapacityException {
+                LinkedHashMap<NetworkVO, List<? extends NicProfile>> networkIpMap = new LinkedHashMap<NetworkVO, List<? extends NicProfile>>();
+                for (String uuid : networkNicMap.keySet()) {
+                    NetworkVO network = _networkDao.findByUuid(uuid);
+                    if(network != null){
+                        networkIpMap.put(network, networkNicMap.get(uuid));
+                    }
+                }
+
+                VirtualMachineEntityImpl vmEntity = ComponentContext.inject(VirtualMachineEntityImpl.class);
+                vmEntity.init(id, owner, hostName, displayName, cpu, speed, memory, computeTags, rootDiskTags, new ArrayList<String>(networkNicMap.keySet()));
+
+                HypervisorType hypervisorType = HypervisorType.valueOf(hypervisor);
+
+                //load vm instance and offerings and call virtualMachineManagerImpl
+                VMInstanceVO vm = _vmDao.findByUuid(id);
+
+                // If the template represents an ISO, a disk offering must be passed in, and will be used to create the root disk
+                // Else, a disk offering is optional, and if present will be used to create the data disk
+
+                DiskOfferingInfo rootDiskOfferingInfo = new DiskOfferingInfo();
+                List<DiskOfferingInfo> dataDiskOfferings = new ArrayList<DiskOfferingInfo>();
+
+                ServiceOfferingVO computeOffering = _serviceOfferingDao.findById(vm.getId(), vm.getServiceOfferingId());
+
+                DiskOfferingVO rootDiskOffering = _diskOfferingDao.findById(rootDiskOfferingId);
+                if (rootDiskOffering == null) {
+                    throw new InvalidParameterValueException("Unable to find root disk offering " + rootDiskOfferingId);
+                }
+                rootDiskOfferingInfo.setDiskOffering(rootDiskOffering);
+                rootDiskOfferingInfo.setSize(rootDiskSize);
+
+                if (rootDiskOffering.isCustomizedIops() != null && rootDiskOffering.isCustomizedIops()) {
+                    Map<String, String> userVmDetails = _userVmDetailsDao.listDetailsKeyPairs(vm.getId());
+
+                    if (userVmDetails != null) {
+                        String minIops = userVmDetails.get("minIops");
+                        String maxIops = userVmDetails.get("maxIops");
+
+                        rootDiskOfferingInfo.setMinIops(minIops != null && minIops.trim().length() > 0 ? Long.parseLong(minIops) : null);
+                        rootDiskOfferingInfo.setMaxIops(maxIops != null && maxIops.trim().length() > 0 ? Long.parseLong(maxIops) : null);
+                    }
+                }
+
+                if (diskOfferingId != null) {
+                    DiskOfferingVO diskOffering = _diskOfferingDao.findById(diskOfferingId);
+                    if (diskOffering == null) {
+                        throw new InvalidParameterValueException("Unable to find data disk offering " + diskOfferingId);
+                    }
+                    if (!diskOffering.isComputeOnly()) {
+                        Long size = null;
+                        if (diskOffering.getDiskSize() == 0) {
+                            size = diskSize;
+                            if (size == null) {
+                                throw new InvalidParameterValueException("Disk offering " + diskOffering + " requires size parameter.");
+                            }
+                            _volumeMgr.validateVolumeSizeRange(size * 1024 * 1024 * 1024);
+                        }
+
+                        DiskOfferingInfo dataDiskOfferingInfo = new DiskOfferingInfo();
+
+                        dataDiskOfferingInfo.setDiskOffering(diskOffering);
+                        dataDiskOfferingInfo.setSize(size);
+
+                        if (diskOffering.isCustomizedIops() != null && diskOffering.isCustomizedIops()) {
+                            Map<String, String> userVmDetails = _userVmDetailsDao.listDetailsKeyPairs(vm.getId());
+
+                            if (userVmDetails != null) {
+                                String minIops = userVmDetails.get("minIopsDo");
+                                String maxIops = userVmDetails.get("maxIopsDo");
+
+                                dataDiskOfferingInfo.setMinIops(minIops != null && minIops.trim().length() > 0 ? Long.parseLong(minIops) : null);
+                                dataDiskOfferingInfo.setMaxIops(maxIops != null && maxIops.trim().length() > 0 ? Long.parseLong(maxIops) : null);
+                            }
+                        }
+
+                        dataDiskOfferings.add(dataDiskOfferingInfo);
+                    }
+                }
+
+                // if (datadiskTemplateToDiskOfferingMap != null && !datadiskTemplateToDiskOfferingMap.isEmpty()) {
+                //     for (Entry<Long, DiskOffering> datadiskTemplateToDiskOffering : datadiskTemplateToDiskOfferingMap.entrySet()) {
+                //         DiskOffering dataDiskOffering = datadiskTemplateToDiskOffering.getValue();
+                //         if (dataDiskOffering == null) {
+                //             throw new InvalidParameterValueException("Unable to find disk offering " + diskOfferingId);
+                //         }
+                //         if (dataDiskOffering.getDiskSize() == 0) { // Custom disk offering is not supported for volumes created from datadisk templates
+                //             throw new InvalidParameterValueException("Disk offering " + dataDiskOffering + " requires size parameter.");
+                //         }
+                //     }
+                // }
+
+                _itMgr.allocate(vm.getInstanceName(), _volsDao.findById(new Long(volumeId)), computeOffering, rootDiskOfferingInfo, dataDiskOfferings, networkIpMap, plan,
+                    hypervisorType, extraDhcpOptionMap);
+
+                return vmEntity;
+            }
+        }
+

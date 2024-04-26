@@ -96,6 +96,7 @@ import com.cloud.storage.DiskOfferingVO;
 import com.cloud.storage.SnapshotVO;
 import com.cloud.storage.VMTemplateStorageResourceAssoc.Status;
 import com.cloud.storage.VMTemplateVO;
+import com.cloud.storage.Volume;
 import com.cloud.storage.VolumeVO;
 import com.cloud.storage.dao.DiskOfferingDao;
 import com.cloud.storage.dao.SnapshotDao;
@@ -1957,4 +1958,40 @@ public class ResourceLimitManagerImpl extends ManagerBase implements ResourceLim
             logger.info("Finished resource counters recalculation periodic task.");
         }
     }
+
+    @Override
+    public List<String> getResourceLimitHostTagsVol(ServiceOffering serviceOffering, Volume volume) {
+        if (StringUtils.isEmpty(ResourceLimitService.ResourceLimitHostTagsVol.value())) {
+            return new ArrayList<>();
+        }
+        return Stream.of(ResourceLimitService.ResourceLimitHostTagsVol.value().split(","))
+                .map(String::trim)
+                .collect(Collectors.toList());
+    }
+
+    @Override
+    public void incrementVmResourceCountVol(long accountId, Boolean displayVm, ServiceOffering serviceOffering,
+            Volume volume) {
+                Transaction.execute(new TransactionCallbackNoReturn() {
+                    @Override
+                    public void doInTransactionWithoutResult(TransactionStatus status) {
+                        List<String> tags = getResourceLimitHostTagsForResourceCountOperationVol(displayVm, serviceOffering, volume);
+                        if (CollectionUtils.isEmpty(tags)) {
+                            return;
+                        }
+                        Long cpu = serviceOffering.getCpu() != null ? Long.valueOf(serviceOffering.getCpu()) : 0L;
+                        Long ram = serviceOffering.getRamSize() != null ? Long.valueOf(serviceOffering.getRamSize()) : 0L;
+                        for (String tag : tags) {
+                            incrementResourceCountWithTag(accountId, ResourceType.user_vm, tag);
+                            incrementResourceCountWithTag(accountId, ResourceType.cpu, tag, cpu);
+                            incrementResourceCountWithTag(accountId, ResourceType.memory, tag, ram);
+                        }
+                    }
+
+                    private List<String> getResourceLimitHostTagsForResourceCountOperationVol(Boolean displayVm,
+                            ServiceOffering serviceOffering, Volume volume) {
+                        return null;
+                    }
+                });
+            }
 }

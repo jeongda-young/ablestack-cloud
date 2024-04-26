@@ -108,6 +108,9 @@ public interface VolumeOrchestrationService {
     DiskProfile allocateRawVolume(Type type, String name, DiskOffering offering, Long size, Long minIops, Long maxIops, VirtualMachine vm, VirtualMachineTemplate template,
             Account owner, Long deviceId);
 
+    DiskProfile allocateRootVolumes(Type type, String name, DiskOffering offering, Long size, Long minIops, Long maxIops, VirtualMachine vm, Volume volume, Account owner,
+    Long deviceId);
+
     VolumeInfo createVolumeOnPrimaryStorage(VirtualMachine vm, VolumeInfo volume, HypervisorType rootDiskHyperType, StoragePool storagePool) throws NoTransitionException;
 
     void release(VirtualMachineProfile profile);

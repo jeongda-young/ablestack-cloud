@@ -6175,4 +6175,97 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
         }
         return result;
     }
+
+    @Override
+    public void allocate(String vmInstanceName, Volume volume, ServiceOffering serviceOffering,
+            DiskOfferingInfo rootDiskOfferingInfo, List<DiskOfferingInfo> dataDiskOfferings,
+            LinkedHashMap<? extends Network, List<? extends NicProfile>> auxiliaryNetworks, DeploymentPlan plan,
+            HypervisorType hyperType, Map<String, Map<Integer, String>> extraDhcpOptions)
+            throws InsufficientCapacityException {
+
+                logger.info(String.format("allocating virtual machine from template:%s with hostname:%s and %d networks", volume.getUuid(), vmInstanceName, auxiliaryNetworks.size()));
+                VMInstanceVO persistedVm = null;
+                try {
+                    final VMInstanceVO vm = _vmDao.findVMByInstanceName(vmInstanceName);
+                    final Account owner = _entityMgr.findById(Account.class, vm.getAccountId());
+
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("Allocating entries for VM: " + vm);
+                    }
+
+                    vm.setDataCenterId(plan.getDataCenterId());
+                    if (plan.getPodId() != null) {
+                        vm.setPodIdToDeployIn(plan.getPodId());
+                    }
+                    assert plan.getClusterId() == null && plan.getPoolId() == null : "We currently don't support cluster and pool preset yet";
+                    persistedVm = _vmDao.persist(vm);
+
+                    final VirtualMachineProfileImpl vmProfile = new VirtualMachineProfileImpl(persistedVm, serviceOffering, null, null);
+
+                    Long rootDiskSize = rootDiskOfferingInfo.getSize();
+                    if (vm.getType().isUsedBySystem() && SystemVmRootDiskSize.value() != null && SystemVmRootDiskSize.value() > 0L) {
+                        rootDiskSize = SystemVmRootDiskSize.value();
+                    }
+                    final Long rootDiskSizeFinal = rootDiskSize;
+
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("Allocating nics for " + persistedVm);
+                    }
+
+                    try {
+                        if (!vmProfile.getBootArgs().contains("ExternalLoadBalancerVm")) {
+                            _networkMgr.allocate(vmProfile, auxiliaryNetworks, extraDhcpOptions);
+                        }
+                    } catch (final ConcurrentOperationException e) {
+                        throw new CloudRuntimeException("Concurrent operation while trying to allocate resources for the VM", e);
+                    }
+
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("Allocating disks for " + persistedVm);
+                    }
+
+                    // allocateRootVolume(persistedVm, template, rootDiskOfferingInfo, owner, rootDiskSizeFinal);
+
+                    // Create new Volume context and inject event resource type, id and details to generate VOLUME.CREATE event for the ROOT disk.
+                    CallContext volumeContext = CallContext.register(CallContext.current(), ApiCommandResourceType.Volume);
+                    try {
+                        if (dataDiskOfferings != null) {
+                            for (final DiskOfferingInfo dataDiskOfferingInfo : dataDiskOfferings) {
+                                volumeMgr.allocateRootVolumes(Type.DATADISK, "DATA-" + persistedVm.getId(), dataDiskOfferingInfo.getDiskOffering(), dataDiskOfferingInfo.getSize(),
+                                        dataDiskOfferingInfo.getMinIops(), dataDiskOfferingInfo.getMaxIops(), persistedVm, volume, owner, null);
+                            }
+                        }
+                        // if (datadiskTemplateToDiskOfferingMap != null && !datadiskTemplateToDiskOfferingMap.isEmpty()) {
+                        //     int diskNumber = 1;
+                        //     for (Entry<Long, DiskOffering> dataDiskTemplateToDiskOfferingMap : datadiskTemplateToDiskOfferingMap.entrySet()) {
+                        //         DiskOffering diskOffering = dataDiskTemplateToDiskOfferingMap.getValue();
+                        //         long diskOfferingSize = diskOffering.getDiskSize() / (1024 * 1024 * 1024);
+                        //         VMTemplateVO dataDiskTemplate = _templateDao.findById(dataDiskTemplateToDiskOfferingMap.getKey());
+                        //         volumeMgr.allocateRawVolume(Type.DATADISK, "DATA-" + persistedVm.getId() + "-" + String.valueOf(diskNumber), diskOffering, diskOfferingSize, null, null,
+                        //                 persistedVm, dataDiskTemplate, owner, Long.valueOf(diskNumber));
+                        //         diskNumber++;
+                        //     }
+                        // }
+                    } finally {
+                        // Remove volumeContext and pop vmContext back
+                        CallContext.unregister();
+                    }
+
+                    if (logger.isDebugEnabled()) {
+                        logger.debug("Allocation completed for VM: " + persistedVm);
+                    }
+                } catch (InsufficientCapacityException | CloudRuntimeException e) {
+                    // Failed VM will be in Stopped. Transition it to Error, so it can be expunged by ExpungeTask or similar
+                    try {
+                        if (persistedVm != null) {
+                            stateTransitTo(persistedVm, VirtualMachine.Event.OperationFailedToError, null);
+                        }
+                    } catch (NoTransitionException nte) {
+                        logger.error(String.format("Failed to transition %s in %s state to Error state", persistedVm, persistedVm.getState().toString()));
+                    }
+                    throw e;
+                }
+                // DiskOffering diskOffering = _diskOfferingDao.findById(serviceOffering.getDiskOfferingId());
+                // allocate(vmInstanceName, volume, serviceOffering, new DiskOfferingInfo(diskOffering), new ArrayList<>(), auxiliaryNetworks, plan, hyperType, extraDhcpOptions);
+    }
 }

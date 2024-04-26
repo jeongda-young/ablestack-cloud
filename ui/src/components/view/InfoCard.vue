@@ -535,12 +535,12 @@
           </div>
         </div>
 
-        <div class="resource-detail-item" v-if="resource.rbdImageId">
+        <div class="resource-detail-item" v-if="resource.volumeId">
           <div class="resource-detail-item__label">{{ $t('label.images') }}</div>
           <div class="resource-detail-item__details">
             <resource-icon v-if="resource.icon" :image="getImage(resource.icon.base64image)" size="1x" style="margin-right: 5px"/>
             <IdcardOutlined v-else />
-            <router-link :to="{ path: '/rbdimages/' + resource.rbdImageId }">{{ resource.rbdimagesdisplaytext || resource.rbdimagesname || resource.rbdImageId }} </router-link>
+            <router-link :to="{ path: '/volume/' + resource.volumeId }">{{ resource.volumesdisplaytext || resource.volumesname || resource.volumeId }} </router-link>
           </div>
 
         </div>
@@ -562,12 +562,12 @@
           </div>
         </div>
 
-        <div class="resource-detail-item" v-if="resource.rbdimagesname && resource.rbdImageId">
+        <div class="resource-detail-item" v-if="resource.volumesname && resource.volumeId">
           <div class="resource-detail-item__label">{{ $t('label.rbdimages') }}</div>
           <div class="resource-detail-item__details">
             <IdcardOutlined />
-            <router-link v-if="!isStatic && $router.resolve('/rbdimages/' + resource.rbdImageId).matched[0].redirect !== '/exception/404'" :to="{ path: '/rbdimages/' + resource.rbdImageId }">{{ resource.rbdimagesgname || resource.rbdImageId }} </router-link>
-            <span v-else>{{ resource.rbdimagesname || resource.rbdImageId }}</span>
+            <router-link v-if="!isStatic && $router.resolve('/volume/' + resource.volumeId).matched[0].redirect !== '/exception/404'" :to="{ path: '/volume/' + resource.volumeId }">{{ resource.volumesgname || resource.volumeId }} </router-link>
+            <span v-else>{{ resource.volumesname || resource.volumeId }}</span>
           </div>
         </div>
 
@@ -996,8 +996,8 @@ export default {
       if (this.resource.isoid) {
         await this.fetchResourceIcon(this.resource.isoid, 'iso')
       }
-      if (this.resource.rbdImageId) {
-        await this.fetchResourceIcon(this.resource.rbdImageId, 'rbdimages')
+      if (this.resource.volumeId) {
+        await this.fetchResourceIcon(this.resource.volumeId, 'volume')
       }
       if (this.resource.zoneid) {
         await this.fetchResourceIcon(this.resource.zoneid, 'zone')

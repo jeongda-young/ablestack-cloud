@@ -84,6 +84,18 @@ public class VirtualMachineProfileImpl implements VirtualMachineProfile {
         _type = type;
     }
 
+    public VirtualMachineProfileImpl(VirtualMachine vm, ServiceOffering offering, Account owner, Map<Param, Object> params) {
+        _vm = vm;
+        _offering = offering;
+        _params = params;
+        _owner = owner;
+        if (_params == null) {
+            _params = new HashMap<Param, Object>();
+        }
+        if (vm != null)
+            _type = vm.getType();
+    }
+
     @Override
     public String toString() {
         if (_vm != null) {

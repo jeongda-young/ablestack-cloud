@@ -19,6 +19,7 @@
 package org.apache.cloudstack.engine.service.api;
 
 import java.net.URL;
+
 import java.util.List;
 import java.util.Map;
 
@@ -32,6 +33,7 @@ import org.apache.cloudstack.engine.cloud.entity.api.NetworkEntity;
 import org.apache.cloudstack.engine.cloud.entity.api.TemplateEntity;
 import org.apache.cloudstack.engine.cloud.entity.api.VirtualMachineEntity;
 import org.apache.cloudstack.engine.cloud.entity.api.VolumeEntity;
+
 
 import com.cloud.deploy.DeploymentPlan;
 import com.cloud.exception.InsufficientCapacityException;
@@ -68,6 +70,17 @@ public interface OrchestrationService {
         @QueryParam("network-nic-map") Map<String, List<NicProfile>> networkNicMap, @QueryParam("deploymentplan") DeploymentPlan plan,
         @QueryParam("root-disk-size") Long rootDiskSize, @QueryParam("extra-dhcp-option-map") Map<String, Map<Integer, String>> extraDhcpOptionMap,
         @QueryParam("datadisktemplate-diskoffering-map") Map<Long, DiskOffering> datadiskTemplateToDiskOfferingMap, @QueryParam("disk-offering-id") Long diskOfferingId, @QueryParam("root-disk-offering-id") Long rootDiskOfferingId) throws InsufficientCapacityException;
+
+
+        @POST
+        @Path("/createvm")
+        VirtualMachineEntity createVirtualMachineVolume(@QueryParam("id") String id, @QueryParam("owner") String owner, @QueryParam("volume-id") String volumeId,
+            @QueryParam("host-name") String hostName, @QueryParam("display-name") String displayName, @QueryParam("hypervisor") String hypervisor,
+            @QueryParam("cpu") int cpu, @QueryParam("speed") int speed, @QueryParam("ram") long memory, @QueryParam("disk-size") Long diskSize,
+            @QueryParam("compute-tags") List<String> computeTags, @QueryParam("root-disk-tags") List<String> rootDiskTags,
+            @QueryParam("network-nic-map") Map<String, List<NicProfile>> networkNicMap, @QueryParam("deploymentplan") DeploymentPlan plan,
+            @QueryParam("root-disk-size") Long rootDiskSize, @QueryParam("extra-dhcp-option-map") Map<String, Map<Integer, String>> extraDhcpOptionMap,
+            @QueryParam("disk-offering-id") Long diskOfferingId, @QueryParam("root-disk-offering-id") Long rootDiskOfferingId) throws InsufficientCapacityException;
 
     @POST
     VirtualMachineEntity createVirtualMachineFromScratch(@QueryParam("id") String id, @QueryParam("owner") String owner, @QueryParam("iso-id") String isoId,

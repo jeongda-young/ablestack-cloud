@@ -2479,6 +2479,7 @@ public class QueryManagerImpl extends MutualExclusiveIdsManagerBase implements Q
         if (Boolean.TRUE.equals(customimages)) {
             volumeSearchBuilder.and("instanceId", volumeSearchBuilder.entity().getInstanceId(), SearchCriteria.Op.NULL);
             volumeSearchBuilder.and("type", volumeSearchBuilder.entity().getVolumeType(), SearchCriteria.Op.EQ);
+            // volumeSearchBuilder.and("templateId", volumeSearchBuilder.entity().getInstanceId(), SearchCriteria.Op.NULL);
         }
         // Need to test thoroughly
         if (!shouldListSystemVms) {

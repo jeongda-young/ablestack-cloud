@@ -44,6 +44,7 @@ import com.cloud.network.Network;
 import com.cloud.offering.DiskOffering;
 import com.cloud.offering.DiskOfferingInfo;
 import com.cloud.offering.ServiceOffering;
+import com.cloud.storage.Volume;
 import com.cloud.template.VirtualMachineTemplate;
 import com.cloud.user.Account;
 import com.cloud.uservm.UserVm;
@@ -112,6 +113,10 @@ public interface VirtualMachineManager extends Manager {
     void allocate(String vmInstanceName, VirtualMachineTemplate template, ServiceOffering serviceOffering, DiskOfferingInfo rootDiskOfferingInfo,
         List<DiskOfferingInfo> dataDiskOfferings, LinkedHashMap<? extends Network, List<? extends NicProfile>> auxiliaryNetworks, DeploymentPlan plan,
         HypervisorType hyperType, Map<String, Map<Integer, String>> extraDhcpOptions, Map<Long, DiskOffering> datadiskTemplateToDiskOfferingMap) throws InsufficientCapacityException;
+
+   void allocate(String vmInstanceName, Volume volume, ServiceOffering serviceOffering, DiskOfferingInfo rootDiskOfferingInfo,
+        List<DiskOfferingInfo> dataDiskOfferings, LinkedHashMap<? extends Network, List<? extends NicProfile>> auxiliaryNetworks, DeploymentPlan plan,
+        HypervisorType hyperType, Map<String, Map<Integer, String>> extraDhcpOptions) throws InsufficientCapacityException;
 
     void allocate(String vmInstanceName, VirtualMachineTemplate template, ServiceOffering serviceOffering,
         LinkedHashMap<? extends Network, List<? extends NicProfile>> networkProfiles, DeploymentPlan plan, HypervisorType hyperType) throws InsufficientCapacityException;
