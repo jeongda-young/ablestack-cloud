@@ -797,7 +797,7 @@ public class DeployVMVolumeCmd extends BaseAsyncCreateCustomIdCmd implements Sec
         CallContext.current().setEventDetails("Vm Id: " + getEntityUuid());
         if (getStartVm()) {
             try {
-                result = _userVmService.startVirtualMachine(this);
+                result = _userVmService.startVirtualMachineVolume(this);
             } catch (ResourceUnavailableException ex) {
                 logger.warn("Exception: ", ex);
                 throw new ServerApiException(ApiErrorCode.RESOURCE_UNAVAILABLE_ERROR, ex.getMessage());
