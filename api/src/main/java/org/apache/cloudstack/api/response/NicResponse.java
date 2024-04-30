@@ -146,6 +146,10 @@ public class NicResponse extends BaseResponse {
     @Param(description = "public IP address associated with this nic via Static nat rule")
     private String publicIp;
 
+    @SerializedName(ApiConstants.LINK_STATE)
+    @Param(description = "nic link state")
+    private boolean linkState;
+
     public void setVmId(String vmId) {
         this.vmId = vmId;
     }
@@ -415,5 +419,13 @@ public class NicResponse extends BaseResponse {
 
     public void setPublicIp(String publicIp) {
         this.publicIp = publicIp;
+    }
+
+    public boolean getLinkState() {
+        return linkState;
+    }
+
+    public void setLinkState(boolean linkState) {
+        this.linkState = linkState;
     }
 }

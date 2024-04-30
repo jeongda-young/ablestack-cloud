@@ -29,13 +29,15 @@ public class KVMHAChecker extends KVMHABase implements Callable<Boolean> {
     private List<HAStoragePool> clvmStoragePools;
     private HostTO host;
     private boolean reportFailureIfOneStorageIsDown;
+    private String volumeList;
 
-    public KVMHAChecker(List<HAStoragePool> pools, List<HAStoragePool> rbdpools, List<HAStoragePool> clvmpools, HostTO host, boolean reportFailureIfOneStorageIsDown) {
+    public KVMHAChecker(List<HAStoragePool> pools, List<HAStoragePool> rbdpools, List<HAStoragePool> clvmpools, HostTO host, boolean reportFailureIfOneStorageIsDown, String volumeList) {
         this.storagePools = pools;
         this.rbdStoragePools = rbdpools;
         this.clvmStoragePools = clvmpools;
         this.host = host;
         this.reportFailureIfOneStorageIsDown = reportFailureIfOneStorageIsDown;
+        this.volumeList = volumeList;
     }
 
     /*
@@ -58,7 +60,7 @@ public class KVMHAChecker extends KVMHABase implements Callable<Boolean> {
         hostAndPools = String.format("host IP [%s] in RBD pools [%s]", host.getPrivateNetwork().getIp(), rbdStoragePools.stream().map(pool -> pool.monHost).collect(Collectors.joining(", ")));
         logger.debug(String.format("Checking heart beat with KVMHAChecker RBD for %s", hostAndPools));
         for (HAStoragePool rbdpool : rbdStoragePools) {
-            validResult = rbdpool.getPool().checkingHeartBeat(rbdpool, host);
+            validResult = rbdpool.getPool().checkingHeartBeatRBD(rbdpool, host, volumeList);
             if (reportFailureIfOneStorageIsDown && !validResult) {
                 break;
             }

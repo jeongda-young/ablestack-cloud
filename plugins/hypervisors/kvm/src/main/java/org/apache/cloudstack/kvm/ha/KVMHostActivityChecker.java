@@ -32,6 +32,7 @@ import com.cloud.storage.StorageManager;
 import com.cloud.storage.StoragePool;
 import com.cloud.storage.Volume;
 import com.cloud.storage.VolumeVO;
+import com.cloud.storage.Storage.StoragePoolType;
 import com.cloud.storage.dao.VolumeDao;
 import com.cloud.utils.component.AdapterBase;
 import com.cloud.vm.VMInstanceVO;
@@ -94,9 +95,21 @@ public class KVMHostActivityChecker extends AdapterBase implements ActivityCheck
         }
         Status hostStatus = Status.Unknown;
         Status neighbourStatus = Status.Unknown;
+        CheckOnHostCommand cmd = null;
 
-        final CheckOnHostCommand cmd = new CheckOnHostCommand(agent, HighAvailabilityManager.KvmHAFenceHostIfHeartbeatFailsOnStorage.value());
+        List<Volume> volume_list = new ArrayList<>();
         try {
+            HashMap<StoragePool, List<Volume>> poolVolMap = getVolumeUuidOnHost(agent);
+            for (StoragePool pool : poolVolMap.keySet()) {
+                if(pool.getPoolType().equals(StoragePoolType.RBD)){
+                    volume_list.addAll(poolVolMap.get(pool));
+                }
+            }
+            if (!volume_list.isEmpty()) {
+                cmd = new CheckOnHostCommand(agent, HighAvailabilityManager.KvmHAFenceHostIfHeartbeatFailsOnStorage.value(), volume_list);
+            } else {
+                cmd = new CheckOnHostCommand(agent, HighAvailabilityManager.KvmHAFenceHostIfHeartbeatFailsOnStorage.value());
+            }
             logger.debug(String.format("Checking %s status...", agent.toString()));
             Answer answer = agentMgr.easySend(agent.getId(), cmd);
             if (answer != null) {
@@ -121,6 +134,7 @@ public class KVMHostActivityChecker extends AdapterBase implements ActivityCheck
                 continue;
             }
 
+            cmd = new CheckOnHostCommand(agent, HighAvailabilityManager.KvmHAFenceHostIfHeartbeatFailsOnStorage.value());
             try {
                 logger.debug(String.format("Investigating %s via neighbouring %s.", agent.toString(), neighbor.toString()));
 

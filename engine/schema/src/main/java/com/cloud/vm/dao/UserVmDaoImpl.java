@@ -672,6 +672,7 @@ public class UserVmDaoImpl extends GenericDaoBase<UserVmVO, Long> implements Use
             nicResponse.setNetmask(rs.getString("nics.netmask"));
             nicResponse.setNetworkid(rs.getLong("nics.network_id"));
             nicResponse.setMacAddress(rs.getString("nics.mac_address"));
+            nicResponse.setLinkState(rs.getBoolean("nics.link_state"));
 
             int account_type = rs.getInt("account.type");
             if (account_type == Account.Type.ADMIN.ordinal()) {

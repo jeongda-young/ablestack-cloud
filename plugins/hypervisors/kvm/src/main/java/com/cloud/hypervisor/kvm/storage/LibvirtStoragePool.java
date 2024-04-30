@@ -366,20 +366,43 @@ public class LibvirtStoragePool implements KVMStoragePool {
             cmd.add("-m", pool.getMountDestPath());
             cmd.add("-h", host.getPrivateNetwork().getIp());
             cmd.add("-r");
-            cmd.add("-t", String.valueOf(HeartBeatUpdateFreq / 1000));
-        } else if (pool.getPool().getType() == StoragePoolType.RBD) {
+            cmd.add("-t", String.valueOf(HeartBeatCheckerFreq / 1000));
+        } else if (pool.getPool().getType() == StoragePoolType.CLVM) {
+            cmd.add("-h", host.getPrivateNetwork().getIp());
+            cmd.add("-p", pool.getPoolMountSourcePath());
+            cmd.add("-r");
+            cmd.add("-t", String.valueOf(HeartBeatCheckerFreq / 1000));
+        }
+
+        OutputInterpreter.OneLineParser parser = new OutputInterpreter.OneLineParser();
+        String result = cmd.execute(parser);
+        String parsedLine = parser.getLine();
+
+        logger.debug(String.format("Checking heart beat with KVMHAChecker [{command=\"%s\", result: \"%s\", log: \"%s\", pool: \"%s\"}].", cmd.toString(), result, parsedLine,
+                pool.getPoolIp()));
+
+        if (result == null && parsedLine.contains("DEAD")) {
+            logger.warn(String.format("Checking heart beat with KVMHAChecker command [%s] returned [%s]. [%s]. It may cause a shutdown of host IP [%s].", cmd.toString(),
+                    result, parsedLine, host.getPrivateNetwork().getIp()));
+        } else {
+            validResult = true;
+        }
+        return validResult;
+    }
+
+    @Override
+    public Boolean checkingHeartBeatRBD(HAStoragePool pool, HostTO host, String volumeList) {
+        boolean validResult = false;
+        Script cmd = new Script(getHearthBeatPath(), HeartBeatCheckerTimeout, logger);
+        if (pool.getPool().getType() == StoragePoolType.RBD) {
             cmd.add("-i", pool.getPoolSourceHost());
             cmd.add("-p", pool.getPoolMountSourcePath());
             cmd.add("-n", pool.getPoolAuthUserName());
             cmd.add("-s", pool.getPoolAuthSecret());
             cmd.add("-h", host.getPrivateNetwork().getIp());
+            cmd.add("-u", volumeList.length() > 0 ? volumeList : "");
             cmd.add("-r", "r");
-            cmd.add("-t", String.valueOf(HeartBeatUpdateFreq / 1000));
-        } else if (pool.getPool().getType() == StoragePoolType.CLVM) {
-            cmd.add("-h", host.getPrivateNetwork().getIp());
-            cmd.add("-p", pool.getPoolMountSourcePath());
-            cmd.add("-r");
-            cmd.add("-t", String.valueOf(HeartBeatUpdateFreq / 1000));
+            cmd.add("-t", String.valueOf(HeartBeatCheckerFreq / 1000));
         }
 
         OutputInterpreter.OneLineParser parser = new OutputInterpreter.OneLineParser();
@@ -410,14 +433,12 @@ public class LibvirtStoragePool implements KVMStoragePool {
             cmd.add("-t", String.valueOf(String.valueOf(System.currentTimeMillis() / 1000)));
             cmd.add("-d", String.valueOf(duration));
         } else if (pool.getPool().getType() == StoragePoolType.RBD) {
-            cmd.add("-i", pool.getPoolSourceHost());
             cmd.add("-p", pool.getPoolMountSourcePath());
             cmd.add("-n", pool.getPoolAuthUserName());
             cmd.add("-s", pool.getPoolAuthSecret());
             cmd.add("-h", host.getPrivateNetwork().getIp());
             cmd.add("-u", volumeUUIDListString);
-            cmd.add("-t", String.valueOf(String.valueOf(System.currentTimeMillis() / 1000)));
-            cmd.add("-d", String.valueOf(duration));
+            cmd.add("-t", String.valueOf(HeartBeatCheckerFreq / 1000));
         } else if (pool.getPool().getType() == StoragePoolType.CLVM) {
             cmd.add("-h", host.getPublicNetwork().getIp());
             cmd.add("-u", volumeUUIDListString);

@@ -26,6 +26,11 @@ import org.apache.cloudstack.framework.config.Configurable;
 
 public interface HAManager extends HAConfigManager, Configurable {
 
+    ConfigKey<Integer> HACheckingInterval = new ConfigKey<>("Advanced", Integer.class,
+        "ha.checking.interval",
+        "10",
+        "The interval at which the garbage collector background tasks in seconds", true);
+
     ConfigKey<Integer> MaxConcurrentHealthCheckOperations = new ConfigKey<>("Advanced", Integer.class,
             "ha.max.concurrent.health.check.operations",
             "50",

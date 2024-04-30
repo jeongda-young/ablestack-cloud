@@ -339,6 +339,11 @@ public class LinstorStoragePool implements KVMStoragePool {
     }
 
     @Override
+    public Boolean checkingHeartBeatRBD(HAStoragePool pool, HostTO host, String volumeList) {
+        return null;
+    }
+
+    @Override
     public Boolean vmActivityCheck(HAStoragePool pool, HostTO host, Duration activityScriptTimeout, String volumeUUIDListString, String vmActivityCheckPath, long duration) {
         LOGGER.trace(String.format("Linstor.vmActivityCheck: %s, %s", pool.getPoolIp(), host.getPrivateNetwork().getIp()));
         return checkingHeartBeat(pool, host);

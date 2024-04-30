@@ -446,6 +446,8 @@ public class DatabaseUpgradeChecker implements SystemIntegrityChecker {
                 afterUpgradeAblestack("Cerato");
                 afterUpgradeAblestack("Diplo");
                 ///////////////////// Ablestack 업그레이드 //////////////////////////
+
+                executeViewScripts();
                 lock.unlock();
             }
         } finally {

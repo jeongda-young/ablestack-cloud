@@ -230,6 +230,11 @@ public class MultipathSCSIPool implements KVMStoragePool {
     }
 
     @Override
+    public Boolean checkingHeartBeatRBD(HAStoragePool pool, HostTO host, String volumeList) {
+        return null;
+    }
+
+    @Override
     public Boolean vmActivityCheck(HAStoragePool pool, HostTO host, Duration activityScriptTimeout,
             String volumeUUIDListString, String vmActivityCheckPath, long duration) {
         return null;

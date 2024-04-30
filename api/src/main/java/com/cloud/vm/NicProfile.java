@@ -42,6 +42,7 @@ public class NicProfile implements InternalIdentity, Serializable {
     String uuid;
 
     String macAddress;
+    boolean linkState;
     BroadcastDomainType broadcastType;
     Mode mode;
     AddressFormat format;
@@ -100,6 +101,7 @@ public class NicProfile implements InternalIdentity, Serializable {
         strategy = nic.getReservationStrategy();
         deviceId = nic.getDeviceId();
         defaultNic = nic.isDefaultNic();
+        linkState = nic.getLinkState();
         this.broadcastUri = broadcastUri;
         this.isolationUri = isolationUri;
 
@@ -405,6 +407,13 @@ public class NicProfile implements InternalIdentity, Serializable {
         this.mtu = mtu;
     }
 
+    public boolean getLinkState() {
+        return linkState;
+    }
+
+    public void setLinkState(boolean linkState) {
+        this.linkState = linkState;
+    }
 
     //
     // OTHER METHODS

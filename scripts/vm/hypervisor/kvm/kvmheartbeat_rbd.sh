@@ -6,9 +6,9 @@
 # to you under the Apache License, Version 2.0 (the
 # "License"); you may not use this file except in compliance
 # with the License.  You may obtain a copy of the License at
-# 
+#
 #   http://www.apache.org/licenses/LICENSE-2.0
-# 
+#
 # Unless required by applicable law or agreed to in writing,
 # software distributed under the License is distributed on an
 # "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
@@ -17,13 +17,14 @@
 # under the License.
 
 help() {
-  printf "Usage: $0 
+  printf "Usage: $0
                     -p rbd pool name
                     -n pool auth username
                     -s pool auth secret
                     -h host
                     -i source host ip
-                    -r write/read hb log 
+                    -u volume uuid list
+                    -r write/read hb log
                     -c cleanup
                     -t interval between read hb log\n"
   exit 1
@@ -37,8 +38,9 @@ SourceHostIP=
 interval=0
 rflag=0
 cflag=0
+UUIDList=
 
-while getopts 'p:n:s:h:i:t:r:c:' OPTION
+while getopts 'p:n:s:h:i:t:u:r:c' OPTION
 do
   case $OPTION in
   p)
@@ -59,8 +61,11 @@ do
   t)
      interval="$OPTARG"
      ;;
+  u)
+     UUIDList="$OPTARG"
+     ;;
   r)
-     rflag=1 
+     rflag=1
      ;;
   c)
      cflag=1
@@ -75,6 +80,28 @@ if [ -z "$PoolName" ]; then
   exit 2
 fi
 
+# rados object touch action for vol list
+res=$(rbd -p $PoolName ls --id $PoolAuthUserName | grep MOLD-AC)
+if [ $? -gt 0 ]; then
+  rbd -p $PoolName create --size 1 --id $PoolAuthUserName MOLD-AC
+fi
+
+timestamp=$(date +%s)
+
+if [ -n "$UUIDList" ]; then
+    for uuid in $(echo $UUIDList | sed 's/,/ /g'); do
+      objId=$(rbd -p $PoolName info $uuid --id $PoolAuthUserName | grep 'id:')
+      objId=${objId#*id: }
+      res=$(timeout 3s bash -c "rados -p $PoolName touch rbd_object_map.$objId")
+    if [ $? -eq 0 ]; then
+      # 정상적인 touch 상태면 image meta에 key: uuid / value : timestamp 입력
+      rbd -p $PoolName --id $PoolAuthUserName image-meta set MOLD-AC $uuid $HostIP:$timestamp
+    else
+      # 정상적으로 touch 상태가 아니면 image meta에 key : uuid 삭제
+      rbd -p $PoolName --id $PoolAuthUserName image-meta rm MOLD-AC $uuid
+    fi
+  done
+fi
 
 #write the heart beat log
 write_hbLog() {
@@ -97,6 +124,10 @@ write_hbLog() {
 check_hbLog() {
   now=$(date +%s)
   getHbTime=$(rbd -p $PoolName --id $PoolAuthUserName image-meta get MOLD-HB $HostIP)
+  if [ $? -gt 0 ] || [ -z "$getHbTime" ]; then
+    return 1
+  fi
+
   diff=$(expr $now - $getHbTime)
 
   if [ $diff -gt $interval ]; then
@@ -109,9 +140,9 @@ if [ "$rflag" == "1" ]; then
   check_hbLog
   diff=$?
   if [ $diff == 0 ]; then
-    echo "=====> ALIVE <====="
+    echo "### [HOST STATE : ALIVE] ###"
   else
-    echo "=====> Considering host as DEAD because last write on [RBD pool] was [$diff] seconds ago, but the max interval is [$interval] <======"
+    echo "### [HOST STATE : DEAD] Set maximum interval: ($interval seconds), Actual difference: ($diff seconds) => Considered host down ###"
   fi
     exit 0
 elif [ "$cflag" == "1" ]; then

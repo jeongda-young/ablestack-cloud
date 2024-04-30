@@ -43,6 +43,7 @@ public class NetworkTO {
     protected String ip6cidr;
     protected String ip6Dns1;
     protected String ip6Dns2;
+    protected boolean linkState;
 
     public NetworkTO() {
     }
@@ -231,4 +232,13 @@ public class NetworkTO {
     public void setIp6Dns2(String ip6Dns2) {
         this.ip6Dns2 = ip6Dns2;
     }
+
+    public boolean getLinkState() {
+        return linkState;
+    }
+
+    public void setLinkState(boolean linkState) {
+        this.linkState = linkState;
+    }
+
 }

@@ -21,11 +21,10 @@ import java.net.InetAddress;
 import java.net.URLDecoder;
 import java.net.UnknownHostException;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-
+import java.util.Collections;
 import javax.inject.Inject;
 import javax.servlet.ServletConfig;
 import javax.servlet.ServletException;
@@ -70,7 +69,6 @@ import com.cloud.utils.db.EntityManager;
 import com.cloud.utils.net.NetUtils;
 
 @Component("apiServlet")
-@SuppressWarnings("serial")
 public class ApiServlet extends HttpServlet {
     protected static Logger LOGGER = LogManager.getLogger(ApiServlet.class);
     private final static List<String> s_clientAddressHeaders = Collections
@@ -368,7 +366,7 @@ public class ApiServlet extends HttpServlet {
             auditTrailSb.append(" unknown exception writing api response");
         } finally {
             if (LOGGER.isTraceEnabled()) {
-                LOGGER.trace(auditTrailSb.toString());
+                //LOGGER.trace(auditTrailSb.toString());
             }
             if (LOGGER.isDebugEnabled()) {
                 LOGGER.debug("===END=== " + reqStr);
@@ -572,17 +570,39 @@ public class ApiServlet extends HttpServlet {
         }
         return false;
     }
+    boolean doUseForwardHeaders() {
+        return Boolean.TRUE.equals(ApiServer.useForwardHeader.value());
+    }
 
+    String[] proxyNets() {
+        return ApiServer.proxyForwardList.value().split(",");
+    }
     //This method will try to get login IP of user even if servlet is behind reverseProxy or loadBalancer
-    public static InetAddress getClientAddress(final HttpServletRequest request) throws UnknownHostException {
-        for(final String header : s_clientAddressHeaders) {
-            final String ip = getCorrectIPAddress(request.getHeader(header));
-            if (ip != null) {
-                return InetAddress.getByName(ip);
-            }
+    public InetAddress getClientAddress(final HttpServletRequest request) throws UnknownHostException {
+        String ip = null;
+        InetAddress pretender = InetAddress.getByName(request.getRemoteAddr());
+        if(doUseForwardHeaders()) {
+            if (NetUtils.isIpInCidrList(pretender, proxyNets())) {
+                for (String header : getClientAddressHeaders()) {
+                    header = header.trim();
+                    ip = getCorrectIPAddress(request.getHeader(header));
+                    if (StringUtils.isNotBlank(ip)) {
+                        LOGGER.debug(String.format("found ip %s in header %s ", ip, header));
+                        break;
+                    }
+                } // no address found in header so ip is blank and use remote addr
+            } // else not an allowed proxy address, ip is blank and use remote addr
+        }
+        if (StringUtils.isBlank(ip)) {
+            LOGGER.trace(String.format("no ip found in headers, returning remote address %s.", pretender.getHostAddress()));
+            return pretender;
         }
 
-        return InetAddress.getByName(request.getRemoteAddr());
+        return InetAddress.getByName(ip);
+    }
+
+    private String[] getClientAddressHeaders() {
+        return ApiServer.listOfForwardHeaders.value().split(",");
     }
 
     private static String getCorrectIPAddress(String ip) {

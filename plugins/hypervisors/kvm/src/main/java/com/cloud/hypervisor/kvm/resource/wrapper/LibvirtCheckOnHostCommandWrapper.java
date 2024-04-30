@@ -46,7 +46,8 @@ public final class LibvirtCheckOnHostCommandWrapper extends CommandWrapper<Check
         final List<HAStoragePool> rbdpools = monitor.getRbdStoragePools();
         final List<HAStoragePool> clvmpools = monitor.getClvmStoragePools();
         final HostTO host = command.getHost();
-        final KVMHAChecker ha = new KVMHAChecker(pools, rbdpools, clvmpools, host, command.isCheckFailedOnOneStorage());
+        final String volumeList = command.getVolumeList();
+        final KVMHAChecker ha = new KVMHAChecker(pools, rbdpools, clvmpools, host, command.isCheckFailedOnOneStorage(), volumeList);
 
         final Future<Boolean> future = executors.submit(ha);
         try {

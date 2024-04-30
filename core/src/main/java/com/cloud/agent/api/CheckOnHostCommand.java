@@ -19,12 +19,16 @@
 
 package com.cloud.agent.api;
 
+import java.util.List;
+
 import com.cloud.agent.api.to.HostTO;
 import com.cloud.host.Host;
+import com.cloud.storage.Volume;
 
 public class CheckOnHostCommand extends Command {
     HostTO host;
     boolean reportCheckFailureIfOneStorageIsDown;
+    private String volumeList;
 
     protected CheckOnHostCommand() {
     }
@@ -40,12 +44,28 @@ public class CheckOnHostCommand extends Command {
         this.reportCheckFailureIfOneStorageIsDown = reportCheckFailureIfOneStorageIsDown;
     }
 
+    public CheckOnHostCommand(Host host, boolean reportCheckFailureIfOneStorageIsDown, final List<Volume> volumeList) {
+        super();
+        this.host = new HostTO(host);
+        this.reportCheckFailureIfOneStorageIsDown = reportCheckFailureIfOneStorageIsDown;
+        final StringBuilder stringBuilder = new StringBuilder();
+        for (final Volume v : volumeList) {
+            stringBuilder.append(v.getPath()).append(",");
+        }
+
+        this.volumeList = stringBuilder.deleteCharAt(stringBuilder.length() - 1).toString();
+    }
+
     public HostTO getHost() {
         return host;
     }
 
     public boolean isCheckFailedOnOneStorage() {
         return reportCheckFailureIfOneStorageIsDown;
+    }
+
+    public String getVolumeList() {
+        return volumeList;
     }
 
     @Override

@@ -70,6 +70,9 @@ public class CloneVMCmd extends BaseAsyncCreateCmd implements UserCmd {
     @Parameter(name = ApiConstants.DOMAIN_ID, type = CommandType.UUID, entityType = DomainResponse.class, description = "an optional domainId for the virtual machine. If the account parameter is used, domainId must also be used.")
     private Long domainId;
 
+    @Parameter(name = ApiConstants.START_VM, type = CommandType.BOOLEAN, description = "true if start vm after creating; defaulted to false if not specified")
+    private Boolean startVm;
+
     @Parameter(name = ApiConstants.ZONE_ID_LIST,
             type=CommandType.LIST,
             collectionType = CommandType.UUID,
@@ -109,6 +112,10 @@ public class CloneVMCmd extends BaseAsyncCreateCmd implements UserCmd {
 
     public ApiCommandResourceType getInstanceType() {
         return ApiCommandResourceType.VirtualMachine;
+    }
+
+    public boolean getStartVm() {
+        return startVm == null ? false : startVm;
     }
 
     @Override

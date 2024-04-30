@@ -300,6 +300,11 @@ public class StorPoolStoragePool implements KVMStoragePool {
     }
 
     @Override
+    public Boolean checkingHeartBeatRBD(HAStoragePool pool, HostTO host, String volumeList) {
+        return null;
+    }
+
+    @Override
     public Boolean vmActivityCheck(HAStoragePool pool, HostTO host, Duration activityScriptTimeout, String volumeUuidListString, String vmActivityCheckPath, long duration) {
         return checkingHeartBeat(pool, host);
     }

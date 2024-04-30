@@ -214,6 +214,10 @@ import com.cloud.vm.VirtualMachine;
 import com.cloud.vm.VirtualMachine.PowerState;
 import com.cloud.vm.VmDetailConstants;
 import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
+import com.google.gson.JsonArray;
+import com.google.gson.JsonElement;
 
 /**
  * LibvirtComputingResource execute requests on the computing/routing host using
@@ -3860,6 +3864,8 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
 
     @Override
     public StartupCommand[] initialize() {
+        Script.runSimpleBashScript("rbd rm MOLD-AC");
+
         final KVMHostInfo info = new KVMHostInfo(dom0MinMem, dom0OvercommitMem, manualCpuSpeed, dom0MinCpuCores);
         calculateHostCpuMaxCapacity(info.getAllocatableCpus(), info.getCpuSpeed());
 
@@ -4750,6 +4756,47 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
                     stats.setDiskWriteKBs(deltabyteswr / 1024);
                 }
             }
+            Map<String, String> nicAddrMap = new HashMap<String, String>();
+            String result = dm.qemuAgentCommand("{\"execute\":\"guest-network-get-interfaces\"}", 2, 0);
+            logger.info("[" +dm.getName() +" :: " + result + "]");
+
+            JsonParser jsonParser = new JsonParser();
+            JsonObject jo = (JsonObject)jsonParser.parse(result);
+            JsonElement nicName;
+            JsonElement nicAddrs;
+            JsonElement nicMac;
+            JsonElement nicAddrIp;
+            JsonElement nicAddrIpType;
+            JsonArray arrData = (JsonArray) jo.get("return");
+            for (JsonElement je : arrData) {
+                nicName = je.getAsJsonObject().get("name") == null ? null : je.getAsJsonObject().get("name");
+                nicAddrs = je.getAsJsonObject().get("ip-addresses") == null ? null : je.getAsJsonObject().get("ip-addresses");
+                if(nicName == null || "lo".equals(nicName.getAsString())) {
+                    continue;
+                } else {
+                    if (nicAddrs ==  null){
+                        continue;
+                    } else {
+                        nicMac = je.getAsJsonObject().get("hardware-address") == null ? null : je.getAsJsonObject().get("hardware-address");
+                        if (nicMac == null) {
+                            continue;
+                        } else {
+                            JsonArray arrData2 = (JsonArray) je.getAsJsonObject().get("ip-addresses");
+                            for (JsonElement je2 : arrData2) {
+                                nicAddrIp = je2.getAsJsonObject().get("ip-address") == null  ? null : je2.getAsJsonObject().get("ip-address");
+                                nicAddrIpType = je2.getAsJsonObject().get("ip-address-type") == null ? null : je2.getAsJsonObject().get("ip-address-type");
+
+                                if(nicAddrIp == null || nicAddrIpType== null || !"ipv4".equals(nicAddrIpType.getAsString())) {
+                                    continue;
+                                } else {
+                                    nicAddrMap.put(nicMac.getAsString(), nicAddrIp.getAsString());
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            stats.setNicAddrMap(nicAddrMap);
 
             /* save to Hashmap */
             final VmStats newStat = new VmStats();

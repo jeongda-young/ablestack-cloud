@@ -131,6 +131,9 @@ public class NicVO implements Nic {
     @Column(name = "mtu")
     Integer mtu;
 
+    @Column(name = "link_state")
+    private boolean linkState = true;
+
     @Transient
     transient String nsxLogicalSwitchUuid;
 
@@ -410,5 +413,14 @@ public class NicVO implements Nic {
 
     public void setMtu(Integer mtu) {
         this.mtu = mtu;
+    }
+
+    @Override
+    public boolean getLinkState() {
+        return linkState;
+    }
+
+    public void setLinkState(boolean linkState) {
+        this.linkState = linkState;
     }
 }

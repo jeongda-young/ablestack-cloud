@@ -31,7 +31,6 @@
       :dataSource="dataItems"
       :pagination="false"
       :rowSelection="rowSelection"
-      :customRow="onClickRow"
       :rowKey="record => record.id"
       size="middle"
       :scroll="{ y: 225 }">
@@ -74,6 +73,11 @@
               </a-input>
             </a-form-item>
           </template>
+          <template v-if="column.key === 'linkstate'">
+            <a-form-item v-if="record.type === 'L2'" :name="'linkstate' + record.id">
+              <a-switch v-model:checked="form[`linkstate` + record.id]" @change="($event) => updateNetworkData('linkstate', record.id, $event)" style="margin-bottom: 30px"/>
+            </a-form-item>
+          </template>
         </template>
       </template>
     </a-table>
@@ -114,19 +118,24 @@ export default {
           key: 'name',
           dataIndex: 'name',
           title: this.$t('label.network'),
-          width: '30%'
+          width: '25%'
         },
         {
           key: 'ipAddress',
           dataIndex: 'ip',
           title: this.$t('label.ip'),
-          width: '30%'
+          width: '25%'
         },
         {
           key: 'macAddress',
           dataIndex: 'mac',
           title: this.$t('label.macaddress'),
-          width: '30%'
+          width: '25%'
+        },
+        {
+          key: 'linkstate',
+          dataIndex: 'linkstate',
+          title: this.$t('label.nic.linkstate')
         }
       ],
       selectedRowKeys: [],
@@ -193,6 +202,7 @@ export default {
       this.dataItems.forEach(record => {
         const ipAddressKey = 'ipAddress' + record.id
         const macAddressKey = 'macAddress' + record.id
+        const linkstate = 'linkstate' + record.id
         rules[ipAddressKey] = [{
           validator: this.validatorIpAddress,
           cidr: record.cidr,
@@ -208,6 +218,7 @@ export default {
           form[macAddressKey] = this.preFillContent.macAddressArray[presetMacAddressIndex]
           presetMacAddressIndex++
         }
+        form[linkstate] = true
       })
       this.form = reactive(form)
       this.rules = reactive(rules)
@@ -265,7 +276,7 @@ export default {
         return Promise.reject(this.$t('message.error.ipv4.address'))
       } else if (rule.networkType !== 'L2' && !this.isIp4InCidr(value, rule.cidr)) {
         const rangeIps = this.calculateCidrRange(rule.cidr)
-        const message = `${this.$t('message.error.ip.range')} ${this.$t('label.from')} ${rangeIps[0]} ${this.$t('label.to')} ${rangeIps[1]}`
+        const message = `${this.$t('message.error.ip.range')} ${rangeIps[0]} ~ ${rangeIps[1]}`
         return Promise.reject(message)
       } else {
         return Promise.resolve()

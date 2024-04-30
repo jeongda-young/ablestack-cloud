@@ -26,6 +26,9 @@
     <template #expandedRowRender="{ record }">
       <slot name="actions" :nic="record" />
       <a-descriptions style="margin-top: 10px" layout="vertical" :column="1" :bordered="false" size="small">
+        <a-descriptions-item :label="$t('label.nic.linkstate')">
+            {{ record.linkstate ? 'UP' : 'DOWN' }}
+        </a-descriptions-item>
         <a-descriptions-item :label="$t('label.id')">
           {{ record.id }}
         </a-descriptions-item>

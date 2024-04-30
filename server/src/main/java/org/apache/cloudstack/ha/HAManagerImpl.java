@@ -863,6 +863,7 @@ public final class HAManagerImpl extends ManagerBase implements HAManager, Clust
     @Override
     public ConfigKey<?>[] getConfigKeys() {
         return new ConfigKey<?>[] {
+                HACheckingInterval,
                 MaxConcurrentHealthCheckOperations,
                 MaxPendingHealthCheckOperations,
                 MaxConcurrentActivityCheckOperations,
@@ -968,7 +969,7 @@ public final class HAManagerImpl extends ManagerBase implements HAManager, Clust
 
         @Override
         public Long getDelay() {
-            return null;
+            return HACheckingInterval.value() * 1000L;
         }
     }
 }

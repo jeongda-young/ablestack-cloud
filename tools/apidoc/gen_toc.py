@@ -204,6 +204,7 @@ known_categories = {
     'addIpToNic': 'Nic',
     'removeIpFromNic': 'Nic',
     'updateVmNicIp': 'Nic',
+    'UpdateVmNicLinkState': 'Nic',
     'listNics':'Nic',
 	'AffinityGroup': 'Affinity Group',
     'addImageStore': 'Image Store',

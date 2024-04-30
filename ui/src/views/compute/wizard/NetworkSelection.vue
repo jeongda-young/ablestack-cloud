@@ -268,7 +268,7 @@ export default {
               return
             }
             this.oldZoneId = this.zoneId
-            this.selectedRowKeys = [this.items[0].id]
+            // this.selectedRowKeys = [this.items[0].id]
             this.$emit('select-network-item', this.selectedRowKeys)
           } else {
             this.selectedRowKeys = []

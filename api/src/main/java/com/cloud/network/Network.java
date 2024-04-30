@@ -364,6 +364,7 @@ public interface Network extends ControlledEntity, StateObject<Network.State>, I
         private String ip4Address;
         private String ip6Address;
         private String macAddress;
+        private boolean linkState;
 
         public String getMacAddress() {
             return macAddress;
@@ -383,6 +384,12 @@ public interface Network extends ControlledEntity, StateObject<Network.State>, I
             setMacAddress(macAddress);
         }
 
+        public IpAddresses(String ipAddress, String ip6Address, String macAddress, boolean linkState) {
+            this(ipAddress, ip6Address);
+            setMacAddress(macAddress);
+            setLinkState(linkState);
+        }
+
         public String getIp4Address() {
             return ip4Address;
         }
@@ -398,6 +405,15 @@ public interface Network extends ControlledEntity, StateObject<Network.State>, I
         public void setIp6Address(String ip6Address) {
             this.ip6Address = ip6Address;
         }
+
+        public void setLinkState(boolean linkState) {
+            this.linkState = linkState;
+        }
+
+        public boolean getLinkState() {
+            return linkState;
+        }
+
     }
 
     static final String AssociatedNetworkId = "AssociatedNetworkId";

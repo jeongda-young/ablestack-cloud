@@ -209,17 +209,18 @@ public class BridgeVifDriver extends VifDriverBase {
         if (libvirtVersion > ((10 * 1000 + 10))) {
             networkRateKBps = (nic.getNetworkRateMbps() != null && nic.getNetworkRateMbps().intValue() != -1) ? nic.getNetworkRateMbps().intValue() * 128 : 0;
         }
-
         if (nic.getType() == Networks.TrafficType.Guest) {
             if (isBroadcastTypeVlanOrVxlan(nic) && isValidProtocolAndVnetId(vNetId, protocol)) {
-                    if (trafficLabel != null && !trafficLabel.isEmpty()) {
-                        logger.debug("creating a vNet dev and bridge for guest traffic per traffic label " + trafficLabel);
-                        String brName = createVnetBr(vNetId, trafficLabel, protocol);
-                        intf.defBridgeNet(brName, null, nic.getMac(), getGuestNicModel(guestOsType, nicAdapter), networkRateKBps);
-                    } else {
-                        String brName = createVnetBr(vNetId, _bridges.get("private"), protocol);
-                        intf.defBridgeNet(brName, null, nic.getMac(), getGuestNicModel(guestOsType, nicAdapter), networkRateKBps);
-                    }
+                if (trafficLabel != null && !trafficLabel.isEmpty()) {
+                    logger.debug("creating a vNet dev and bridge for guest traffic per traffic label " + trafficLabel);
+                    String brName = createVnetBr(vNetId, trafficLabel, protocol);
+                    intf.defBridgeNet(brName, null, nic.getMac(), getGuestNicModel(guestOsType, nicAdapter), networkRateKBps);
+                    intf.setLinkStateUp(nic.getLinkState());
+                } else {
+                    String brName = createVnetBr(vNetId, _bridges.get("private"), protocol);
+                    intf.defBridgeNet(brName, null, nic.getMac(), getGuestNicModel(guestOsType, nicAdapter), networkRateKBps);
+                    intf.setLinkStateUp(nic.getLinkState());
+                }
             } else {
                 String brname = "";
                 if (trafficLabel != null && !trafficLabel.isEmpty()) {
@@ -228,6 +229,7 @@ public class BridgeVifDriver extends VifDriverBase {
                     brname = _bridges.get("guest");
                 }
                 intf.defBridgeNet(brname, null, nic.getMac(), getGuestNicModel(guestOsType, nicAdapter), networkRateKBps);
+                intf.setLinkStateUp(nic.getLinkState());
             }
         } else if (nic.getType() == Networks.TrafficType.Control) {
             /* Make sure the network is still there */

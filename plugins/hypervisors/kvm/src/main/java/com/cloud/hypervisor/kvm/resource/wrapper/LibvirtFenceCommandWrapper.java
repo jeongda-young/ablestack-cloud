@@ -67,7 +67,7 @@ public final class LibvirtFenceCommandWrapper extends CommandWrapper<FenceComman
             return new FenceAnswer(command, false, logline);
         }
 
-        final KVMHAChecker ha = new KVMHAChecker(pools, rbdpools, clvmpools, command.getHost(), command.isReportCheckFailureIfOneStorageIsDown());
+        final KVMHAChecker ha = new KVMHAChecker(pools, rbdpools, clvmpools, command.getHost(), command.isReportCheckFailureIfOneStorageIsDown(), null);
 
         final Future<Boolean> future = executors.submit(ha);
         try {

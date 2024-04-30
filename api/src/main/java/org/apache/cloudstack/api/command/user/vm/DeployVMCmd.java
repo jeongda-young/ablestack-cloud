@@ -554,7 +554,7 @@ public class DeployVMCmd extends BaseAsyncCreateCustomIdCmd implements SecurityG
             Iterator iter = ipsCollection.iterator();
             while (iter.hasNext()) {
                 HashMap<String, String> ips = (HashMap<String, String>)iter.next();
-                Long networkId = getNetworkIdFomIpMap(ips);
+                Long networkId = getNetworkIdFromIpMap(ips);
                 IpAddresses addrs = getIpAddressesFromIpMap(ips);
                 ipToNetworkMap.put(networkId, addrs);
             }
@@ -568,6 +568,12 @@ public class DeployVMCmd extends BaseAsyncCreateCustomIdCmd implements SecurityG
         String requestedIp = ips.get("ip");
         String requestedIpv6 = ips.get("ipv6");
         String requestedMac = ips.get("mac");
+        String reqLinkStateStr = ips.get("linkstate");
+        boolean requestedLinkState = false;
+        if (reqLinkStateStr == null || "true".equals(reqLinkStateStr)) {
+            requestedLinkState = true;
+        }
+
         if (requestedIpv6 != null) {
             requestedIpv6 = NetUtils.standardizeIp6Address(requestedIpv6);
         }
@@ -579,11 +585,11 @@ public class DeployVMCmd extends BaseAsyncCreateCustomIdCmd implements SecurityG
             }
             requestedMac = NetUtils.standardizeMacAddress(requestedMac);
         }
-        return new IpAddresses(requestedIp, requestedIpv6, requestedMac);
+        return new IpAddresses(requestedIp, requestedIpv6, requestedMac, requestedLinkState);
     }
 
     @Nonnull
-    private Long getNetworkIdFomIpMap(HashMap<String, String> ips) {
+    private Long getNetworkIdFromIpMap(HashMap<String, String> ips) {
         Long networkId;
         final String networkid = ips.get("networkid");
         Network network = _networkService.getNetwork(networkid);

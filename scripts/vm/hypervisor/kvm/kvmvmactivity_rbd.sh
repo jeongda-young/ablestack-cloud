@@ -16,15 +16,14 @@
 # specific language governing permissions and limitations
 # under the License.
 help() {
-  printf "Usage: $0 
+  printf "Usage: $0
                     -p rbd pool name
                     -n pool auth username
                     -s pool auth secret
                     -h host
                     -i source host ip
                     -u volume uuid list
-                    -t time on ms
-                    -d suspect time\n"
+                    -t time on ms\n"
   exit 1
 }
 #set -x
@@ -32,12 +31,10 @@ PoolName=
 PoolAuthUserName=
 PoolAuthSecret=
 HostIP=
-SourceHostIP=
 UUIDList=
-MSTime=
-SuspectTime=
+interval=0
 
-while getopts 'p:n:s:h:i:u:t:d:' OPTION
+while getopts 'p:n:s:h:u:t:' OPTION
 do
   case $OPTION in
   p)
@@ -52,17 +49,11 @@ do
   h)
      HostIP="$OPTARG"
      ;;
-  i)
-     SourceHostIP="$OPTARG"
-     ;;
   u)
      UUIDList="$OPTARG"
      ;;
   t)
-     MSTime="$OPTARG"
-     ;;
-  d)
-     SuspectTime="$OPTARG"
+     interval="$OPTARG"
      ;;
   *)
      help
@@ -74,63 +65,56 @@ if [ -z "$PoolName" ]; then
   exit 2
 fi
 
-if [ -z "$SuspectTime" ]; then
-  exit 2
+# if [ -z "$SuspectTime" ]; then
+#   exit 2
+# fi
+
+# First check: heartbeat filei
+
+now=$(date +%s)
+getHbTime=$(rbd -p $PoolName --id $PoolAuthUserName image-meta get MOLD-HB $HostIP)
+if [ $? -gt 0 ] || [ -z "$getHbTime" ]; then
+   diff=$(expr $interval + 10)
 fi
 
-# First check: heartbeat file
-getHbTime=$(rbd -p $PoolName --id $PoolAuthUserName image-meta get MOLD-HB $HostIP)
-diff=$(expr $(date +%s) - $getHbTime)
+if [ $? -eq 0 ]; then
+   diff=$(expr $now - $getHbTime)
+else
+   diff=$(expr $interval + 10)
+fi
 
-if [ $diff -lt 61 ]; then
-    echo "=====> ALIVE <====="
-    exit 0
+if [ $diff -le $interval ]; then
+   echo "### [HOST STATE : ALIVE] ###"
+   exit 0
 fi
 
 if [ -z "$UUIDList" ]; then
-    echo "=====> Considering host as DEAD due to empty UUIDList <======"
-    exit 0
+   echo " ### [HOST STATE : DEAD] Volume UUID list is empty => Considered host down ###"
+   exit 0
 fi
 
 # Second check: disk activity check
-lastestUUIDList=
-for UUID in $(echo $UUIDList | sed 's/,/ /g'); do
-    time=$(rbd -p $PoolName info $UUID --id $PoolAuthUserName | grep modify_timestamp)
-    time=${time#*modify_timestamp: }
-    time=$(date -d "$time" +%s)
-    lastestUUIDList+="${time}\n"
+for uuid in $(echo $UUIDList | sed 's/,/ /g'); do
+   acTime=$(rbd -p $PoolName --id $PoolAuthUserName image-meta get MOLD-AC $uuid > /dev/null 2>&1)
+   if [ $? -gt 0 ]; then
+      echo "### [HOST STATE : DEAD] Unable to confirm normal activity of volume image list => Considered host down ### "
+      exit 0
+   else
+      acTime=$(rbd -p $PoolName --id $PoolAuthUserName image-meta get MOLD-AC $uuid)
+      if [ -z "$acTime" ]; then
+         echo "### [HOST STATE : DEAD] Unable to confirm normal activity of volume image list => Considered host down ### "
+         exit 0
+      else
+         arrTime=(${acTime//:/ })
+         acTime=${arrTime[1]}
+         if [ $(expr $now - $acTime) > $interval ]; then
+            echo "### [HOST STATE : DEAD] Unable to confirm normal activity of volume image list => Considered host down ### "
+            exit 0
+         fi
+      fi
+   fi
 done
 
-latestUpdateTime=$(echo -e $lastestUUIDList 2> /dev/null | sort -nr | head -1)
-obj=$(rbd -p $PoolName ls --id $PoolAuthUserName | grep MOLD-AC)
-if [ $? -gt 0 ]; then
-    rbd -p $PoolName create --size 1 --id $PoolAuthUserName MOLD-AC
-    rbd -p $PoolName --id $PoolAuthUserName image-meta set MOLD-AC $HostIP $SuspectTime:$latestUpdateTime:$MSTime
-    if [[ $latestUpdateTime -gt $SuspectTime ]]; then
-        echo "=====> ALIVE <====="
-    else
-        echo "=====> Considering host as DEAD due to file [RBD pool] does not exists and condition [latestUpdateTime -gt SuspectTime] has not been satisfied. <======"
-    fi
-else
-    acTime=$(rbd -p $PoolName --id $PoolAuthUserName image-meta get MOLD-AC $HostIP)
-    arrTime=(${acTime//:/ })
-    lastSuspectTime=${arrTime[0]}
-    lastUpdateTime=${arrTime[1]}
-    rbd -p $PoolName --id $PoolAuthUserName image-meta set MOLD-AC $HostIP $SuspectTime:$latestUpdateTime:$MSTime
-    suspectTimeDiff=$(expr $SuspectTime - $lastSuspectTime)
-    if [ $suspectTimeDiff -lt 0 ]; then
-        if [[ $latestUpdateTime -gt $SuspectTime ]]; then
-            echo "=====> ALIVE <====="
-        else
-            echo "=====> Considering host as DEAD due to file [RBD pool] exist, condition [suspectTimeDiff -lt 0] was satisfied and [latestUpdateTime -gt SuspectTime] has not been satisfied. <======"
-        fi
-    else
-        if [[ $latestUpdateTime -gt $lastUpdateTime ]]; then
-            echo "=====> ALIVE <====="
-        else
-            echo "=====> Considering host as DEAD due to file [RBD pool] exist and conditions [suspectTimeDiff -lt 0] and [latestUpdateTime -gt SuspectTime] have not been satisfied. <======"
-        fi
-    fi
-fi
+echo "### [HOST STATE : ALIVE] ###"
 
 exit 0

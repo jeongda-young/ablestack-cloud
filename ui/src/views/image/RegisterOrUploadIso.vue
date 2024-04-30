@@ -226,31 +226,45 @@
             </a-form-item>
           </a-col>
         </a-row>
-
-        <a-form-item ref="isextractable" name="isextractable">
-          <template #label>
-            <tooltip-label :title="$t('label.isextractable')" :tooltip="apiParams.isextractable.description"/>
-          </template>
-          <a-switch v-model:checked="form.isextractable" />
-        </a-form-item>
-
-        <a-form-item
-          ref="ispublic"
-          name="ispublic"
-          v-if="$store.getters.userInfo.roletype === 'Admin' || $store.getters.features.userpublictemplateenabled" >
-          <template #label>
-            <tooltip-label :title="$t('label.ispublic')" :tooltip="apiParams.ispublic.description"/>
-          </template>
-          <a-switch v-model:checked="form.ispublic" />
-        </a-form-item>
-
-        <a-form-item ref="isfeatured" name="isfeatured" v-if="$store.getters.userInfo.roletype === 'Admin'">
-          <template #label>
-            <tooltip-label :title="$t('label.isfeatured')" :tooltip="apiParams.isfeatured.description"/>
-          </template>
-          <a-switch v-model:checked="form.isfeatured" />
-        </a-form-item>
-
+        <a-row :gutter="12">
+          <a-col :md="24" :lg="12">
+            <a-form-item ref="isextractable" name="isextractable">
+              <template #label>
+                <tooltip-label :title="$t('label.isextractable')" :tooltip="apiParams.isextractable.description"/>
+              </template>
+              <a-switch v-model:checked="form.isextractable" />
+            </a-form-item>
+          </a-col>
+          <a-col :md="24" :lg="12">
+            <a-form-item
+              ref="ispublic"
+              name="ispublic"
+              v-if="$store.getters.userInfo.roletype === 'Admin' || $store.getters.features.userpublictemplateenabled" >
+              <template #label>
+                <tooltip-label :title="$t('label.ispublic')" :tooltip="apiParams.ispublic.description"/>
+              </template>
+              <a-switch v-model:checked="form.ispublic" />
+            </a-form-item>
+          </a-col>
+        </a-row>
+        <a-row :gutter="12">
+          <a-col :md="24" :lg="12">
+            <a-form-item ref="isfeatured" name="isfeatured" v-if="$store.getters.userInfo.roletype === 'Admin'">
+              <template #label>
+                <tooltip-label :title="$t('label.isfeatured')" :tooltip="apiParams.isfeatured.description"/>
+              </template>
+              <a-switch v-model:checked="form.isfeatured" />
+            </a-form-item>
+          </a-col>
+          <a-col :md="24" :lg="12">
+            <a-form-item ref="isdynamicallyscalable" name="isdynamicallyscalable" v-if="$store.getters.userInfo.roletype === 'Admin'">
+              <template #label>
+                <tooltip-label :title="$t('label.isdynamicallyscalable')" :tooltip="apiParams.isdynamicallyscalable.description"/>
+              </template>
+              <a-switch v-model:checked="form.isdynamicallyscalable" />
+            </a-form-item>
+          </a-col>
+        </a-row>
         <div :span="24" class="action-button">
           <a-button @click="closeAction">{{ $t('label.cancel') }}</a-button>
           <a-button :loading="loading" ref="submit" type="primary" @click="handleSubmit">{{ $t('label.ok') }}</a-button>
@@ -494,7 +508,7 @@ export default {
               break
           }
         }
-
+        console.log('params :>> ', params)
         if (this.currentForm === 'Create') {
           this.loading = true
           api('registerIso', params).then(json => {

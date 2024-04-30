@@ -482,7 +482,6 @@
           <div class="resource-detail-item__details">
             <gateway-outlined />
             <router-link v-if="resource.publicipid" :to="{ path: '/publicip/' + resource.publicipid }">{{ resource.publicip }} </router-link>
-            <copy-label :label="resource.publicip"/>
           </div>
         </div>
         <div class="resource-detail-item" v-if="resource.vpcid">
