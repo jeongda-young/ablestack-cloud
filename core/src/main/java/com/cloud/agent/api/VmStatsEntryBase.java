@@ -40,6 +40,7 @@ public class VmStatsEntryBase implements VmStats {
     private int numCPUs;
     private String entityType;
     private Map<String, String> nicAddrMap;
+    private String qemuAgentVersion;
 
     public VmStatsEntryBase() {
 
@@ -210,6 +211,14 @@ public class VmStatsEntryBase implements VmStats {
 
     public void setNicAddrMap(Map<String, String> nicAddrMap) {
         this.nicAddrMap = nicAddrMap;
+    }
+
+    public String getQemuAgentVersion() {
+        return qemuAgentVersion;
+    }
+
+    public void setQemuAgentVersion(String qemuAgentVersion) {
+        this.qemuAgentVersion = qemuAgentVersion;
     }
 
 }

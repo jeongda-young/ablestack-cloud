@@ -99,6 +99,8 @@ import com.cloud.agent.api.VmStatsEntry;
 import com.cloud.agent.api.VmStatsEntryBase;
 import com.cloud.agent.api.VolumeStatsEntry;
 import com.cloud.api.ApiSessionListener;
+import com.cloud.api.query.dao.UserVmJoinDao;
+import com.cloud.api.query.vo.UserVmJoinVO;
 import com.cloud.capacity.CapacityManager;
 import com.cloud.cluster.ClusterManager;
 import com.cloud.cluster.ClusterManagerListener;
@@ -123,8 +125,6 @@ import com.cloud.hypervisor.Hypervisor;
 import com.cloud.hypervisor.Hypervisor.HypervisorType;
 import com.cloud.network.Network;
 import com.cloud.network.as.AutoScaleManager;
-import com.cloud.network.dao.NetworkDao;
-import com.cloud.network.dao.NetworkVO;
 import com.cloud.org.Cluster;
 import com.cloud.resource.ResourceManager;
 import com.cloud.resource.ResourceState;
@@ -378,7 +378,7 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
     @Inject
     AlertManager _alertMgr;
     @Inject
-    NetworkDao _networkDao;
+    protected UserVmJoinDao userVmJoinDao;
 
 
     private final ConcurrentHashMap<String, ManagementServerHostStats> managementServerHostStats = new ConcurrentHashMap<>();
@@ -1370,6 +1370,19 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
                 List<HostVO> hosts = _hostDao.search(sc, null);
                 logger.debug(String.format("VmStatsCollector is running to process VMs across %d UP hosts", hosts.size()));
 
+                List<UserVmJoinVO> listL2netVMs = userVmJoinDao.listGuestTypeVMs(Network.GuestType.L2);
+                ArrayList<String> listL2NicMacAddr = new ArrayList<String>();
+
+                for (UserVmJoinVO vm : listL2netVMs) {
+                    if(!listL2NicMacAddr.contains(vm.getMacAddress())){
+                        NicVO nicVO = _nicDao.findById(vm.getNicId());
+                        nicVO.setIPv4Address(null);
+                        _nicDao.update(vm.getNicId(), nicVO);
+
+                        listL2NicMacAddr.add(vm.getMacAddress());
+                    }
+                }
+
                 Map<Object, Object> metrics = new HashMap<>();
                 for (HostVO host : hosts) {
                     Date timestamp = new Date();
@@ -1384,26 +1397,22 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
                                 statsForCurrentIteration.setVmId(vmId);
                                 VMInstanceVO vm = vmMap.get(vmId);
                                 statsForCurrentIteration.setVmUuid(vm.getUuid());
+                                if(statsForCurrentIteration.getQemuAgentVersion() != null && !"".equals(statsForCurrentIteration.getQemuAgentVersion())){
+                                    VMInstanceVO vmVO = _vmInstance.findById(vmId);
+                                    vmVO.setQemuAgentVersion(statsForCurrentIteration.getQemuAgentVersion());
+                                    _vmInstance.update(vmId, vmVO);
+                                }
 
                                 Map<String, String> agentNicMap = statsForCurrentIteration.getNicAddrMap();
-                                List<NetworkVO> networks = _networkDao.listByGuestType(Network.GuestType.L2);
-                                for (NetworkVO network : networks) {
-                                    List<NicVO> nics = _nicDao.listByNetworkId(network.getId());
-                                    for (NicVO nic : nics) {
-                                        String agentNicIpAddr= agentNicMap.get(nic.getMacAddress());
-                                        if (agentNicIpAddr == null || "".equals(agentNicIpAddr)){
-                                            continue;
-                                        } else {
-                                            NicVO nicVO = _nicDao.findById(nic.getId());
-                                            nicVO.setIPv4Address(agentNicIpAddr);
-                                            _nicDao.update(nic.getId(), nicVO);
+                                if (agentNicMap != null) {
+                                    for (String key : agentNicMap.keySet()) {
+                                        NicVO nicVO = _nicDao.findByMacAddress(key);
+                                        if (listL2NicMacAddr.contains(key)) {
+                                            nicVO.setIPv4Address(agentNicMap.get(key));
+                                            _nicDao.update(nicVO.getId(), nicVO);
                                         }
                                     }
                                 }
-
-
-
-                                // NicVO nic = _nicDao.update(null, null)
                                 persistVirtualMachineStats(statsForCurrentIteration, timestamp);
 
                                 if (externalStatsType == ExternalStatsProtocol.GRAPHITE) {
@@ -2096,7 +2105,7 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
                 statsForCurrentIteration.getDiskWriteKBs(), statsForCurrentIteration.getDiskReadIOs(), statsForCurrentIteration.getDiskWriteIOs(),
                 statsForCurrentIteration.getEntityType());
         VmStatsVO vmStatsVO = new VmStatsVO(statsForCurrentIteration.getVmId(), msId, timestamp, gson.toJson(vmStats));
-        logger.trace(String.format("Recording VM stats: [%s].", vmStatsVO.toString()));
+        logger.debug(String.format("Recording VM stats: [%s].", vmStatsVO.toString()));
         vmStatsDao.persist(vmStatsVO);
     }
 

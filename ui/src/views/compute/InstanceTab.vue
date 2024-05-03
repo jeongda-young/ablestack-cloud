@@ -17,6 +17,8 @@
 
 <template>
   <a-spin :spinning="loading">
+    <a-alert v-if="vm.qemuagentversion === 'Not Installed'" :message="$t('message.alert.qemuagentversion')" type="error" show-icon />
+    <br/>
     <a-tabs
       :activeKey="currentTab"
       :tabPosition="device === 'mobile' ? 'top' : 'left'"

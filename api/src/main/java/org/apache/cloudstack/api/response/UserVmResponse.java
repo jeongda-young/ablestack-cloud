@@ -387,6 +387,10 @@ public class UserVmResponse extends BaseResponseWithTagInformation implements Co
     @Param(description = "vbmc port")
     private String vbmcPort;
 
+    @SerializedName(ApiConstants.QEMU_AGENT_VERSION)
+    @Param(description = "qemu agent version")
+    private String qemuAgentVersion;
+
     public UserVmResponse() {
         securityGroupList = new LinkedHashSet<>();
         nics = new TreeSet<>(Comparator.comparingInt(x -> Integer.parseInt(x.getDeviceId())));
@@ -1138,4 +1142,13 @@ public class UserVmResponse extends BaseResponseWithTagInformation implements Co
     public String getVbmcPort(){
         return this.vbmcPort;
     }
+
+    public String getQemuAgentVersion() {
+        return qemuAgentVersion;
+    }
+
+    public void setQemuAgentVersion(String qemuAgentVersion) {
+        this.qemuAgentVersion = qemuAgentVersion;
+    }
+
 }

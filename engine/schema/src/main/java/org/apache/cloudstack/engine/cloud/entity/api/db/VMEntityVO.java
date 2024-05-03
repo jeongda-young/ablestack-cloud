@@ -191,6 +191,9 @@ public class VMEntityVO implements VirtualMachine, FiniteStateObject<State, Virt
     @Column(name = "dynamically_scalable")
     protected boolean dynamicallyScalable;
 
+    @Column(name = "qemu_agent_version")
+    protected String qemuAgentVersion;
+
     @Transient
     private VMReservationVO vmReservation;
 
@@ -590,4 +593,13 @@ public class VMEntityVO implements VirtualMachine, FiniteStateObject<State, Virt
     public List<Backup.VolumeInfo> getBackupVolumeList() {
         return Arrays.asList(new Gson().fromJson(this.backupVolumes, Backup.VolumeInfo[].class));
     }
+
+    public String getQemuAgentVersion() {
+        return qemuAgentVersion;
+    }
+
+    public void setQemuAgentVersion(String qemuAgentVersion) {
+        this.qemuAgentVersion = qemuAgentVersion;
+    }
+
 }

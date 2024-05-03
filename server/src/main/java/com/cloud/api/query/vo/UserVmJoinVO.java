@@ -421,6 +421,9 @@ public class UserVmJoinVO extends BaseViewWithTagInformationVO implements Contro
     @Column(name = "user_data_details")
     private String userDataDetails;
 
+    @Column(name = "qemu_agent_version")
+    private String qemuAgentVersion;
+
     transient String password;
 
     @Transient
@@ -963,4 +966,9 @@ public class UserVmJoinVO extends BaseViewWithTagInformationVO implements Contro
     public boolean getLinkState() {
         return linkState;
     }
+
+    public String getQemuAgentVersion() {
+        return qemuAgentVersion;
+    }
+
 }

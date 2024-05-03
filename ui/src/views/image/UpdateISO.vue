@@ -106,7 +106,12 @@
             </a-form-item>
           </a-col>
         </a-row>
-
+        <a-form-item ref="isdynamicallyscalable" name="isdynamicallyscalable">
+          <template #label>
+            <tooltip-label :title="$t('label.isdynamicallyscalable')" :tooltip="apiParams.isdynamicallyscalable.description"/>
+          </template>
+          <a-switch v-model:checked="form.isdynamicallyscalable" />
+        </a-form-item>
         <div :span="24" class="action-button">
           <a-button @click="closeAction">{{ $t('label.cancel') }}</a-button>
           <a-button :loading="loading" ref="submit" type="primary" @click="handleSubmit">{{ $t('label.ok') }}</a-button>
@@ -162,7 +167,7 @@ export default {
         displaytext: [{ required: true, message: this.$t('message.error.required.input') }],
         ostypeid: [{ required: true, message: this.$t('message.error.select') }]
       })
-      const resourceFields = ['name', 'displaytext', 'ostypeid', 'userdataid', 'userdatapolicy']
+      const resourceFields = ['name', 'displaytext', 'ostypeid', 'userdataid', 'userdatapolicy', 'isdynamicallyscalable']
 
       for (var field of resourceFields) {
         var fieldValue = this.resource[field]

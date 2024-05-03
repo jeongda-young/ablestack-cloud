@@ -4226,5 +4226,14 @@
 "label.create.rbd.image": "Create Image",
 "message.rbd.name ": "Please enter image name",
 "message.rbd.size": "Please enter image size",
-"label.delete.rbd.image": "Are you sure you want to delete the image"
+"label.delete.rbd.image": "Are you sure you want to delete the image",
+"label.nic.linkstate": "NIC State",
+"label.action.nic.linkstate": "Change NIC State",
+"label.action.nic.linkstate.up": "Do you want to activate (UP) this NIC?",
+"label.action.nic.linkstate.down": "Do you want to disable (DOWN) this NIC?",
+"message.success.update.nic.linkstate": "Nic state change was successful.",
+"message.update.nic.linkstate.processing": "Changing Nic state...",
+"label.qemuagentversion": "Agent version",
+"message.alert.qemuagentversion": "The agent is not installed on this virtual machine.",
+"label.state.qemuagentversion.notinstalled": "Not installed",
 }

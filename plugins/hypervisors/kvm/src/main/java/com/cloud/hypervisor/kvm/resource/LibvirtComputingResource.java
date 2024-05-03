@@ -65,6 +65,7 @@ import org.apache.cloudstack.utils.hypervisor.HypervisorUtils;
 import org.apache.cloudstack.utils.linux.CPUStat;
 import org.apache.cloudstack.utils.linux.KVMHostInfo;
 import org.apache.cloudstack.utils.linux.MemStat;
+import org.apache.cloudstack.utils.qemu.QemuCommand;
 import org.apache.cloudstack.utils.qemu.QemuImg;
 import org.apache.cloudstack.utils.qemu.QemuImg.PhysicalDiskFormat;
 import org.apache.cloudstack.utils.qemu.QemuImgException;
@@ -214,7 +215,6 @@ import com.cloud.vm.VirtualMachine;
 import com.cloud.vm.VirtualMachine.PowerState;
 import com.cloud.vm.VmDetailConstants;
 import com.google.gson.Gson;
-import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
@@ -4757,47 +4757,51 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
                 }
             }
             Map<String, String> nicAddrMap = new HashMap<String, String>();
-            String result = dm.qemuAgentCommand("{\"execute\":\"guest-network-get-interfaces\"}", 2, 0);
-            logger.info("[" +dm.getName() +" :: " + result + "]");
+            String qemuAgentVersion = "Not Installed";
+            stats.setQemuAgentVersion(qemuAgentVersion);
 
-            JsonParser jsonParser = new JsonParser();
-            JsonObject jo = (JsonObject)jsonParser.parse(result);
-            JsonElement nicName;
-            JsonElement nicAddrs;
-            JsonElement nicMac;
-            JsonElement nicAddrIp;
-            JsonElement nicAddrIpType;
-            JsonArray arrData = (JsonArray) jo.get("return");
-            for (JsonElement je : arrData) {
-                nicName = je.getAsJsonObject().get("name") == null ? null : je.getAsJsonObject().get("name");
-                nicAddrs = je.getAsJsonObject().get("ip-addresses") == null ? null : je.getAsJsonObject().get("ip-addresses");
-                if(nicName == null || "lo".equals(nicName.getAsString())) {
-                    continue;
-                } else {
-                    if (nicAddrs ==  null){
-                        continue;
-                    } else {
-                        nicMac = je.getAsJsonObject().get("hardware-address") == null ? null : je.getAsJsonObject().get("hardware-address");
-                        if (nicMac == null) {
+            // String result = dm.qemuAgentCommand(QemuCommand.buildQemuCommand(QemuCommand.AGENT_INFO, null), 2, 0);
+            String mergeCommand = String.format("virsh qemu-agent-command %s '{\"execute\":\"guest-info\"}'", vmName);
+            String result = Script.runSimpleBashScript(mergeCommand);
+
+            if (result != null) {
+                qemuAgentVersion = new JsonParser().parse(result).getAsJsonObject().get("return").getAsJsonObject().get("version").getAsString();
+                stats.setQemuAgentVersion(qemuAgentVersion);
+
+                result = dm.qemuAgentCommand(QemuCommand.buildQemuCommand(QemuCommand.AGENT_NETWORK_GET_INTERFACES, null), 2, 0);
+                if (result != null && !(result.startsWith("error"))) {
+                    logger.debug(dm.getName() +" >>  " + result);
+                    JsonArray arrData = (JsonArray) new JsonParser().parse(result).getAsJsonObject().get("return");
+                    for (JsonElement je : arrData) {
+                        JsonElement nicName = je.getAsJsonObject().get("name") == null ? null : je.getAsJsonObject().get("name");
+                        JsonElement nicAddrs = je.getAsJsonObject().get("ip-addresses") == null ? null : je.getAsJsonObject().get("ip-addresses");
+                        if(nicName == null || "lo".equals(nicName.getAsString())) {
                             continue;
                         } else {
-                            JsonArray arrData2 = (JsonArray) je.getAsJsonObject().get("ip-addresses");
-                            for (JsonElement je2 : arrData2) {
-                                nicAddrIp = je2.getAsJsonObject().get("ip-address") == null  ? null : je2.getAsJsonObject().get("ip-address");
-                                nicAddrIpType = je2.getAsJsonObject().get("ip-address-type") == null ? null : je2.getAsJsonObject().get("ip-address-type");
-
-                                if(nicAddrIp == null || nicAddrIpType== null || !"ipv4".equals(nicAddrIpType.getAsString())) {
+                            if (nicAddrs ==  null){
+                                continue;
+                            } else {
+                                JsonElement nicMac = je.getAsJsonObject().get("hardware-address") == null ? null : je.getAsJsonObject().get("hardware-address");
+                                if (nicMac == null) {
                                     continue;
                                 } else {
-                                    nicAddrMap.put(nicMac.getAsString(), nicAddrIp.getAsString());
+                                    JsonArray arrData2 = (JsonArray) je.getAsJsonObject().get("ip-addresses");
+                                    for (JsonElement je2 : arrData2) {
+                                        JsonElement nicAddrIp = je2.getAsJsonObject().get("ip-address") == null  ? null : je2.getAsJsonObject().get("ip-address");
+                                        JsonElement nicAddrIpType = je2.getAsJsonObject().get("ip-address-type") == null ? null : je2.getAsJsonObject().get("ip-address-type");
+                                        if(nicAddrIp == null || nicAddrIpType== null || !"ipv4".equals(nicAddrIpType.getAsString())) {
+                                            continue;
+                                        } else {
+                                            nicAddrMap.put(nicMac.getAsString(), nicAddrIp.getAsString());
+                                        }
+                                    }
                                 }
                             }
                         }
                     }
+                    stats.setNicAddrMap(nicAddrMap);
                 }
             }
-            stats.setNicAddrMap(nicAddrMap);
-
             /* save to Hashmap */
             final VmStats newStat = new VmStats();
             newStat.usedTime = info.cpuTime;

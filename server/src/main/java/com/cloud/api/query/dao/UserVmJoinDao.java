@@ -24,6 +24,7 @@ import org.apache.cloudstack.api.ResponseObject.ResponseView;
 import org.apache.cloudstack.api.response.UserVmResponse;
 
 import com.cloud.api.query.vo.UserVmJoinVO;
+import com.cloud.network.Network;
 import com.cloud.user.Account;
 import com.cloud.uservm.UserVm;
 import com.cloud.utils.db.GenericDao;
@@ -43,6 +44,8 @@ public interface UserVmJoinDao extends GenericDao<UserVmJoinVO, Long> {
     List<UserVmJoinVO> searchByIds(Long... ids);
 
     List<UserVmJoinVO> listActiveByIsoId(Long isoId);
+
+    List<UserVmJoinVO> listGuestTypeVMs(Network.GuestType type);
 
     List<UserVmJoinVO> listByAccountServiceOfferingTemplateAndNotInState(long accountId, List<VirtualMachine.State> states,
             List<Long> offeringIds, List<Long> templateIds);

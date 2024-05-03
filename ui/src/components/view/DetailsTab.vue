@@ -51,6 +51,9 @@
               <router-link :to="{ path: '/volume/' + volume.uuid }">{{ volume.type }} - {{ volume.path }}</router-link> ({{ parseFloat(volume.size / (1024.0 * 1024.0 * 1024.0)).toFixed(1) }} GB)
             </div>
           </div>
+          <div v-else-if="$route.meta.name === 'vm' && item === 'qemuagentversion'">
+            {{ dataResource[item] === 'Not Installed' ? $t('label.state.qemuagentversion.notinstalled') : dataResource[item]}}
+          </div>
           <div v-else-if="$route.meta.name === 'controllertemplate' && item === 'dctemplate'">
             <div v-for="(dctemplate, idx) in dataResource[item]" :key="idx">
               <router-link :to="{ path: '/template/' + dctemplate.id }">{{ dctemplate.name }}</router-link>
