@@ -2413,6 +2413,14 @@ export default {
                 this.loading.deploy = false
                 return
               }
+              for (let j = 0; j < arrNetwork.length; j++) {
+                deployVmData['iptonetworklist[' + j + '].networkid'] = arrNetwork[j].networkid
+                if (this.networkConfig.length > 0) {
+                  const networkConfig = this.networkConfig.filter((item) => item.key === arrNetwork[j].networkid)
+                  if (networkConfig && networkConfig.length > 0) {
+                    deployVmData['iptonetworklist[' + j + '].ip'] = networkConfig[0].ipAddress ? networkConfig[0].ipAddress : undefined
+                    deployVmData['iptonetworklist[' + j + '].mac'] = networkConfig[0].macAddress ? networkConfig[0].macAddress : undefined
+                  }
                 }
               }
             }
