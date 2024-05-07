@@ -274,7 +274,7 @@ export default {
         return Promise.resolve()
       } else if (!this.ipV4Regex.test(value)) {
         return Promise.reject(this.$t('message.error.ipv4.address'))
-      } else if (rule.networkType !== 'L2' && !this.isIp4InCidr(value, rule.cidr)) {
+      } else if (rule.networkType === 'Isolated' && !this.isIp4InCidr(value, rule.cidr)) {
         const rangeIps = this.calculateCidrRange(rule.cidr)
         const message = `${this.$t('message.error.ip.range')} ${rangeIps[0]} ~ ${rangeIps[1]}`
         return Promise.reject(message)

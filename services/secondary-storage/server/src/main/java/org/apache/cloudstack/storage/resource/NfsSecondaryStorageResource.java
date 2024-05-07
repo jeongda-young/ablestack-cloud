@@ -88,7 +88,6 @@ import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang3.BooleanUtils;
-import org.apache.commons.lang3.StringUtils;
 import org.apache.http.HttpEntity;
 import org.apache.http.HttpResponse;
 import org.apache.http.NameValuePair;
@@ -171,6 +170,7 @@ import com.cloud.utils.EncryptionUtil;
 import com.cloud.utils.LogUtils;
 import com.cloud.utils.NumbersUtil;
 import com.cloud.utils.Pair;
+import com.cloud.utils.StringUtils;
 import com.cloud.utils.SwiftUtil;
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.utils.net.NetUtils;
@@ -3119,9 +3119,8 @@ public class NfsSecondaryStorageResource extends ServerResourceBase implements S
             extraOpts.append(name + "=" + nvp.getValue() + ",");
         }
 
-        if (logger.isDebugEnabled()) {
-            logger.error("extraOpts now " + extraOpts);
-        }
+        String extraOptions = extraOpts.toString();
+        logger.debug("extraOpts now {}", ()->StringUtils.cleanString(extraOptions));
 
         if (!foundUser || !foundPswd) {
             String errMsg = "Missing user and password from URI. Make sure they" + "are in the query string and separated by '&'.  E.g. "
@@ -3129,7 +3128,7 @@ public class NfsSecondaryStorageResource extends ServerResourceBase implements S
             logger.error(errMsg);
             throw new CloudRuntimeException(errMsg);
         }
-        return extraOpts.toString();
+        return extraOptions;
     }
 
     protected boolean mountExists(String localRootPath, URI uri) {

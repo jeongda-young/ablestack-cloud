@@ -251,9 +251,7 @@ public class LibvirtVMDef {
                         guestDef.append("<boot dev='" + bo + "'/>\n");
                     }
                 }
-                if (_arch == null || !_arch.equals("aarch64")) {
-                    guestDef.append("<smbios mode='sysinfo'/>\n");
-                }
+                guestDef.append("<smbios mode='sysinfo'/>\n");
                 guestDef.append("</os>\n");
                 if (iothreads) {
                     guestDef.append(String.format("<iothreads>%s</iothreads>", NUMBER_OF_IOTHREADS));
@@ -624,6 +622,22 @@ public class LibvirtVMDef {
             public QemuObject.EncryptFormat getEncryptFormat() { return this.encryptFormat; }
         }
 
+        public static class DiskGeometry {
+            int cylinders;
+            int heads;
+            int sectors;
+
+            public DiskGeometry(int cylinders, int heads, int sectors) {
+                this.cylinders = cylinders;
+                this.heads = heads;
+                this.sectors = sectors;
+            }
+
+            public String toXml() {
+                return String.format("<geometry cyls='%d' heads='%d' secs='%d'/>\n", this.cylinders, this.heads, this.sectors);
+            }
+        }
+
         public enum DeviceType {
             FLOPPY("floppy"), DISK("disk"), CDROM("cdrom"), LUN("lun");
             String _type;
@@ -775,6 +789,7 @@ public class LibvirtVMDef {
         private boolean isIothreadsEnabled;
         private BlockIOSize logicalBlockIOSize = null;
         private BlockIOSize physicalBlockIOSize = null;
+        private DiskGeometry geometry = null;
 
         public DiscardType getDiscard() {
             return _discard;
@@ -1031,6 +1046,10 @@ public class LibvirtVMDef {
             return _diskLabel;
         }
 
+        public void setDiskLabel(String label) {
+            _diskLabel = label;
+        }
+
         public DiskType getDiskType() {
             return _diskType;
         }
@@ -1125,9 +1144,20 @@ public class LibvirtVMDef {
             this._serial = serial;
         }
 
-        public void setLibvirtDiskEncryptDetails(LibvirtDiskEncryptDetails details) { this.encryptDetails = details; }
+        public void setLibvirtDiskEncryptDetails(LibvirtDiskEncryptDetails details)
+        {
+            this.encryptDetails = details;
+        }
 
-        public LibvirtDiskEncryptDetails getLibvirtDiskEncryptDetails() { return this.encryptDetails; }
+        public LibvirtDiskEncryptDetails getLibvirtDiskEncryptDetails()
+        {
+            return this.encryptDetails;
+        }
+
+        public void setGeometry(DiskGeometry geometry)
+        {
+            this.geometry = geometry;
+        }
 
         public String getSourceHost() {
             return _sourceHost;
@@ -1211,6 +1241,10 @@ public class LibvirtVMDef {
                 diskBuilder.append(" bus='" + _bus + "'");
             }
             diskBuilder.append("/>\n");
+
+            if (geometry != null) {
+                diskBuilder.append(geometry.toXml());
+            }
 
             if (logicalBlockIOSize != null || physicalBlockIOSize != null) {
                 diskBuilder.append("<blockio ");
@@ -1764,6 +1798,7 @@ public class LibvirtVMDef {
         private String _model;
         private List<String> _features;
         private int _coresPerSocket = -1;
+        private int _threadsPerCore = -1;
         private int _sockets = -1;
 
         public void setMode(String mode) {
@@ -1780,8 +1815,9 @@ public class LibvirtVMDef {
             _model = model;
         }
 
-        public void setTopology(int coresPerSocket, int sockets) {
+        public void setTopology(int coresPerSocket, int threadsPerCore, int sockets) {
             _coresPerSocket = coresPerSocket;
+            _threadsPerCore = threadsPerCore;
             _sockets = sockets;
         }
 
@@ -1810,9 +1846,9 @@ public class LibvirtVMDef {
                 }
             }
 
-            // add topology
-            if (_sockets > 0 && _coresPerSocket > 0) {
-                modeBuilder.append("<topology sockets='" + _sockets + "' cores='" + _coresPerSocket + "' threads='1' />");
+            // add topology. Note we require sockets, cores, and threads defined
+            if (_sockets > 0 && _coresPerSocket > 0 && _threadsPerCore > 0) {
+                modeBuilder.append("<topology sockets='" + _sockets + "' cores='" + _coresPerSocket + "' threads='"  + _threadsPerCore + "' />");
             }
 
             // close cpu def
@@ -1823,6 +1859,8 @@ public class LibvirtVMDef {
         public int getCoresPerSocket() {
             return _coresPerSocket;
         }
+        public int getThreadsPerCore() { return _threadsPerCore; }
+        public int getSockets() { return _sockets; }
     }
 
     public static class SerialDef {

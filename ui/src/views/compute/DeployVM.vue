@@ -797,6 +797,9 @@
                         :filterOption="filterOption"
                       ></a-select>
                     </a-form-item>
+                    <a-form-item :label="$t('label.deploy.vm.number')" name="vmNumber" ref="vmNumber">
+                      <a-input-number :min=1 :max=50 :maxlength="2" v-model:value="form.vmNumber" />
+                    </a-form-item>
                     <a-form-item :label="$t('label.action.start.instance')" name="startvm" ref="startvm">
                       <a-switch v-model:checked="form.startvm" />
                     </a-form-item>
@@ -1595,6 +1598,7 @@ export default {
       if (this.zoneSelected) {
         this.form.startvm = true
       }
+      this.form.vmNumber = 1
 
       if (this.zone && this.zone.networktype !== 'Basic') {
         if (this.zoneSelected && this.vm.templateid && this.templateNics && this.templateNics.length > 0) {
@@ -2541,7 +2545,16 @@ export default {
         }
       })
     },
-
+    deployVM (args, httpMethod, data) {
+      return new Promise((resolve, reject) => {
+        api('deployVirtualMachine', args, httpMethod, data).then(json => {
+          const jobId = json.deployvirtualmachineresponse.jobid
+          return resolve(jobId)
+        }).catch(error => {
+          return reject(error)
+        })
+      })
+    },
     fetchZones (zoneId, listZoneAllow) {
       this.zones = []
       return new Promise((resolve) => {

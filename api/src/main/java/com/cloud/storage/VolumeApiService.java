@@ -180,6 +180,8 @@ public interface VolumeApiService {
 
     boolean validateVolumeSizeInBytes(long size);
 
+    void validateDestroyVolume(Volume volume, Account caller, boolean expunge, boolean forceExpunge);
+
     Volume changeDiskOfferingForVolume(ChangeOfferingForVolumeCmd cmd) throws ResourceAllocationException;
 
     void publishVolumeCreationUsageEvent(Volume volume);
