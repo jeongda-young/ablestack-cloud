@@ -20,10 +20,13 @@
 package com.cloud.resource;
 
 import java.io.File;
+import java.io.InputStreamReader;
 import java.io.PrintWriter;
 import java.io.StringWriter;
 import java.net.NetworkInterface;
 import java.net.SocketException;
+import java.net.URL;
+import java.security.SecureRandom;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -36,23 +39,28 @@ import java.util.Locale;
 import java.util.Map;
 
 import javax.naming.ConfigurationException;
-
-import org.apache.cloudstack.storage.command.browser.ListRbdObjectsAnswer;
-
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.TrustManager;
 import org.apache.cloudstack.storage.command.browser.ListDataStoreObjectsAnswer;
+import org.apache.cloudstack.storage.command.browser.ListRbdObjectsAnswer;
+import org.apache.cloudstack.utils.security.SSLUtils;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import com.cloud.agent.IAgentControl;
 import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.Command;
+import com.cloud.agent.api.LicenseHostAnswer;
+import com.cloud.agent.api.ListHostDeviceAnswer;
 import com.cloud.agent.api.StartupCommand;
 import com.cloud.utils.net.NetUtils;
+import com.cloud.utils.nio.TrustAllManager;
 import com.cloud.utils.script.OutputInterpreter;
 import com.cloud.utils.script.Script;
-import com.cloud.agent.api.ListHostDeviceAnswer;
+import java.io.BufferedReader;
 
 public abstract class ServerResourceBase implements ServerResource {
     protected Logger logger = LogManager.getLogger(getClass());
@@ -265,49 +273,92 @@ public abstract class ServerResourceBase implements ServerResource {
         return new ListDataStoreObjectsAnswer(true, count, names, paths, absPaths, isDirs, sizes, modifiedList);
     }
 
+    protected static Answer LicenseHost() {
+        List<String> licenseHostValue = new ArrayList<>();
+        try {
+            final SSLContext sslContext = SSLUtils.getSSLContext();
+            sslContext.init(null, new TrustManager[]{new TrustAllManager()}, new SecureRandom());
 
-protected Answer listFilesAtPath(String nfsMountPoint, String relativePath, int startIndex, int pageSize, String keyword) {
-    int count = 0;
-    File file = new File(nfsMountPoint, relativePath);
-    List<String> names = new ArrayList<>();
-    List<String> paths = new ArrayList<>();
-    List<String> absPaths = new ArrayList<>();
-    List<Boolean> isDirs = new ArrayList<>();
-    List<Long> sizes = new ArrayList<>();
-    List<Long> modifiedList = new ArrayList<>();
-    if (file.isFile()) {
-        count = 1;
-        names.add(file.getName());
-        paths.add(file.getPath().replace(nfsMountPoint, ""));
-        absPaths.add(file.getPath());
-        isDirs.add(file.isDirectory());
-        sizes.add(file.length());
-        modifiedList.add(file.lastModified());
-    } else if (file.isDirectory()) {
-        String[] files = file.list();
-        List<String> filteredFiles = new ArrayList<>();
-        if (keyword != null && !"".equals(keyword)) {
-            for (String fileName : files) {
-                if (fileName.contains(keyword)) {
-                    filteredFiles.add(fileName);
+            String licenseApiUrl = "https://10.10.254.92:8080/api/v1/license";
+            URL url = new URL(licenseApiUrl);
+
+            HttpsURLConnection connection = (HttpsURLConnection) url.openConnection();
+            connection.setSSLSocketFactory(sslContext.getSocketFactory());
+            connection.setDoOutput(true);
+            connection.setRequestMethod("GET");
+            connection.setConnectTimeout(30000);
+            connection.setReadTimeout(600000);
+            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
+
+            int responseCode = connection.getResponseCode();
+            if (responseCode == 200) {
+                BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
+                StringBuilder response = new StringBuilder();
+                String inputLine;
+
+                while ((inputLine = in.readLine()) != null) {
+                    response.append(inputLine);
                 }
+                in.close();
+
+                String licenseData = response.toString();
+                // String licenseHostValue = processLicenseData(licenseData);
+
+                return new LicenseHostAnswer(true, licenseHostValue);
             }
-        } else {
-            filteredFiles.addAll(Arrays.asList(files));
+        } catch (Exception e) {
+            e.printStackTrace();
         }
-        count = filteredFiles.size();
-        for (int i = startIndex; i < startIndex + pageSize && i < count; i++) {
-            File f = new File(nfsMountPoint, relativePath + '/' + filteredFiles.get(i));
-            names.add(f.getName());
-            paths.add(f.getPath().replace(nfsMountPoint, ""));
-            absPaths.add(f.getPath());
-            isDirs.add(f.isDirectory());
-            sizes.add(f.length());
-            modifiedList.add(f.lastModified());
-        }
+        return null;
     }
-    return new ListDataStoreObjectsAnswer(file.exists(), count, names, paths, absPaths, isDirs, sizes, modifiedList);
-}
+    private static String processLicenseData(String licenseData) {
+        return "ProcessedValue";
+    }
+
+
+    protected Answer listFilesAtPath(String nfsMountPoint, String relativePath, int startIndex, int pageSize, String keyword) {
+        int count = 0;
+        File file = new File(nfsMountPoint, relativePath);
+        List<String> names = new ArrayList<>();
+        List<String> paths = new ArrayList<>();
+        List<String> absPaths = new ArrayList<>();
+        List<Boolean> isDirs = new ArrayList<>();
+        List<Long> sizes = new ArrayList<>();
+        List<Long> modifiedList = new ArrayList<>();
+        if (file.isFile()) {
+            count = 1;
+            names.add(file.getName());
+            paths.add(file.getPath().replace(nfsMountPoint, ""));
+            absPaths.add(file.getPath());
+            isDirs.add(file.isDirectory());
+            sizes.add(file.length());
+            modifiedList.add(file.lastModified());
+        } else if (file.isDirectory()) {
+            String[] files = file.list();
+            List<String> filteredFiles = new ArrayList<>();
+            if (keyword != null && !"".equals(keyword)) {
+                for (String fileName : files) {
+                    if (fileName.contains(keyword)) {
+                        filteredFiles.add(fileName);
+                    }
+                }
+            } else {
+                filteredFiles.addAll(Arrays.asList(files));
+            }
+            count = filteredFiles.size();
+            for (int i = startIndex; i < startIndex + pageSize && i < count; i++) {
+                File f = new File(nfsMountPoint, relativePath + '/' + filteredFiles.get(i));
+                names.add(f.getName());
+                paths.add(f.getPath().replace(nfsMountPoint, ""));
+                absPaths.add(f.getPath());
+                isDirs.add(f.isDirectory());
+                sizes.add(f.length());
+                modifiedList.add(f.lastModified());
+            }
+        }
+        return new ListDataStoreObjectsAnswer(file.exists(), count, names, paths, absPaths, isDirs, sizes, modifiedList);
+    }
     protected Answer listFilesAtPath(String nfsMountPoint, String relativePath, int startIndex, int pageSize) {
         int count = 0;
         File file = new File(nfsMountPoint, relativePath);

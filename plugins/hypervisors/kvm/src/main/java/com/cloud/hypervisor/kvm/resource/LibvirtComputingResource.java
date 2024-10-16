@@ -110,6 +110,7 @@ import org.xml.sax.SAXException;
 import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.Command;
 import com.cloud.agent.api.HostVmStateReportEntry;
+import com.cloud.agent.api.LicenseHostCommand;
 import com.cloud.agent.api.ListHostDeviceCommand;
 import com.cloud.agent.api.PingCommand;
 import com.cloud.agent.api.PingRoutingCommand;
@@ -5241,9 +5242,16 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
     }
 
     public Answer listHostDevices(ListHostDeviceCommand command) {
-        logger.info("listpci: " + command.getId());
         if (command.getId() != null) {
             return listHostDevices();
+        } else {
+            throw new IllegalArgumentException("Host ID cannot be null");
+        }
+    }
+
+    public Answer LicenseHost(LicenseHostCommand command) {
+        if (command.getId() != null) {
+            return LicenseHost();
         } else {
             throw new IllegalArgumentException("Host ID cannot be null");
         }
