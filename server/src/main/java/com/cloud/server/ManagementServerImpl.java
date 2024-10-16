@@ -25,6 +25,8 @@ import com.cloud.agent.api.GetHypervisorGuestOsNamesAnswer;
 import com.cloud.agent.api.GetHypervisorGuestOsNamesCommand;
 import com.cloud.agent.api.GetVncPortAnswer;
 import com.cloud.agent.api.GetVncPortCommand;
+import com.cloud.agent.api.LicenseHostAnswer;
+import com.cloud.agent.api.LicenseHostCommand;
 import com.cloud.agent.api.ListHostDeviceAnswer;
 import com.cloud.agent.api.ListHostDeviceCommand;
 import com.cloud.agent.api.PatchSystemVmAnswer;
@@ -197,6 +199,7 @@ import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.utils.fsm.StateMachine2;
 import com.cloud.utils.net.MacAddress;
 import com.cloud.utils.net.NetUtils;
+import com.cloud.utils.security.CertificateHelper;
 import com.cloud.utils.ssh.SSHKeysHelper;
 import com.cloud.vm.ConsoleProxyVO;
 import com.cloud.vm.DiskProfile;
@@ -247,8 +250,6 @@ import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import javax.inject.Inject;
 import javax.naming.ConfigurationException;
-
-import com.cloud.utils.security.CertificateHelper;
 import org.apache.cloudstack.acl.ControlledEntity;
 import org.apache.cloudstack.acl.SecurityChecker;
 import org.apache.cloudstack.affinity.AffinityGroupProcessor;
@@ -275,7 +276,6 @@ import org.apache.cloudstack.api.command.admin.autoscale.DeleteCounterCmd;
 import org.apache.cloudstack.api.command.admin.bgp.CreateASNRangeCmd;
 import org.apache.cloudstack.api.command.admin.bgp.DeleteASNRangeCmd;
 import org.apache.cloudstack.api.command.admin.bgp.ListASNRangesCmd;
-import org.apache.cloudstack.api.command.user.bgp.ListASNumbersCmd;
 import org.apache.cloudstack.api.command.admin.bgp.ReleaseASNumberCmd;
 import org.apache.cloudstack.api.command.admin.cluster.AddClusterCmd;
 import org.apache.cloudstack.api.command.admin.cluster.DeleteClusterCmd;
@@ -383,6 +383,7 @@ import org.apache.cloudstack.api.command.admin.outofbandmanagement.EnableOutOfBa
 import org.apache.cloudstack.api.command.admin.outofbandmanagement.EnableOutOfBandManagementForHostCmd;
 import org.apache.cloudstack.api.command.admin.outofbandmanagement.EnableOutOfBandManagementForZoneCmd;
 import org.apache.cloudstack.api.command.admin.outofbandmanagement.IssueOutOfBandManagementPowerActionCmd;
+import org.apache.cloudstack.api.command.admin.outofbandmanagement.LicenseHostCmd;
 import org.apache.cloudstack.api.command.admin.outofbandmanagement.ListHostDevicesCmd;
 import org.apache.cloudstack.api.command.admin.pod.CreatePodCmd;
 import org.apache.cloudstack.api.command.admin.pod.DeletePodCmd;
@@ -583,6 +584,7 @@ import org.apache.cloudstack.api.command.user.autoscale.UpdateAutoScalePolicyCmd
 import org.apache.cloudstack.api.command.user.autoscale.UpdateAutoScaleVmGroupCmd;
 import org.apache.cloudstack.api.command.user.autoscale.UpdateAutoScaleVmProfileCmd;
 import org.apache.cloudstack.api.command.user.autoscale.UpdateConditionCmd;
+import org.apache.cloudstack.api.command.user.bgp.ListASNumbersCmd;
 import org.apache.cloudstack.api.command.user.bucket.CreateBucketCmd;
 import org.apache.cloudstack.api.command.user.bucket.DeleteBucketCmd;
 import org.apache.cloudstack.api.command.user.bucket.ListBucketsCmd;
@@ -821,6 +823,7 @@ import org.apache.cloudstack.api.command.user.vpn.UpdateVpnConnectionCmd;
 import org.apache.cloudstack.api.command.user.vpn.UpdateVpnCustomerGatewayCmd;
 import org.apache.cloudstack.api.command.user.vpn.UpdateVpnGatewayCmd;
 import org.apache.cloudstack.api.command.user.zone.ListZonesCmd;
+import org.apache.cloudstack.api.response.LicenseHostResponse;
 import org.apache.cloudstack.api.response.ListHostDevicesResponse;
 import org.apache.cloudstack.api.response.ListResponse;
 import org.apache.cloudstack.auth.UserAuthenticator;
@@ -3198,6 +3201,70 @@ public class ManagementServerImpl extends ManagerBase implements ManagementServe
         return new Pair<>(result, details);
     }
 
+    @Override
+    public ListResponse<LicenseHostResponse> LicenseHost(LicenseHostCmd cmd) {
+                Long id = cmd.getId();
+                HostVO hostVO = _hostDao.findById(id);
+                if (hostVO == null) {
+                    throw new CloudRuntimeException("Host not found with ID: " + id);
+                }
+
+                LicenseHostCommand licenseName = new LicenseHostCommand(id);
+                Answer answer;
+                try {
+                    answer = _agentMgr.send(hostVO.getId(), licenseName);
+                } catch (Exception e) {
+                    String errorMsg = "Error sending ListHostDevicesCommand: " + e.getMessage();
+                    logger.error(errorMsg, e);
+                    throw new CloudRuntimeException(errorMsg, e);
+                }
+
+                if (answer == null) {
+                    throw new CloudRuntimeException("Answer is null");
+                }
+                if (!answer.getResult()) {
+                    String errorDetails = (answer.getDetails() != null) ? answer.getDetails()
+                            : "No additional details available";
+                    String errorMsg = "Answer result is false. Details: " + errorDetails;
+                    logger.error(errorMsg);
+                    throw new CloudRuntimeException(errorMsg);
+                }
+                if (!(answer instanceof LicenseHostAnswer)) {
+                    throw new CloudRuntimeException("Answer is not an instance of listHostDeviceAnswer");
+                }
+
+                LicenseHostAnswer LicenseAnswer = (LicenseHostAnswer) answer;
+                if (!LicenseAnswer.isSuccessMessage()) {
+                    throw new IllegalArgumentException("Failed to list VM PCI objects.");
+                }
+
+                List<LicenseHostResponse> responses = new ArrayList<>();
+                ListResponse<LicenseHostResponse> listResponse = new ListResponse<>();
+
+                List<String> LicenseHostVaule = LicenseAnswer.getLicenseHostVaule();
+
+                List<String> LicenseHostNames = new ArrayList<>();
+                List<String> LicenseHostVaules = new ArrayList<>();
+
+                // for (String LicenseHostVaules : LicenseHostVaule) {
+                //     String[] parts = LicenseHostVaule.split(": ", 2);
+                //     if (parts.length == 2) {
+                //         LicenseHostNames.add(parts[0].trim());
+                //         LicenseHostVaules.add(parts[1].trim());
+                //     } else {
+                //         logger.warn("Unexpected PCI info format: " + LicenseHostVaule);
+                //     }
+                // }
+
+                LicenseHostResponse response = new LicenseHostResponse();
+                response.setLicenseHostName(LicenseHostNames);
+                response.setLicenseHostValue(LicenseHostVaules);
+                responses.add(response);
+
+                listResponse.setResponses(responses);
+                return listResponse;
+            }
+
      @Override
     public ListResponse<ListHostDevicesResponse> listHostDevices(ListHostDevicesCmd cmd) {
         Long id = cmd.getId();
@@ -4174,6 +4241,7 @@ public class ManagementServerImpl extends ManagerBase implements ManagementServe
         cmdList.add(AllocateVbmcToVMCmd.class);
         cmdList.add(RemoveVbmcToVMCmd.class);
         cmdList.add(ListHostDevicesCmd.class);
+        cmdList.add(LicenseHostCmd.class);
 
         //object store APIs
         cmdList.add(AddObjectStoragePoolCmd.class);
