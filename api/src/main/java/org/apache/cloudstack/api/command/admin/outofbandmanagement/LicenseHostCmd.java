@@ -29,7 +29,7 @@ import org.apache.cloudstack.context.CallContext;
 
 
 
-@APICommand(name = "LicenseHost", description = "Host License'.", since = "4.20.0.0", responseObject = LicenseHostResponse.class, requestHasSensitiveInfo = false, responseHasSensitiveInfo = false, authorized = {
+@APICommand(name = "licenseHost", description = "Host License'.", since = "4.20.0.0", responseObject = LicenseHostResponse.class, requestHasSensitiveInfo = false, responseHasSensitiveInfo = false, authorized = {
         RoleType.Admin })
 public class LicenseHostCmd extends BaseListCmd {
 

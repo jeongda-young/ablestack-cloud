@@ -3203,67 +3203,53 @@ public class ManagementServerImpl extends ManagerBase implements ManagementServe
 
     @Override
     public ListResponse<LicenseHostResponse> LicenseHost(LicenseHostCmd cmd) {
-                Long id = cmd.getId();
-                HostVO hostVO = _hostDao.findById(id);
-                if (hostVO == null) {
-                    throw new CloudRuntimeException("Host not found with ID: " + id);
-                }
+        Long id = cmd.getId();
+        HostVO hostVO = _hostDao.findById(id);
+        if (hostVO == null) {
+            throw new CloudRuntimeException("Host not found with ID: " + id);
+        }
 
-                LicenseHostCommand licenseName = new LicenseHostCommand(id);
-                Answer answer;
-                try {
-                    answer = _agentMgr.send(hostVO.getId(), licenseName);
-                } catch (Exception e) {
-                    String errorMsg = "Error sending ListHostDevicesCommand: " + e.getMessage();
-                    logger.error(errorMsg, e);
-                    throw new CloudRuntimeException(errorMsg, e);
-                }
+        LicenseHostCommand licenseName = new LicenseHostCommand(id);
+        Answer answer;
+        try {
+            answer = _agentMgr.send(hostVO.getId(), licenseName);
+        } catch (Exception e) {
+            String errorMsg = "Error sending LicenseHostCommand: " + e.getMessage();
+            logger.error(errorMsg, e);
+            throw new CloudRuntimeException(errorMsg, e);
+        }
 
-                if (answer == null) {
-                    throw new CloudRuntimeException("Answer is null");
-                }
-                if (!answer.getResult()) {
-                    String errorDetails = (answer.getDetails() != null) ? answer.getDetails()
-                            : "No additional details available";
-                    String errorMsg = "Answer result is false. Details: " + errorDetails;
-                    logger.error(errorMsg);
-                    throw new CloudRuntimeException(errorMsg);
-                }
-                if (!(answer instanceof LicenseHostAnswer)) {
-                    throw new CloudRuntimeException("Answer is not an instance of listHostDeviceAnswer");
-                }
+        if (answer == null) {
+            throw new CloudRuntimeException("Answer is null");
+        }
+        if (!answer.getResult()) {
+            String errorDetails = (answer.getDetails() != null) ? answer.getDetails()
+                    : "No additional details available";
+            String errorMsg = "Answer result is false. Details: " + errorDetails;
+            logger.error(errorMsg);
+            throw new CloudRuntimeException(errorMsg);
+        }
+        if (!(answer instanceof LicenseHostAnswer)) {
+            throw new CloudRuntimeException("Answer is not an instance of LicenseHostAnswer");
+        }
 
-                LicenseHostAnswer LicenseAnswer = (LicenseHostAnswer) answer;
-                if (!LicenseAnswer.isSuccessMessage()) {
-                    throw new IllegalArgumentException("Failed to list VM PCI objects.");
-                }
+        LicenseHostAnswer licenseAnswer = (LicenseHostAnswer) answer;
+        if (!licenseAnswer.isSuccessMessage()) {
+            throw new IllegalArgumentException("Failed to list Host License objects.");
+        }
 
-                List<LicenseHostResponse> responses = new ArrayList<>();
-                ListResponse<LicenseHostResponse> listResponse = new ListResponse<>();
+        List<LicenseHostResponse> responses = new ArrayList<>();
+        ListResponse<LicenseHostResponse> listResponse = new ListResponse<>();
 
-                List<String> LicenseHostVaule = LicenseAnswer.getLicenseHostVaule();
+        List<String> licenseHostValue = licenseAnswer.getLicenseHostVaule();
 
-                List<String> LicenseHostNames = new ArrayList<>();
-                List<String> LicenseHostVaules = new ArrayList<>();
+        LicenseHostResponse response = new LicenseHostResponse();
+        response.setLicenseHostValue(licenseHostValue);
+        responses.add(response);
 
-                // for (String LicenseHostVaules : LicenseHostVaule) {
-                //     String[] parts = LicenseHostVaule.split(": ", 2);
-                //     if (parts.length == 2) {
-                //         LicenseHostNames.add(parts[0].trim());
-                //         LicenseHostVaules.add(parts[1].trim());
-                //     } else {
-                //         logger.warn("Unexpected PCI info format: " + LicenseHostVaule);
-                //     }
-                // }
-
-                LicenseHostResponse response = new LicenseHostResponse();
-                response.setLicenseHostName(LicenseHostNames);
-                response.setLicenseHostValue(LicenseHostVaules);
-                responses.add(response);
-
-                listResponse.setResponses(responses);
-                return listResponse;
-            }
+        listResponse.setResponses(responses);
+        return listResponse;
+    }
 
      @Override
     public ListResponse<ListHostDevicesResponse> listHostDevices(ListHostDevicesCmd cmd) {
