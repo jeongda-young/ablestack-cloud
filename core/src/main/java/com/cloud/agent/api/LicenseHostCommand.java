@@ -23,7 +23,6 @@ import java.util.List;
 
 public class LicenseHostCommand extends Command {
 
-    private List<String> licenseHostName;
     private List<String> licenseHostValue;
     private Long id;
 
@@ -35,23 +34,9 @@ public class LicenseHostCommand extends Command {
         this.id = id;
     }
 
-     public LicenseHostCommand(Long id, List<String> licenseHostName, List<String> licenseHostValue) {
-         this.id = id;
-         this.licenseHostName = licenseHostName;
-         this.licenseHostValue = licenseHostValue;
-    }
-
     @Override
     public boolean executeInSequence() {
         return false;
-    }
-
-    public List<String> getLicenseHostName() {
-        return licenseHostName;
-     }
-
-     public void setLicenseHostName(List<String> licenseHostName) {
-         this.licenseHostName = licenseHostName;
     }
 
     public List<String> getLicenseHostValue() {

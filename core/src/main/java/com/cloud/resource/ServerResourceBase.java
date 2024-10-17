@@ -62,6 +62,8 @@ import com.cloud.utils.script.OutputInterpreter;
 import com.cloud.utils.script.Script;
 import java.io.BufferedReader;
 
+import com.google.gson.Gson;
+
 public abstract class ServerResourceBase implements ServerResource {
     protected Logger logger = LogManager.getLogger(getClass());
     protected String name;
@@ -287,35 +289,48 @@ public abstract class ServerResourceBase implements ServerResource {
             connection.setDoOutput(true);
             connection.setRequestMethod("GET");
             connection.setConnectTimeout(30000);
-            connection.setReadTimeout(600000);
+            connection.setReadTimeout(60000);
             connection.setRequestProperty("Accept", "application/json");
             connection.setRequestProperty("Content-Type", "application/x-www-form-urlencoded");
 
             int responseCode = connection.getResponseCode();
             if (responseCode == 200) {
-                BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()));
-                StringBuilder response = new StringBuilder();
-                String inputLine;
+                try (BufferedReader in = new BufferedReader(new InputStreamReader(connection.getInputStream()))) {
+                    StringBuilder response = new StringBuilder();
+                    String inputLine;
 
-                while ((inputLine = in.readLine()) != null) {
-                    response.append(inputLine);
+                    while ((inputLine = in.readLine()) != null) {
+                        response.append(inputLine);
+                    }
+
+                    String licenseData = response.toString();
+                    licenseHostValue = processLicenseData(licenseData);
+
+                    return new LicenseHostAnswer(true, licenseHostValue);
                 }
-                in.close();
-
-                String licenseData = response.toString();
-                // String licenseHostValue = processLicenseData(licenseData);
-
-                return new LicenseHostAnswer(true, licenseHostValue);
+            } else {
+                System.err.println("Error: Received HTTP response code " + responseCode);
             }
         } catch (Exception e) {
             e.printStackTrace();
         }
-        return null;
-    }
-    private static String processLicenseData(String licenseData) {
-        return "ProcessedValue";
+        return new LicenseHostAnswer(false, new ArrayList<>());
     }
 
+    private static List<String> processLicenseData(String licenseData) {
+        List<String> processedValues = new ArrayList<>();
+        try {
+            Gson gson = new Gson();
+            String[] values = gson.fromJson(licenseData, String[].class);
+            for (String value : values) {
+                processedValues.add(value);
+            }
+        } catch (Exception e) {
+            System.err.println("Error processing license data: " + e.getMessage());
+        }
+
+        return processedValues;
+    }
 
     protected Answer listFilesAtPath(String nfsMountPoint, String relativePath, int startIndex, int pageSize, String keyword) {
         int count = 0;

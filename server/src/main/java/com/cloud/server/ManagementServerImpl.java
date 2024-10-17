@@ -3209,10 +3209,10 @@ public class ManagementServerImpl extends ManagerBase implements ManagementServe
             throw new CloudRuntimeException("Host not found with ID: " + id);
         }
 
-        LicenseHostCommand licenseName = new LicenseHostCommand(id);
+        LicenseHostCommand licenseCommand = new LicenseHostCommand(id);
         Answer answer;
         try {
-            answer = _agentMgr.send(hostVO.getId(), licenseName);
+            answer = _agentMgr.send(hostVO.getId(), licenseCommand);
         } catch (Exception e) {
             String errorMsg = "Error sending LicenseHostCommand: " + e.getMessage();
             logger.error(errorMsg, e);
