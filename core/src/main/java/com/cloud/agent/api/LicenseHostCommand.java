@@ -19,19 +19,19 @@
 
 package com.cloud.agent.api;
 
-import java.util.List;
+// import java.util.List;
+
+// import com.cloud.agent.api.Command;
 
 public class LicenseHostCommand extends Command {
-
-    private List<String> licenseHostValue;
     private Long id;
 
-    public LicenseHostCommand() {
+    public LicenseHostCommand(Long id) {
+        this.id = id;
     }
 
-    public LicenseHostCommand(Long id) {
-        super();
-        this.id = id;
+    public Long getId() {
+        return id;
     }
 
     @Override
@@ -39,17 +39,17 @@ public class LicenseHostCommand extends Command {
         return false;
     }
 
-    public List<String> getLicenseHostValue() {
-        return licenseHostValue;
-     }
+    // public List<String> getLicenseHostValue() {
+    //     return licenseHostValue;
+    //  }
 
-     public void setLicenseHostValue(List<String> licenseHostValue) {
-         this.licenseHostValue = licenseHostValue;
-    }
+    //  public void setLicenseHostValue(List<String> licenseHostValue) {
+    //      this.licenseHostValue = licenseHostValue;
+    // }
 
-    public Long getId() {
-        return id;
-    }
+    // public Long getId() {
+    //     return id;
+    // }
 
      public void setId(Long id) {
          this.id = id;

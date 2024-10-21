@@ -314,7 +314,7 @@ public abstract class ServerResourceBase implements ServerResource {
         } catch (Exception e) {
             e.printStackTrace();
         }
-        return new LicenseHostAnswer(false, new ArrayList<>());
+        return null;
     }
 
     private static List<String> processLicenseData(String licenseData) {

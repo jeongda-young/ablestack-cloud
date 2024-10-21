@@ -3203,52 +3203,26 @@ public class ManagementServerImpl extends ManagerBase implements ManagementServe
 
     @Override
     public ListResponse<LicenseHostResponse> LicenseHost(LicenseHostCmd cmd) {
-        Long id = cmd.getId();
-        HostVO hostVO = _hostDao.findById(id);
-        if (hostVO == null) {
-            throw new CloudRuntimeException("Host not found with ID: " + id);
+        Long hostId = cmd.getId();
+        HostVO host = _hostDao.findById(hostId);
+
+        if (host == null) {
+            throw new CloudRuntimeException("Host not found with ID: " + hostId);
         }
 
-        LicenseHostCommand licenseCommand = new LicenseHostCommand(id);
-        Answer answer;
-        try {
-            answer = _agentMgr.send(hostVO.getId(), licenseCommand);
-        } catch (Exception e) {
-            String errorMsg = "Error sending LicenseHostCommand: " + e.getMessage();
-            logger.error(errorMsg, e);
-            throw new CloudRuntimeException(errorMsg, e);
+        LicenseHostCommand licenseHostCmd = new LicenseHostCommand(hostId);
+        LicenseHostAnswer answer = (LicenseHostAnswer) _agentMgr.easySend(host.getId(), licenseHostCmd);
+
+        if (answer == null || !answer.getResult()) {
+            throw new CloudRuntimeException("Failed to fetch license host data from agent");
         }
 
-        if (answer == null) {
-            throw new CloudRuntimeException("Answer is null");
-        }
-        if (!answer.getResult()) {
-            String errorDetails = (answer.getDetails() != null) ? answer.getDetails()
-                    : "No additional details available";
-            String errorMsg = "Answer result is false. Details: " + errorDetails;
-            logger.error(errorMsg);
-            throw new CloudRuntimeException(errorMsg);
-        }
-        if (!(answer instanceof LicenseHostAnswer)) {
-            throw new CloudRuntimeException("Answer is not an instance of LicenseHostAnswer");
-        }
-
-        LicenseHostAnswer licenseAnswer = (LicenseHostAnswer) answer;
-        if (!licenseAnswer.isSuccessMessage()) {
-            throw new IllegalArgumentException("Failed to list Host License objects.");
-        }
-
-        List<LicenseHostResponse> responses = new ArrayList<>();
-        ListResponse<LicenseHostResponse> listResponse = new ListResponse<>();
-
-        List<String> licenseHostValue = licenseAnswer.getLicenseHostVaule();
-
-        LicenseHostResponse response = new LicenseHostResponse();
-        response.setLicenseHostValue(licenseHostValue);
-        responses.add(response);
-
-        listResponse.setResponses(responses);
-        return listResponse;
+        // 응답 처리 및 리턴
+        ListResponse<LicenseHostResponse> response = new ListResponse<>();
+        LicenseHostResponse licenseResponse = new LicenseHostResponse();
+        licenseResponse.setLicenseHostValue(answer.getLicenseHostVaule());
+        response.setResponses(List.of(licenseResponse));
+        return response;
     }
 
      @Override

@@ -495,6 +495,6 @@ public interface ManagementService {
 
     ListResponse<ListHostDevicesResponse> listHostDevices(ListHostDevicesCmd cmd);
 
-    ListResponse<LicenseHostResponse> LicenseHost(LicenseHostCmd licenseHostCmd);
+    ListResponse<LicenseHostResponse> LicenseHost(LicenseHostCmd cmd);
 
 }
