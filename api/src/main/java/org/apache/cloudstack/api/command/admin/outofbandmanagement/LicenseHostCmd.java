@@ -43,12 +43,20 @@ public class LicenseHostCmd extends BaseListCmd {
             ApiArgValidator.PositiveNumber })
     private Long id;
 
+    @Parameter(name = ApiConstants.IP, type = BaseCmd.CommandType.UUID, entityType = LicenseHostResponse.class, description = "host IP", required = true, validations = {
+        ApiArgValidator.PositiveNumber })
+    private String ip;
+
     /////////////////////////////////////////////////////
     /////////////////// Accessors ///////////////////////
     /////////////////////////////////////////////////////
 
     public Long getId() {
         return id;
+    }
+
+    public String getIp() {
+        return ip;
     }
 
     /////////////////////////////////////////////////////

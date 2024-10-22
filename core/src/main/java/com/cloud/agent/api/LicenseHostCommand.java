@@ -17,27 +17,31 @@
  * under the License.
  */
 
-package com.cloud.agent.api;
-
-// import java.util.List;
+ package com.cloud.agent.api;
 
 // import com.cloud.agent.api.Command;
 
-public class LicenseHostCommand extends Command {
-    private Long id;
+ public class LicenseHostCommand extends Command {
+     private Long id;
+     private String hostIp;
 
-    public LicenseHostCommand(Long id) {
-        this.id = id;
-    }
+     public LicenseHostCommand(Long id, String hostIp) {
+         this.id = id;
+         this.hostIp = hostIp;
+     }
 
-    public Long getId() {
-        return id;
-    }
+     public Long getId() {
+         return id;
+     }
 
-    @Override
-    public boolean executeInSequence() {
-        return false;
-    }
+     public String getHostIp() {
+         return hostIp;
+     }
+
+     @Override
+     public boolean executeInSequence() {
+         return false;
+     }
 
     // public List<String> getLicenseHostValue() {
     //     return licenseHostValue;
@@ -45,10 +49,6 @@ public class LicenseHostCommand extends Command {
 
     //  public void setLicenseHostValue(List<String> licenseHostValue) {
     //      this.licenseHostValue = licenseHostValue;
-    // }
-
-    // public Long getId() {
-    //     return id;
     // }
 
      public void setId(Long id) {

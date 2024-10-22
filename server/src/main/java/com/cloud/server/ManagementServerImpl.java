@@ -3204,50 +3204,40 @@ public class ManagementServerImpl extends ManagerBase implements ManagementServe
     @Override
     public ListResponse<LicenseHostResponse> LicenseHost(LicenseHostCmd cmd) {
         Long id = cmd.getId();
+        String hostIp = cmd.getIp();
         HostVO hostVO = _hostDao.findById(id);
-        if (hostVO == null) {
-            throw new CloudRuntimeException("Host not found with ID: " + id);
+        if (hostVO == null && hostIp == null) {
+            throw new CloudRuntimeException("Host not found with ID or IP: " + id + " or " + hostIp);
+        }
+        if (hostIp == null && hostVO != null) {
+            hostIp = hostVO.getPrivateIpAddress();
         }
 
-        LicenseHostCommand licenseName = new LicenseHostCommand(id);
+        LicenseHostCommand licenseCmd = new LicenseHostCommand(id, hostIp);
         Answer answer;
         try {
-            answer = _agentMgr.send(hostVO.getId(), licenseName);
+            answer = _agentMgr.send(hostVO.getId(), licenseCmd);
         } catch (Exception e) {
             String errorMsg = "Error sending LicenseHostCommand: " + e.getMessage();
             logger.error(errorMsg, e);
             throw new CloudRuntimeException(errorMsg, e);
         }
 
-        if (answer == null) {
-            throw new CloudRuntimeException("Answer is null");
-        }
-        if (!answer.getResult()) {
-            String errorDetails = (answer.getDetails() != null) ? answer.getDetails()
-                    : "No additional details available";
-            String errorMsg = "Answer result is false. Details: " + errorDetails;
+        if (answer == null || !answer.getResult()) {
+            String errorMsg = "Answer result is false. Details: " + (answer != null ? answer.getDetails() : "Answer is null");
             logger.error(errorMsg);
             throw new CloudRuntimeException(errorMsg);
         }
         if (!(answer instanceof LicenseHostAnswer)) {
             throw new CloudRuntimeException("Answer is not an instance of LicenseHostAnswer");
         }
-
-        LicenseHostAnswer LicenseAnswer = (LicenseHostAnswer) answer;
-        if (!LicenseAnswer.isSuccessMessage()) {
-            throw new IllegalArgumentException("Failed to list Host License objects.");
-        }
-
+        LicenseHostAnswer licenseAnswer = (LicenseHostAnswer) answer;
         List<LicenseHostResponse> responses = new ArrayList<>();
-        ListResponse<LicenseHostResponse> listResponse = new ListResponse<>();
-
-        List<String> LicenseHostVaule = LicenseAnswer.getLicenseHostVaule();
-
-
         LicenseHostResponse response = new LicenseHostResponse();
-        response.setLicenseHostValue(LicenseHostVaule);
+        response.setLicenseHostValue(licenseAnswer.getLicenseHostValue());
         responses.add(response);
 
+        ListResponse<LicenseHostResponse> listResponse = new ListResponse<>();
         listResponse.setResponses(responses);
         return listResponse;
     }
@@ -5717,4 +5707,5 @@ public class ManagementServerImpl extends ManagerBase implements ManagementServe
     public void setLockControllerListener(final LockControllerListener lockControllerListener) {
         _lockControllerListener = lockControllerListener;
     }
+
 }

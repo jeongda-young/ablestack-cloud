@@ -5251,7 +5251,7 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
 
     public Answer LicenseHost(LicenseHostCommand command) {
         if (command.getId() != null) {
-            return LicenseHost();
+            return LicenseHost(command.getHostIp());
         } else {
             throw new IllegalArgumentException("Host ID cannot be null");
         }

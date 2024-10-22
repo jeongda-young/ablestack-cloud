@@ -54,12 +54,14 @@ import com.cloud.agent.IAgentControl;
 import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.Command;
 import com.cloud.agent.api.LicenseHostAnswer;
+// import com.cloud.agent.api.LicenseHostCommand;
 import com.cloud.agent.api.ListHostDeviceAnswer;
 import com.cloud.agent.api.StartupCommand;
 import com.cloud.utils.net.NetUtils;
 import com.cloud.utils.nio.TrustAllManager;
 import com.cloud.utils.script.OutputInterpreter;
 import com.cloud.utils.script.Script;
+
 import java.io.BufferedReader;
 
 import com.google.gson.Gson;
@@ -275,13 +277,13 @@ public abstract class ServerResourceBase implements ServerResource {
         return new ListDataStoreObjectsAnswer(true, count, names, paths, absPaths, isDirs, sizes, modifiedList);
     }
 
-    protected static Answer LicenseHost() {
+    protected static Answer LicenseHost(String hostIp) {
         List<String> licenseHostValue = new ArrayList<>();
         try {
             final SSLContext sslContext = SSLUtils.getSSLContext();
             sslContext.init(null, new TrustManager[]{new TrustAllManager()}, new SecureRandom());
 
-            String licenseApiUrl = "https://10.10.254.92:8080/api/v1/license";
+            String licenseApiUrl = "https://" + hostIp + ":8080/api/v1/license";
             URL url = new URL(licenseApiUrl);
 
             HttpsURLConnection connection = (HttpsURLConnection) url.openConnection();
@@ -314,7 +316,7 @@ public abstract class ServerResourceBase implements ServerResource {
         } catch (Exception e) {
             e.printStackTrace();
         }
-        return null;
+        return new LicenseHostAnswer(false, licenseHostValue);
     }
 
     private static List<String> processLicenseData(String licenseData) {

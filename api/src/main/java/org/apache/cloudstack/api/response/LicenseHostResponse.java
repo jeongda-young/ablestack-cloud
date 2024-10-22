@@ -28,9 +28,9 @@ import org.apache.cloudstack.api.EntityReference;
 @EntityReference(value = Host.class)
 public class LicenseHostResponse extends BaseResponse {
 
-    @SerializedName(ApiConstants.LICENSEHOST_NAME)
-    @Param(description = "Name of the License Host")
-    private List<String> licenseHostName;
+    // @SerializedName(ApiConstants.LICENSEHOST_NAME)
+    // @Param(description = "Name of the License Host")
+    // private List<String> licenseHostName;
 
     @SerializedName(ApiConstants.LICENSEHOST_VALUE)
     @Param(description = "Value of the License Host")
@@ -41,23 +41,23 @@ public class LicenseHostResponse extends BaseResponse {
         this.setObjectName("licensehost");
     }
 
-    public LicenseHostResponse(List<String> licenseHostName, List<String> licenseHostValue) {
-        this.licenseHostName = licenseHostName;
+    public LicenseHostResponse(List<String> licenseHostValue) {
+        // this.licenseHostName = licenseHostName;
         this.licenseHostValue = licenseHostValue;
         this.setObjectName("licensehost");
     }
 
-    public List<String> getLicenseHostName() {
-        return licenseHostName;
-    }
+    // public List<String> getLicenseHostName() {
+    //     return licenseHostName;
+    // }
 
     public List<String> getLicenseHostValue() {
         return licenseHostValue;
     }
 
-    public void setLicenseHostName(List<String> licenseHostName) {
-        this.licenseHostName = licenseHostName;
-    }
+    // public void setLicenseHostName(List<String> licenseHostName) {
+    //     this.licenseHostName = licenseHostName;
+    // }
 
     public void setLicenseHostValue(List<String> licenseHostValue) {
         this.licenseHostValue = licenseHostValue;

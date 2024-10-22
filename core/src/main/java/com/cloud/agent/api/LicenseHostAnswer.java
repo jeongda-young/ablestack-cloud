@@ -36,7 +36,7 @@ public class LicenseHostAnswer extends Answer {
         this.licenseHostVaule = licenseHostValue;
     }
 
-    public List<String> getLicenseHostVaule() {
+    public List<String> getLicenseHostValue() {
         if (licenseHostVaule == null) {
             return Collections.emptyList();
         }
