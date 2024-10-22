@@ -42,9 +42,19 @@
 
 <script>
 import { api } from '@/api'
+import { IdcardOutlined } from '@ant-design/icons-vue'
 
 export default {
-  name: 'LicenseHost',
+  name: 'licenseHost',
+  components: {
+    IdcardOutlined
+  },
+  props: {
+    resource: {
+      type: Object,
+      required: true
+    }
+  },
   data () {
     return {
       fetchLoading: false,
@@ -53,25 +63,47 @@ export default {
     }
   },
   created () {
-    this.fetchLicenseData()
+    this.fetchData()
   },
   methods: {
-    fetchLicenseData () {
+    fetchData () {
       this.fetchLoading = true
-      api('LicenseHost', { id: this.resource.id })
-        .then(response => {
-          this.licenseData = response.data
-        })
-        .catch(error => {
-          this.errorMessage = error.message
-        })
-        .finally(() => {
-          this.fetchLoading = false
-        })
+      api('licenseHost', {
+        id: this.resource.id
+      }).then(json => {
+        const response = json.licensehostresponse
+        if (response && response.licensehost && response.licensehost.length > 0) {
+          const licenseArray = response.licensehost[0]
+          this.licenseData = {
+            name: licenseArray[0],
+            value: licenseArray[1]
+          }
+        } else {
+          this.licenseData = {}
+        }
+      }).catch(error => {
+        this.errorMessage = error.message || 'Failed to fetch data'
+      }).finally(() => {
+        this.fetchLoading = false
+      })
     }
   }
 }
 </script>
 
 <style lang="less" scoped>
+  .ant-table-wrapper {
+    margin: 2rem 0;
+  }
+
+  @media (max-width: 600px) {
+    position: relative;
+    width: 100%;
+    top: 0;
+    right: 0;
+  }
+
+  :deep(.ant-table-tbody) > tr > td {
+    cursor: pointer;
+  }
 </style>
