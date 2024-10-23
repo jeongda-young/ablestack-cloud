@@ -20,7 +20,7 @@
     <a-list size="small">
       <a-list-item v-if="licenseData.name">
         <div>
-          <strong>{{ $t('label.licenseName') }}</strong>
+          <strong>{{ $t('label.LicensesHost') }}</strong>
           <div>{{ licenseData.name }}</div>
         </div>
       </a-list-item>
@@ -71,12 +71,13 @@ export default {
       api('licenseHost', {
         id: this.resource.id
       }).then(json => {
+        console.log('API Response:', json)
         const response = json.licensehostresponse
-        if (response && response.licensehost && response.licensehost.length > 0) {
-          const licenseArray = response.licensehost[0]
+        if (response && response.count > 0 && response.licensehost.length > 0) {
+          const licenseArray = response.licensehost[0].licensehostvalue
           this.licenseData = {
-            name: licenseArray[0],
-            value: licenseArray[1]
+            name: licenseArray[0] || 'No Name',
+            value: licenseArray[1] || 'No Value'
           }
         } else {
           this.licenseData = {}
@@ -92,18 +93,7 @@ export default {
 </script>
 
 <style lang="less" scoped>
-  .ant-table-wrapper {
-    margin: 2rem 0;
-  }
-
-  @media (max-width: 600px) {
-    position: relative;
-    width: 100%;
-    top: 0;
-    right: 0;
-  }
-
-  :deep(.ant-table-tbody) > tr > td {
-    cursor: pointer;
-  }
+.ant-table-wrapper {
+  margin: 2rem 0;
+}
 </style>

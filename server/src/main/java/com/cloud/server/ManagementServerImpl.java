@@ -3206,11 +3206,14 @@ public class ManagementServerImpl extends ManagerBase implements ManagementServe
         Long id = cmd.getId();
         String hostIp = cmd.getIp();
         HostVO hostVO = _hostDao.findById(id);
-        if (hostVO == null && hostIp == null) {
-            throw new CloudRuntimeException("Host not found with ID or IP: " + id + " or " + hostIp);
+        if (hostVO == null) {
+            throw new CloudRuntimeException("Host not found with ID: " + id);
         }
-        if (hostIp == null && hostVO != null) {
+        if (hostIp == null) {
             hostIp = hostVO.getPrivateIpAddress();
+            if (hostIp == null) {
+                throw new CloudRuntimeException("Host IP is null for host ID: " + id);
+            }
         }
 
         LicenseHostCommand licenseCmd = new LicenseHostCommand(id, hostIp);

@@ -277,16 +277,17 @@ public abstract class ServerResourceBase implements ServerResource {
         return new ListDataStoreObjectsAnswer(true, count, names, paths, absPaths, isDirs, sizes, modifiedList);
     }
 
-    protected static Answer LicenseHost(String hostIp) {
+    protected Answer LicenseHost(String hostIp) {
         List<String> licenseHostValue = new ArrayList<>();
         try {
             final SSLContext sslContext = SSLUtils.getSSLContext();
             sslContext.init(null, new TrustManager[]{new TrustAllManager()}, new SecureRandom());
 
-            String licenseApiUrl = "https://" + hostIp + ":8080/api/v1/license";
+            String licenseApiUrl = "https://10.10.254.113:8080/api/v1/license";
             URL url = new URL(licenseApiUrl);
 
             HttpsURLConnection connection = (HttpsURLConnection) url.openConnection();
+            connection.setHostnameVerifier((hostname, session) -> true);
             connection.setSSLSocketFactory(sslContext.getSocketFactory());
             connection.setDoOutput(true);
             connection.setRequestMethod("GET");
@@ -311,26 +312,25 @@ public abstract class ServerResourceBase implements ServerResource {
                     return new LicenseHostAnswer(true, licenseHostValue);
                 }
             } else {
-                System.err.println("Error: Received HTTP response code " + responseCode);
+                logger.error("Error: Received HTTP response code " + responseCode);
             }
         } catch (Exception e) {
+            logger.error("Exception occurred: ", e);
             e.printStackTrace();
         }
         return new LicenseHostAnswer(false, licenseHostValue);
     }
 
-    private static List<String> processLicenseData(String licenseData) {
+    private List<String> processLicenseData(String licenseData) {
         List<String> processedValues = new ArrayList<>();
+        logger.info("Processing license data...");
         try {
             Gson gson = new Gson();
             String[] values = gson.fromJson(licenseData, String[].class);
-            for (String value : values) {
-                processedValues.add(value);
-            }
+            processedValues.addAll(Arrays.asList(values));
         } catch (Exception e) {
-            System.err.println("Error processing license data: " + e.getMessage());
+            logger.error("Error processing license data: " + e.getMessage(), e);
         }
-
         return processedValues;
     }
 
