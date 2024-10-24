@@ -26,7 +26,6 @@ import java.io.StringWriter;
 import java.net.NetworkInterface;
 import java.net.SocketException;
 import java.net.URL;
-import java.security.SecureRandom;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -42,9 +41,10 @@ import javax.naming.ConfigurationException;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
+import javax.net.ssl.X509TrustManager;
+
 import org.apache.cloudstack.storage.command.browser.ListDataStoreObjectsAnswer;
 import org.apache.cloudstack.storage.command.browser.ListRbdObjectsAnswer;
-import org.apache.cloudstack.utils.security.SSLUtils;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.LogManager;
@@ -54,11 +54,9 @@ import com.cloud.agent.IAgentControl;
 import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.Command;
 import com.cloud.agent.api.LicenseHostAnswer;
-// import com.cloud.agent.api.LicenseHostCommand;
 import com.cloud.agent.api.ListHostDeviceAnswer;
 import com.cloud.agent.api.StartupCommand;
 import com.cloud.utils.net.NetUtils;
-import com.cloud.utils.nio.TrustAllManager;
 import com.cloud.utils.script.OutputInterpreter;
 import com.cloud.utils.script.Script;
 
@@ -280,15 +278,26 @@ public abstract class ServerResourceBase implements ServerResource {
     protected Answer LicenseHost(String hostIp) {
         List<String> licenseHostValue = new ArrayList<>();
         try {
-            final SSLContext sslContext = SSLUtils.getSSLContext();
-            sslContext.init(null, new TrustManager[]{new TrustAllManager()}, new SecureRandom());
+            TrustManager[] trustAllCerts = new TrustManager[] {
+                new X509TrustManager() {
+                    public java.security.cert.X509Certificate[] getAcceptedIssuers() {
+                        return null;
+                    }
+                    public void checkClientTrusted(java.security.cert.X509Certificate[] certs, String authType) {}
+                    public void checkServerTrusted(java.security.cert.X509Certificate[] certs, String authType) {}
+                }
+            };
 
-            String licenseApiUrl = "https://10.10.254.113:8080/api/v1/license";
+            SSLContext sslContext = SSLContext.getInstance("TLS");
+            sslContext.init(null, trustAllCerts, new java.security.SecureRandom());
+            HttpsURLConnection.setDefaultSSLSocketFactory(sslContext.getSocketFactory());
+
+            String licenseApiUrl = "https://" + hostIp + ":8080/api/v1/license";
             URL url = new URL(licenseApiUrl);
-
             HttpsURLConnection connection = (HttpsURLConnection) url.openConnection();
-            connection.setHostnameVerifier((hostname, session) -> true);
-            connection.setSSLSocketFactory(sslContext.getSocketFactory());
+
+            connection.setHostnameVerifier((hostname, session) -> hostname.equals(hostIp));
+
             connection.setDoOutput(true);
             connection.setRequestMethod("GET");
             connection.setConnectTimeout(30000);
@@ -328,11 +337,13 @@ public abstract class ServerResourceBase implements ServerResource {
             Gson gson = new Gson();
             String[] values = gson.fromJson(licenseData, String[].class);
             processedValues.addAll(Arrays.asList(values));
+            logger.info("Processed values: " + processedValues);
         } catch (Exception e) {
             logger.error("Error processing license data: " + e.getMessage(), e);
         }
         return processedValues;
     }
+
 
     protected Answer listFilesAtPath(String nfsMountPoint, String relativePath, int startIndex, int pageSize, String keyword) {
         int count = 0;
