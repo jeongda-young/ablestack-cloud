@@ -71,7 +71,6 @@ export default {
       api('licenseHost', {
         id: this.resource.id
       }).then(json => {
-        console.log('API Response:', json)
         const response = json.licensehostresponse
         if (response && response.count > 0 && response.licensehost.length > 0) {
           const licenseArray = response.licensehost[0].licensehostvalue

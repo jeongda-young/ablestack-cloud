@@ -19,8 +19,6 @@
 
  package com.cloud.agent.api;
 
-// import com.cloud.agent.api.Command;
-
  public class LicenseHostCommand extends Command {
      private Long id;
      private String hostIp;
@@ -42,14 +40,6 @@
      public boolean executeInSequence() {
          return false;
      }
-
-    // public List<String> getLicenseHostValue() {
-    //     return licenseHostValue;
-    //  }
-
-    //  public void setLicenseHostValue(List<String> licenseHostValue) {
-    //      this.licenseHostValue = licenseHostValue;
-    // }
 
      public void setId(Long id) {
          this.id = id;
