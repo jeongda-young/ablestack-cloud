@@ -256,6 +256,7 @@ import com.cloud.host.HostVO;
 import com.cloud.host.Status;
 import com.cloud.host.dao.HostDao;
 import com.cloud.hypervisor.Hypervisor.HypervisorType;
+import com.cloud.hypervisor.Hypervisor.HypervisorType.Functionality;
 import com.cloud.hypervisor.HypervisorGuru;
 import com.cloud.hypervisor.HypervisorGuruManager;
 import com.cloud.hypervisor.dao.HypervisorCapabilitiesDao;
@@ -1290,7 +1291,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
      */
 
     protected void updateInstanceDetailsMapWithCurrentValuesForAbsentDetails(Map<String, String> details, VirtualMachine vmInstance, Long newServiceOfferingId) {
-        ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getId(), vmInstance.getServiceOfferingId());
+        ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getServiceOfferingId());
         ServiceOfferingVO newServiceOffering = serviceOfferingDao.findById(newServiceOfferingId);
         addCurrentDetailValueToInstanceDetailsMapIfNewValueWasNotSpecified(newServiceOffering.getSpeed(), details, VmDetailConstants.CPU_SPEED, currentServiceOffering.getSpeed());
         addCurrentDetailValueToInstanceDetailsMapIfNewValueWasNotSpecified(newServiceOffering.getRamSize(), details, VmDetailConstants.MEMORY, currentServiceOffering.getRamSize());
@@ -1316,7 +1317,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
 
 
     private void validateOfferingMaxResource(ServiceOfferingVO offering) {
-        Integer maxCPUCores = ConfigurationManagerImpl.VM_SERVICE_OFFERING_MAX_CPU_CORES.value() == 0 ? Integer.MAX_VALUE: ConfigurationManagerImpl.VM_SERVICE_OFFERING_MAX_CPU_CORES.value();
+        Integer maxCPUCores = ConfigurationManagerImpl.VM_SERVICE_OFFERING_MAX_CPU_CORES.value() == 0 ? 16 : ConfigurationManagerImpl.VM_SERVICE_OFFERING_MAX_CPU_CORES.value();
         if (offering.getCpu() > maxCPUCores) {
             throw new InvalidParameterValueException("Invalid cpu cores value, please choose another service offering with cpu cores between 1 and " + maxCPUCores);
         }
@@ -1332,10 +1333,10 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         if (customParameters.size() != 0) {
             Map<String, String> offeringDetails = serviceOfferingDetailsDao.listDetailsKeyPairs(serviceOffering.getId());
             if (serviceOffering.getCpu() == null) {
-                int minCPU = NumbersUtil.parseInt(offeringDetails.get(ApiConstants.MIN_CPU_NUMBER), 1);
-                int maxCPU = NumbersUtil.parseInt(offeringDetails.get(ApiConstants.MAX_CPU_NUMBER), Integer.MAX_VALUE);
-                int cpuNumber = NumbersUtil.parseInt(customParameters.get(UsageEventVO.DynamicParameters.cpuNumber.name()), -1);
-                Integer maxCPUCores = ConfigurationManagerImpl.VM_SERVICE_OFFERING_MAX_CPU_CORES.value() == 0 ? Integer.MAX_VALUE: ConfigurationManagerImpl.VM_SERVICE_OFFERING_MAX_CPU_CORES.value();
+                int minCPU = NumbersUtil.parseInt(offeringDetails.get(ApiConstants.MIN_CPU_NUMBER), 2);
+                int maxCPU = NumbersUtil.parseInt(offeringDetails.get(ApiConstants.MAX_CPU_NUMBER), 16);
+                int cpuNumber = Integer.parseInt(customParameters.get(UsageEventVO.DynamicParameters.cpuNumber.name()));
+                Integer maxCPUCores = ConfigurationManagerImpl.VM_SERVICE_OFFERING_MAX_CPU_CORES.value() == 0 ? 16 : ConfigurationManagerImpl.VM_SERVICE_OFFERING_MAX_CPU_CORES.value();
                 if (cpuNumber < minCPU || cpuNumber > maxCPU || cpuNumber > maxCPUCores) {
                     throw new InvalidParameterValueException(String.format("Invalid cpu cores value, specify a value between %d and %d", minCPU, Math.min(maxCPUCores, maxCPU)));
                 }
@@ -1385,7 +1386,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         } else {
             validateOfferingMaxResource(newServiceOffering);
         }
-        ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getId(), vmInstance.getServiceOfferingId());
+        ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getServiceOfferingId());
 
         validateDiskOfferingChecks(currentServiceOffering, newServiceOffering);
 
@@ -1489,7 +1490,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
             }
         }
 
-        Account vmOwner = _accountMgr.getAccount(vmInstance.getAccountId());
+        Account vmOwner = _accountMgr.getActiveAccountById(vmInstance.getAccountId());
         _networkModel.checkNetworkPermissions(vmOwner, network);
 
         checkIfNetExistsForVM(vmInstance, network);
@@ -2063,7 +2064,10 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         // Check that the specified service offering ID is valid
         _itMgr.checkIfCanUpgrade(vmInstance, newServiceOffering);
 
-        ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getId(), vmInstance.getServiceOfferingId());
+        ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getServiceOfferingId());
+        if (currentServiceOffering == null) {
+            throw new InvalidParameterValueException("Unable to find current service offering for VM");
+        }
         if (newServiceOffering.isDynamicScalingEnabled() != currentServiceOffering.isDynamicScalingEnabled()) {
             throw new InvalidParameterValueException("Unable to Scale VM: since dynamic scaling enabled flag is not same for new service offering and old service offering");
         }
@@ -2848,18 +2852,49 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
             throw new InvalidParameterValueException("The owner of " + vmInstance + " does not exist: " + vmInstance.getAccountId());
         }
 
+        // 새로운 값 가져오기 - VmDetailConstants 사용
         long newCpu = NumberUtils.toLong(details.get(VmDetailConstants.CPU_NUMBER));
         long newMemory = NumberUtils.toLong(details.get(VmDetailConstants.MEMORY));
-        ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getId(), vmInstance.getServiceOfferingId());
+        ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getServiceOfferingId());
+        if (currentServiceOffering == null) {
+            throw new InvalidParameterValueException("Unable to find current service offering for VM");
+        }
+
+        // 현재 값들 로깅
+        logger.info("Current CPU: " + currentServiceOffering.getCpu());
+        logger.info("Current Memory: " + currentServiceOffering.getRamSize());
+
+        // 새로운 값들 로깅
+        logger.info("New CPU: " + newCpu);
+        logger.info("New Memory: " + newMemory);
+
         ServiceOfferingVO svcOffering = serviceOfferingDao.findById(vmInstance.getServiceOfferingId());
         boolean isDynamic = currentServiceOffering.isDynamic();
         if (isDynamic) {
             Map<String, String> customParameters = new HashMap<>();
-            customParameters.put(VmDetailConstants.CPU_NUMBER, String.valueOf(newCpu));
-            customParameters.put(VmDetailConstants.MEMORY, String.valueOf(newMemory));
-            if (svcOffering.isCustomCpuSpeedSupported()) {
-                customParameters.put(VmDetailConstants.CPU_SPEED, details.get(VmDetailConstants.CPU_SPEED));
+            // CPU 값이 0이거나 없는 경우 현재 값을 유지
+            if (newCpu <= 0) {
+                newCpu = currentServiceOffering.getCpu();
+                details.put(VmDetailConstants.CPU_NUMBER, String.valueOf(newCpu));
             }
+            // Memory 값이 0이거나 없는 경우 현재 값을 유지
+            if (newMemory <= 0) {
+                newMemory = currentServiceOffering.getRamSize();
+                details.put(VmDetailConstants.MEMORY, String.valueOf(newMemory));
+            }
+
+            customParameters.put(UsageEventVO.DynamicParameters.cpuNumber.name(), String.valueOf(newCpu));
+            customParameters.put(UsageEventVO.DynamicParameters.memory.name(), String.valueOf(newMemory));
+
+            if (svcOffering.isCustomCpuSpeedSupported()) {
+                String cpuSpeed = details.get(VmDetailConstants.CPU_SPEED);
+                if (cpuSpeed != null) {
+                    customParameters.put(UsageEventVO.DynamicParameters.cpuSpeed.name(), cpuSpeed);
+                }
+            }
+
+            logger.info("customParameters cpuNumber::: " + customParameters.get(UsageEventVO.DynamicParameters.cpuNumber.name()));
+            logger.info("customParameters memory::: " + customParameters.get(UsageEventVO.DynamicParameters.memory.name()));
             validateCustomParameters(svcOffering, customParameters);
         }
         if (VirtualMachineManager.ResourceCountRunningVMsonly.value()) {
@@ -5911,7 +5946,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
 
         Account owner = _accountMgr.getAccount(vm.getAccountId());
 
-        ServiceOfferingVO offering = serviceOfferingDao.findByIdIncludingRemoved(vm.getId(), vm.getServiceOfferingId());
+        ServiceOfferingVO offering = serviceOfferingDao.findByIdIncludingRemoved(vm.getServiceOfferingId());
 
         try (CheckedReservation vmReservation = new CheckedReservation(owner, ResourceType.user_vm, vmId, null, -1L, reservationDao, resourceLimitService);
              CheckedReservation cpuReservation = new CheckedReservation(owner, ResourceType.cpu, vmId, null, -1 * Long.valueOf(offering.getCpu()), reservationDao, resourceLimitService);
@@ -6366,8 +6401,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
                     throw new InvalidParameterValueException("Can't create vm with security groups; security group feature is not enabled per zone");
                 }
                 vm = createAdvancedVirtualMachine(zone, serviceOffering, template, networkIds, owner, name, displayName, diskOfferingId, size, group,
-                        cmd.getHypervisor(), cmd.getHttpMethod(), userData, userDataId, userDataDetails, sshKeyPairNames, cmd.getIpToNetworkMap(), addrs, displayVm, keyboard, cmd.getAffinityGroupIdList(), cmd.getDetails(),
-                        cmd.getCustomId(), cmd.getDhcpOptionsMap(), dataDiskTemplateToDiskOfferingMap, userVmOVFProperties, dynamicScalingEnabled, null, overrideDiskOfferingId);
+                        cmd.getHypervisor(), cmd.getHttpMethod(), userData, userDataId, userDataDetails, sshKeyPairNames, cmd.getIpToNetworkMap(), addrs, displayVm, keyboard, cmd.getAffinityGroupIdList(), cmd.getDetails(), cmd.getCustomId(), cmd.getDhcpOptionsMap(), dataDiskTemplateToDiskOfferingMap, userVmOVFProperties, dynamicScalingEnabled, null, overrideDiskOfferingId);
                 if (cmd instanceof DeployVnfApplianceCmd) {
                     vnfTemplateManager.createIsolatedNetworkRulesForVnfAppliance(zone, template, owner, vm, (DeployVnfApplianceCmd) cmd);
                 }
@@ -6520,7 +6554,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
      * @param vm
      */
     protected void persistExtraConfigKvm(String decodedUrl, UserVm vm) {
-        // validate config against denied cfg commands
+        // validate config against deny-list of unwanted commands
         validateKvmExtraConfig(decodedUrl, vm.getAccountId());
         String[] extraConfigs = decodedUrl.split("\n\n");
         for (String cfg : extraConfigs) {
@@ -7595,7 +7629,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         final List<VolumeVO> volumes = _volsDao.findByInstance(vmId);
         validateIfVolumesHaveNoSnapshots(volumes);
 
-        final ServiceOfferingVO offering = serviceOfferingDao.findByIdIncludingRemoved(vm.getId(), vm.getServiceOfferingId());
+        final ServiceOfferingVO offering = serviceOfferingDao.findByIdIncludingRemoved(vm.getServiceOfferingId());
         VirtualMachineTemplate template = _templateDao.findByIdIncludingRemoved(vm.getTemplateId());
 
         verifyResourceLimitsForAccountAndStorage(newAccount, vm, offering, volumes, template);
@@ -7813,13 +7847,15 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
      * {@link #updateBasicTypeNetworkForVm(AssignVMCmd, UserVmVO, Account, VirtualMachineTemplate, VirtualMachineProfileImpl, DataCenterVO, List, List)}.
      * If the network type for the zone is advanced, calls
      * {@link #updateAdvancedTypeNetworkForVm(AssignVMCmd, Account, UserVmVO, Account, VirtualMachineTemplate, VirtualMachineProfileImpl, DataCenterVO, List, List)}.
-     * @param cmd The assignVMCmd.
-     * @param caller The account calling the assignVMCmd.
-     * @param vm The VM to be assigned to another user, which has to have networks updated.
-     * @param newAccount The account to whom the VM will be assigned to.
-     * @param template The template of the VM which will be assigned to another account.
+     * @param cmd The assignVMCmd which attempts to update a basic network.
+     * @param vm The VM for which the networks are allocated.
+     * @param newAccount The new account to which the VM will be assigned to.
+     * @param template The template of the VM.
+     * @param vmOldProfile The VM profile.
+     * @param zone The zone where the network has to be allocated.
+     * @param networkIdList The list of network IDs provided to the assignVMCmd.
+     * @param securityGroupIdList The list of security groups provided to the assignVMCmd.
      * @throws InsufficientCapacityException
-     * @throws ResourceAllocationException
      */
     protected void updateVmNetwork(AssignVMCmd cmd, Account caller, UserVmVO vm, Account newAccount, VirtualMachineTemplate template)
             throws InsufficientCapacityException, ResourceAllocationException {
@@ -8587,7 +8623,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
                 destroyVolumeInContext(vm, Volume.State.Allocated.equals(root.getState()) || expunge, root);
 
                 if (currentTemplate.getId() != template.getId() && VirtualMachine.Type.User.equals(vm.type) && !VirtualMachineManager.ResourceCountRunningVMsonly.value()) {
-                    ServiceOfferingVO serviceOffering = serviceOfferingDao.findById(vm.getId(), vm.getServiceOfferingId());
+                    ServiceOfferingVO serviceOffering = serviceOfferingDao.findById(vm.getServiceOfferingId());
                     _resourceLimitMgr.updateVmResourceCountForTemplateChange(vm.getAccountId(), vm.isDisplay(), serviceOffering, currentTemplate, template);
                 }
 
@@ -8766,7 +8802,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
 
         AccountVO owner = _accountDao.findByIdIncludingRemoved(vm.getAccountId());
         if (vm.getTemplateId() != template.getId()) {
-            ServiceOfferingVO serviceOffering = serviceOfferingDao.findById(vm.getId(), vm.getServiceOfferingId());
+            ServiceOfferingVO serviceOffering = serviceOfferingDao.findById(vm.getServiceOfferingId());
             VMTemplateVO currentTemplate = _templateDao.findByIdIncludingRemoved(vm.getTemplateId());
             _resourceLimitMgr.checkVmResourceLimitsForTemplateChange(owner, vm.isDisplay(), serviceOffering, currentTemplate, template);
         }
