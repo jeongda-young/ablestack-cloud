@@ -151,7 +151,6 @@ export default {
     closeAction () {
       this.$emit('close-action')
     },
-
     filterOption (input, option) {
       return option.label.toLowerCase().indexOf(input.toLowerCase()) >= 0
     }
