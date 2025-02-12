@@ -103,7 +103,7 @@ export default {
 
       api('listVirtualMachines', {
         id: vmId,
-        details: 'all'
+        details: 'min'
       }).then(response => {
         const vm = response.listvirtualmachinesresponse.virtualmachine[0]
         const details = vm.details || {}
@@ -117,7 +117,7 @@ export default {
           params[`details[0].${key}`] = details[key]
         })
 
-        // 필요한 추가 값 동적으로 설정J
+        // 필요한 추가 값 동적으로 설정
         params[`details[0].extraconfig-1`] = xmlConfig
 
         return api('updateVirtualMachine', params)

@@ -1291,7 +1291,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
      */
 
     protected void updateInstanceDetailsMapWithCurrentValuesForAbsentDetails(Map<String, String> details, VirtualMachine vmInstance, Long newServiceOfferingId) {
-        ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getServiceOfferingId());
+        ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getId(), vmInstance.getServiceOfferingId());
         ServiceOfferingVO newServiceOffering = serviceOfferingDao.findById(newServiceOfferingId);
         addCurrentDetailValueToInstanceDetailsMapIfNewValueWasNotSpecified(newServiceOffering.getSpeed(), details, VmDetailConstants.CPU_SPEED, currentServiceOffering.getSpeed());
         addCurrentDetailValueToInstanceDetailsMapIfNewValueWasNotSpecified(newServiceOffering.getRamSize(), details, VmDetailConstants.MEMORY, currentServiceOffering.getRamSize());
@@ -1386,7 +1386,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         } else {
             validateOfferingMaxResource(newServiceOffering);
         }
-        ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getServiceOfferingId());
+        ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getId(), vmInstance.getServiceOfferingId());
 
         validateDiskOfferingChecks(currentServiceOffering, newServiceOffering);
 
@@ -2064,7 +2064,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         // Check that the specified service offering ID is valid
         _itMgr.checkIfCanUpgrade(vmInstance, newServiceOffering);
 
-        ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getServiceOfferingId());
+        ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getId(), vmInstance.getServiceOfferingId());
         if (currentServiceOffering == null) {
             throw new InvalidParameterValueException("Unable to find current service offering for VM");
         }
@@ -2855,18 +2855,10 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         // 새로운 값 가져오기 - VmDetailConstants 사용
         long newCpu = NumberUtils.toLong(details.get(VmDetailConstants.CPU_NUMBER));
         long newMemory = NumberUtils.toLong(details.get(VmDetailConstants.MEMORY));
-        ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getServiceOfferingId());
+        ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getId(), vmInstance.getServiceOfferingId());
         if (currentServiceOffering == null) {
             throw new InvalidParameterValueException("Unable to find current service offering for VM");
         }
-
-        // 현재 값들 로깅
-        logger.info("Current CPU: " + currentServiceOffering.getCpu());
-        logger.info("Current Memory: " + currentServiceOffering.getRamSize());
-
-        // 새로운 값들 로깅
-        logger.info("New CPU: " + newCpu);
-        logger.info("New Memory: " + newMemory);
 
         ServiceOfferingVO svcOffering = serviceOfferingDao.findById(vmInstance.getServiceOfferingId());
         boolean isDynamic = currentServiceOffering.isDynamic();
@@ -2893,8 +2885,6 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
                 }
             }
 
-            logger.info("customParameters cpuNumber::: " + customParameters.get(UsageEventVO.DynamicParameters.cpuNumber.name()));
-            logger.info("customParameters memory::: " + customParameters.get(UsageEventVO.DynamicParameters.memory.name()));
             validateCustomParameters(svcOffering, customParameters);
         }
         if (VirtualMachineManager.ResourceCountRunningVMsonly.value()) {
