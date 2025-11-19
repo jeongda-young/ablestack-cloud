@@ -61,6 +61,7 @@ import org.apache.cloudstack.api.command.admin.outofbandmanagement.CreateVhbaDev
 import org.apache.cloudstack.api.command.admin.outofbandmanagement.DeleteVhbaDeviceCmd;
 import org.apache.cloudstack.api.command.admin.outofbandmanagement.LicenseCheckCmd;
 import org.apache.cloudstack.api.command.admin.outofbandmanagement.ListHostDevicesCmd;
+import org.apache.cloudstack.api.command.admin.outofbandmanagement.ListVmHostDevicesCmd;
 import org.apache.cloudstack.api.command.admin.outofbandmanagement.ListHostHbaDevicesCmd;
 import org.apache.cloudstack.api.command.admin.outofbandmanagement.ListHostLunDevicesCmd;
 import org.apache.cloudstack.api.command.admin.outofbandmanagement.ListHostScsiDevicesCmd;
@@ -106,6 +107,7 @@ import org.apache.cloudstack.api.response.CreateVhbaDeviceResponse;
 import org.apache.cloudstack.api.response.DeleteVhbaDeviceResponse;
 import org.apache.cloudstack.api.response.LicenseCheckerResponse;
 import org.apache.cloudstack.api.response.ListHostDevicesResponse;
+import org.apache.cloudstack.api.response.ListVmHostDevicesResponse;
 import org.apache.cloudstack.api.response.ListHostHbaDevicesResponse;
 import org.apache.cloudstack.api.response.ListHostLunDevicesResponse;
 import org.apache.cloudstack.api.response.ListHostScsiDevicesResponse;
@@ -523,6 +525,8 @@ public interface ManagementService {
     Pair<Boolean, String> patchSystemVM(PatchSystemVMCmd cmd);
 
     ListResponse<ListHostDevicesResponse> listHostDevices(ListHostDevicesCmd cmd);
+
+    ListResponse<ListVmHostDevicesResponse> listVmHostDevices(ListVmHostDevicesCmd cmd);
 
     ListResponse<UpdateHostDevicesResponse> updateHostDevices(UpdateHostDevicesCmd cmd);
 

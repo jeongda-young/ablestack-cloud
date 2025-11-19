@@ -57,6 +57,10 @@ public class UpdateHostVhbaDevicesCmd extends BaseCmd {
             description = "Current VM ID")
     private String currentVmId;
 
+    @Parameter(name = ApiConstants.HOSTDEVICES_DETAIL, type = CommandType.STRING, required = false,
+            description = "Device detail text stored together with the device name")
+    private String hostDeviceDetail;
+
     /////////////////////////////////////////////////////
     /////////////////// Accessors ///////////////////////
     /////////////////////////////////////////////////////
@@ -88,6 +92,10 @@ public class UpdateHostVhbaDevicesCmd extends BaseCmd {
 
     public void setCurrentVmId(String currentVmId) {
         this.currentVmId = currentVmId;
+    }
+
+    public String getHostDeviceDetail() {
+        return hostDeviceDetail;
     }
 
     /////////////////////////////////////////////////////
