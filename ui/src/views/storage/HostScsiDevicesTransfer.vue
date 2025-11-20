@@ -250,7 +250,8 @@ export default {
           hostdevicesname: this.resource.hostDevicesName,
           virtualmachineid: this.form.virtualmachineid,
           xmlconfig: xmlConfig,
-          isattach: true
+          isattach: true,
+          hostdevicesdetail: hostDevicesText || ''
         })
 
         // 매핑된 디바이스 상태 업데이트
@@ -331,7 +332,8 @@ export default {
             virtualmachineid: null,
             currentvmid: this.deleteTargetVmId || null,
             xmlconfig: xmlConfig,
-            isattach: false
+            isattach: false,
+            hostdevicesdetail: actualDeviceText || ''
           })
           this.$message.success(this.$t('message.success.remove.allocation'))
           this.$emit('allocation-completed')

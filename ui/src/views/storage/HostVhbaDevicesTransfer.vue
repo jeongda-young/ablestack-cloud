@@ -243,7 +243,8 @@ export default {
             hostid: this.resource.id,
             hostdevicesname: this.resource.hostDevicesName,
             virtualmachineid: vmNumericId,
-            xmlconfig: xmlConfig
+            xmlconfig: xmlConfig,
+            hostdevicesdetail: this.resource.hostDevicesText || ''
           })
         } else {
           // 숫자 ID가 없으면 UUID로 시도 후 재시도
@@ -252,7 +253,8 @@ export default {
               hostid: this.resource.id,
               hostdevicesname: this.resource.hostDevicesName,
               virtualmachineid: vmUuid,
-              xmlconfig: xmlConfig
+              xmlconfig: xmlConfig,
+              hostdevicesdetail: this.resource.hostDevicesText || ''
             })
             if (response?.error) throw response.error
           } catch (e1) {
@@ -326,7 +328,8 @@ export default {
           hostdevicesname: hostDevicesName,
           virtualmachineid: null,
           currentvmid: vmId,
-          xmlconfig: xmlConfig
+          xmlconfig: xmlConfig,
+          hostdevicesdetail: (record && record.hostDevicesText) || this.resource.hostDevicesText || ''
         })
 
         if (!detachResponse || detachResponse.error) {

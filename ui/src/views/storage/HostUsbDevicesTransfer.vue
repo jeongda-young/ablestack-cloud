@@ -248,7 +248,8 @@ export default {
           hostid: this.resource.id,
           hostdevicesname: this.resource.hostDevicesName,
           virtualmachineid: this.form.virtualmachineid,
-          xmlconfig: xmlConfig
+          xmlconfig: xmlConfig,
+          hostdevicesdetail: this.resource.hostDevicesText || ''
         })
 
         if (response && response.error) {
@@ -315,7 +316,8 @@ export default {
           hostdevicesname: hostDevicesName,
           virtualmachineid: null,
           currentvmid: vmId,
-          xmlconfig: xmlConfig
+          xmlconfig: xmlConfig,
+          hostdevicesdetail: this.resource.hostDevicesText || ''
         })
 
         if (!detachResponse || detachResponse.error) {

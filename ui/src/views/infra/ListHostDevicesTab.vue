@@ -1069,6 +1069,9 @@ export default {
         xmlconfig: xmlConfig
       }
 
+      const detailText = await this.resolveDeviceDetail(deviceInfo.type, deviceInfo.deviceName)
+      params.hostdevicesdetail = detailText || deviceInfo.deviceName || ''
+
       let apiMethod
       switch (deviceInfo.type) {
         case 'usb':
@@ -1166,6 +1169,77 @@ export default {
       } catch (error) {
         return null
       }
+    },
+
+    async resolveDeviceDetail (type, deviceName) {
+      try {
+        if (!deviceName) {
+          return ''
+        }
+        const hostIdParam = { id: this.resource.id }
+        switch (type) {
+          case 'usb': {
+            const response = await api('listHostUsbDevices', hostIdParam)
+            const data = response.listhostusbdevicesresponse?.listhostusbdevices?.[0]
+            if (data?.hostdevicesname) {
+              const index = data.hostdevicesname.indexOf(deviceName)
+              if (index !== -1) {
+                return data.hostdevicestext?.[index] || ''
+              }
+            }
+            break
+          }
+          case 'hba': {
+            const response = await api('listHostHbaDevices', hostIdParam)
+            const data = response.listhosthbadevicesresponse?.listhosthbadevices?.[0]
+            if (data?.hostdevicesname) {
+              const index = data.hostdevicesname.indexOf(deviceName)
+              if (index !== -1) {
+                return data.hostdevicestext?.[index] || ''
+              }
+            }
+            break
+          }
+          case 'lun': {
+            const response = await api('listHostLunDevices', hostIdParam)
+            const data = response.listhostlundevicesresponse?.listhostlundevices?.[0]
+            if (data?.hostdevicesname) {
+              const index = data.hostdevicesname.indexOf(deviceName)
+              if (index !== -1) {
+                return data.hostdevicestext?.[index] || ''
+              }
+            }
+            break
+          }
+          case 'scsi': {
+            const response = await api('listHostScsiDevices', hostIdParam)
+            const data = response.listhostscsidevicesresponse?.listhostscsidevices?.[0]
+            if (data?.hostdevicesname) {
+              const index = data.hostdevicesname.indexOf(deviceName)
+              if (index !== -1) {
+                return data.hostdevicestext?.[index] || ''
+              }
+            }
+            break
+          }
+          case 'vhba': {
+            const response = await api('listVhbaDevices', { hostid: this.resource.id })
+            const data = response.listvhbadevicesresponse?.listvhbadevices?.[0]
+            if (data?.hostdevicesname) {
+              const index = data.hostdevicesname.indexOf(deviceName)
+              if (index !== -1) {
+                return data.hostdevicestext?.[index] || ''
+              }
+            }
+            break
+          }
+          default:
+            break
+        }
+      } catch (error) {
+        // ignore
+      }
+      return ''
     },
 
     // VM 시작 후 데이터 새로고침

@@ -503,7 +503,8 @@ export default {
             hostid: this.resource.id,
             hostdevicesname: this.resource.hostDevicesName,
             virtualmachineid: selectedVM.id,
-            xmlconfig: xmlConfig
+            xmlconfig: xmlConfig,
+            hostdevicesdetail: this.resource.hostDevicesText || ''
           }
 
           // 디바이스 타입 확인

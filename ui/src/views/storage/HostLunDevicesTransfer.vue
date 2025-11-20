@@ -256,7 +256,8 @@ export default {
           hostdevicesname: this.resource.hostDevicesName,
           virtualmachineid: this.form.virtualmachineid,
           xmlconfig: xmlConfig,
-          isattach: true
+          isattach: true,
+          hostdevicesdetail: this.resource.hostDevicesText || ''
         })
 
         // 매핑된 디바이스 상태 업데이트
@@ -443,7 +444,8 @@ export default {
           virtualmachineid: null,
           currentvmid: vmId,
           xmlconfig: xmlConfig,
-          isattach: false
+          isattach: false,
+          hostdevicesdetail: this.resource.hostDevicesText || ''
         })
 
         if (!detachResponse || detachResponse.error) {

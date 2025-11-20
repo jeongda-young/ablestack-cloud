@@ -304,7 +304,8 @@ known_categories = {
     'listVhbaDevices.xml': 'Storage',
     'listHostScsiDevices.xml': 'Storage',
     'updateHostScsiDevices.xml': 'Storage',
-    'deleteVhbaDevice.xml': 'Storage'
+    'deleteVhbaDevice.xml': 'Storage',
+    'listVmDeviceAssignments.xml': 'Virtual Machine'
 }
 
 

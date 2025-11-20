@@ -573,80 +573,18 @@ export default {
       this.pciDevices = []
 
       try {
-        const vmNumericId = this.vm.instancename?.split('-')[2]
-        if (!vmNumericId) {
+        if (!this.vm.id) {
           return
         }
 
-        // VM의 클러스터에 속한 호스트만 가져오기 (성능 최적화)
-        const params = { zoneid: this.vm.zoneid }
-        if (this.vm.clusterid) {
-          params.clusterid = this.vm.clusterid
-        }
-        const hostsResponse = await api('listHosts', params)
-        const hosts = hostsResponse?.listhostsresponse?.host || []
+        const response = await api('listVmHostDevices', { virtualmachineid: this.vm.id })
+        const devices = response?.listvmhostdevicesresponse?.listvmhostdevices || []
 
-        // 호스트가 없으면 종료
-        if (hosts.length === 0) {
-          return
-        }
-
-        // 첫 번째 호스트로 PCI API 지원 여부 확인
-        try {
-          const testRes = await api('listHostDevices', { id: hosts[0].id })
-          if (testRes?.listhostdevicesresponse?.errorcode) {
-            // PCI API가 지원되지 않으면 조기 종료
-            return
-          }
-        } catch (error) {
-          // API가 지원되지 않으면 조기 종료
-          return
-        }
-
-        // 각 호스트에서 디바이스 할당 정보 확인 (병렬 처리)
-        const devicePromises = hosts.map(async (host) => {
-          try {
-            const response = await api('listHostDevices', { id: host.id })
-
-            // API 응답 에러 확인
-            if (response?.listhostdevicesresponse?.errorcode) {
-              return null
-            }
-
-            const devices = response?.listhostdevicesresponse?.listhostdevices?.[0]
-            if (devices && devices.vmallocations && devices.hostdevicesname && devices.hostdevicestext) {
-              const foundDevices = []
-              Object.entries(devices.vmallocations).forEach(([deviceName, vmId]) => {
-                if (vmId === vmNumericId) {
-                  const deviceIndex = devices.hostdevicesname.findIndex(name => name === deviceName)
-                  if (deviceIndex !== -1 && devices.hostdevicestext[deviceIndex]) {
-                    foundDevices.push({
-                      key: `${host.id}-${deviceName}`,
-                      hostDevicesName: devices.hostdevicesname[deviceIndex],
-                      hostDevicesText: devices.hostdevicestext[deviceIndex]
-                    })
-                  }
-                }
-              })
-              return foundDevices
-            }
-          } catch (error) {
-            // 에러 조용히 처리
-          }
-          return null
-        })
-
-        const results = await Promise.all(devicePromises)
-        results.forEach(devices => {
-          if (devices) {
-            devices.forEach(device => {
-              const existingDevice = this.pciDevices.find(d => d.hostDevicesName === device.hostDevicesName)
-              if (!existingDevice) {
-                this.pciDevices.push(device)
-              }
-            })
-          }
-        })
+        this.pciDevices = devices.map(device => ({
+          key: `${device.hostid || 'unknown'}-${device.hostdevicesname}`,
+          hostDevicesName: device.hostdevicesname,
+          hostDevicesText: device.hostdevicestext
+        }))
       } catch (error) {
         // 에러 조용히 처리
       } finally {

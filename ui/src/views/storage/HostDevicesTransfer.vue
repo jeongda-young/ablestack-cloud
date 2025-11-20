@@ -210,10 +210,12 @@ export default {
 
         return api('updateVirtualMachine', params)
           .then(() => {
+            const hostDevicesDetail = this.resource.hostDevicesText || ''
             return api('updateHostDevices', {
               hostid: this.resource.id,
               hostdevicesname: hostDevicesName,
-              virtualmachineid: this.form.virtualmachineid
+              virtualmachineid: this.form.virtualmachineid,
+              hostdevicesdetail: hostDevicesDetail
             })
           })
       }).then(() => {
@@ -256,10 +258,12 @@ export default {
               }
 
               // 디비에서 호스트 디바이스 할당 정보 삭제
+              const hostDevicesDetail = this.resource.hostDevicesText || ''
               await api('updateHostDevices', {
                 hostid: this.resource.id,
                 hostdevicesname: hostDevicesName,
-                virtualmachineid: vmId
+                virtualmachineid: vmId,
+                hostdevicesdetail: hostDevicesDetail
               })
             } catch (error) {
               console.error('Failed to delete host device allocation:', error)
