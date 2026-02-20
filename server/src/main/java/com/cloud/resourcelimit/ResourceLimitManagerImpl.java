@@ -1253,11 +1253,6 @@ public class ResourceLimitManagerImpl extends ManagerBase implements ResourceLim
             long newResourceCount = 0L;
             ResourceCountVO domainRC = null;
 
-            // calculate project count here
-            if (type == ResourceType.project) {
-                newResourceCount += _projectDao.countProjectsForDomain(domainId);
-            }
-
             if (type == ResourceType.network) {
                 newResourceCount += networkDomainDao.listDomainNetworkMapByDomain(domainId).size();
             }

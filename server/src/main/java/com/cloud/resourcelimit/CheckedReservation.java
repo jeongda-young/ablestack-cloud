@@ -41,7 +41,7 @@ import com.cloud.utils.db.GlobalLock;
 import com.cloud.utils.exception.CloudRuntimeException;
 
 
-public class CheckedReservation  implements AutoCloseable {
+public class CheckedReservation implements Reserver {
     protected Logger logger = LogManager.getLogger(getClass());
 
     private static final int TRY_TO_GET_LOCK_TIME = 120;
