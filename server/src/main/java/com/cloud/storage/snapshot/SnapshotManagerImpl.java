@@ -2142,19 +2142,6 @@ public class SnapshotManagerImpl extends MutualExclusiveIdsManagerBase implement
         Account owner = _accountMgr.getAccount(volume.getAccountId());
 
         ResourceType storeResourceType = getStoreResourceType(volume.getDataCenterId(), locationType);
-        try {
-            _resourceLimitMgr.checkResourceLimit(owner, ResourceType.snapshot);
-            _resourceLimitMgr.checkResourceLimit(owner, ResourceType.secondary_storage, new Long(volume.getSize()).longValue());
-        } catch (ResourceAllocationException e) {
-            if (snapshotType != Type.MANUAL) {
-                String msg = String.format("Snapshot resource limit exceeded for account %s. Failed to create recurring snapshots", owner);
-                logger.warn(msg);
-                _alertMgr.sendAlert(AlertManager.AlertType.ALERT_TYPE_UPDATE_RESOURCE_COUNT, 0L, 0L, msg, "Snapshot resource limit exceeded for account id : " + owner.getId()
-                        + ". Failed to create recurring snapshots; please use updateResourceLimit to increase the limit");
-            }
-            throw e;
-        }
-
         // Determine the name for this snapshot
         // Snapshot Name: VMInstancename + volumeName + timeString
         String timeString = DateUtil.getDateDisplayString(DateUtil.GMT_TIMEZONE, new Date(), DateUtil.YYYYMMDD_FORMAT);
