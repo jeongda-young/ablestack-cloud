@@ -25,6 +25,11 @@ import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
 import javax.naming.ConfigurationException;
 
+import com.cloud.agent.api.to.OVFInformationTO;
+import com.cloud.exception.ResourceAllocationException;
+import com.cloud.resourcelimit.CheckedReservation;
+import com.cloud.user.Account;
+import com.cloud.user.dao.AccountDao;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreManager;
 import org.apache.cloudstack.engine.subsystem.api.storage.EndPoint;
@@ -36,6 +41,7 @@ import org.apache.cloudstack.engine.subsystem.api.storage.TemplateService;
 import org.apache.cloudstack.framework.config.ConfigKey;
 import org.apache.cloudstack.framework.config.Configurable;
 import org.apache.cloudstack.managed.context.ManagedContextRunnable;
+import org.apache.cloudstack.reservation.dao.ReservationDao;
 import org.apache.cloudstack.storage.command.UploadStatusAnswer;
 import org.apache.cloudstack.storage.command.UploadStatusAnswer.UploadStatus;
 import org.apache.cloudstack.storage.command.UploadStatusCommand;
@@ -54,7 +60,6 @@ import com.cloud.agent.api.AgentControlCommand;
 import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.Command;
 import com.cloud.agent.api.StartupCommand;
-import com.cloud.agent.api.to.OVFInformationTO;
 import com.cloud.alert.AlertManager;
 import com.cloud.api.query.dao.TemplateJoinDao;
 import com.cloud.api.query.vo.TemplateJoinVO;
@@ -79,11 +84,7 @@ import com.cloud.utils.db.TransactionStatus;
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.utils.fsm.NoTransitionException;
 import com.cloud.utils.fsm.StateMachine2;
-import com.cloud.resourcelimit.CheckedReservation;
-import com.cloud.user.Account;
 import com.cloud.user.AccountManager;
-import com.cloud.user.dao.AccountDao;
-import org.apache.cloudstack.reservation.dao.ReservationDao;
 
 /**
  * Monitors the progress of upload.
@@ -543,6 +544,22 @@ public class ImageStoreUploadMonitorImpl extends ManagerBase implements ImageSto
                                     break;
                                 }
                             }
+
+                            Account owner = accountDao.findById(template.getAccountId());
+                            long templateSize = answer.getVirtualSize();
+
+                            try (CheckedReservation secondaryStorageReservation = new CheckedReservation(owner, Resource.ResourceType.secondary_storage, null, null, templateSize, reservationDao, _resourceLimitMgr)) {
+                                _resourceLimitMgr.incrementResourceCount(owner.getId(), Resource.ResourceType.secondary_storage, templateSize);
+                            } catch (ResourceAllocationException e) {
+                                tmpTemplateDataStore.setDownloadState(VMTemplateStorageResourceAssoc.Status.UPLOAD_ERROR);
+                                tmpTemplateDataStore.setState(State.Failed);
+                                stateMachine.transitTo(tmpTemplate, VirtualMachineTemplate.Event.OperationFailed, null, _templateDao);
+                                msg = String.format("Upload of template [%s] failed because its owner [%s] does not have enough secondary storage space available.", template.getUuid(), owner.getUuid());
+                                logger.warn(msg);
+                                sendAlert = true;
+                                break;
+                            }
+
                             stateMachine.transitTo(tmpTemplate, VirtualMachineTemplate.Event.OperationSucceeded, null, _templateDao);
                             //publish usage event
                             String etype = EventTypes.EVENT_TEMPLATE_CREATE;
