@@ -439,7 +439,11 @@ public class HypervisorTemplateAdapter extends TemplateAdapterBase {
                         template.getSize(), VirtualMachineTemplate.class.getName(), template.getUuid());
                 }
             }
-             _resourceLimitMgr.recalculateResourceCount(accountId, tmplt.getDomainId(), ResourceType.secondary_storage.getOrdinal());
+        }
+        if (tmplt != null) {
+            long accountId = tmplt.getAccountId();
+            Account account = _accountDao.findById(accountId);
+            _resourceLimitMgr.recalculateResourceCount(accountId, account.getDomainId(), ResourceType.secondary_storage.getOrdinal());
         }
         if (tmplt != null) {
             long accountId = tmplt.getAccountId();
