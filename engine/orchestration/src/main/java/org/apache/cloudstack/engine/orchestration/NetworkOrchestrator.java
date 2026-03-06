@@ -3130,9 +3130,6 @@ public class NetworkOrchestrator extends ManagerBase implements NetworkOrchestra
         CallContext.current().setEventDetails("Network ID: " + network.getUuid());
         CallContext.current().putContextParameter(Network.class, network.getUuid());
         return network;
-        } catch (Exception e) {
-            logger.error(e);
-            throw new RuntimeException(e);
         }
     }
 
