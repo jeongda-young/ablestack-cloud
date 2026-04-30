@@ -1031,7 +1031,8 @@ public class ResourceLimitManagerImpl extends ManagerBase implements ResourceLim
 
         ResourceLimitVO limit = _resourceLimitDao.findByOwnerIdAndTypeAndTag(ownerId, ownerType, resourceType, tag);
 
-        ActionEventUtils.onActionEvent(caller.getId(), caller.getAccountId(),
+        Long callingUserId = CallContext.current().getCallingUserId();
+        ActionEventUtils.onActionEvent(callingUserId, caller.getAccountId(),
                 caller.getDomainId(), EventTypes.EVENT_RESOURCE_LIMIT_UPDATE,
                 "Resource limit updated. Resource Type: " + resourceType.toString() + ", New Value: " + max,
                 ownerResourceId, ownerResourceType.toString());
