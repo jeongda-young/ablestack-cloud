@@ -7346,7 +7346,6 @@
   "label.dr.vm.authority.unknown": "Authority unknown",
   "label.dr.test.vm": "Test virtual machine",
   "label.dr.target.pending": "Target not created",
-  "label.dr.replication.activity": "Replication activity",
   "label.dr.last.target.durable.at": "Last durable target",
   "label.dr.freshness": "Freshness",
   "label.dr.latest.operation": "Latest operation",
@@ -7470,5 +7469,6 @@
   "message.storage.service.runtime.upgrade.success": "Runtime upgrade and verification completed.",
   "message.storage.service.runtime.upgrade.failed": "Runtime upgrade failed.",
   "message.storage.service.runtime.rollback.success": "The previous runtime was restored.",
-  "message.storage.service.runtime.rollback.failed": "Runtime rollback failed. Manual recovery is required."
+  "message.storage.service.runtime.rollback.failed": "Runtime rollback failed. Manual recovery is required.",
+  "message.webhook.filter.add": "Webhook deliveries can be controlled using filters (currently by Event type). Please select the parameters to add to the applied filters list."
 }
