@@ -83,17 +83,6 @@ export default {
   },
   created () {
     if (this.resource && this.resource.id) {
-      // LUN이나 dm이 포함된 디바이스는 할당 불가
-      const deviceName = String(this.resource.hostDevicesName || '')
-      if (deviceName.toUpperCase().includes('LUN') || deviceName.toLowerCase().includes('dm')) {
-        this.$notification.warning({
-          message: this.$t('label.warning'),
-          description: 'LUN 또는 dm이 포함된 디바이스는 할당할 수 없습니다.'
-        })
-        this.$emit('close-action')
-        return
-      }
-
       this.fetchVMs()
       this.fetchCurrentAllocation()
     }
