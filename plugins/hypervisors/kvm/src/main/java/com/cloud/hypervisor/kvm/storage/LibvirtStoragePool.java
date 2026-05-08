@@ -342,9 +342,9 @@ public class LibvirtStoragePool implements KVMStoragePool {
 
     public String createHeartBeatCommand(HAStoragePool primaryStoragePool, String hostPrivateIp, boolean hostValidation) {
         logger.info("### [HA HB Writing] createHeartBeatCommand Method Start!!!");
-        Script cmd = new Script(getHearthBeatPath(), HeartBeatUpdateTimeout, logger);
+        Script cmd = new Script(getHearthBeatPath(), HeartBeatUpdateTimeoutInMs, logger);
         if (primaryStoragePool.getPool().getType() == StoragePoolType.NetworkFilesystem) {
-            cmd = new Script(getHearthBeatPath(), HeartBeatUpdateTimeout, logger);
+            cmd = new Script(getHearthBeatPath(), HeartBeatUpdateTimeoutInMs, logger);
             cmd.add("-i", primaryStoragePool.getPoolIp());
             cmd.add("-p", primaryStoragePool.getPoolMountSourcePath());
             cmd.add("-m", primaryStoragePool.getMountDestPath());
@@ -354,7 +354,7 @@ public class LibvirtStoragePool implements KVMStoragePool {
                 cmd.add("-c");
             }
         } else if (primaryStoragePool.getPool().getType() == StoragePoolType.SharedMountPoint) {
-                cmd = new Script(getHearthBeatPath(), HeartBeatUpdateTimeout, logger);
+                cmd = new Script(getHearthBeatPath(), HeartBeatUpdateTimeoutInMs, logger);
                 cmd.add("-m", primaryStoragePool.getMountDestPath());
                 if (hostValidation) {
                     cmd.add("-h", hostPrivateIp);
@@ -402,10 +402,10 @@ public class LibvirtStoragePool implements KVMStoragePool {
     }
 
     @Override
-    public Boolean checkingHeartBeat(HAStoragePool pool, HostTO host) {
-        logger.info("### [HA Checking] checkingHeartBeat Method Start!!!");
+    public Boolean hasHeartBeat(HAStoragePool pool, HostTO host) {
+        logger.info("### [HA Checking] hasHeartBeat Method Start!!!");
         boolean validResult = false;
-        Script cmd = new Script(getHearthBeatPath(), HeartBeatCheckerTimeout, logger);
+        Script cmd = new Script(getHearthBeatPath(), HeartBeatCheckerTimeoutInMs, logger);
         if (pool.getPool().getType() == StoragePoolType.NetworkFilesystem) {
             cmd.add("-i", pool.getPoolIp());
             cmd.add("-p", pool.getPoolMountSourcePath());
@@ -438,8 +438,7 @@ public class LibvirtStoragePool implements KVMStoragePool {
         String result = cmd.execute(parser);
         String parsedLine = parser.getLine();
 
-        logger.debug(String.format("Checking heart beat with KVMHAChecker [{command=\"%s\", result: \"%s\", log: \"%s\", pool: \"%s\"}].", cmd.toString(), result, parsedLine,
-                pool.getPoolIp()));
+        logger.debug("Checking heart beat for host IP {} with KVMHAChecker [{command=\"{}\", result: \"{}\", log: \"{}\", pool: \"{}\"}].", hostIp, cmd.toString(), result, parsedLine, pool.getPoolIp());
 
         if (result == null && parsedLine.contains("DEAD")) {
             logger.info(String.format("Checking heart beat with KVMHAChecker command [%s] returned [%s]. [%s]. It may cause a shutdown of host IP [%s].", cmd.toString(),
@@ -454,7 +453,7 @@ public class LibvirtStoragePool implements KVMStoragePool {
     public Boolean checkingHeartBeatRBD(HAStoragePool pool, HostTO host, String volumeList) {
         logger.info("### [HA RBD Checking] checkingHeartBeatRBD Method Start!!!");
         boolean validResult = false;
-        Script cmd = new Script(getHearthBeatPath(), HeartBeatCheckerTimeout, logger);
+        Script cmd = new Script(getHearthBeatPath(), HeartBeatCheckerTimeoutInMs, logger);
         cmd.add("-i", pool.getPoolSourceHost());
         cmd.add("-p", pool.getPoolMountSourcePath());
         cmd.add("-n", pool.getPoolAuthUserName());
@@ -475,14 +474,14 @@ public class LibvirtStoragePool implements KVMStoragePool {
             logger.info(String.format("Checking heart beat with KVMHAChecker command [%s] returned [%s]. [%s]. It may cause a shutdown of host IP [%s].", cmd.toString(),
                     result, parsedLine, host.getPrivateNetwork().getIp()));
         } else {
-            validResult = true;
+            logger.debug("Checking heart beat for host IP {} with KVMHAChecker command [{}] succeeded.", hostIp, cmd.toString());
+            return true;
         }
-        return validResult;
     }
 
     @Override
-    public Boolean vmActivityCheck(HAStoragePool pool, HostTO host, Duration activityScriptTimeout, String volumeUUIDListString, String vmActivityCheckPath, long duration) {
-        logger.info("### [HA AC Checking] vmActivityCheck Method Start!!!");
+    public Boolean hasVmActivity(HAStoragePool pool, HostTO host, Duration activityScriptTimeout, String volumeUUIDListString, String vmActivityCheckPath, long duration) {
+        logger.info("### [HA AC Checking] hasVmActivity Method Start!!!");
         Script cmd = new Script(vmActivityCheckPath, activityScriptTimeout.getStandardSeconds(), logger);
         if (pool.getPool().getType() == StoragePoolType.NetworkFilesystem) {
             cmd.add("-i", pool.getPoolIp());
@@ -528,12 +527,13 @@ public class LibvirtStoragePool implements KVMStoragePool {
         String result = cmd.execute(parser);
         String parsedLine = parser.getLine();
 
-        logger.debug(String.format("Checking heart beat with KVMHAVMActivityChecker [{command=\"%s\", result: \"%s\", log: \"%s\", pool: \"%s\"}].", cmd.toString(), result, parsedLine, pool.getPoolIp()));
+        logger.debug("Checking VM activity for host IP {} with KVMHAVMActivityChecker [{command=\"{}\", result: \"{}\", log: \"{}\", pool: \"{}\"}].", hostIp, cmd.toString(), result, parsedLine, pool.getPoolIp());
 
         if (result == null && parsedLine.contains("DEAD")) {
             logger.info(String.format("Checking heart beat with KVMHAVMActivityChecker command [%s] returned [%s]. It is [%s]. It may cause a shutdown of host IP [%s].", cmd.toString(), result, parsedLine, host.getPrivateNetwork().getIp()));
             return false;
         } else {
+            logger.debug("Checking VM activity for host IP {} with KVMHAVMActivityChecker command [{}] succeeded.", hostIp, cmd.toString());
             return true;
         }
     }

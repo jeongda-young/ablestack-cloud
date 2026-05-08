@@ -27,25 +27,25 @@ public class KVMHAChecker extends KVMHABase implements Callable<Boolean> {
     private List<HAStoragePool> rbdStoragePools;
     private List<HAStoragePool> clvmStoragePools;
     private HostTO host;
-    private boolean reportFailureIfOneStorageIsDown;
+    private boolean reportIfHeartBeatFailedForOneStoragePool;
     private String volumeList;
 
-    public KVMHAChecker(List<HAStoragePool> pools, List<HAStoragePool> gfspools, List<HAStoragePool> rbdpools, List<HAStoragePool> clvmpools, HostTO host, boolean reportFailureIfOneStorageIsDown, String volumeList) {
+    public KVMHAChecker(List<HAStoragePool> pools, List<HAStoragePool> gfspools, List<HAStoragePool> rbdpools, List<HAStoragePool> clvmpools, HostTO host, boolean reportIfHeartBeatFailedForOneStoragePool, String volumeList) {
         this.storagePools = pools;
         this.gfsStoragePools = gfspools;
         this.rbdStoragePools = rbdpools;
         this.clvmStoragePools = clvmpools;
         this.host = host;
-        this.reportFailureIfOneStorageIsDown = reportFailureIfOneStorageIsDown;
+        this.reportIfHeartBeatFailedForOneStoragePool = reportIfHeartBeatFailedForOneStoragePool;
         this.volumeList = volumeList;
     }
 
     /*
-     * True means heartbeaing is on going, or we can't get it's status. False
-     * means heartbeating is stopped definitely
+     * True means heart beating is on going, or we can't get it's status.
+     * False means heart beating is stopped definitely.
      */
     @Override
-    public Boolean checkingHeartBeat() {
+    public Boolean hasHeartBeat() {
         boolean validResult = false;
 
         // NFS
@@ -55,8 +55,8 @@ public class KVMHAChecker extends KVMHABase implements Callable<Boolean> {
                 host.getPrivateNetwork().getIp(),
                 pool.getPoolUUID()
             ));
-            validResult = pool.getPool().checkingHeartBeat(pool, host);
-            if (reportFailureIfOneStorageIsDown && !validResult) break;
+            validResult = pool.getPool().hasHeartBeat(pool, host);
+            if (reportIfHeartBeatFailedForOneStoragePool && !validResult) break;
         }
 
         // SharedMountPoint(GFS)
@@ -66,8 +66,8 @@ public class KVMHAChecker extends KVMHABase implements Callable<Boolean> {
                 host.getPrivateNetwork().getIp(),
                 gfspool.getPoolUUID()
             ));
-            validResult = gfspool.getPool().checkingHeartBeat(gfspool, host);
-            if (reportFailureIfOneStorageIsDown && !validResult) break;
+            validResult = gfspool.getPool().hasHeartBeat(gfspool, host);
+            if (reportIfHeartBeatFailedForOneStoragePool && !validResult) break;
         }
 
         // RBD
@@ -78,7 +78,7 @@ public class KVMHAChecker extends KVMHABase implements Callable<Boolean> {
                 rbdpool.monHost
             ));
             validResult = rbdpool.getPool().checkingHeartBeatRBD(rbdpool, host, volumeList);
-            if (reportFailureIfOneStorageIsDown && !validResult) break;
+            if (reportIfHeartBeatFailedForOneStoragePool && !validResult) break;
         }
 
         // CLVM
@@ -88,8 +88,8 @@ public class KVMHAChecker extends KVMHABase implements Callable<Boolean> {
                 host.getPrivateNetwork().getIp(),
                 clvmpool.poolIp
             ));
-            validResult = clvmpool.getPool().checkingHeartBeat(clvmpool, host);
-            if (reportFailureIfOneStorageIsDown && !validResult) break;
+            validResult = clvmpool.getPool().hasHeartBeat(clvmpool, host);
+            if (reportIfHeartBeatFailedForOneStoragePool && !validResult) break;
         }
 
         if (!validResult) {
@@ -101,6 +101,6 @@ public class KVMHAChecker extends KVMHABase implements Callable<Boolean> {
 
     @Override
     public Boolean call() throws Exception {
-        return checkingHeartBeat();
+        return hasHeartBeat();
     }
 }
