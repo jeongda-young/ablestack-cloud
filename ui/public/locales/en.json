@@ -7523,5 +7523,6 @@
   "message.quota.usage.resource.warn": "Resources that are tagged as <untraceable> do not have constant metadata (if removed, the data is deleted) and cannot be retrieved.",
   "message.request.no.data": "There is no data to show.",
   "placeholder.quota.credit.add.min_balance": "Account's minimum balance",
-  "placeholder.quota.credit.add.value": "Amount of credits"
+  "placeholder.quota.credit.add.value": "Amount of credits",
+  "message.action.vmsnapshot.disk-only.delete": "Please confirm that you want to delete this Instance Snapshot."
 }

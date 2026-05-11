@@ -3136,7 +3136,7 @@
   "message.action.unmanage.virtualmachine": "Por favor, confirme que você deseja parar de gerenciar a VM.",
   "message.action.unmanage.volume": "Please confirm that you want to unmanage the Volume.",
   "message.action.unmanage.volumes": "Please confirm that you want to unmanage the Volumes.",
-  "message.action.vmsnapshot.delete": "Por favor, confirme que você deseja excluir esta snapshot de VM.",
+  "message.action.vmsnapshot.delete": "Por favor, confirme que você deseja excluir esta snapshot de VM. <br>Saiba que caso a instância execute em um hypervisor KVM, ela será pausada antes da deleção, e continuada após a deleção.",
   "message.activate.project": "Você tem certeza que deseja ativar este projeto?",
   "message.add.custom.action.parameters": "Parameters to be made available while running the custom action.",
   "message.add.egress.rule.failed": "Falha ao adicionar uma nova regra de saída",
@@ -5571,5 +5571,6 @@
   "message.quota.usage.resource.warn": "Recursos que são marcados como <untraceable> não possuem metadados constantes (se removido, o dado é completamente deletado) e não podem ser retornados.",
   "message.request.no.data": "Não há dados para mostrar.",
   "placeholder.quota.credit.add.min_balance": "Saldo mínimo",
-  "placeholder.quota.credit.add.value": "Quantidade de créditos"
+  "placeholder.quota.credit.add.value": "Quantidade de créditos",
+  "message.action.vmsnapshot.disk-only.delete": "Por favor, confirme que você deseja excluir esta snapshot de VM."
 }
