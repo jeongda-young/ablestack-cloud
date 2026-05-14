@@ -62,9 +62,11 @@ import com.cloud.user.AccountVO;
 import com.cloud.user.ResourceLimitService;
 import com.cloud.user.User;
 import com.cloud.user.UserData;
+import com.cloud.user.UserDataVO;
 import com.cloud.user.UserVO;
 import com.cloud.user.dao.AccountDao;
 import com.cloud.utils.component.ComponentContext;
+import com.cloud.user.dao.UserDataDao;
 import com.cloud.utils.concurrency.NamedThreadFactory;
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.vm.VMInstanceVO;
@@ -217,6 +219,12 @@ public class TemplateManagerImplTest {
 
     @Inject
     HeuristicRuleHelper heuristicRuleHelperMock;
+
+    @Mock
+    private UserDataDao userDataDaoMock;
+
+    @Mock
+    private UserDataVO userDataMock;
 
     public class CustomThreadPoolExecutor extends ThreadPoolExecutor {
         AtomicInteger ai = new AtomicInteger(0);
@@ -549,6 +557,8 @@ public class TemplateManagerImplTest {
 
         VMTemplateVO template = Mockito.mock(VMTemplateVO.class);
         when(_tmpltDao.findById(anyLong())).thenReturn(template);
+
+        when(userDataDaoMock.findById(anyLong())).thenReturn(userDataMock);
 
         VirtualMachineTemplate resultTemplate = templateManager.linkUserDataToTemplate(cmd);
 
