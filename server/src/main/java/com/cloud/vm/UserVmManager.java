@@ -145,6 +145,10 @@ public interface UserVmManager extends UserVmService {
             "Bandwidth limit (in MiB/s) for SharedMountPoint QCOW2 volume flatten blockpull job.",
             true);
 
+    ConfigKey<Boolean> AutoMigrateVmOnLiveScaleInsufficientCapacity = new ConfigKey<>("Advanced", Boolean.class, "auto.migrate.vm.on.live.scale.insufficient.capacity",
+            "true", "Defines whether a VM should be automatically migrated to a suitable host when the current host " +
+                    "lacks sufficient compute capacity to live scale the instance. Defaults to true.", true, ConfigKey.Scope.Cluster);
+
     static final int MAX_USER_DATA_LENGTH_BYTES = 2048;
 
     public  static  final String CKS_NODE = "cksnode";
