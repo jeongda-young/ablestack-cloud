@@ -7541,5 +7541,10 @@
   "label.linstor.apitoken": "Controller API token",
   "label.linstor.ssl.insecure": "Allow self-signed certificate",
   "message.linstor.apitoken.description": "API token used to authenticate against the Linstor controller. Leave empty to use an auth.json file on the management server and hosts, or for an unauthenticated controller.",
-  "message.linstor.ssl.insecure.description": "Trust self-signed/untrusted TLS certificates from the Linstor controller (disables certificate and hostname verification)."
+  "message.linstor.ssl.insecure.description": "Trust self-signed/untrusted TLS certificates from the Linstor controller (disables certificate and hostname verification).",
+  "label.ssvm.open.cert.page": "Open Certificate Page",
+  "label.retry.upload": "Retry Upload",
+  "message.ssvm.cert.untrusted": "Unable to reach the upload server.",
+  "message.ssvm.cert.trust.instructions": "The upload server may be using a self-signed or untrusted certificate. Click 'Open Certificate Page' to open the server in a new browser tab, accept the certificate warning, then return here and click 'Retry Upload'. If the server remains unreachable, contact your administrator.",
+  "message.ssvm.unreachable.retry": "The upload server is still unreachable. If it uses a self-signed certificate, please accept it in the opened tab and try again."
 }
