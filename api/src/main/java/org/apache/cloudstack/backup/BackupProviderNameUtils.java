@@ -23,6 +23,7 @@ public final class BackupProviderNameUtils {
     public static final String COMMVAULT = "commvault";
     public static final String ABLESTACK_NAS = "ablestack-nas";
     public static final String ABLESTACK_COMMVAULT = "ablestack-commvault";
+    public static final String ABLESTACK_VEEAM = "ablestack-veeam";
 
     private BackupProviderNameUtils() {
     }
@@ -37,6 +38,9 @@ public final class BackupProviderNameUtils {
         if (COMMVAULT.equalsIgnoreCase(providerName) || ABLESTACK_COMMVAULT.equalsIgnoreCase(providerName)) {
             return ABLESTACK_COMMVAULT;
         }
+        if ("veeam".equalsIgnoreCase(providerName) || ABLESTACK_VEEAM.equalsIgnoreCase(providerName)) {
+            return ABLESTACK_VEEAM;
+        }
         return providerName;
     }
 
@@ -50,6 +54,9 @@ public final class BackupProviderNameUtils {
         if (ABLESTACK_COMMVAULT.equalsIgnoreCase(providerName) || COMMVAULT.equalsIgnoreCase(providerName)) {
             return COMMVAULT;
         }
+        if (ABLESTACK_VEEAM.equalsIgnoreCase(providerName) || "veeam".equalsIgnoreCase(providerName)) {
+            return "veeam";
+        }
         return providerName;
     }
 
@@ -59,5 +66,9 @@ public final class BackupProviderNameUtils {
 
     public static boolean isCommvaultFamily(final String providerName) {
         return ABLESTACK_COMMVAULT.equalsIgnoreCase(canonicalize(providerName));
+    }
+
+    public static boolean isVeeamFamily(final String providerName) {
+        return ABLESTACK_VEEAM.equalsIgnoreCase(canonicalize(providerName));
     }
 }

@@ -65,6 +65,8 @@
         <module>backup/nas</module>
         <module>backup/ablestack-nas</module>
         <module>backup/ablestack-commvault</module>
+        <module>backup/veeam</module>
+        <module>backup/ablestack-veeam</module>
         <module>backup/bx</module>
 
         <module>ca/root-ca</module>
@@ -238,7 +240,6 @@
             </activation>
             <modules>
                 <module>api/vmware-sioc</module>
-                <module>backup/veeam</module>
                 <module>hypervisors/vmware</module>
                 <module>network-elements/cisco-vnmc</module>
                 <module>network-elements/nsx</module>

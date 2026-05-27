@@ -106,6 +106,9 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
     private static final String DETAIL_CHAIN_SEALED = "nas.chain.sealed";
     private static final String DETAIL_CHAIN_SEAL_REASON = "nas.chain.seal.reason";
     private static final String DETAIL_FALLBACK_VOLUME_UUIDS = "nas.fallback.volume.uuids";
+    public static final String DETAIL_BACKUP_SOURCE = "nas.backup.source";
+    public static final String DETAIL_VEEAM_RESTORE_POINT_ID = "nas.veeam.restore.point.id";
+    public static final String DETAIL_VEEAM_IMPORTED = "nas.veeam.imported";
     private static final String MISSING_PARENT_RBD_SNAPSHOT_ERROR = "Parent RBD snapshot";
     private static final long STALE_BACKUP_THRESHOLD_MS = TimeUnit.DAYS.toMillis(1);
 
@@ -280,6 +283,81 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
             result = executeBackup(vm, quiesceVM, host, backupRepository, vmVolumes, volumePoolsAndPaths, null, false, false);
         }
         return new Pair<>(result.success, result.backup);
+    }
+
+    /**
+     * Import Veeam-exported disks as a FULL NAS backup seed for subsequent incremental backups.
+     */
+    public Pair<Boolean, Backup> importVeeamBackupSeed(final VirtualMachine vm, final List<String> stagingDiskPaths,
+            final String veeamRestorePointId, final String sourceFormat, final Boolean bootstrapCheckpoint) {
+        if (CollectionUtils.isEmpty(stagingDiskPaths)) {
+            throw new CloudRuntimeException("Staging disk paths are required to import a Veeam backup seed");
+        }
+        final Host host = getVMHypervisorHostForBackup(vm);
+        final BackupRepository backupRepository = backupRepositoryDao.findByBackupOfferingId(vm.getBackupOfferingId());
+        if (backupRepository == null) {
+            throw new CloudRuntimeException("No valid backup repository found for the VM");
+        }
+
+        validateNoKvmFileBasedVmSnapshots(vm);
+        List<VolumeVO> vmVolumes = volumeDao.findByInstance(vm.getId());
+        vmVolumes.sort(Comparator.comparing(Volume::getDeviceId));
+        Pair<List<PrimaryDataStoreTO>, List<String>> volumePoolsAndPaths = getVolumePoolsAndPaths(vmVolumes);
+        validateVolumePoolTypes(volumePoolsAndPaths.first());
+
+        final String backupPath = buildBackupPath(vm);
+        final String checkpointName = backupPath.substring(backupPath.lastIndexOf("/") + 1);
+        final String backupEngine = areAllVolumesOnRbdPool(volumePoolsAndPaths.first()) ? BACKUP_ENGINE_RBD_DIFF : BACKUP_ENGINE_QCOW2;
+        final List<String> backupFiles = buildBackupFileNames(vmVolumes, backupEngine, false);
+
+        BackupVO backupVO = createBackupObject(vm, backupPath, BACKUP_TYPE_FULL, checkpointName, backupEngine, null, volumePoolsAndPaths.second());
+        updateBackupDetail(backupVO, DETAIL_BACKUP_SOURCE, "ablestack-veeam");
+        updateBackupDetail(backupVO, DETAIL_VEEAM_IMPORTED, "true");
+        if (StringUtils.isNotBlank(veeamRestorePointId)) {
+            updateBackupDetail(backupVO, DETAIL_VEEAM_RESTORE_POINT_ID, veeamRestorePointId);
+        }
+
+        AblestackNasImportVeeamSeedCommand command = new AblestackNasImportVeeamSeedCommand(vm.getInstanceName(), backupPath);
+        command.setCheckpointName(checkpointName);
+        command.setBackupFiles(backupFiles);
+        command.setVolumePools(volumePoolsAndPaths.first());
+        command.setVolumePaths(volumePoolsAndPaths.second());
+        command.setStagingDiskPaths(stagingDiskPaths);
+        command.setSourceFormat(StringUtils.defaultIfBlank(sourceFormat, "vmdk"));
+        command.setVeeamRestorePointId(veeamRestorePointId);
+        command.setBootstrapCheckpoint(bootstrapCheckpoint == null || bootstrapCheckpoint);
+        command.setBackupRepoType(backupRepository.getType());
+        command.setBackupRepoAddress(backupRepository.getAddress());
+        command.setMountOptions(backupRepository.getMountOptions());
+
+        BackupAnswer answer;
+        try {
+            answer = (BackupAnswer) agentManager.send(host.getId(), command);
+        } catch (AgentUnavailableException e) {
+            removeBackupWithDetails(backupVO.getId());
+            throw new CloudRuntimeException("Unable to contact hypervisor host to import Veeam backup seed");
+        } catch (OperationTimedoutException e) {
+            removeBackupWithDetails(backupVO.getId());
+            throw new CloudRuntimeException("Timed out importing Veeam backup seed, please try again");
+        }
+
+        if (answer != null && answer.getResult()) {
+            backupVO.setDate(new Date());
+            backupVO.setSize(answer.getSize());
+            backupVO.setStatus(Backup.Status.BackedUp);
+            backupVO.setBackedUpVolumes(createVolumeInfoFromVolumes(vmVolumes, backupFiles));
+            backupDao.update(backupVO.getId(), backupVO);
+            return new Pair<>(true, backupVO);
+        }
+
+        final String details = answer != null ? answer.getDetails() : "No answer received";
+        logger.error("Failed to import Veeam backup seed for VM {}: {}", vm.getInstanceName(), details);
+        removeBackupWithDetails(backupVO.getId());
+        throw new CloudRuntimeException("Failed to import Veeam backup seed: " + details);
+    }
+
+    public boolean hasBackedUpSeed(final VirtualMachine vm) {
+        return getLatestBackedUpBackup(vm) != null;
     }
 
     private BackupExecutionResult executeBackup(VirtualMachine vm, Boolean quiesceVM, Host host, BackupRepository backupRepository,
@@ -537,7 +615,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         updateBackupDetail(backup, DETAIL_CHAIN_SEAL_REASON, reason);
     }
 
-    private void updateBackupDetail(Backup backup, String key, String value) {
+    public void updateBackupDetail(Backup backup, String key, String value) {
         if (backup == null || StringUtils.isBlank(key)) {
             return;
         }
