@@ -463,7 +463,7 @@ public class VeeamClient {
             final HttpResponse response = get("/jobs");
             checkResponseOK(response);
             final EntityReferences entityReferences = OBJECT_MAPPER.readValue(response.getEntity().getContent(), EntityReferences.class);
-            final List<BackupOffering> policies = new ArrayList<>();
+            final List<BackupOffering> policies = new ArrayList<BackupOffering>();
             if (entityReferences == null || entityReferences.getRefs() == null) {
                 return policies;
             }
@@ -475,7 +475,7 @@ public class VeeamClient {
             logger.error("Failed to list Veeam jobs due to:", e);
             checkResponseTimeOut(e);
         }
-        return new ArrayList<>();
+        return new ArrayList<BackupOffering>();
     }
 
     public Job listJob(final String jobId) {
@@ -698,11 +698,11 @@ public class VeeamClient {
             logger.error("Failed to get backup metrics via Veeam B&R API due to:", e);
             checkResponseTimeOut(e);
         }
-        return new HashMap<>();
+        return new HashMap<String, Backup.Metric>();
     }
 
     protected Map<String, Backup.Metric> processHttpResponseForBackupMetrics(final InputStream content) {
-        Map<String, Backup.Metric> metrics = new HashMap<>();
+        Map<String, Backup.Metric> metrics = new HashMap<String, Backup.Metric>();
         try {
             final BackupFiles backupFiles = OBJECT_MAPPER.readValue(content, BackupFiles.class);
             if (backupFiles == null || CollectionUtils.isEmpty(backupFiles.getBackupFiles())) {
@@ -755,7 +755,7 @@ public class VeeamClient {
     protected Map<String, Backup.Metric> processPowerShellResultForBackupMetrics(final String result) {
         logger.debug("Processing powershell result: " + result);
         final String separator = "=====";
-        Map<String, Backup.Metric> metrics = new HashMap<>();
+        Map<String, Backup.Metric> metrics = new HashMap<String, Backup.Metric>();
         for (final String block : result.split(separator + "\r\n")) {
             final String[] parts = block.split("\r\n");
             if (parts.length != 3) {
@@ -891,7 +891,10 @@ public class VeeamClient {
                 }
                 vmRestorePointList.add(new Backup.RestorePoint(vmRestorePointId, created, type, backupSize, dataSize));
             }
-        } catch (final IOException | ParseException e) {
+        } catch (final IOException e) {
+            logger.error("Failed to process response to get VM restore points via Veeam B&R API due to:", e);
+            checkResponseTimeOut(e);
+        } catch (final ParseException e) {
             logger.error("Failed to process response to get VM restore points via Veeam B&R API due to:", e);
             checkResponseTimeOut(e);
         }
