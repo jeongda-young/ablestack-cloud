@@ -98,7 +98,7 @@ public class VeeamBackupProviderTest {
         Mockito.when(vmInstanceDao.findByIdIncludingRemoved(Mockito.anyLong())).thenReturn(vmInstanceVO);
         Mockito.doReturn(client).when(backupProvider).getClient(2l);
         Mockito.doReturn(true).when(client).deleteBackup("abc");
-        List<Backup> backups = new ArrayList<>();
+        List<Backup> backups = new ArrayList<Backup>();
         backups.add(backup);
         Mockito.when(backupDao.listByVmIdAndOffering(3l, 1l, 4l)).thenReturn(backups);
         Mockito.verify(backupDao, Mockito.never()).remove(Mockito.anyLong());

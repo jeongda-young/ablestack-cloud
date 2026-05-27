@@ -173,7 +173,7 @@ public class VeeamClientTest {
 
     @Test
     public void getRestoreVmErrorDescriptionTestFindErrorDescription() {
-        Pair<Boolean, String> response = new Pair<>(true, "Example of error description found in Veeam.");
+        Pair<Boolean, String> response = new Pair<Boolean, String>(true, "Example of error description found in Veeam.");
         Mockito.when(mockClient.getRestoreVmErrorDescription("uuid")).thenCallRealMethod();
         Mockito.when(mockClient.executePowerShellCommands(Mockito.any())).thenReturn(response);
         String result = mockClient.getRestoreVmErrorDescription("uuid");
@@ -182,7 +182,7 @@ public class VeeamClientTest {
 
     @Test
     public void getRestoreVmErrorDescriptionTestNotFindErrorDescription() {
-        Pair<Boolean, String> response = new Pair<>(true, "Cannot find restore session with provided uid uuid");
+        Pair<Boolean, String> response = new Pair<Boolean, String>(true, "Cannot find restore session with provided uid uuid");
         Mockito.when(mockClient.getRestoreVmErrorDescription("uuid")).thenCallRealMethod();
         Mockito.when(mockClient.executePowerShellCommands(Mockito.any())).thenReturn(response);
         String result = mockClient.getRestoreVmErrorDescription("uuid");
@@ -199,7 +199,7 @@ public class VeeamClientTest {
 
     @Test
     public void getRestoreVmErrorDescriptionTestWhenPowerShellOutputIsFalse() {
-        Pair<Boolean, String> response = new Pair<>(false, null);
+        Pair<Boolean, String> response = new Pair<Boolean, String>(false, null);
         Mockito.when(mockClient.getRestoreVmErrorDescription("uuid")).thenCallRealMethod();
         Mockito.when(mockClient.executePowerShellCommands(Mockito.any())).thenReturn(response);
         String result = mockClient.getRestoreVmErrorDescription("uuid");
