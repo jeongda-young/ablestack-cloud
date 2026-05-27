@@ -395,7 +395,7 @@ public class VeeamClient {
     private Pair<String, String> getRelatedLinkPair(List<Link> links) {
         for (Link link : links) {
             if (link.getRel().equals("Related")) {
-                return new Pair<>(link.getHref(), link.getType());
+                return new Pair<String, String>(link.getHref(), link.getType());
             }
         }
         return null;
@@ -811,7 +811,7 @@ public class VeeamClient {
             return null;
         }
 
-        final List<Backup.RestorePoint> restorePoints = new ArrayList<>();
+        final List<Backup.RestorePoint> restorePoints = new ArrayList<Backup.RestorePoint>();
         for (final String block : response.second().split("\r\n\r\n")) {
             if (block.isEmpty()) {
                 continue;
@@ -842,11 +842,11 @@ public class VeeamClient {
             logger.error("Failed to list VM restore points via Veeam B&R API due to:", e);
             checkResponseTimeOut(e);
         }
-        return new ArrayList<>();
+        return new ArrayList<Backup.RestorePoint>();
     }
 
     public List<Backup.RestorePoint> processHttpResponseForVmRestorePoints(InputStream content, String vmwareDcName, String vmInternalName, Map<String, Backup.Metric> metricsMap) {
-        List<Backup.RestorePoint> vmRestorePointList = new ArrayList<>();
+        List<Backup.RestorePoint> vmRestorePointList = new ArrayList<Backup.RestorePoint>();
         try {
             final VmRestorePoints vmRestorePoints = OBJECT_MAPPER.readValue(content, VmRestorePoints.class);
             final String hierarchyId = findDCHierarchy(vmwareDcName);
@@ -922,7 +922,7 @@ public class VeeamClient {
         if (result == null || !result.first()) {
             throw new CloudRuntimeException("Failed to restore VM to location " + restoreLocation);
         }
-        return new Pair<>(result.first(), restoreLocation);
+        return new Pair<Boolean, String>(result.first(), restoreLocation);
     }
 
     /**

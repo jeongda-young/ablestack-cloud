@@ -224,7 +224,7 @@ public class VeeamBackupProvider extends AdapterBase implements BackupProvider, 
     public Pair<Boolean, Backup> takeBackup(final VirtualMachine vm, Boolean quiesceVM) {
         final VeeamClient client = getClient(vm.getDataCenterId());
         Boolean result = client.startBackupJob(vm.getBackupExternalId());
-        return new Pair<>(result, null);
+        return new Pair<Boolean, Backup>(result, null);
     }
 
     @Override
@@ -353,7 +353,7 @@ public class VeeamBackupProvider extends AdapterBase implements BackupProvider, 
 
     @Override
     public Pair<Long, Long> getBackupStorageStats(Long zoneId) {
-        return new Pair<>(0L, 0L);
+        return new Pair<Long, Long>(0L, 0L);
     }
 
     @Override
