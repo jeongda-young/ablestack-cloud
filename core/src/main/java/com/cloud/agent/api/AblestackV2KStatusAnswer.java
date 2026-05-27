@@ -23,6 +23,16 @@ public class AblestackV2KStatusAnswer extends Answer {
     private String migrationStep;
     private String syncPhysical;
     private String workdir;
+    private String targetProvider;
+    private String cloudVmId;
+    private String displayStep;
+    private String syncProgressLabel;
+    private Long syncDoneBytes;
+    private Long syncTotalBytes;
+    private Integer syncPercent;
+    private Long syncCumulativeDoneBytes;
+    private Long syncCumulativeKnownBytes;
+    private Integer syncCumulativePercent;
 
     public AblestackV2KStatusAnswer(Command command, boolean success, String details) {
         super(command, success, details);
@@ -31,12 +41,20 @@ public class AblestackV2KStatusAnswer extends Answer {
     public AblestackV2KStatusAnswer(Command command, boolean success, String details,
                                     String phase, String migrationState, String migrationStep,
                                     String syncPhysical, String workdir) {
+        this(command, success, details, phase, migrationState, migrationStep, syncPhysical, workdir, null, null);
+    }
+
+    public AblestackV2KStatusAnswer(Command command, boolean success, String details,
+                                    String phase, String migrationState, String migrationStep,
+                                    String syncPhysical, String workdir, String targetProvider, String cloudVmId) {
         super(command, success, details);
         this.phase = phase;
         this.migrationState = migrationState;
         this.migrationStep = migrationStep;
         this.syncPhysical = syncPhysical;
         this.workdir = workdir;
+        this.targetProvider = targetProvider;
+        this.cloudVmId = cloudVmId;
     }
 
     public String getPhase() {
@@ -57,5 +75,77 @@ public class AblestackV2KStatusAnswer extends Answer {
 
     public String getWorkdir() {
         return workdir;
+    }
+
+    public String getTargetProvider() {
+        return targetProvider;
+    }
+
+    public String getCloudVmId() {
+        return cloudVmId;
+    }
+
+    public String getDisplayStep() {
+        return displayStep;
+    }
+
+    public void setDisplayStep(String displayStep) {
+        this.displayStep = displayStep;
+    }
+
+    public String getSyncProgressLabel() {
+        return syncProgressLabel;
+    }
+
+    public void setSyncProgressLabel(String syncProgressLabel) {
+        this.syncProgressLabel = syncProgressLabel;
+    }
+
+    public Long getSyncDoneBytes() {
+        return syncDoneBytes;
+    }
+
+    public void setSyncDoneBytes(Long syncDoneBytes) {
+        this.syncDoneBytes = syncDoneBytes;
+    }
+
+    public Long getSyncTotalBytes() {
+        return syncTotalBytes;
+    }
+
+    public void setSyncTotalBytes(Long syncTotalBytes) {
+        this.syncTotalBytes = syncTotalBytes;
+    }
+
+    public Integer getSyncPercent() {
+        return syncPercent;
+    }
+
+    public void setSyncPercent(Integer syncPercent) {
+        this.syncPercent = syncPercent;
+    }
+
+    public Long getSyncCumulativeDoneBytes() {
+        return syncCumulativeDoneBytes;
+    }
+
+    public void setSyncCumulativeDoneBytes(Long syncCumulativeDoneBytes) {
+        this.syncCumulativeDoneBytes = syncCumulativeDoneBytes;
+    }
+
+    public Long getSyncCumulativeKnownBytes() {
+        return syncCumulativeKnownBytes;
+    }
+
+    public void setSyncCumulativeKnownBytes(Long syncCumulativeKnownBytes) {
+        this.syncCumulativeKnownBytes = syncCumulativeKnownBytes;
+    }
+
+    public Integer getSyncCumulativePercent() {
+        return syncCumulativePercent;
+    }
+
+    public void setSyncCumulativePercent(Integer syncCumulativePercent) {
+        this.syncCumulativePercent = syncCumulativePercent;
     }
 }

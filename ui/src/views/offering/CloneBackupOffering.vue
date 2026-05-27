@@ -39,7 +39,7 @@
         :model="form"
         :rules="rules"
         @finish="handleSubmit"
-       >
+      >
         <a-form-item name="name" ref="name">
           <template #label>
             <tooltip-label :title="$t('label.name')" :tooltip="apiParams.name.description"/>
@@ -90,7 +90,7 @@
             :filterOption="(input, option) => {
               return option.label.toLowerCase().indexOf(input.toLowerCase()) >= 0
             }" >
-            <a-select-option v-for="opt in externals.opts" :key="opt.id" :label="opt.name">
+            <a-select-option v-for="opt in externals.opts" :key="opt.id" :value="opt.externalid" :label="opt.name">
               {{ opt.name }}
             </a-select-option>
           </a-select>
@@ -166,6 +166,10 @@ export default {
         loading: false,
         opts: []
       },
+      providers: {
+        loading: false,
+        opts: []
+      },
       externals: {
         loading: false,
         opts: []
@@ -173,7 +177,8 @@ export default {
       domains: {
         loading: false,
         opts: []
-      }
+      },
+      selectedZoneId: null
     }
   },
   beforeCreate () {
@@ -191,7 +196,8 @@ export default {
       })
       this.rules = reactive({
         name: [{ required: true, message: this.$t('message.error.required.input') }],
-        description: [{ required: true, message: this.$t('message.error.required.input') }]
+        description: [{ required: true, message: this.$t('message.error.required.input') }],
+        externalid: [{ required: true, message: this.$t('message.error.select') }]
       })
     },
     fetchData () {
@@ -228,14 +234,52 @@ export default {
         this.domains.loading = false
       })
     },
-    fetchExternal (zoneId) {
+    fetchProvider (zoneId) {
       if (!zoneId) {
+        this.providers.opts = []
         this.externals.opts = []
+        this.form.externalid = null
         return
       }
+      this.providers.loading = true
+      getAPI('listBackupProvidersForZone', { zoneid: zoneId }).then(json => {
+        this.providers.opts = json.listbackupprovidersforzoneresponse.providers || []
+        const sourceProvider = this.resource?.provider
+        const provider = this.providers.opts.find(provider => {
+          return provider.name?.toLowerCase() === sourceProvider?.toLowerCase()
+        })
+        if (!provider) {
+          this.externals.opts = []
+          this.form.externalid = null
+          return
+        }
+        this.fetchExternal(zoneId, provider.name)
+      }).catch(error => {
+        this.$notifyError(error)
+      }).finally(() => {
+        this.providers.loading = false
+      })
+    },
+    fetchExternal (zoneId, providerName) {
+      if (!zoneId || !providerName) {
+        this.externals.opts = []
+        this.form.externalid = null
+        return
+      }
+
       this.externals.loading = true
-      getAPI('listBackupProviderOfferings', { zoneid: zoneId }).then(json => {
-        this.externals.opts = json.listbackupproviderofferingsresponse.backupoffering || []
+      getAPI('listBackupProviderOfferings', { zoneid: zoneId, provider: providerName }).then(json => {
+        const externalOfferings = json.listbackupproviderofferingsresponse.backupoffering || []
+        const sourceExternalId = this.resource?.externalid
+        this.externals.opts = externalOfferings.filter(opt => {
+          return String(opt.externalid) !== String(sourceExternalId)
+        })
+        const hasSelectedExternal = this.externals.opts.some(opt => {
+          return String(opt.externalid) === String(this.form.externalid)
+        })
+        if (!hasSelectedExternal) {
+          this.form.externalid = null
+        }
       }).catch(error => {
         this.$notifyError(error)
       }).finally(() => {
@@ -279,14 +323,9 @@ export default {
         const zone = this.zones.opts.find(z => z.id === r.zoneid)
         if (zone) {
           this.form.zoneid = zone.name
-          this.fetchExternal(zone.id)
+          this.selectedZoneId = zone.id
+          this.fetchProvider(zone.id)
         }
-      }
-
-      if (r.externalid) {
-        this.$nextTick(() => {
-          this.form.externalid = r.externalid
-        })
       }
     },
     handleSubmit (e) {
@@ -342,8 +381,7 @@ export default {
         }
 
         this.loading = true
-        const title = this.$t('message.success.clone.backup.offering')
-
+        const title = this.$t('label.clone.backup.offering')
         postAPI('cloneBackupOffering', params).then(json => {
           const jobId = json.clonebackupofferingresponse?.jobid
           if (jobId) {
@@ -378,13 +416,18 @@ export default {
     },
     onChangeZone (value) {
       if (!value) {
+        this.selectedZoneId = null
+        this.providers.opts = []
         this.externals.opts = []
         this.form.externalid = null
         return
       }
       const zone = this.zones.opts.find(z => z.name === value)
       if (zone) {
-        this.fetchExternal(zone.id)
+        this.selectedZoneId = zone.id
+        this.form.externalid = null
+        this.externals.opts = []
+        this.fetchProvider(zone.id)
       }
     },
     onChangeIsPublic (value) {

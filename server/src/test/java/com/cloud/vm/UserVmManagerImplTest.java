@@ -3658,11 +3658,6 @@ public class UserVmManagerImplTest {
         when(vm.getId()).thenReturn(vmId);
         when(vm.getState()).thenReturn(VirtualMachine.State.Running);
         when(vm.getTemplateId()).thenReturn(templateId);
-        BackupVO backup = mock(BackupVO.class);
-        when(backupDao.findById(backupId)).thenReturn(backup);
-        when(backup.getBackupOfferingId()).thenReturn(2L);
-        when(backupManager.getBackupProviderForOffering(2L)).thenReturn(null);
-
         when(backupManager.restoreBackupToVM(backupId, vmId)).thenReturn(true);
 
         Map<VirtualMachineProfile.Param, Object> params = new HashMap<>();

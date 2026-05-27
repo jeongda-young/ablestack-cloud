@@ -34,7 +34,7 @@ import org.apache.commons.lang3.StringUtils;
         description = "Import virtual machine from VMware into CloudStack using ablestack-v2k workflow",
         responseObject = UserVmResponse.class,
         responseView = ResponseObject.ResponseView.Full,
-        requestHasSensitiveInfo = false,
+        requestHasSensitiveInfo = true,
         responseHasSensitiveInfo = true,
         authorized = {RoleType.Admin},
         since = "4.19.0")
@@ -49,8 +49,13 @@ public class ImportUnmanagedInstanceForAblestackV2KCmd extends ImportVmCmd {
 
     @Parameter(name = ApiConstants.IMPORT_VM_TASK_ID,
             type = CommandType.STRING,
-            description = "(only for phase2 execution) existing import VM task ID to continue on the original conversion host")
+            description = "(only for task continuation) existing import VM task ID to continue on the original conversion host")
     private String importVmTaskId;
+
+    @Parameter(name = "taskaction",
+            type = CommandType.STRING,
+            description = "(only with importvmtaskid) task action to execute: phase2, resume, or retryfromstart")
+    private String taskAction;
 
     public String getSplitMode() {
         return StringUtils.defaultIfBlank(splitMode, DEFAULT_SPLIT_MODE);
@@ -58,6 +63,10 @@ public class ImportUnmanagedInstanceForAblestackV2KCmd extends ImportVmCmd {
 
     public String getImportVmTaskId() {
         return importVmTaskId;
+    }
+
+    public String getTaskAction() {
+        return taskAction;
     }
 
     @Override

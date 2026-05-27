@@ -52,6 +52,7 @@
       <div>
         <a-card>
           <a-alert
+            class="manage-instances-alert"
             type="info"
             :showIcon="true"
             :message="wizardTitle"
@@ -78,10 +79,13 @@
                         v-model:value="form.sourceHypervisor"
                         @change="selected => { onSelectHypervisor(selected.target.value) }"
                         buttonStyle="solid">
-                        <a-radio-button value="vmware" style="width: 50%; text-align: center">
-                          VMware
+                        <a-radio-button value="vmware" class="source-hypervisor-button">
+                          {{ $t('label.vmware') }}
                         </a-radio-button>
-                        <a-radio-button value="kvm" style="width: 50%; text-align: center">
+                        <a-radio-button value="nutanix" class="source-hypervisor-button">
+                          {{ $t('label.nutanix') }}
+                        </a-radio-button>
+                        <a-radio-button value="kvm" class="source-hypervisor-button">
                           {{ $t('label.app.name') }}
                         </a-radio-button>
                       </a-radio-group>
@@ -106,21 +110,21 @@
                       </a-select>
                     </a-form-item>
                   </a-col>
-                    <a-col v-if="showExtHost" :md="24" :lg="12">
+                    <a-col v-if="isExternal" :md="24" :lg="12">
                         <a-form-item
                                 name="hostname"
                                 ref="hostname">
                           <template #label>
                             <tooltip-label
-                              :title="$t('label.hostname')"
-                              :tooltip="$t('label.ext.hostname.tooltip')"/>
+                              :title="sourceEndpointLabel"
+                              :tooltip="sourceEndpointTooltip"/>
                           </template>
                             <a-input
                                     v-model:value="form.hostname"
                             ></a-input>
                         </a-form-item>
                     </a-col>
-                    <a-col v-if="showExtHost" :md="24" :lg="12">
+                    <a-col v-if="isExternal" :md="24" :lg="12">
                         <a-form-item
                                 name="username"
                                 ref="username">
@@ -134,7 +138,7 @@
                             ></a-input>
                         </a-form-item>
                     </a-col>
-                    <a-col v-if="showExtHost" :md="24" :lg="12">
+                    <a-col v-if="isExternal" :md="24" :lg="12">
                         <a-form-item
                                 name="password"
                                 ref="password">
@@ -148,7 +152,7 @@
                             ></a-input-password>
                         </a-form-item>
                     </a-col>
-                    <a-col v-if="showExtHost" :md="24" :lg="12">
+                    <a-col v-if="showExtTmpPath" :md="24" :lg="12">
                         <a-form-item
                                 name="tmppath"
                                 ref="tmppath">
@@ -250,13 +254,79 @@
                       @change="onSelectClusterId"
                     ></a-select>
                   </a-form-item>
-                  <a-form-item v-if="supportsVmwareDatacenterImport && isDestinationKVM && isMigrateFromVmware && clusterId != undefined">
+                  <a-form-item v-if="isDestinationKVM && isMigrateFromVmware && clusterId != undefined">
                     <SelectVmwareVcenter
+                      :zoneid="zoneId"
+                      :clusterid="clusterId"
+                      :useAblestackV2KInventory="true"
                       @onVcenterTypeChanged="updateVmwareVcenterType"
                       @loadingVmwareUnmanagedInstances="() => this.unmanagedInstancesLoading = true"
                       @listedVmwareUnmanagedInstances="($e) => onListUnmanagedInstancesFromVmware($e)"
                     />
                   </a-form-item>
+                  <template v-if="isDestinationKVM && isMigrateFromNutanix && clusterId != undefined">
+                    <a-form-item
+                      name="hostname"
+                      ref="hostname">
+                      <template #label>
+                        <tooltip-label
+                          :title="sourceEndpointLabel"
+                          :tooltip="sourceEndpointTooltip"/>
+                      </template>
+                      <a-input v-model:value="form.hostname" />
+                    </a-form-item>
+                    <a-form-item
+                      name="username"
+                      ref="username">
+                      <template #label>
+                        <tooltip-label
+                          :title="$t('label.username')"
+                          :tooltip="$t('label.username.tooltip')"/>
+                      </template>
+                      <a-input v-model:value="form.username" />
+                    </a-form-item>
+                    <a-form-item
+                      name="password"
+                      ref="password">
+                      <template #label>
+                        <tooltip-label
+                          :title="$t('label.password')"
+                          :tooltip="$t('label.password.tooltip')"/>
+                      </template>
+                      <a-input-password v-model:value="form.password" />
+                    </a-form-item>
+                    <a-form-item name="sourceapi" ref="sourceapi">
+                      <template #label>
+                        <tooltip-label
+                          :title="$t('label.source.api')"
+                          :tooltip="$t('message.nutanix.source.api.tooltip')"/>
+                      </template>
+                      <a-select v-model:value="form.sourceapi">
+                        <a-select-option value="v3" :label="$t('label.nutanix.api.v3')">
+                          {{ $t('label.nutanix.api.v3') }}
+                        </a-select-option>
+                        <a-select-option value="auto" :label="$t('label.auto')">
+                          {{ $t('label.auto') }}
+                        </a-select-option>
+                      </a-select>
+                    </a-form-item>
+                    <a-form-item name="insecure" ref="insecure">
+                      <template #label>
+                        <tooltip-label
+                          :title="$t('label.skip.tls.verify')"
+                          :tooltip="$t('message.skip.tls.verify.nutanix')"/>
+                      </template>
+                      <a-switch v-model:checked="form.insecure" />
+                    </a-form-item>
+                    <div class="card-footer">
+                      <a-button
+                        :loading="unmanagedInstancesLoading"
+                        type="primary"
+                        @click="() => { fetchUnmanagedInstances() }">
+                        {{ sourceFetchButtonLabel }}
+                      </a-button>
+                    </div>
+                  </template>
                   <a-form-item
                     v-if="showHost"
                     name="hostid"
@@ -320,14 +390,14 @@
               </a-col>
             </a-card>
           </a-row>
-          <a-row v-if="showExtHost">
+          <a-row v-if="isExternal">
             <a-col class="fetch-instances-column">
               <div>
                 <a-button
                   shape="round"
                   type="primary"
-                  @click="() => { fetchExtKVMInstances() }">
-                  {{ $t('label.fetch.instances') }}
+                  @click="() => { fetchUnmanagedInstances() }">
+                  {{ sourceFetchButtonLabel }}
                 </a-button>
               </div>
             </a-col>
@@ -373,9 +443,12 @@
                       size="middle"
                       :rowClassName="getRowClassName"
                     >
-                      <template #bodyCell="{ column, text }">
+                      <template #bodyCell="{ column, text, record }">
                         <template v-if="column.key === 'state'">
                           <status :text="text ? text : ''" displayText />
+                        </template>
+                        <template v-else-if="['hostname', 'clustername', 'osdisplayname'].includes(column.key)">
+                          {{ getUnmanagedInstanceCellText(record, column.key, text) }}
                         </template>
                       </template>
                     </a-table>
@@ -497,7 +570,7 @@
                 </a-col>
               </a-row>
             </a-tab-pane>
-            <a-tab-pane :key=2 :tab="$t('label.import.vm.tasks')" v-if="isMigrateFromVmware">
+            <a-tab-pane :key=2 :tab="$t('label.import.vm.tasks')" v-if="isAblestackCloudMigration">
               <ImportVmTasks
                 :tasks="importVmTasks"
                 :loading="loadingImportVmTasks"
@@ -544,6 +617,9 @@
             :isOpen="showUnmanageForm"
             :loadingGuestOsMappings="loadingGuestOsMappings"
             :selectedVmwareVcenter="selectedVmwareVcenter"
+            :sourceprovider="selectedSourceProvider"
+            :sourceapi="values?.sourceapi || form.sourceapi"
+            :insecure="values?.insecure ?? form.insecure"
             @refresh-data="fetchInstances"
             @close-action="closeImportUnmanagedInstanceForm"
             @loading-changed="updateManageInstanceActionLoading"
@@ -602,6 +678,15 @@ export default {
         wizardDescription: this.$t('message.desc.importmigratefromvmwarewizard')
       },
       {
+        name: 'nutanix',
+        label: this.$t('label.desc.importmigratefromnutanixwizard'),
+        sourceDestHypervisors: {
+          nutanix: 'kvm'
+        },
+        wizardTitle: this.$t('label.desc.importmigratefromnutanixwizard'),
+        wizardDescription: this.$t('message.desc.importmigratefromnutanixwizard')
+      },
+      {
         name: 'external',
         label: this.$t('label.desc.import.ext.kvm.wizard'),
         sourceDestHypervisors: {
@@ -641,14 +726,17 @@ export default {
         dataIndex: 'powerstate'
       },
       {
+        key: 'hostname',
         title: this.$t('label.hostname'),
         dataIndex: 'hostname'
       },
       {
+        key: 'clustername',
         title: this.$t('label.clustername'),
         dataIndex: 'clustername'
       },
       {
+        key: 'osdisplayname',
         title: this.$t('label.ostypename'),
         dataIndex: 'osdisplayname'
       }
@@ -730,11 +818,11 @@ export default {
       itemCount: {},
       hypervisors: [],
       sourceHypervisor: 'vmware',
-      destinationHypervisor: 'vmware',
+      destinationHypervisor: 'kvm',
       sourceActions: undefined,
-      selectedSourceAction: undefined,
-      wizardTitle: this.$t('label.desc.importexportinstancewizard'),
-      wizardDescription: this.$t('message.desc.importexportinstancewizard'),
+      selectedSourceAction: 'vmware',
+      wizardTitle: this.$t('label.desc.importmigratefromvmwarewizard'),
+      wizardDescription: this.$t('message.desc.importmigratefromvmwarewizard'),
       zone: {},
       pod: {},
       cluster: {},
@@ -753,7 +841,7 @@ export default {
       listInstancesApi: {
         unmanaged: 'listUnmanagedInstances',
         managed: 'listVirtualMachines',
-        migratefromvmware: 'listVmwareDcVms',
+        migratefromvmware: 'listVmsForImport',
         external: 'listVmsForImport'
       },
       unmanagedInstancesColumns,
@@ -811,8 +899,29 @@ export default {
     isMigrateFromVmware () {
       return this.selectedSourceAction === 'vmware'
     },
-    supportsVmwareDatacenterImport () {
-      return 'listVmwareDcVms' in this.$store.getters.apis && 'listVmwareDcs' in this.$store.getters.apis
+    isMigrateFromNutanix () {
+      return this.selectedSourceAction === 'nutanix'
+    },
+    isAblestackCloudMigration () {
+      return this.isMigrateFromVmware || this.isMigrateFromNutanix
+    },
+    selectedSourceProvider () {
+      if (this.isMigrateFromVmware) {
+        return 'vmware'
+      }
+      if (this.isMigrateFromNutanix) {
+        return 'nutanix'
+      }
+      return this.selectedSourceAction
+    },
+    sourceEndpointLabel () {
+      return this.isMigrateFromNutanix ? this.$t('label.nutanix.prism.endpoint') : this.$t('label.hostname')
+    },
+    sourceEndpointTooltip () {
+      return this.isMigrateFromNutanix ? this.$t('message.nutanix.prism.endpoint.tooltip') : this.$t('label.ext.hostname.tooltip')
+    },
+    sourceFetchButtonLabel () {
+      return this.isMigrateFromNutanix ? this.$t('label.fetch.source.vms') : this.$t('label.fetch.instances')
     },
     isDestinationKVM () {
       return this.destinationHypervisor === 'kvm'
@@ -836,13 +945,17 @@ export default {
       return (this.selectedSourceAction === 'shared')
     },
     showExtHost () {
-      return (this.selectedSourceAction === 'external')
+      return (this.selectedSourceAction === 'external' || this.isMigrateFromNutanix)
+    },
+    showExtTmpPath () {
+      return this.selectedSourceAction === 'external'
     },
     showDiskPath () {
       return ((this.selectedSourceAction === 'local') || (this.selectedSourceAction === 'shared'))
     },
     showManagedInstances () {
-      return ((this.selectedSourceAction !== 'local') && (this.selectedSourceAction !== 'shared') && (this.selectedSourceAction !== 'external'))
+      return !this.isAblestackCloudMigration &&
+        ((this.selectedSourceAction !== 'local') && (this.selectedSourceAction !== 'shared') && (this.selectedSourceAction !== 'external'))
     },
     isDiskImport () {
       return ((this.selectedSourceAction === 'local') || (this.selectedSourceAction === 'shared'))
@@ -1003,7 +1116,9 @@ export default {
     initForm () {
       this.formRef = ref()
       this.form = reactive({
-        sourceHypervisor: this.sourceHypervisor
+        sourceHypervisor: this.sourceHypervisor,
+        sourceapi: 'v3',
+        insecure: true
       })
       this.rules = reactive({
         hostname: [{ required: true, message: this.$t('message.error.input.value') }],
@@ -1025,6 +1140,21 @@ export default {
       return (
         option.label.toUpperCase().indexOf(input.toUpperCase()) >= 0
       )
+    },
+    getUnmanagedInstanceCellText (record, key, text) {
+      if (text) {
+        return text
+      }
+      if (key === 'osdisplayname') {
+        return record?.operatingsystem || record?.ostypename || record?.guestosname || '-'
+      }
+      if (key === 'clustername') {
+        return record?.cluster || record?.clusterid || '-'
+      }
+      if (key === 'hostname') {
+        return record?.host || record?.hostid || '-'
+      }
+      return '-'
     },
     fetchOptions (param, name, exclude) {
       if (exclude && exclude.length > 0) {
@@ -1131,16 +1261,23 @@ export default {
         if (!action.sourceDestHypervisors[hypervisor]) {
           return false
         }
-        if (action.name === 'vmware' && !this.supportsVmwareDatacenterImport) {
-          return false
-        }
         return true
       })
+    },
+    getDefaultSourceActionForHypervisor (hypervisor, sourceActions) {
+      const preferredActionByHypervisor = {
+        vmware: 'vmware'
+      }
+      const preferredAction = preferredActionByHypervisor[hypervisor]
+      if (preferredAction && _.find(sourceActions, (action) => action.name === preferredAction)) {
+        return preferredAction
+      }
+      return sourceActions[0]?.name || ''
     },
     onSelectHypervisor (value) {
       this.sourceHypervisor = value
       this.sourceActions = this.getSourceActionsForHypervisor(value)
-      this.form.sourceAction = this.sourceActions[0]?.name || ''
+      this.form.sourceAction = this.getDefaultSourceActionForHypervisor(value, this.sourceActions)
       this.selectedVmwareVcenter = undefined
       if (this.form.sourceAction) {
         this.onSelectSourceAction(this.form.sourceAction)
@@ -1161,6 +1298,10 @@ export default {
       this.form.zoneid = undefined
       this.form.podid = undefined
       this.form.clusterid = undefined
+      if (this.isMigrateFromNutanix) {
+        this.form.sourceapi = this.form.sourceapi || 'v3'
+        this.form.insecure = this.form.insecure !== false
+      }
       this.fetchOptions(this.params.zones, 'zones')
       this.resetLists()
     },
@@ -1225,7 +1366,7 @@ export default {
     startImportVmTasksAutoRefresh () {
       this.stopImportVmTasksAutoRefresh()
       this.importVmTasksAutoRefreshTimer = window.setInterval(() => {
-        if (String(this.activeTabKey) !== '2' || !this.zoneId || !this.isMigrateFromVmware || this.loadingImportVmTasks) {
+        if (String(this.activeTabKey) !== '2' || !this.zoneId || !this.isAblestackCloudMigration || this.loadingImportVmTasks) {
           return
         }
         this.fetchImportVmTasks()
@@ -1247,18 +1388,44 @@ export default {
       this.fetchImportVmTasks()
     },
     onStartPhase2 (task) {
-      this.selectedImportVmTask = task
+      const taskRecord = task?.task || task
+      const credential = task?.credential || {}
+      this.selectedImportVmTask = taskRecord
+      const isN2KTask = taskRecord.migrationtool === 'ablestack_n2k' || taskRecord.sourceprovider === 'nutanix'
+      const importApi = isN2KTask ? 'importUnmanagedInstanceForAblestackN2K' : 'importUnmanagedInstanceForAblestackV2K'
+      const responseKey = isN2KTask ? 'importunmanagedinstanceforablestackn2kresponse' : 'importunmanagedinstanceforablestackv2kresponse'
       const params = {
-        importvmtaskid: task.id,
+        importvmtaskid: taskRecord.id,
         split: 'phase2',
-        zoneid: task.zoneid,
-        clusterid: task.clusterid,
-        serviceofferingid: task.serviceofferingid,
-        name: task.sourcevmname,
-        importsource: 'VMWARE',
+        zoneid: taskRecord.zoneid,
+        clusterid: taskRecord.clusterid,
+        serviceofferingid: taskRecord.serviceofferingid,
+        name: taskRecord.sourcevmname,
+        importsource: isN2KTask ? 'nutanix' : 'VMWARE',
         hypervisor: 'KVM'
       }
-      if (this.selectedVmwareVcenter) {
+      if (credential.endpoint) {
+        params.host = credential.endpoint
+      }
+      if (credential.username) {
+        params.username = credential.username
+      }
+      if (credential.password) {
+        params.password = credential.password
+      }
+      if (credential.sourceapi) {
+        params.sourceapi = credential.sourceapi
+      }
+      if (credential.insecure !== undefined) {
+        params.insecure = credential.insecure
+      }
+      if (credential.retentionseconds) {
+        params.retentionseconds = credential.retentionseconds
+      }
+      if (credential.starttargetvm !== undefined) {
+        params.starttargetvm = credential.starttargetvm
+      }
+      if (!isN2KTask && this.selectedVmwareVcenter) {
         if (this.selectedVmwareVcenter.existingvcenterid) {
           params.existingvcenterid = this.selectedVmwareVcenter.existingvcenterid
         } else {
@@ -1268,13 +1435,19 @@ export default {
           params.password = this.selectedVmwareVcenter.password
         }
       }
-      postAPI('importUnmanagedInstanceForAblestackV2K', params).then(response => {
-        const jobId = response.importunmanagedinstanceforablestackv2kresponse.jobid
+      postAPI(importApi, params).then(response => {
+        const jobId = response[responseKey].jobid
+        if (isN2KTask) {
+          this.finishN2KImportTaskBackgroundJob(jobId, this.$t('label.phase2.execute'), taskRecord.displayname || taskRecord.sourcevmname)
+          this.fetchImportVmTasks()
+          window.setTimeout(() => this.fetchImportVmTasks(), 3000)
+          return
+        }
         this.$pollJob({
           jobId,
           title: this.$t('label.phase2.execute'),
-          description: task.displayname || task.sourcevmname,
-          loadingMessage: `${task.displayname || task.sourcevmname} ${this.$t('label.in.progress')}`,
+          description: taskRecord.displayname || taskRecord.sourcevmname,
+          loadingMessage: `${taskRecord.displayname || taskRecord.sourcevmname} ${this.$t('label.in.progress')}`,
           catchMessage: this.$t('error.fetching.async.job.result'),
           successMessage: this.$t('label.phase2.execute'),
           successMethod: () => {
@@ -1288,13 +1461,36 @@ export default {
         this.$notifyError(error)
       })
     },
+    finishN2KImportTaskBackgroundJob (jobId, title, description) {
+      this.$message.success({
+        content: this.$t('message.import.vm.task.submitted') + ' ' + description,
+        key: jobId,
+        duration: 2
+      })
+      this.$store.dispatch('AddHeaderNotice', {
+        key: jobId,
+        title,
+        description,
+        status: 'done',
+        duration: 2,
+        timestamp: new Date()
+      })
+    },
     fetchImportVmTasks () {
       this.loadingImportVmTasks = true
       const params = {
         zoneid: this.zoneId,
         page: this.page.tasks,
         pagesize: this.pageSize.tasks,
-        tasksfilter: this.importVmTasksFilter
+        tasksfilter: this.importVmTasksFilter,
+        targetprovider: 'cloud'
+      }
+      if (this.isMigrateFromVmware) {
+        params.sourceprovider = 'vmware'
+        params.migrationtool = 'ablestack_v2k'
+      } else if (this.isMigrateFromNutanix) {
+        params.sourceprovider = 'nutanix'
+        params.migrationtool = 'ablestack_n2k'
       }
       getAPI('listImportVmTasks', params).then(response => {
         this.itemCount.tasks = response.listimportvmtasksresponse.count
@@ -1318,10 +1514,8 @@ export default {
         this.fetchExtKVMInstances(page, pageSize)
         return
       }
-      if (this.isMigrateFromVmware && !this.supportsVmwareDatacenterImport) {
-        this.unmanagedInstances = []
-        this.itemCount.unmanaged = 0
-        this.unmanagedInstancesLoading = false
+      if (this.isMigrateFromNutanix) {
+        this.fetchNutanixInstances(page, pageSize)
         return
       }
       const params = {
@@ -1347,9 +1541,14 @@ export default {
       let apiName = this.listInstancesApi.unmanaged
       if (this.isMigrateFromVmware && this.selectedVmwareVcenter) {
         apiName = this.listInstancesApi.migratefromvmware
+        params.zoneid = this.zoneId
+        params.clusterid = this.clusterId
+        params.hypervisor = 'VMware'
+        params.sourceprovider = 'vmware'
         if (this.selectedVmwareVcenter.vcenter) {
           params.datacentername = this.selectedVmwareVcenter.datacentername
           params.vcenter = this.selectedVmwareVcenter.vcenter
+          params.host = this.selectedVmwareVcenter.vcenter
           params.username = this.selectedVmwareVcenter.username
           params.password = this.selectedVmwareVcenter.password
         } else {
@@ -1358,12 +1557,14 @@ export default {
       }
 
       getAPI(apiName, params).then(json => {
-        const response = this.isMigrateFromVmware ? json.listvmwaredcvmsresponse : json.listunmanagedinstancesresponse
+        const response = this.isMigrateFromVmware ? json.listvmsforimportresponse : json.listunmanagedinstancesresponse
         const listUnmanagedInstances = response.unmanagedinstance
         if (this.arrayHasItems(listUnmanagedInstances)) {
           this.unmanagedInstances = this.unmanagedInstances.concat(listUnmanagedInstances)
         }
-        this.itemCount.unmanaged = response.count
+        this.itemCount.unmanaged = response.count || 0
+      }).catch(error => {
+        this.$notifyError(error)
       }).finally(() => {
         this.unmanagedInstancesLoading = false
       })
@@ -1407,6 +1608,54 @@ export default {
           this.unmanagedInstances = this.unmanagedInstances.concat(listUnmanagedInstances)
         }
         this.itemCount.unmanaged = json.listvmsforimportresponse.count
+      }).catch(error => {
+        this.$notifyError(error)
+      }).finally(() => {
+        this.unmanagedInstancesLoading = false
+      })
+    },
+    fetchNutanixInstances (page, pageSize) {
+      const params = {
+        zoneid: this.zoneId,
+        host: this.form.hostname,
+        username: this.form.username,
+        password: this.form.password,
+        hypervisor: 'Nutanix',
+        sourceprovider: 'nutanix',
+        sourceapi: this.form.sourceapi || 'v3',
+        insecure: this.form.insecure !== false
+      }
+      const query = Object.assign({}, this.$route.query)
+      this.page.unmanaged = page || parseInt(query.unmanagedpage) || this.page.unmanaged
+      this.updateQuery('unmanagedpage', this.page.unmanaged)
+      params.page = this.page.unmanaged
+      this.pageSize.unmanaged = pageSize || this.pageSize.unmanaged
+      params.pagesize = this.pageSize.unmanaged
+      this.unmanagedInstances = []
+      this.unmanagedInstancesSelectedRowKeys = []
+      if (this.searchParams.unmanaged.keyword) {
+        params.keyword = this.searchParams.unmanaged.keyword
+      }
+      var details = ['host', 'username', 'password']
+      for (var detail of details) {
+        if (!params[detail]) {
+          this.$notification.error({
+            message: this.$t('message.request.failed'),
+            description: this.$t('message.please.enter.valid.value') + ': ' + this.$t('label.' + detail.toLowerCase())
+          })
+          return
+        }
+      }
+      this.values = toRaw(this.form)
+      this.unmanagedInstancesLoading = true
+      this.searchParams.unmanaged = params
+      getAPI(this.listInstancesApi.external, params).then(json => {
+        const response = json.listvmsforimportresponse
+        const listUnmanagedInstances = response.unmanagedinstance
+        if (this.arrayHasItems(listUnmanagedInstances)) {
+          this.unmanagedInstances = this.unmanagedInstances.concat(listUnmanagedInstances)
+        }
+        this.itemCount.unmanaged = response.count
       }).catch(error => {
         this.$notifyError(error)
       }).finally(() => {
@@ -1486,29 +1735,34 @@ export default {
       })
     },
     fetchVmwareInstanceForKVMMigration (vmname, hostname) {
-      if (!this.supportsVmwareDatacenterImport) {
-        return
-      }
       const params = {}
       this.loadingGuestOsMappings = true
       if (this.isMigrateFromVmware && this.selectedVmwareVcenter) {
         if (this.selectedVmwareVcenter.vcenter) {
           params.datacentername = this.selectedVmwareVcenter.datacentername
           params.vcenter = this.selectedVmwareVcenter.vcenter
+          params.host = this.selectedVmwareVcenter.vcenter
           params.username = this.selectedVmwareVcenter.username
           params.password = this.selectedVmwareVcenter.password
         } else {
           params.existingvcenterid = this.selectedVmwareVcenter.existingvcenterid
         }
         params.instancename = vmname
-        params.hostname = hostname
+        params.zoneid = this.zoneId
+        params.clusterid = this.clusterId
+        params.hypervisor = 'VMware'
+        params.sourceprovider = 'vmware'
       }
-      getAPI('listVmwareDcVms', params).then(async json => {
-        const response = json.listvmwaredcvmsresponse
+      getAPI('listVmsForImport', params).then(async json => {
+        const response = json.listvmsforimportresponse
         this.selectedUnmanagedInstance = response.unmanagedinstance[0]
         this.selectedUnmanagedInstance.ostypename = this.selectedUnmanagedInstance.osdisplayname
         this.selectedUnmanagedInstance.state = this.selectedUnmanagedInstance.powerstate
-        this.selectedUnmanagedInstance.guestOsMappings = await this.fetchGuestOsMappings(this.selectedUnmanagedInstance.osid, this.selectedUnmanagedInstance.hypervisorversion)
+        if (this.selectedUnmanagedInstance.osid && this.selectedUnmanagedInstance.hypervisorversion) {
+          this.selectedUnmanagedInstance.guestOsMappings = await this.fetchGuestOsMappings(this.selectedUnmanagedInstance.osid, this.selectedUnmanagedInstance.hypervisorversion)
+        } else {
+          this.selectedUnmanagedInstance.guestOsMappings = []
+        }
       }).catch(error => {
         this.$notifyError(error)
       }).finally(() => {
@@ -1618,8 +1872,10 @@ export default {
     },
     onListUnmanagedInstancesFromVmware (obj) {
       this.selectedVmwareVcenter = obj.params
-      this.unmanagedInstances = obj.response.unmanagedinstance
-      this.itemCount.unmanaged = obj.response.count
+      this.page.unmanaged = 1
+      this.updateQuery('unmanagedpage', this.page.unmanaged)
+      this.unmanagedInstances = obj.response.unmanagedinstance || []
+      this.itemCount.unmanaged = obj.response.count || 0
       this.unmanagedInstancesLoading = false
     },
     updateVmwareVcenterType (type) {
@@ -1644,6 +1900,10 @@ export default {
   width: 50%;
   height: 100%;
 }
+.source-hypervisor-button {
+  width: 33.333%;
+  text-align: center;
+}
 .instances-card-table {
   overflow-y: auto;
   margin-bottom: 100px;
@@ -1656,6 +1916,13 @@ export default {
   margin-left: 10px;
   right: 0;
   margin-right: 10px;
+}
+.card-footer {
+  text-align: right;
+}
+.card-footer button {
+  width: 50%;
+  text-align: center;
 }
 .row-element {
   margin-top: 10px;
@@ -1671,6 +1938,38 @@ export default {
   width: 50%;
   margin-left: 50%;
   padding-left: 24px;
+}
+
+.manage-instances-alert {
+  margin-bottom: 16px;
+
+  :deep(.ant-alert-icon) {
+    align-items: center;
+    display: inline-flex;
+  }
+
+  :deep(.ant-alert-message) {
+    font-weight: 600;
+    line-height: 1.45;
+  }
+
+  :deep(.ant-alert-description) {
+    line-height: 1.6;
+  }
+}
+
+:global(body.dark-mode .manage-instances-alert.ant-alert-info) {
+  background: #102538;
+  border-color: #27445f;
+}
+
+:global(body.dark-mode .manage-instances-alert .ant-alert-icon),
+:global(body.dark-mode .manage-instances-alert .ant-alert-message) {
+  color: #d6e4ff;
+}
+
+:global(body.dark-mode .manage-instances-alert .ant-alert-description) {
+  color: #b7c9e6;
 }
 
 .breadcrumb-card {

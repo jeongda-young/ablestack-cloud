@@ -45,13 +45,22 @@ public class ImportVMTaskDaoImpl extends GenericDaoBase<ImportVMTaskVO, Long> im
         AllFieldsSearch.and("vcenter", AllFieldsSearch.entity().getVcenter(), SearchCriteria.Op.EQ);
         AllFieldsSearch.and("convertHostId", AllFieldsSearch.entity().getConvertHostId(), SearchCriteria.Op.EQ);
         AllFieldsSearch.and("state", AllFieldsSearch.entity().getState(), SearchCriteria.Op.EQ);
+        AllFieldsSearch.and("migrationTool", AllFieldsSearch.entity().getMigrationTool(), SearchCriteria.Op.EQ);
+        AllFieldsSearch.and("sourceProvider", AllFieldsSearch.entity().getSourceProvider(), SearchCriteria.Op.EQ);
+        AllFieldsSearch.and("targetProvider", AllFieldsSearch.entity().getTargetProvider(), SearchCriteria.Op.EQ);
+        AllFieldsSearch.and("targetProfile", AllFieldsSearch.entity().getTargetProfile(), SearchCriteria.Op.EQ);
+        AllFieldsSearch.and("currentPhase", AllFieldsSearch.entity().getCurrentPhase(), SearchCriteria.Op.EQ);
+        AllFieldsSearch.and("migrationState", AllFieldsSearch.entity().getMigrationState(), SearchCriteria.Op.EQ);
+        AllFieldsSearch.and("removed", AllFieldsSearch.entity().getRemoved(), SearchCriteria.Op.NULL);
         AllFieldsSearch.done();
     }
 
 
     @Override
     public Pair<List<ImportVMTaskVO>, Integer> listImportVMTasks(Long zoneId, Long accountId, String vcenter, Long convertHostId,
-                                                                 ImportVmTask.TaskState state, Long startIndex, Long pageSizeVal) {
+                                                                 ImportVmTask.TaskState state, String migrationTool, String sourceProvider,
+                                                                 String targetProvider, String targetProfile, String currentPhase,
+                                                                 String migrationState, Long startIndex, Long pageSizeVal) {
         SearchCriteria<ImportVMTaskVO> sc = AllFieldsSearch.create();
         if (zoneId != null) {
             sc.setParameters("zoneId", zoneId);
@@ -67,6 +76,24 @@ public class ImportVMTaskDaoImpl extends GenericDaoBase<ImportVMTaskVO, Long> im
         }
         if (state != null) {
             sc.setParameters("state", state);
+        }
+        if (StringUtils.isNotBlank(migrationTool)) {
+            sc.setParameters("migrationTool", migrationTool);
+        }
+        if (StringUtils.isNotBlank(sourceProvider)) {
+            sc.setParameters("sourceProvider", sourceProvider);
+        }
+        if (StringUtils.isNotBlank(targetProvider)) {
+            sc.setParameters("targetProvider", targetProvider);
+        }
+        if (StringUtils.isNotBlank(targetProfile)) {
+            sc.setParameters("targetProfile", targetProfile);
+        }
+        if (StringUtils.isNotBlank(currentPhase)) {
+            sc.setParameters("currentPhase", currentPhase);
+        }
+        if (StringUtils.isNotBlank(migrationState)) {
+            sc.setParameters("migrationState", migrationState);
         }
         Filter filter = new Filter(ImportVMTaskVO.class, "created", false, startIndex, pageSizeVal);
         return searchAndCount(sc, filter);

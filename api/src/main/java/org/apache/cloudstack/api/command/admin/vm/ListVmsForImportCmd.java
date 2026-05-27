@@ -31,7 +31,9 @@ import org.apache.cloudstack.api.Parameter;
 import org.apache.cloudstack.api.ResponseObject;
 import org.apache.cloudstack.api.ServerApiException;
 import org.apache.cloudstack.api.response.ListResponse;
+import org.apache.cloudstack.api.response.ClusterResponse;
 import org.apache.cloudstack.api.response.UnmanagedInstanceResponse;
+import org.apache.cloudstack.api.response.VmwareDatacenterResponse;
 import org.apache.cloudstack.api.response.ZoneResponse;
 import org.apache.cloudstack.context.CallContext;
 import org.apache.cloudstack.vm.UnmanagedInstanceTO;
@@ -44,7 +46,7 @@ import javax.inject.Inject;
         responseObject = UnmanagedInstanceResponse.class,
         responseView = ResponseObject.ResponseView.Full,
         entityType = {UnmanagedInstanceTO.class},
-        requestHasSensitiveInfo = false,
+        requestHasSensitiveInfo = true,
         responseHasSensitiveInfo = true,
         authorized = {RoleType.Admin},
         since = "4.19.0")
@@ -76,7 +78,6 @@ public class ListVmsForImportCmd extends BaseListCmd {
 
     @Parameter(name = ApiConstants.HOST,
             type = CommandType.STRING,
-            required = true,
             description = "the host name or IP address")
     private String host;
 
@@ -85,6 +86,48 @@ public class ListVmsForImportCmd extends BaseListCmd {
             required = true,
             description = "hypervisor type of the host")
     private String hypervisor;
+
+    @Parameter(name = ApiConstants.CLUSTER_ID,
+            type = CommandType.UUID,
+            entityType = ClusterResponse.class,
+            description = "the destination KVM cluster ID used to select an ablestack-v2k inventory host")
+    private Long clusterId;
+
+    @Parameter(name = ApiConstants.EXISTING_VCENTER_ID,
+            type = CommandType.UUID,
+            entityType = VmwareDatacenterResponse.class,
+            description = "UUID of a linked existing vCenter")
+    private Long existingVcenterId;
+
+    @Parameter(name = ApiConstants.VCENTER,
+            type = CommandType.STRING,
+            description = "the name/IP of the vCenter. If omitted, host is used for VMware source inventory.")
+    private String vcenter;
+
+    @Parameter(name = ApiConstants.DATACENTER_NAME,
+            type = CommandType.STRING,
+            description = "name of VMware datacenter")
+    private String datacenterName;
+
+    @Parameter(name = ApiConstants.INSTANCE_NAME,
+            type = CommandType.STRING,
+            description = "name of one source VM to retrieve with detailed inventory")
+    private String instanceName;
+
+    @Parameter(name = "sourceprovider",
+            type = CommandType.STRING,
+            description = "source provider for ablestack import. Supported values: kvm, vmware, nutanix")
+    private String sourceProvider;
+
+    @Parameter(name = "sourceapi",
+            type = CommandType.STRING,
+            description = "source API selection for Nutanix inventory. Supported values: auto, v4, v3, v2")
+    private String sourceApi;
+
+    @Parameter(name = "insecure",
+            type = CommandType.BOOLEAN,
+            description = "skip TLS verification for Nutanix Prism when true")
+    private Boolean insecure;
 
     /////////////////////////////////////////////////////
     /////////////////// Accessors ///////////////////////
@@ -108,6 +151,38 @@ public class ListVmsForImportCmd extends BaseListCmd {
 
     public String getHypervisor() {
         return hypervisor;
+    }
+
+    public Long getClusterId() {
+        return clusterId;
+    }
+
+    public Long getExistingVcenterId() {
+        return existingVcenterId;
+    }
+
+    public String getVcenter() {
+        return vcenter;
+    }
+
+    public String getDatacenterName() {
+        return datacenterName;
+    }
+
+    public String getInstanceName() {
+        return instanceName;
+    }
+
+    public String getSourceProvider() {
+        return sourceProvider;
+    }
+
+    public String getSourceApi() {
+        return sourceApi;
+    }
+
+    public boolean isInsecure() {
+        return Boolean.TRUE.equals(insecure);
     }
 
     /////////////////////////////////////////////////////

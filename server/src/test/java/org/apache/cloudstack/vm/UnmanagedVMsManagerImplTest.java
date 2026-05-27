@@ -466,6 +466,16 @@ public class UnmanagedVMsManagerImplTest {
     }
 
     @Test
+    public void getAblestackN2KNfsHostStripsSchemeAndPortFromPrismEndpoint() {
+        Assert.assertEquals("10.10.132.11", unmanagedVMsManager.getAblestackN2KNfsHost("https://10.10.132.11:9440"));
+    }
+
+    @Test
+    public void getAblestackN2KNfsHostSupportsPlainHostPort() {
+        Assert.assertEquals("10.10.132.11", unmanagedVMsManager.getAblestackN2KNfsHost("10.10.132.11:9440"));
+    }
+
+    @Test
     public void listUnmanagedInstancesTest() {
         ListUnmanagedInstancesCmd cmd = Mockito.mock(ListUnmanagedInstancesCmd.class);
         when(cmd.getClusterId()).thenReturn(1L);

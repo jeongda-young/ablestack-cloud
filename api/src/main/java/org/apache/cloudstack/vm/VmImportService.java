@@ -18,10 +18,13 @@
 package org.apache.cloudstack.vm;
 
 import org.apache.cloudstack.api.command.admin.vm.ImportUnmanagedInstanceCmd;
+import org.apache.cloudstack.api.command.admin.vm.ImportUnmanagedInstanceForAblestackN2KCmd;
 import org.apache.cloudstack.api.command.admin.vm.ImportUnmanagedInstanceForAblestackV2KCmd;
 import org.apache.cloudstack.api.command.admin.vm.ImportVmCmd;
 import org.apache.cloudstack.api.command.admin.vm.ListUnmanagedInstancesCmd;
 import org.apache.cloudstack.api.command.admin.vm.ListVmsForImportCmd;
+import org.apache.cloudstack.api.command.admin.vm.PreflightAblestackVmImportCmd;
+import org.apache.cloudstack.api.response.AblestackVmImportPreflightResponse;
 import org.apache.cloudstack.api.response.ListResponse;
 import org.apache.cloudstack.api.response.UnmanagedInstanceResponse;
 import org.apache.cloudstack.api.response.UserVmResponse;
@@ -42,6 +45,8 @@ public interface VmImportService {
 
     UserVmResponse importVm(ImportVmCmd cmd);
     UserVmResponse importVmForAblestackV2K(ImportUnmanagedInstanceForAblestackV2KCmd cmd);
+    UserVmResponse importVmForAblestackN2K(ImportUnmanagedInstanceForAblestackN2KCmd cmd);
 
     ListResponse<UnmanagedInstanceResponse> listVmsForImport(ListVmsForImportCmd cmd);
+    AblestackVmImportPreflightResponse preflightAblestackVmImport(PreflightAblestackVmImportCmd cmd);
 }

@@ -25,6 +25,7 @@ import javax.persistence.Entity;
 import javax.persistence.GeneratedValue;
 import javax.persistence.GenerationType;
 import javax.persistence.Id;
+import javax.persistence.Lob;
 import javax.persistence.Table;
 import javax.persistence.Temporal;
 import javax.persistence.TemporalType;
@@ -48,6 +49,12 @@ public class ImportVMTaskVO implements ImportVmTask {
         this.uuid = UUID.randomUUID().toString();
         this.convertHostId = convertHostId;
         this.importHostId = importHostId;
+        this.migrationTool = ImportVmTask.MigrationTool.Legacy.getValue();
+        this.sourceProvider = ImportVmTask.SourceProvider.VMware.getValue();
+        this.targetProvider = ImportVmTask.TargetProvider.KVM.getValue();
+        this.sourceEndpoint = vcenter;
+        this.sourceRef = sourceVMName;
+        this.targetVMName = displayName;
     }
 
     public ImportVMTaskVO() {
@@ -125,6 +132,75 @@ public class ImportVMTaskVO implements ImportVmTask {
 
     @Column(name = "nic_network_map")
     private String nicNetworkMap;
+
+    @Column(name = "migration_tool")
+    private String migrationTool;
+
+    @Column(name = "source_provider")
+    private String sourceProvider;
+
+    @Column(name = "target_provider")
+    private String targetProvider;
+
+    @Column(name = "target_profile")
+    private String targetProfile;
+
+    @Column(name = "target_storage_pool_id")
+    private Long targetStoragePoolId;
+
+    @Column(name = "target_format")
+    private String targetFormat;
+
+    @Column(name = "target_storage_type")
+    private String targetStorageType;
+
+    @Column(name = "target_vm_name")
+    private String targetVMName;
+
+    @Column(name = "source_endpoint")
+    private String sourceEndpoint;
+
+    @Column(name = "source_ref")
+    private String sourceRef;
+
+    @Lob
+    @Column(name = "source_inventory_json")
+    private String sourceInventoryJson;
+
+    @Lob
+    @Column(name = "source_context_json")
+    private String sourceContextJson;
+
+    @Column(name = "source_credential_id")
+    private Long sourceCredentialId;
+
+    @Lob
+    @Column(name = "target_context_json")
+    private String targetContextJson;
+
+    @Column(name = "workdir")
+    private String workdir;
+
+    @Column(name = "split_mode")
+    private String splitMode;
+
+    @Column(name = "current_phase")
+    private String currentPhase;
+
+    @Column(name = "migration_state")
+    private String migrationState;
+
+    @Column(name = "migration_step")
+    private String migrationStep;
+
+    @Column(name = "cutover_policy")
+    private String cutoverPolicy;
+
+    @Column(name = "status_json")
+    private String statusJson;
+
+    @Column(name = "error_code")
+    private String errorCode;
 
     @Column(name = "state")
     private TaskState state;
@@ -339,6 +415,182 @@ public class ImportVMTaskVO implements ImportVmTask {
 
     public void setNicNetworkMap(String nicNetworkMap) {
         this.nicNetworkMap = nicNetworkMap;
+    }
+
+    public String getMigrationTool() {
+        return migrationTool;
+    }
+
+    public void setMigrationTool(String migrationTool) {
+        this.migrationTool = migrationTool;
+    }
+
+    public String getSourceProvider() {
+        return sourceProvider;
+    }
+
+    public void setSourceProvider(String sourceProvider) {
+        this.sourceProvider = sourceProvider;
+    }
+
+    public String getTargetProvider() {
+        return targetProvider;
+    }
+
+    public void setTargetProvider(String targetProvider) {
+        this.targetProvider = targetProvider;
+    }
+
+    public String getTargetProfile() {
+        return targetProfile;
+    }
+
+    public void setTargetProfile(String targetProfile) {
+        this.targetProfile = targetProfile;
+    }
+
+    public Long getTargetStoragePoolId() {
+        return targetStoragePoolId;
+    }
+
+    public void setTargetStoragePoolId(Long targetStoragePoolId) {
+        this.targetStoragePoolId = targetStoragePoolId;
+    }
+
+    public String getTargetFormat() {
+        return targetFormat;
+    }
+
+    public void setTargetFormat(String targetFormat) {
+        this.targetFormat = targetFormat;
+    }
+
+    public String getTargetStorageType() {
+        return targetStorageType;
+    }
+
+    public void setTargetStorageType(String targetStorageType) {
+        this.targetStorageType = targetStorageType;
+    }
+
+    public String getTargetVMName() {
+        return targetVMName;
+    }
+
+    public void setTargetVMName(String targetVMName) {
+        this.targetVMName = targetVMName;
+    }
+
+    public String getSourceEndpoint() {
+        return sourceEndpoint;
+    }
+
+    public void setSourceEndpoint(String sourceEndpoint) {
+        this.sourceEndpoint = sourceEndpoint;
+    }
+
+    public String getSourceRef() {
+        return sourceRef;
+    }
+
+    public void setSourceRef(String sourceRef) {
+        this.sourceRef = sourceRef;
+    }
+
+    public String getSourceInventoryJson() {
+        return sourceInventoryJson;
+    }
+
+    public void setSourceInventoryJson(String sourceInventoryJson) {
+        this.sourceInventoryJson = sourceInventoryJson;
+    }
+
+    public String getSourceContextJson() {
+        return sourceContextJson;
+    }
+
+    public void setSourceContextJson(String sourceContextJson) {
+        this.sourceContextJson = sourceContextJson;
+    }
+
+    public Long getSourceCredentialId() {
+        return sourceCredentialId;
+    }
+
+    public void setSourceCredentialId(Long sourceCredentialId) {
+        this.sourceCredentialId = sourceCredentialId;
+    }
+
+    public String getTargetContextJson() {
+        return targetContextJson;
+    }
+
+    public void setTargetContextJson(String targetContextJson) {
+        this.targetContextJson = targetContextJson;
+    }
+
+    public String getWorkdir() {
+        return workdir;
+    }
+
+    public void setWorkdir(String workdir) {
+        this.workdir = workdir;
+    }
+
+    public String getSplitMode() {
+        return splitMode;
+    }
+
+    public void setSplitMode(String splitMode) {
+        this.splitMode = splitMode;
+    }
+
+    public String getCurrentPhase() {
+        return currentPhase;
+    }
+
+    public void setCurrentPhase(String currentPhase) {
+        this.currentPhase = currentPhase;
+    }
+
+    public String getMigrationState() {
+        return migrationState;
+    }
+
+    public void setMigrationState(String migrationState) {
+        this.migrationState = migrationState;
+    }
+
+    public String getMigrationStep() {
+        return migrationStep;
+    }
+
+    public void setMigrationStep(String migrationStep) {
+        this.migrationStep = migrationStep;
+    }
+
+    public String getCutoverPolicy() {
+        return cutoverPolicy;
+    }
+
+    public void setCutoverPolicy(String cutoverPolicy) {
+        this.cutoverPolicy = cutoverPolicy;
+    }
+
+    public String getStatusJson() {
+        return statusJson;
+    }
+
+    public void setStatusJson(String statusJson) {
+        this.statusJson = statusJson;
+    }
+
+    public String getErrorCode() {
+        return errorCode;
+    }
+
+    public void setErrorCode(String errorCode) {
+        this.errorCode = errorCode;
     }
 
     public TaskState getState() {

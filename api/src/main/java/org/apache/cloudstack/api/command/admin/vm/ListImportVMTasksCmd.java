@@ -78,6 +78,36 @@ public class ListImportVMTasksCmd extends BaseListCmd {
     @Parameter(name = ApiConstants.TASKS_FILTER, type = CommandType.STRING, description = "Filter tasks by state, valid options are: All, Running, Completed, Failed")
     private String tasksFilter;
 
+    @Parameter(name = "migrationtool",
+            type = CommandType.STRING,
+            description = "Filter tasks by migration tool, for example legacy, ablestack_v2k, or ablestack_n2k")
+    private String migrationTool;
+
+    @Parameter(name = "sourceprovider",
+            type = CommandType.STRING,
+            description = "Filter tasks by source provider, for example vmware or nutanix")
+    private String sourceProvider;
+
+    @Parameter(name = "targetprovider",
+            type = CommandType.STRING,
+            description = "Filter tasks by target provider, for example cloud or kvm")
+    private String targetProvider;
+
+    @Parameter(name = "targetprofile",
+            type = CommandType.STRING,
+            description = "Filter tasks by target profile")
+    private String targetProfile;
+
+    @Parameter(name = "currentphase",
+            type = CommandType.STRING,
+            description = "Filter tasks by normalized current migration phase")
+    private String currentPhase;
+
+    @Parameter(name = "migrationstate",
+            type = CommandType.STRING,
+            description = "Filter tasks by normalized migration state")
+    private String migrationState;
+
     public Long getZoneId() {
         return zoneId;
     }
@@ -96,6 +126,30 @@ public class ListImportVMTasksCmd extends BaseListCmd {
 
     public String getTasksFilter() {
         return tasksFilter;
+    }
+
+    public String getMigrationTool() {
+        return migrationTool;
+    }
+
+    public String getSourceProvider() {
+        return sourceProvider;
+    }
+
+    public String getTargetProvider() {
+        return targetProvider;
+    }
+
+    public String getTargetProfile() {
+        return targetProfile;
+    }
+
+    public String getCurrentPhase() {
+        return currentPhase;
+    }
+
+    public String getMigrationState() {
+        return migrationState;
     }
 
     @Override

@@ -58,6 +58,7 @@ import com.cloud.vm.snapshot.VMSnapshotVO;
 import com.cloud.vm.snapshot.dao.VMSnapshotDao;
 
 import org.apache.cloudstack.api.command.user.snapshot.ExtractSnapshotCmd;
+import org.apache.cloudstack.backup.dao.BackupDao;
 import org.apache.cloudstack.context.CallContext;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreManager;
@@ -200,6 +201,8 @@ public class SnapshotManagerTest {
     ImageStoreEntity imageStoreEntityMock;
     @Mock
     DataStoreManager dataStoreManagerMock;
+    @Mock
+    BackupDao backupDao;
 
     SnapshotPolicyVO snapshotPolicyVoInstance;
 
@@ -233,6 +236,7 @@ public class SnapshotManagerTest {
         when(_volumeDao.findById(anyLong())).thenReturn(volumeMock);
         when(volumeMock.getState()).thenReturn(Volume.State.Ready);
         when(volumeMock.getId()).thenReturn(TEST_VOLUME_ID);
+        when(backupDao.listByVmId(nullable(Long.class), anyLong())).thenReturn(Collections.emptyList());
         when(volumeFactory.getVolume(anyLong())).thenReturn(volumeInfoMock);
         when(volumeInfoMock.getDataStore()).thenReturn(storeMock);
         when(volumeInfoMock.getState()).thenReturn(Volume.State.Ready);

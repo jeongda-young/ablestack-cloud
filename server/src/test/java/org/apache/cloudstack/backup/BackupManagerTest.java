@@ -708,7 +708,7 @@ public class BackupManagerTest {
         when(backup.getId()).thenReturn(backupId);
         when(backup.getSize()).thenReturn(newBackupSize);
         when(backupProvider.getName()).thenReturn("testbackupprovider");
-        when(backupProvider.takeBackup(vmInstanceVOMock, null, scheduleId)).thenReturn(new Pair<>(true, backup));
+        when(backupProvider.takeBackup(vmInstanceVOMock, null)).thenReturn(new Pair<>(true, backup));
         Map<String, BackupProvider> backupProvidersMap = new HashMap<>();
         backupProvidersMap.put(backupProvider.getName().toLowerCase(), backupProvider);
         ReflectionTestUtils.setField(backupManager, "backupProvidersMap", backupProvidersMap);
@@ -854,15 +854,21 @@ public class BackupManagerTest {
 
         BackupProvider backupProvider = mock(BackupProvider.class);
         when(backupProvider.getName()).thenReturn("testbackupprovider");
+        when(backupProvider.supportsBackgroundSync()).thenReturn(true);
+        when(backupProvider.supportsOutOfBandBackupSync()).thenReturn(true);
         backupManager.setBackupProviders(List.of(backupProvider));
         backupManager.start();
 
         VMInstanceVO vm = Mockito.mock(VMInstanceVO.class);
         when(vm.getId()).thenReturn(vmId);
         when(vm.getAccountId()).thenReturn(accountId);
+        when(vm.getBackupOfferingId()).thenReturn(1L);
         List<Long> vmIds = List.of(vmId);
         when(backupDao.listVmIdsWithBackupsInZone(dataCenterId)).thenReturn(vmIds);
         when(vmInstanceDao.listByZoneAndBackupOffering(dataCenterId, null)).thenReturn(List.of(vm));
+        BackupOfferingVO backupOffering = mock(BackupOfferingVO.class);
+        when(backupOffering.getProvider()).thenReturn("testbackupprovider");
+        when(backupOfferingDao.findById(1L)).thenReturn(backupOffering);
 
         Backup.RestorePoint restorePoint1 = new Backup.RestorePoint(restorePoint1ExternalId, DateUtil.now(), "Full", restorePointSize, 0L);
         Backup.RestorePoint restorePoint2 = new Backup.RestorePoint("12345", DateUtil.now(), "Full", restorePointSize, 0L);

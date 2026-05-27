@@ -1137,14 +1137,18 @@ public class LibvirtComputingResourceTest {
         final LibvirtRequestWrapper wrapper = LibvirtRequestWrapper.getInstance();
         assertNotNull(wrapper);
 
-        final Answer answer = wrapper.execute(command, libvirtComputingResourceMock);
-        assertTrue(answer.getResult());
+        try (MockedStatic<Script> ignored = Mockito.mockStatic(Script.class)) {
+            Mockito.when(Script.runSimpleBashScript(Mockito.anyString(), Mockito.anyInt())).thenReturn("Job type: None");
 
-        verify(libvirtComputingResourceMock, times(1)).getLibvirtUtilitiesHelper();
-        try {
-            verify(libvirtUtilitiesHelper, times(1)).getConnectionByVmName(vmName);
-        } catch (final LibvirtException e) {
-            fail(e.getMessage());
+            final Answer answer = wrapper.execute(command, libvirtComputingResourceMock);
+            assertTrue(answer.getResult());
+
+            verify(libvirtComputingResourceMock, times(1)).getLibvirtUtilitiesHelper();
+            try {
+                verify(libvirtUtilitiesHelper, times(1)).getConnectionByVmName(vmName);
+            } catch (final LibvirtException e) {
+                fail(e.getMessage());
+            }
         }
     }
 

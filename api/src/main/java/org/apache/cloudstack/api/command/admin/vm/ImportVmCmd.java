@@ -48,7 +48,7 @@ import javax.inject.Inject;
         description = "Import virtual machine from a unmanaged host into CloudStack",
         responseObject = UserVmResponse.class,
         responseView = ResponseObject.ResponseView.Full,
-        requestHasSensitiveInfo = false,
+        requestHasSensitiveInfo = true,
         responseHasSensitiveInfo = true,
         authorized = {RoleType.Admin},
         since = "4.19.0")

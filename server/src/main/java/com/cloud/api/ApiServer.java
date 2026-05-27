@@ -39,7 +39,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
-import java.util.Arrays;
 import java.util.Map;
 import java.util.Set;
 import java.util.TimeZone;
@@ -275,12 +274,6 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
     @Inject
     private MessageBus messageBus;
 
-    private static final Set<String> sensitiveFields = new HashSet<>(Arrays.asList(
-        "password", "secretkey", "apikey", "token",
-        "sessionkey", "accesskey", "signature",
-        "authorization", "credential", "secret"
-    ));
-
     private static final ConfigKey<Integer> IntegrationAPIPort = new ConfigKey<>(ConfigKey.CATEGORY_ADVANCED
             , Integer.class
             , "integration.api.port"
@@ -438,7 +431,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
         if (info != null) {
             Type type = new TypeToken<Map<String, String>>(){}.getType();
             Map<String, String> cmdInfo = ApiGsonHelper.getBuilder().create().fromJson(info, type);
-            cmdInfoObj.putAll(cmdInfo);
+            cmdInfoObj.putAll(ApiSensitiveParamUtils.redactValues(cmdInfo));
             String eventTypeObj = cmdInfo.get("cmdEventType");
             if (eventTypeObj != null) {
                 cmdEventType = eventTypeObj;
@@ -680,12 +673,8 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
                         final String keyStr = (String) key;
                         final String[] value = (String[]) params.get(key);
 
-                        String lowerKeyStr = keyStr.toLowerCase();
-                        boolean isSensitive = sensitiveFields.stream()
-                            .anyMatch(lowerKeyStr::contains);
-
                         String logValue;
-                        if (isSensitive) {
+                        if (ApiSensitiveParamUtils.isSensitiveParameter(keyStr)) {
                             logValue = "******"; // mask sensitive values
                         } else {
                             logValue = (value == null) ? "'null'" : value[0];
@@ -887,7 +876,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
             uuidMgr.checkUuidSimple(injectedJobId, AsyncJob.class);
 
             AsyncJobVO job = new AsyncJobVO("", callerUserId, caller.getId(), cmdObj.getClass().getName(),
-                    ApiGsonHelper.getBuilder().create().toJson(params), instanceId,
+                    ApiGsonHelper.getBuilder().create().toJson(ApiSensitiveParamUtils.encryptSensitiveValues(params)), instanceId,
                     asyncCmd.getApiResourceType() != null ? asyncCmd.getApiResourceType().toString() : null,
                             injectedJobId);
             job.setDispatcher(asyncDispatcher.getName());

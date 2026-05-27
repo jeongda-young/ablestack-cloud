@@ -31,11 +31,22 @@ import org.apache.cloudstack.storage.to.PrimaryDataStoreTO;
 import org.apache.commons.lang3.StringUtils;
 
 import java.io.File;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.attribute.PosixFilePermission;
 import java.util.ArrayList;
+import java.util.EnumSet;
 import java.util.List;
+import java.util.Set;
 
 @ResourceWrapper(handles = AblestackV2KConvertInstanceCommand.class)
 public class LibvirtAblestackV2KConvertInstanceCommandWrapper extends CommandWrapper<AblestackV2KConvertInstanceCommand, Answer, LibvirtComputingResource> {
+
+    private static final String DEFAULT_TARGET_PROVIDER = "libvirt";
+    private static final String CLOUD_TARGET_PROVIDER = "ablestack-cloud";
+    private static final String DEFAULT_CUTOVER_SHUTDOWN_POLICY = "guest";
 
     @Override
     public Answer execute(AblestackV2KConvertInstanceCommand cmd, LibvirtComputingResource serverResource) {
@@ -55,14 +66,42 @@ public class LibvirtAblestackV2KConvertInstanceCommandWrapper extends CommandWra
         if (cmd.getTargetStorageLocation() == null) {
             missingParams.add("targetStorageLocation");
         }
+        if (StringUtils.isBlank(cmd.getWorkdir())) {
+            missingParams.add("workdir");
+        }
         if (StringUtils.isBlank(cmd.getTargetFormat())) {
             missingParams.add("targetFormat");
         }
         if (StringUtils.isBlank(cmd.getTargetStorage())) {
             missingParams.add("targetStorage");
         }
-        if (StringUtils.equals(cmd.getTargetStorage(), "rbd") && StringUtils.isBlank(cmd.getTargetMapJson())) {
+        if ((StringUtils.equals(cmd.getTargetStorage(), "rbd") || StringUtils.equals(cmd.getTargetStorage(), "block"))
+                && StringUtils.isBlank(cmd.getTargetMapJson())) {
             missingParams.add("targetMapJson");
+        }
+        String targetProvider = StringUtils.defaultIfBlank(cmd.getTargetProvider(), DEFAULT_TARGET_PROVIDER);
+        if (StringUtils.equals(targetProvider, CLOUD_TARGET_PROVIDER)) {
+            if (StringUtils.isBlank(cmd.getCloudEndpoint())) {
+                missingParams.add("cloudEndpoint");
+            }
+            if (StringUtils.isBlank(cmd.getCloudApiKey())) {
+                missingParams.add("cloudApiKey");
+            }
+            if (StringUtils.isBlank(cmd.getCloudSecretKey())) {
+                missingParams.add("cloudSecretKey");
+            }
+            if (StringUtils.isBlank(cmd.getCloudZoneId())) {
+                missingParams.add("cloudZoneId");
+            }
+            if (StringUtils.isBlank(cmd.getCloudServiceOfferingId())) {
+                missingParams.add("cloudServiceOfferingId");
+            }
+            if (StringUtils.isBlank(cmd.getCloudNetworkIds())) {
+                missingParams.add("cloudNetworkIds");
+            }
+            if (StringUtils.isBlank(cmd.getCloudStorageId())) {
+                missingParams.add("cloudStorageId");
+            }
         }
         if (!missingParams.isEmpty()) {
             return new Answer(cmd, false, "Missing required parameter(s) for ablestack_v2k command: " + String.join(", ", missingParams));
@@ -71,29 +110,55 @@ public class LibvirtAblestackV2KConvertInstanceCommandWrapper extends CommandWra
         final long timeout = (long) cmd.getWait() * 1000;
         final KVMStoragePoolManager storagePoolMgr = serverResource.getStoragePoolMgr();
         final KVMStoragePool targetStoragePool = getTargetStoragePool(cmd.getTargetStorageLocation(), storagePoolMgr);
-        final String targetStoragePath = getTargetStoragePath(cmd, targetStoragePool);
+        final String targetStoragePath = StringUtils.defaultIfBlank(cmd.getTargetDestinationPath(), getTargetStoragePath(cmd, targetStoragePool));
 
-        Script script = new Script("ablestack_v2k", timeout, logger);
-        script.add("run");
-        script.add("--vcenter", cmd.getVcenter());
-        script.add("--username", cmd.getUsername());
-        script.add("--password", cmd.getPassword());
-        script.add("--dst", targetStoragePath);
-        script.add("--split", StringUtils.defaultIfBlank(cmd.getSplitMode(), "phase1"));
-        script.add("--target-format", cmd.getTargetFormat());
-        script.add("--target-storage", cmd.getTargetStorage());
-        if (StringUtils.isNotBlank(cmd.getTargetMapJson())) {
-            script.add("--target-map-json", cmd.getTargetMapJson());
-        }
-        script.add("--vm", cmd.getVmName());
+        try {
+            Path credentialFile = createV2KCredentialFile(cmd);
+            Path cloudCredentialFile = createV2KCloudCredentialFile(cmd, targetProvider);
+            Script script = new Script("ablestack_v2k", timeout, logger);
+            script.add("--workdir", cmd.getWorkdir());
+            if (cmd.isResume()) {
+                script.add("--resume");
+            }
+            script.add("run");
+            script.add("--vcenter", cmd.getVcenter());
+            script.add("--cred-file", credentialFile.toString());
+            script.add("--dst", targetStoragePath);
+            script.add("--split", StringUtils.defaultIfBlank(cmd.getSplitMode(), "phase1"));
+            script.add("--shutdown", DEFAULT_CUTOVER_SHUTDOWN_POLICY);
+            script.add("--target-provider", targetProvider);
+            script.add("--target-format", cmd.getTargetFormat());
+            script.add("--target-storage", cmd.getTargetStorage());
+            if (StringUtils.isNotBlank(cmd.getTargetMapJson())) {
+                script.add("--target-map-json", cmd.getTargetMapJson());
+            }
+            if (StringUtils.equals(targetProvider, CLOUD_TARGET_PROVIDER)) {
+                script.add("--cloud-cred-file", cloudCredentialFile.toString());
+                addIfNotBlank(script, "--cloud-zone-id", cmd.getCloudZoneId());
+                addIfNotBlank(script, "--cloud-service-offering-id", cmd.getCloudServiceOfferingId());
+                addIfNotBlank(script, "--cloud-network-ids", cmd.getCloudNetworkIds());
+                addIfNotBlank(script, "--cloud-storage-id", cmd.getCloudStorageId());
+                addIfNotBlank(script, "--cloud-disk-offering-id", cmd.getCloudDiskOfferingId());
+                addIfNotBlank(script, "--cloud-host-id", cmd.getCloudHostId());
+                addIfNotBlank(script, "--cloud-account", cmd.getCloudAccount());
+                addIfNotBlank(script, "--cloud-domain-id", cmd.getCloudDomainId());
+                addIfNotBlank(script, "--cloud-project-id", cmd.getCloudProjectId());
+                addIfNotBlank(script, "--cloud-name", cmd.getCloudName());
+                addIfNotBlank(script, "--cloud-display-name", cmd.getCloudDisplayName());
+                addIfNotBlank(script, "--cloud-cpu-speed", cmd.getCloudCpuSpeed());
+            }
+            script.add("--vm", cmd.getVmName());
 
-        String logPrefix = String.format("(%s) ablestack_v2k run progress", cmd.getVmName());
-        OutputInterpreter.LineByLineOutputLogger outputLogger = new OutputInterpreter.LineByLineOutputLogger(logger, logPrefix);
-        String result = script.execute(outputLogger);
-        int exitValue = script.getExitValue();
-        if (exitValue != 0) {
-            return new Answer(cmd, false, StringUtils.defaultIfBlank(result,
-                    String.format("ablestack_v2k command failed with exit code %d", exitValue)));
+            String logPrefix = String.format("(%s) ablestack_v2k run progress", cmd.getVmName());
+            OutputInterpreter.LineByLineOutputLogger outputLogger = new OutputInterpreter.LineByLineOutputLogger(logger, logPrefix);
+            String result = script.execute(outputLogger);
+            int exitValue = script.getExitValue();
+            if (exitValue != 0) {
+                return new Answer(cmd, false, StringUtils.defaultIfBlank(result,
+                        String.format("ablestack_v2k command failed with exit code %d", exitValue)));
+            }
+        } catch (IOException e) {
+            return new Answer(cmd, false, "Unable to create protected ablestack_v2k credential file: " + e.getMessage());
         }
         return new Answer(cmd, true, "ablestack_v2k command started successfully");
     }
@@ -112,5 +177,53 @@ public class LibvirtAblestackV2KConvertInstanceCommandWrapper extends CommandWra
             return "/var/lib/libvirt/images" + File.separator + cmd.getVmName();
         }
         return targetStoragePool.getLocalPath();
+    }
+
+    private Path createV2KCredentialFile(AblestackV2KConvertInstanceCommand cmd) throws IOException {
+        Path workdir = Path.of(cmd.getWorkdir());
+        Files.createDirectories(workdir);
+        Path credentialFile = workdir.resolve("govc.env");
+        Set<PosixFilePermission> permissions = EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
+        String content = String.format("GOVC_URL=%s%nGOVC_USERNAME=%s%nGOVC_PASSWORD=%s%nGOVC_INSECURE=1%n",
+                shellQuote(buildGovcUrl(cmd.getVcenter())), shellQuote(cmd.getUsername()), shellQuote(cmd.getPassword()));
+        Files.write(credentialFile, content.getBytes(StandardCharsets.UTF_8));
+        Files.setPosixFilePermissions(credentialFile, permissions);
+        return credentialFile;
+    }
+
+    private Path createV2KCloudCredentialFile(AblestackV2KConvertInstanceCommand cmd, String targetProvider) throws IOException {
+        if (!StringUtils.equals(targetProvider, CLOUD_TARGET_PROVIDER)) {
+            return null;
+        }
+        Path workdir = Path.of(cmd.getWorkdir());
+        Files.createDirectories(workdir);
+        Path credentialFile = workdir.resolve("cloud.env");
+        Set<PosixFilePermission> permissions = EnumSet.of(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE);
+        String content = String.format("V2K_CLOUD_ENDPOINT=%s%nV2K_CLOUD_API_KEY=%s%nV2K_CLOUD_SECRET_KEY=%s%n",
+                shellQuote(cmd.getCloudEndpoint()), shellQuote(cmd.getCloudApiKey()), shellQuote(cmd.getCloudSecretKey()));
+        Files.write(credentialFile, content.getBytes(StandardCharsets.UTF_8));
+        Files.setPosixFilePermissions(credentialFile, permissions);
+        return credentialFile;
+    }
+
+    private void addIfNotBlank(Script script, String option, String value) {
+        if (StringUtils.isNotBlank(value)) {
+            script.add(option, value);
+        }
+    }
+
+    private String buildGovcUrl(String vcenter) {
+        String value = StringUtils.trimToEmpty(vcenter);
+        if (StringUtils.contains(value, "://")) {
+            return value;
+        }
+        if (StringUtils.endsWith(value, "/sdk")) {
+            return "https://" + value;
+        }
+        return "https://" + StringUtils.removeEnd(value, "/") + "/sdk";
+    }
+
+    private String shellQuote(String value) {
+        return "'" + StringUtils.defaultString(value).replace("'", "'\"'\"'") + "'";
     }
 }

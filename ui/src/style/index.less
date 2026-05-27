@@ -37,4 +37,24 @@
 @import "frame/top-menu";
 
 @import "objects/table";
+
+.sider .ant-layout-sider-children,
+.sider .ant-menu,
+.sider .ant-menu-root,
+.sticky-sidebar .sider .ant-layout-sider-children,
+.sticky-sidebar .sider .ant-menu,
+.sticky-sidebar .sider .ant-menu-root {
+  scrollbar-width: thin;
+}
+
+.sider .ant-layout-sider-children::-webkit-scrollbar,
+.sider .ant-menu::-webkit-scrollbar,
+.sider .ant-menu-root::-webkit-scrollbar,
+.sticky-sidebar .sider .ant-layout-sider-children::-webkit-scrollbar,
+.sticky-sidebar .sider .ant-menu::-webkit-scrollbar,
+.sticky-sidebar .sider .ant-menu-root::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
 @import "dark-mode";

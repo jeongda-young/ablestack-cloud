@@ -63,6 +63,7 @@ import com.cloud.vm.snapshot.dao.VMSnapshotDetailsDao;
 import org.apache.cloudstack.acl.ControlledEntity;
 import org.apache.cloudstack.acl.SecurityChecker.AccessType;
 import org.apache.cloudstack.api.ResourceDetail;
+import org.apache.cloudstack.backup.dao.BackupDao;
 import org.apache.cloudstack.framework.config.dao.ConfigurationDao;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
@@ -74,6 +75,7 @@ import org.mockito.Captor;
 import org.mockito.Mock;
 import org.mockito.MockitoAnnotations;
 import org.mockito.Spy;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -89,6 +91,7 @@ import static org.mockito.ArgumentMatchers.anyBoolean;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.nullable;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
@@ -144,6 +147,8 @@ public class VMSnapshotManagerTest {
     VMSnapshotDetailsDao _vmSnapshotDetailsDao;
     @Mock
     UserVmManager _userVmManager;
+    @Mock
+    BackupDao backupDao;
     @Mock
     DiskOfferingDao _diskOfferingDao;
     @Mock
@@ -212,10 +217,12 @@ public class VMSnapshotManagerTest {
         _vmSnapshotMgr._vmSnapshotDetailsDao = _vmSnapshotDetailsDao;
         _vmSnapshotMgr._userVmManager = _userVmManager;
         _vmSnapshotMgr._diskOfferingDao = _diskOfferingDao;
+        ReflectionTestUtils.setField(_vmSnapshotMgr, "backupDao", backupDao);
 
         when(_userVMDao.findById(anyLong())).thenReturn(vmMock);
         when(_vmSnapshotDao.findByName(anyLong(), anyString())).thenReturn(null);
         when(_vmSnapshotDao.findByVm(anyLong())).thenReturn(new ArrayList<VMSnapshotVO>());
+        when(backupDao.listByVmId(nullable(Long.class), anyLong())).thenReturn(new ArrayList<>());
         when(_hypervisorCapabilitiesDao.isVmSnapshotEnabled(Hypervisor.HypervisorType.XenServer, "default")).thenReturn(true);
         when(_serviceOfferingDetailsDao.findDetail(anyLong(), anyString())).thenReturn(null);
 

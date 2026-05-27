@@ -36,6 +36,40 @@
 .dark-mode {
   background: @dark-bgColor;
 
+  &,
+  * {
+    scrollbar-color: rgba(143, 179, 217, 0.56) rgba(21, 29, 38, 0.92);
+    scrollbar-width: thin;
+  }
+
+  &::-webkit-scrollbar,
+  *::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  &::-webkit-scrollbar-track,
+  *::-webkit-scrollbar-track {
+    background: rgba(21, 29, 38, 0.92);
+  }
+
+  &::-webkit-scrollbar-thumb,
+  *::-webkit-scrollbar-thumb {
+    background: rgba(143, 179, 217, 0.56);
+    border: 2px solid rgba(21, 29, 38, 0.92);
+    border-radius: 8px;
+  }
+
+  &::-webkit-scrollbar-thumb:hover,
+  *::-webkit-scrollbar-thumb:hover {
+    background: rgba(143, 179, 217, 0.78);
+  }
+
+  &::-webkit-scrollbar-corner,
+  *::-webkit-scrollbar-corner {
+    background: rgba(21, 29, 38, 0.92);
+  }
+
   h1, h2, h3, h4, h5, h6, .ant-statistic-title, .ant-statistic-content {
     color: @dark-text-color-3;
   }
@@ -131,6 +165,82 @@
     .ant-menu-submenu > .ant-menu {
       background: @dark-secondary-bgColor;
     }
+  }
+
+  .sider.dark .ant-layout-sider-children,
+  .sider.dark .ant-menu,
+  .sider.dark .ant-menu-root,
+  .drawer-sider.dark .ant-layout-sider-children,
+  .drawer-sider.dark .ant-menu,
+  .drawer-sider.dark .ant-menu-root,
+  .sticky-sidebar .sider.dark .ant-layout-sider-children,
+  .sticky-sidebar .sider.dark .ant-menu,
+  .sticky-sidebar .sider.dark .ant-menu-root {
+    scrollbar-color: rgba(143, 179, 217, 0.56) rgba(21, 29, 38, 0.92);
+    scrollbar-width: thin;
+  }
+
+  .sider.dark .ant-layout-sider-children::-webkit-scrollbar,
+  .sider.dark .ant-menu::-webkit-scrollbar,
+  .sider.dark .ant-menu-root::-webkit-scrollbar,
+  .drawer-sider.dark .ant-layout-sider-children::-webkit-scrollbar,
+  .drawer-sider.dark .ant-menu::-webkit-scrollbar,
+  .drawer-sider.dark .ant-menu-root::-webkit-scrollbar,
+  .sticky-sidebar .sider.dark .ant-layout-sider-children::-webkit-scrollbar,
+  .sticky-sidebar .sider.dark .ant-menu::-webkit-scrollbar,
+  .sticky-sidebar .sider.dark .ant-menu-root::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+
+  .sider.dark .ant-layout-sider-children::-webkit-scrollbar-track,
+  .sider.dark .ant-menu::-webkit-scrollbar-track,
+  .sider.dark .ant-menu-root::-webkit-scrollbar-track,
+  .drawer-sider.dark .ant-layout-sider-children::-webkit-scrollbar-track,
+  .drawer-sider.dark .ant-menu::-webkit-scrollbar-track,
+  .drawer-sider.dark .ant-menu-root::-webkit-scrollbar-track,
+  .sticky-sidebar .sider.dark .ant-layout-sider-children::-webkit-scrollbar-track,
+  .sticky-sidebar .sider.dark .ant-menu::-webkit-scrollbar-track,
+  .sticky-sidebar .sider.dark .ant-menu-root::-webkit-scrollbar-track {
+    background: rgba(21, 29, 38, 0.92);
+  }
+
+  .sider.dark .ant-layout-sider-children::-webkit-scrollbar-thumb,
+  .sider.dark .ant-menu::-webkit-scrollbar-thumb,
+  .sider.dark .ant-menu-root::-webkit-scrollbar-thumb,
+  .drawer-sider.dark .ant-layout-sider-children::-webkit-scrollbar-thumb,
+  .drawer-sider.dark .ant-menu::-webkit-scrollbar-thumb,
+  .drawer-sider.dark .ant-menu-root::-webkit-scrollbar-thumb,
+  .sticky-sidebar .sider.dark .ant-layout-sider-children::-webkit-scrollbar-thumb,
+  .sticky-sidebar .sider.dark .ant-menu::-webkit-scrollbar-thumb,
+  .sticky-sidebar .sider.dark .ant-menu-root::-webkit-scrollbar-thumb {
+    background: rgba(143, 179, 217, 0.56);
+    border: 2px solid rgba(21, 29, 38, 0.92);
+    border-radius: 8px;
+  }
+
+  .sider.dark .ant-layout-sider-children::-webkit-scrollbar-thumb:hover,
+  .sider.dark .ant-menu::-webkit-scrollbar-thumb:hover,
+  .sider.dark .ant-menu-root::-webkit-scrollbar-thumb:hover,
+  .drawer-sider.dark .ant-layout-sider-children::-webkit-scrollbar-thumb:hover,
+  .drawer-sider.dark .ant-menu::-webkit-scrollbar-thumb:hover,
+  .drawer-sider.dark .ant-menu-root::-webkit-scrollbar-thumb:hover,
+  .sticky-sidebar .sider.dark .ant-layout-sider-children::-webkit-scrollbar-thumb:hover,
+  .sticky-sidebar .sider.dark .ant-menu::-webkit-scrollbar-thumb:hover,
+  .sticky-sidebar .sider.dark .ant-menu-root::-webkit-scrollbar-thumb:hover {
+    background: rgba(143, 179, 217, 0.78);
+  }
+
+  .sider.dark .ant-layout-sider-children::-webkit-scrollbar-corner,
+  .sider.dark .ant-menu::-webkit-scrollbar-corner,
+  .sider.dark .ant-menu-root::-webkit-scrollbar-corner,
+  .drawer-sider.dark .ant-layout-sider-children::-webkit-scrollbar-corner,
+  .drawer-sider.dark .ant-menu::-webkit-scrollbar-corner,
+  .drawer-sider.dark .ant-menu-root::-webkit-scrollbar-corner,
+  .sticky-sidebar .sider.dark .ant-layout-sider-children::-webkit-scrollbar-corner,
+  .sticky-sidebar .sider.dark .ant-menu::-webkit-scrollbar-corner,
+  .sticky-sidebar .sider.dark .ant-menu-root::-webkit-scrollbar-corner {
+    background: rgba(21, 29, 38, 0.92);
   }
 
   .ant-menu-submenu-popup.ant-menu-light,

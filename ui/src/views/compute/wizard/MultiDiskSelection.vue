@@ -136,7 +136,8 @@ export default {
     tableSource () {
       return this.items.map(item => {
         var disk = { ...item, disabled: this.validOfferings[item.id] && this.validOfferings[item.id].length === 0 }
-        disk.name = `${item.name} (${item.size} GB)`
+        const size = Number(item.size)
+        disk.name = Number.isFinite(size) && size > 0 ? `${item.name} (${item.size} GB)` : `${item.name} (-)`
         return disk
       })
     },

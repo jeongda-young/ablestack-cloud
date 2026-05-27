@@ -154,6 +154,21 @@ export default {
     TooltipLabel,
     Status
   },
+  props: {
+    zoneid: {
+      type: String,
+      required: false
+    },
+    clusterid: {
+      type: String,
+      required: false
+    },
+    useAblestackV2KInventory: {
+      type: Boolean,
+      required: false,
+      default: false
+    }
+  },
   data () {
     return {
       vcenter: '',
@@ -191,6 +206,9 @@ export default {
     }
   },
   computed: {
+    supportsVmwareDatacenterImport () {
+      return 'listVmwareDcVms' in this.$store.getters.apis && 'listVmwareDcs' in this.$store.getters.apis
+    },
     vmwareDcVmsSelection () {
       return {
         type: 'radio',
@@ -203,6 +221,10 @@ export default {
     this.apiParams = this.$getApiParams('listVmwareDcVms') || {}
     this.initForm()
     this.fetchZones()
+    if (this.useAblestackV2KInventory && !this.supportsVmwareDatacenterImport) {
+      this.vcenterSelectedOption = 'new'
+      this.$emit('onVcenterTypeChanged', this.vcenterSelectedOption)
+    }
   },
   methods: {
     getApiParamDescription (paramName, fallbackTranslationKey) {
@@ -224,6 +246,7 @@ export default {
       if (this.vcenterSelectedOption === 'new') {
         params.datacentername = this.datacenter
         params.vcenter = this.vcenter
+        params.host = this.vcenter
         params.username = this.username
         params.password = this.password
       } else {
@@ -231,10 +254,20 @@ export default {
       }
       params.page = 1
       params.pagesize = 10
-      getAPI('listVmwareDcVms', params).then(json => {
+      let apiName = 'listVmwareDcVms'
+      let responseKey = 'listvmwaredcvmsresponse'
+      if (this.useAblestackV2KInventory) {
+        apiName = 'listVmsForImport'
+        responseKey = 'listvmsforimportresponse'
+        params.zoneid = this.zoneid
+        params.clusterid = this.clusterid
+        params.hypervisor = 'VMware'
+        params.sourceprovider = 'vmware'
+      }
+      getAPI(apiName, params).then(json => {
         const obj = {
           params: params,
-          response: json.listvmwaredcvmsresponse
+          response: json[responseKey]
         }
         this.$emit('listedVmwareUnmanagedInstances', obj)
       }).catch(error => {
@@ -258,6 +291,10 @@ export default {
       this.listZoneVmwareDcs()
     },
     listZoneVmwareDcs () {
+      if (!this.supportsVmwareDatacenterImport) {
+        this.existingvcenter = []
+        return
+      }
       this.loading = true
       getAPI('listVmwareDcs', { zoneid: this.sourcezoneid }).then(response => {
         if (response.listvmwaredcsresponse.VMwareDC && response.listvmwaredcsresponse.VMwareDC.length > 0) {

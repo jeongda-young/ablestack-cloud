@@ -69,6 +69,7 @@ public class ApiAsyncJobDispatcher extends AdapterBase implements AsyncJobDispat
             }.getType();
             Gson gson = ApiGsonHelper.getBuilder().create();
             Map<String, String> params = gson.fromJson(job.getCmdInfo(), mapType);
+            ApiSensitiveParamUtils.decryptSensitiveValues(params);
 
             // whenever we deserialize, the UserContext needs to be updated
             String userIdStr = params.get("ctxUserId");

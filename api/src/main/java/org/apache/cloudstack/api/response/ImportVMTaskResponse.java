@@ -24,6 +24,7 @@ import org.apache.cloudstack.api.ApiConstants;
 import org.apache.cloudstack.api.BaseResponse;
 
 import java.util.Date;
+import java.util.List;
 
 public class ImportVMTaskResponse extends BaseResponse {
 
@@ -79,6 +80,26 @@ public class ImportVMTaskResponse extends BaseResponse {
     @Param(description = "the source VM name")
     private String sourceVMName;
 
+    @SerializedName("migrationtool")
+    @Param(description = "the migration tool used by the import task")
+    private String migrationTool;
+
+    @SerializedName("sourceprovider")
+    @Param(description = "the source provider used by the import task")
+    private String sourceProvider;
+
+    @SerializedName("targetprovider")
+    @Param(description = "the target provider used by the import task")
+    private String targetProvider;
+
+    @SerializedName("targetprofile")
+    @Param(description = "the target profile selected for the import task")
+    private String targetProfile;
+
+    @SerializedName("targetvmname")
+    @Param(description = "the target VM name selected for the import task")
+    private String targetVMName;
+
     @SerializedName("step")
     @Param(description = "the current step on the importing VM task")
     private String step;
@@ -119,6 +140,10 @@ public class ImportVMTaskResponse extends BaseResponse {
     @Param(description = "the current PHASE from ablestack-v2k status")
     private String phase;
 
+    @SerializedName("currentphase")
+    @Param(description = "the normalized current migration phase")
+    private String currentPhase;
+
     @SerializedName("migrationstate")
     @Param(description = "the current STATE from ablestack-v2k status")
     private String migrationState;
@@ -131,9 +156,49 @@ public class ImportVMTaskResponse extends BaseResponse {
     @Param(description = "the current SYNC(Physical) from ablestack-v2k status")
     private String syncPhysical;
 
+    @SerializedName("displaystep")
+    @Param(description = "the normalized display step for the import task")
+    private String displayStep;
+
+    @SerializedName("syncprogresslabel")
+    @Param(description = "the current sync progress label")
+    private String syncProgressLabel;
+
+    @SerializedName("syncdonebytes")
+    @Param(description = "the bytes transferred in the current sync step")
+    private Long syncDoneBytes;
+
+    @SerializedName("synctotalbytes")
+    @Param(description = "the total bytes for the current sync step")
+    private Long syncTotalBytes;
+
+    @SerializedName("syncpercent")
+    @Param(description = "the percent completed in the current sync step")
+    private Integer syncPercent;
+
+    @SerializedName("synccumulativedonebytes")
+    @Param(description = "the cumulative transferred bytes from base sync through the current sync step")
+    private Long syncCumulativeDoneBytes;
+
+    @SerializedName("synccumulativeknownbytes")
+    @Param(description = "the cumulative known bytes from base sync through the current sync step")
+    private Long syncCumulativeKnownBytes;
+
+    @SerializedName("synccumulativepercent")
+    @Param(description = "the cumulative sync percent from base sync through the current sync step")
+    private Integer syncCumulativePercent;
+
     @SerializedName("workdir")
     @Param(description = "the current WORKDIR from ablestack-v2k status")
     private String workdir;
+
+    @SerializedName("credentialstate")
+    @Param(description = "the source credential state for the import task")
+    private String credentialState;
+
+    @SerializedName("availableactions")
+    @Param(description = "the currently available task actions")
+    private List<String> availableActions;
 
     public String getId() {
         return id;
@@ -231,6 +296,46 @@ public class ImportVMTaskResponse extends BaseResponse {
         this.sourceVMName = sourceVMName;
     }
 
+    public String getMigrationTool() {
+        return migrationTool;
+    }
+
+    public void setMigrationTool(String migrationTool) {
+        this.migrationTool = migrationTool;
+    }
+
+    public String getSourceProvider() {
+        return sourceProvider;
+    }
+
+    public void setSourceProvider(String sourceProvider) {
+        this.sourceProvider = sourceProvider;
+    }
+
+    public String getTargetProvider() {
+        return targetProvider;
+    }
+
+    public void setTargetProvider(String targetProvider) {
+        this.targetProvider = targetProvider;
+    }
+
+    public String getTargetProfile() {
+        return targetProfile;
+    }
+
+    public void setTargetProfile(String targetProfile) {
+        this.targetProfile = targetProfile;
+    }
+
+    public String getTargetVMName() {
+        return targetVMName;
+    }
+
+    public void setTargetVMName(String targetVMName) {
+        this.targetVMName = targetVMName;
+    }
+
     public String getStep() {
         return step;
     }
@@ -319,6 +424,14 @@ public class ImportVMTaskResponse extends BaseResponse {
         this.phase = phase;
     }
 
+    public String getCurrentPhase() {
+        return currentPhase;
+    }
+
+    public void setCurrentPhase(String currentPhase) {
+        this.currentPhase = currentPhase;
+    }
+
     public String getMigrationState() {
         return migrationState;
     }
@@ -343,11 +456,91 @@ public class ImportVMTaskResponse extends BaseResponse {
         this.syncPhysical = syncPhysical;
     }
 
+    public String getDisplayStep() {
+        return displayStep;
+    }
+
+    public void setDisplayStep(String displayStep) {
+        this.displayStep = displayStep;
+    }
+
+    public String getSyncProgressLabel() {
+        return syncProgressLabel;
+    }
+
+    public void setSyncProgressLabel(String syncProgressLabel) {
+        this.syncProgressLabel = syncProgressLabel;
+    }
+
+    public Long getSyncDoneBytes() {
+        return syncDoneBytes;
+    }
+
+    public void setSyncDoneBytes(Long syncDoneBytes) {
+        this.syncDoneBytes = syncDoneBytes;
+    }
+
+    public Long getSyncTotalBytes() {
+        return syncTotalBytes;
+    }
+
+    public void setSyncTotalBytes(Long syncTotalBytes) {
+        this.syncTotalBytes = syncTotalBytes;
+    }
+
+    public Integer getSyncPercent() {
+        return syncPercent;
+    }
+
+    public void setSyncPercent(Integer syncPercent) {
+        this.syncPercent = syncPercent;
+    }
+
+    public Long getSyncCumulativeDoneBytes() {
+        return syncCumulativeDoneBytes;
+    }
+
+    public void setSyncCumulativeDoneBytes(Long syncCumulativeDoneBytes) {
+        this.syncCumulativeDoneBytes = syncCumulativeDoneBytes;
+    }
+
+    public Long getSyncCumulativeKnownBytes() {
+        return syncCumulativeKnownBytes;
+    }
+
+    public void setSyncCumulativeKnownBytes(Long syncCumulativeKnownBytes) {
+        this.syncCumulativeKnownBytes = syncCumulativeKnownBytes;
+    }
+
+    public Integer getSyncCumulativePercent() {
+        return syncCumulativePercent;
+    }
+
+    public void setSyncCumulativePercent(Integer syncCumulativePercent) {
+        this.syncCumulativePercent = syncCumulativePercent;
+    }
+
     public String getWorkdir() {
         return workdir;
     }
 
     public void setWorkdir(String workdir) {
         this.workdir = workdir;
+    }
+
+    public String getCredentialState() {
+        return credentialState;
+    }
+
+    public void setCredentialState(String credentialState) {
+        this.credentialState = credentialState;
+    }
+
+    public List<String> getAvailableActions() {
+        return availableActions;
+    }
+
+    public void setAvailableActions(List<String> availableActions) {
+        this.availableActions = availableActions;
     }
 }
