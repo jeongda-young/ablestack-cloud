@@ -107,7 +107,7 @@ public class VeeamClientTest {
     public void getRepositoryNameFromJobTestExceptionCmdWithoutResult() throws Exception {
         String backupName = "TEST-BACKUP";
         try {
-            Mockito.doReturn(null).when(mockClient).executePowerShellCommands(Mockito.anyList());
+            Mockito.doReturn(null).when(mockClient).executePowerShellCommands(Mockito.anyListOf(String.class));
             mockClient.getRepositoryNameFromJob(backupName);
             fail();
         } catch (Exception e) {
@@ -120,7 +120,7 @@ public class VeeamClientTest {
     public void getRepositoryNameFromJobTestExceptionCmdWithFalseResult() {
         String backupName = "TEST-BACKUP2";
         Pair<Boolean, String> response = new Pair<Boolean, String>(Boolean.FALSE, "");
-        Mockito.doReturn(response).when(mockClient).executePowerShellCommands(Mockito.anyList());
+        Mockito.doReturn(response).when(mockClient).executePowerShellCommands(Mockito.anyListOf(String.class));
         try {
             mockClient.getRepositoryNameFromJob(backupName);
             fail();
@@ -134,7 +134,7 @@ public class VeeamClientTest {
     public void getRepositoryNameFromJobTestExceptionWhenResultIsInWrongFormat() {
         String backupName = "TEST-BACKUP3";
         Pair<Boolean, String> response = new Pair<Boolean, String>(Boolean.TRUE, "\nName:\n\nName-test");
-        Mockito.doReturn(response).when(mockClient).executePowerShellCommands(Mockito.anyList());
+        Mockito.doReturn(response).when(mockClient).executePowerShellCommands(Mockito.anyListOf(String.class));
         try {
             mockClient.getRepositoryNameFromJob(backupName);
             fail();
@@ -148,7 +148,7 @@ public class VeeamClientTest {
     public void getRepositoryNameFromJobTestSuccess() throws Exception {
         String backupName = "TEST-BACKUP3";
         Pair<Boolean, String> response = new Pair<Boolean, String>(Boolean.TRUE, "\r\nName : test");
-        Mockito.doReturn(response).when(mockClient).executePowerShellCommands(Mockito.anyList());
+        Mockito.doReturn(response).when(mockClient).executePowerShellCommands(Mockito.anyListOf(String.class));
         String repositoryNameFromJob = mockClient.getRepositoryNameFromJob(backupName);
         Assert.assertEquals("test", repositoryNameFromJob);
     }
@@ -175,7 +175,7 @@ public class VeeamClientTest {
     public void getRestoreVmErrorDescriptionTestFindErrorDescription() {
         Pair<Boolean, String> response = new Pair<Boolean, String>(true, "Example of error description found in Veeam.");
         Mockito.when(mockClient.getRestoreVmErrorDescription("uuid")).thenCallRealMethod();
-        Mockito.when(mockClient.executePowerShellCommands(Mockito.any())).thenReturn(response);
+        Mockito.when(mockClient.executePowerShellCommands(Mockito.anyListOf(String.class))).thenReturn(response);
         String result = mockClient.getRestoreVmErrorDescription("uuid");
         Assert.assertEquals("Example of error description found in Veeam.", result);
     }
@@ -184,7 +184,7 @@ public class VeeamClientTest {
     public void getRestoreVmErrorDescriptionTestNotFindErrorDescription() {
         Pair<Boolean, String> response = new Pair<Boolean, String>(true, "Cannot find restore session with provided uid uuid");
         Mockito.when(mockClient.getRestoreVmErrorDescription("uuid")).thenCallRealMethod();
-        Mockito.when(mockClient.executePowerShellCommands(Mockito.any())).thenReturn(response);
+        Mockito.when(mockClient.executePowerShellCommands(Mockito.anyListOf(String.class))).thenReturn(response);
         String result = mockClient.getRestoreVmErrorDescription("uuid");
         Assert.assertEquals("Cannot find restore session with provided uid uuid", result);
     }
@@ -192,7 +192,7 @@ public class VeeamClientTest {
     @Test
     public void getRestoreVmErrorDescriptionTestWhenPowerShellOutputIsNull() {
         Mockito.when(mockClient.getRestoreVmErrorDescription("uuid")).thenCallRealMethod();
-        Mockito.when(mockClient.executePowerShellCommands(Mockito.any())).thenReturn(null);
+        Mockito.when(mockClient.executePowerShellCommands(Mockito.anyListOf(String.class))).thenReturn(null);
         String result = mockClient.getRestoreVmErrorDescription("uuid");
         Assert.assertEquals("Failed to get the description of the failed restore session [uuid]. Please contact an administrator.", result);
     }
@@ -201,7 +201,7 @@ public class VeeamClientTest {
     public void getRestoreVmErrorDescriptionTestWhenPowerShellOutputIsFalse() {
         Pair<Boolean, String> response = new Pair<Boolean, String>(false, null);
         Mockito.when(mockClient.getRestoreVmErrorDescription("uuid")).thenCallRealMethod();
-        Mockito.when(mockClient.executePowerShellCommands(Mockito.any())).thenReturn(response);
+        Mockito.when(mockClient.executePowerShellCommands(Mockito.anyListOf(String.class))).thenReturn(response);
         String result = mockClient.getRestoreVmErrorDescription("uuid");
         Assert.assertEquals("Failed to get the description of the failed restore session [uuid]. Please contact an administrator.", result);
     }
@@ -544,21 +544,21 @@ public class VeeamClientTest {
     @Test
     public void testGetVeeamServerVersionAllGood() {
         Pair<Boolean, String> response = new Pair<Boolean, String>(Boolean.TRUE, "12.0.0.1");
-        Mockito.doReturn(response).when(mockClient).executePowerShellCommands(Mockito.anyList());
+        Mockito.doReturn(response).when(mockClient).executePowerShellCommands(Mockito.anyListOf(String.class));
         Assert.assertEquals(12, (int) mockClient.getVeeamServerVersion());
     }
 
     @Test
     public void testGetVeeamServerVersionWithError() {
         Pair<Boolean, String> response = new Pair<Boolean, String>(Boolean.FALSE, "");
-        Mockito.doReturn(response).when(mockClient).executePowerShellCommands(Mockito.anyList());
+        Mockito.doReturn(response).when(mockClient).executePowerShellCommands(Mockito.anyListOf(String.class));
         Assert.assertEquals(0, (int) mockClient.getVeeamServerVersion());
     }
 
     @Test
     public void testGetVeeamServerVersionWithEmptyVersion() {
         Pair<Boolean, String> response = new Pair<Boolean, String>(Boolean.TRUE, "");
-        Mockito.doReturn(response).when(mockClient).executePowerShellCommands(Mockito.anyList());
+        Mockito.doReturn(response).when(mockClient).executePowerShellCommands(Mockito.anyListOf(String.class));
         Assert.assertEquals(0, (int) mockClient.getVeeamServerVersion());
     }
 }
