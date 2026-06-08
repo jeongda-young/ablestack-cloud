@@ -22,6 +22,7 @@ import java.net.MalformedURLException;
 import java.util.List;
 import java.util.Map;
 
+import com.cloud.dc.DataCenter;
 import com.cloud.exception.ResourceAllocationException;
 import com.cloud.exception.StorageUnavailableException;
 import com.cloud.offering.DiskOffering;
@@ -72,6 +73,10 @@ public interface VolumeApiService {
      */
     Volume allocVolume(CreateVolumeCmd cmd) throws ResourceAllocationException;
 
+    Volume allocVolume(long ownerId, Long zoneId, Long diskOfferingId, Long vmId, Long snapshotId, String name,
+           Long cmdSize, Boolean displayVolume, Long cmdMinIops, Long cmdMaxIops, String customId)
+            throws ResourceAllocationException;
+
     /**
      * Creates the volume based on the given criteria
      *
@@ -81,6 +86,8 @@ public interface VolumeApiService {
      * @return the volume object
      */
     Volume createVolume(CreateVolumeCmd cmd);
+
+    Volume createVolume(long volumeId, Long vmId, Long snapshotId, Long storageId, Boolean display);
 
     /**
      * Resizes the volume based on the given criteria
@@ -212,4 +219,6 @@ public interface VolumeApiService {
     Volume updateCompressDedupVolume(UpdateCompressDedupCmd cmd);
 
     Long getVolumePhysicalSize(Storage.ImageFormat format, String path, String chainInfo);
+
+    Long getCustomDiskOfferingIdForVolumeUpload(Account owner, DataCenter zone, boolean encryptEnabledOnly);
 }

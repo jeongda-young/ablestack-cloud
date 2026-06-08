@@ -105,6 +105,8 @@
         <module>integrations/automation-service</module>
         <module>integrations/disaster-recovery</module>
         <module>integrations/rack-management</module>
+        <module>integrations/veeam-control-service</module>
+
         <module>metrics</module>
 
         <module>network-elements/bigswitch</module>

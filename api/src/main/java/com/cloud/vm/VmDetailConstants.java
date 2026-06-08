@@ -136,4 +136,10 @@ public interface VmDetailConstants {
     String CLOUDSTACK_VM_DETAILS = "cloudstack.vm.details";
     String CLOUDSTACK_VLAN = "cloudstack.vlan";
     String KVM_GUEST_OS_MACHINE_TYPE = "kvm.guest.os.machine.type";
+
+    // KVM Checkpoints related
+    String ACTIVE_CHECKPOINT_ID = "active.checkpoint.id";
+    String ACTIVE_CHECKPOINT_CREATE_TIME = "active.checkpoint.create.time";
+    String LAST_CHECKPOINT_ID = "last.checkpoint.id";
+    String LAST_CHECKPOINT_CREATE_TIME = "last.checkpoint.create.time";
 }

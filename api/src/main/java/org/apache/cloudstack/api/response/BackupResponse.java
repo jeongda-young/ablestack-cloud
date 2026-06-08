@@ -134,6 +134,17 @@ public class BackupResponse extends BaseResponse {
     @SerializedName(ApiConstants.SNAPSHOT_ID)
     @Param(description = "snapshot id")
     private String snapshotId;
+    @SerializedName(ApiConstants.FROM_CHECKPOINT_ID)
+    @Param(description = "Previous active checkpoint ID for incremental backups", since = "4.23.0")
+    private String fromCheckpointId;
+
+    @SerializedName(ApiConstants.TO_CHECKPOINT_ID)
+    @Param(description = "Next checkpoint ID for incremental backups", since = "4.23.0")
+    private String toCheckpointId;
+
+    @SerializedName(ApiConstants.HOST_ID)
+    @Param(description = "Host ID where the backup is running", since = "4.23.0")
+    private String hostId;
 
     public String getId() {
         return id;
@@ -337,5 +348,29 @@ public class BackupResponse extends BaseResponse {
 
     public void setSnapshotId(String snapshotId) {
         this.snapshotId = snapshotId;
+    }
+
+    public void setFromCheckpointId(String fromCheckpointId) {
+        this.fromCheckpointId = fromCheckpointId;
+    }
+
+    public String getFromCheckpointId() {
+        return this.fromCheckpointId;
+    }
+
+    public void setToCheckpointId(String toCheckpointId) {
+        this.toCheckpointId = toCheckpointId;
+    }
+
+    public String getToCheckpointId() {
+        return this.toCheckpointId;
+    }
+
+    public void setHostId(String hostId) {
+        this.hostId = hostId;
+    }
+
+    public String getHostId() {
+        return this.hostId;
     }
 }
