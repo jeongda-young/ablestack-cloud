@@ -82,6 +82,12 @@ public class ImportAblestackVeeamBackupSeedCmd extends BaseAsyncCreateCmd {
             description = "Create libvirt checkpoint on the KVM VM after import. Default: true")
     private Boolean bootstrapCheckpoint;
 
+    @Parameter(name = ApiConstants.NAME,
+            type = CommandType.STRING,
+            description = "the name of the backup (default: VM hostname + ISO-8601 timestamp)",
+            since = "4.22.0.0")
+    private String name;
+
     public Long getVmId() {
         return vmId;
     }
@@ -100,6 +106,10 @@ public class ImportAblestackVeeamBackupSeedCmd extends BaseAsyncCreateCmd {
 
     public Boolean getBootstrapCheckpoint() {
         return bootstrapCheckpoint;
+    }
+
+    public String getName() {
+        return name;
     }
 
     @Override

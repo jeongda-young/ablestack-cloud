@@ -64,12 +64,22 @@ public class CreateAblestackVeeamBackupCmd extends BaseAsyncCreateCmd {
             description = "Quiesce VM via QEMU guest agent before backup")
     private Boolean quiesceVM;
 
+    @Parameter(name = ApiConstants.NAME,
+            type = CommandType.STRING,
+            description = "the name of the backup (default: VM hostname + ISO-8601 timestamp)",
+            since = "4.22.0.0")
+    private String name;
+
     public Long getVmId() {
         return vmId;
     }
 
     public Boolean getQuiesceVM() {
         return quiesceVM;
+    }
+
+    public String getName() {
+        return name;
     }
 
     @Override

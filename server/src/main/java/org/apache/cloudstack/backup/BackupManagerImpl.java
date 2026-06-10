@@ -1051,11 +1051,17 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             throw new CloudRuntimeException("Failed to import Ablestack Veeam backup seed");
         }
 
+        BackupVO backupVO = backupDao.findById(result.second().getId());
+        if (cmd.getName() != null) {
+            backupVO.setName(cmd.getName());
+            backupDao.update(backupVO.getId(), backupVO);
+        }
+
         resourceLimitMgr.incrementResourceCount(vm.getAccountId(), Resource.ResourceType.backup);
         if (result.second().getSize() != null) {
             resourceLimitMgr.incrementResourceCount(vm.getAccountId(), Resource.ResourceType.backup_storage, result.second().getSize());
         }
-        return result.second();
+        return backupVO;
     }
 
     private BackupOffering validateVmAblestackVeeamOffering(final VMInstanceVO vm) {
@@ -1120,12 +1126,14 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 backupSize += volumeSize;
             }
         }
-        createCheckedBackupVeeam(vm, vmId, backupProvider, cmd.getQuiesceVM(), backupSize, owner, getBackupScheduleId(job));
+        createCheckedBackupVeeam(vm, vmId, backupProvider, cmd.getQuiesceVM(), backupSize, owner, getBackupScheduleId(job),
+                cmd.getName());
         return true;
     }
 
     private void createCheckedBackupVeeam(final VMInstanceVO vm, final Long vmId, final BackupProvider backupProvider,
-            final Boolean quiesceVM, final Long backupSize, final Account owner, final Long backupScheduleId)
+            final Boolean quiesceVM, final Long backupSize, final Account owner, final Long backupScheduleId,
+            final String backupName)
             throws ResourceAllocationException {
         try (CheckedReservation backupReservation = new CheckedReservation(owner, Resource.ResourceType.backup,
                 1L, reservationDao, resourceLimitMgr);
@@ -1144,6 +1152,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             if (backup != null) {
                 final BackupVO vmBackup = backupDao.findById(backup.getId());
                 vmBackup.setBackupScheduleId(backupScheduleId);
+                if (backupName != null) {
+                    vmBackup.setName(backupName);
+                }
                 backupDao.update(vmBackup.getId(), vmBackup);
                 resourceLimitMgr.incrementResourceCount(vm.getAccountId(), Resource.ResourceType.backup);
                 resourceLimitMgr.incrementResourceCount(vm.getAccountId(), Resource.ResourceType.backup_storage, backup.getSize());
