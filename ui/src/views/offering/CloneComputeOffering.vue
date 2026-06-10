@@ -160,8 +160,49 @@ export default {
     this.fetchData()
     this.isPublic = isAdmin()
     this.form.ispublic = this.isPublic
+    this.fetchSourceOffering()
   },
   methods: {
+    fetchSourceOffering () {
+      if (!this.resource?.id) {
+        this.populateFormFromResource()
+        return
+      }
+
+      const params = {
+        id: this.resource.id,
+        listall: true,
+        details: 'all'
+      }
+      if (this.isSystem) {
+        params.issystem = true
+      }
+
+      getAPI('listServiceOfferings', params).then(json => {
+        const offering = json?.listserviceofferingsresponse?.serviceoffering?.[0]
+        const sourceOffering = offering || this.resource
+        this.populateFormFromResource(sourceOffering)
+        this.resolveComputeOnlyState(sourceOffering)
+      }).catch(() => {
+        this.populateFormFromResource()
+        this.resolveComputeOnlyState(this.resource)
+      })
+    },
+    resolveComputeOnlyState (sourceResource) {
+      if (!sourceResource?.diskofferingid) {
+        return
+      }
+
+      getAPI('listDiskOfferings', {
+        id: sourceResource.diskofferingid,
+        listall: true
+      }).then(json => {
+        const diskOffering = json?.listdiskofferingsresponse?.diskoffering?.[0]
+        const isComputeOnly = !diskOffering
+        this.form.computeonly = isComputeOnly
+        this.computeonly = isComputeOnly
+      })
+    },
     initForm () {
       this.formRef = ref()
       this.form = reactive({
@@ -183,6 +224,8 @@ export default {
         diskofferingid: this.selectedDiskOfferingId,
         diskofferingstrictness: this.diskofferingstrictness,
         encryptdisk: this.encryptdisk,
+        kvdoenable: false,
+        shareable: false,
         leaseduration: this.leaseduration,
         leaseexpiryaction: this.leaseexpiryaction
       })
@@ -262,13 +305,14 @@ export default {
         }
       }
       this.fetchDiskOfferings()
-      this.populateFormFromResource()
     },
-    populateFormFromResource () {
-      if (!this.resource) return
+    populateFormFromResource (sourceResource = this.resource) {
+      if (!sourceResource) return
 
       // Pre-fill form with source offering values
-      const r = this.resource
+      const r = sourceResource
+      const isTrueValue = value => value === true || value === 'true' || value === 1 || value === '1'
+      const offeringDetails = r.serviceofferingdetails || {}
       this.form.name = r.name + ' - Clone'
       this.form.displaytext = r.displaytext
 
@@ -289,10 +333,10 @@ export default {
       if (r.cpuspeed) this.form.cpuspeed = r.cpuspeed
       if (r.memory) this.form.memory = r.memory
 
-      if (r.mincpunumber) this.form.mincpunumber = r.mincpunumber
-      if (r.maxcpunumber) this.form.maxcpunumber = r.maxcpunumber
-      if (r.minmemory) this.form.minmemory = r.minmemory
-      if (r.maxmemory) this.form.maxmemory = r.maxmemory
+      if (r.mincpunumber || offeringDetails.mincpunumber) this.form.mincpunumber = r.mincpunumber || offeringDetails.mincpunumber
+      if (r.maxcpunumber || offeringDetails.maxcpunumber) this.form.maxcpunumber = r.maxcpunumber || offeringDetails.maxcpunumber
+      if (r.minmemory || offeringDetails.minmemory) this.form.minmemory = r.minmemory || offeringDetails.minmemory
+      if (r.maxmemory || offeringDetails.maxmemory) this.form.maxmemory = r.maxmemory || offeringDetails.maxmemory
 
       if (r.hosttags) this.form.hosttags = r.hosttags
       if (r.networkrate) this.form.networkrate = r.networkrate
@@ -303,6 +347,11 @@ export default {
       }
       if (r.limitcpuuse !== undefined) this.form.limitcpuuse = r.limitcpuuse
       if (r.isvolatile !== undefined) this.form.isvolatile = r.isvolatile
+
+      if (r.diskofferingid) {
+        this.form.diskofferingid = r.diskofferingid
+        this.selectedDiskOfferingId = r.diskofferingid
+      }
 
       if (r.storagetype) {
         this.storageType = r.storagetype
@@ -322,8 +371,14 @@ export default {
         this.diskofferingstrictness = r.diskofferingstrictness
       }
       if (r.encryptroot !== undefined) {
-        this.form.encryptdisk = r.encryptroot
-        this.encryptdisk = r.encryptroot
+        this.form.encryptdisk = isTrueValue(r.encryptroot)
+        this.encryptdisk = isTrueValue(r.encryptroot)
+      }
+      if (r.kvdoenable !== undefined) {
+        this.form.kvdoenable = isTrueValue(r.kvdoenable)
+      }
+      if (r.shareable !== undefined) {
+        this.form.shareable = isTrueValue(r.shareable)
       }
 
       if (r.diskBytesReadRate || r.diskBytesWriteRate || r.diskIopsReadRate || r.diskIopsWriteRate) {
@@ -493,9 +548,15 @@ export default {
           dynamicscalingenabled: values.dynamicscalingenabled,
           diskofferingstrictness: values.diskofferingstrictness,
           encryptroot: values.encryptdisk,
+          shareable: values.shareable,
+          kvdoEnable: values.kvdoenable,
           purgeresources: values.purgeresources,
           leaseduration: values.leaseduration,
           leaseexpiryaction: values.leaseexpiryaction
+        }
+
+        if (values.shareable === true) {
+          params.cacheMode = 'none'
         }
 
         if (values.diskofferingid) {

@@ -76,13 +76,13 @@
       <template #label>
         <tooltip-label :title="$t('label.encrypt')" :tooltip="apiParams.encrypt.description" />
       </template>
-      <a-switch v-model:checked="form.encryptdisk" :checked="encryptdisk" @change="val => { encryptdisk = val }" />
+      <a-switch v-model:checked="form.encryptdisk" />
     </a-form-item>
     <a-form-item name="disksizestrictness" ref="disksizestrictness">
       <template #label>
         <tooltip-label :title="$t('label.disksizestrictness')" :tooltip="apiParams.disksizestrictness.description" />
       </template>
-      <a-switch v-model:checked="form.disksizestrictness" :checked="disksizestrictness" @change="val => { disksizestrictness = val }" />
+      <a-switch v-model:checked="form.disksizestrictness" />
     </a-form-item>
     <a-form-item name="customdisksize" ref="customdisksize">
       <template #label>
@@ -191,7 +191,19 @@
         v-model:value="form.hypervisorsnapshotreserve"
         :placeholder="apiParams.hypervisorsnapshotreserve.description"/>
     </a-form-item>
-    <a-form-item name="writecachetype" ref="writecachetype">
+    <a-form-item v-if="!form.shareable" name="kvdoenable" ref="kvdoenable">
+      <template #label>
+        <tooltip-label :title="$t('label.kvdoenable')" :tooltip="apiParams.kvdoenable ? apiParams.kvdoenable.description : ''"/>
+      </template>
+      <a-switch v-model:checked="form.kvdoenable" />
+    </a-form-item>
+    <a-form-item v-if="!form.kvdoenable" name="shareable" ref="shareable">
+      <template #label>
+        <tooltip-label :title="$t('label.shareable')" :tooltip="apiParams.shareable ? apiParams.shareable.description : ''"/>
+      </template>
+      <a-switch v-model:checked="form.shareable" />
+    </a-form-item>
+    <a-form-item v-if="!form.shareable" name="writecachetype" ref="writecachetype">
       <template #label>
         <tooltip-label :title="$t('label.writecachetype')" :tooltip="apiParams.cachemode.description"/>
       </template>
@@ -199,14 +211,14 @@
         v-model:value="form.writecachetype"
         buttonStyle="solid"
         @change="selected => { handleWriteCacheTypeChange(selected.target.value) }">
-        <a-radio-button value="none">
-          {{ $t('label.nodiskcache') }}
-        </a-radio-button>
         <a-radio-button value="writeback">
           {{ $t('label.writeback') }}
         </a-radio-button>
         <a-radio-button value="writethrough">
           {{ $t('label.writethrough') }}
+        </a-radio-button>
+        <a-radio-button value="none">
+          {{ $t('label.nodiskcache') }}
         </a-radio-button>
         <a-radio-button value="hypervisor_default">
           {{ $t('label.hypervisor.default') }}
@@ -235,9 +247,9 @@
       </a-select>
     </a-form-item>
     <a-form-item :label="$t('label.ispublic')" v-show="isAdmin()" name="ispublic" ref="ispublic">
-      <a-switch v-model:checked="form.ispublic" @change="val => { isPublic = val }" />
+      <a-switch v-model:checked="form.ispublic" />
     </a-form-item>
-    <a-form-item v-if="!isPublic" name="domainid" ref="domainid">
+    <a-form-item v-if="!form.ispublic" name="domainid" ref="domainid">
       <template #label>
         <tooltip-label :title="$t('label.domainid')" :tooltip="apiParams.domainid.description"/>
       </template>
@@ -349,11 +361,13 @@ export default {
         storagetype: 'shared',
         provisioningtype: 'thin',
         customdisksize: true,
-        writecachetype: 'none',
+        writecachetype: 'writeback',
         qostype: '',
         ispublic: true,
         disksizestrictness: false,
-        encryptdisk: false
+        encryptdisk: false,
+        kvdoenable: false,
+        shareable: false
       }, this.initialValues || {})),
       rules: reactive({}),
       storageTags: [],
@@ -364,17 +378,25 @@ export default {
       domainLoading: false,
       zones: [],
       zoneLoading: false,
-      disksizestrictness: false,
-      encryptdisk: false,
       isDomainAdminAllowedToInformTags: false
+    }
+  },
+  watch: {
+    initialValues: {
+      deep: true,
+      handler (values) {
+        this.applyInitialValues(values)
+      }
     }
   },
   created () {
     this.zones = [{ id: null, name: this.$t('label.all.zone') }]
     this.initForm()
+    this.applyInitialValues(this.initialValues)
     this.fetchData()
-    this.isPublic = isAdmin()
-    this.form.ispublic = this.isPublic
+    if (this.form.ispublic === undefined) {
+      this.form.ispublic = isAdmin()
+    }
   },
   methods: {
     initForm () {
@@ -405,6 +427,40 @@ export default {
           }
         }]
       })
+    },
+    applyInitialValues (values) {
+      if (!values) {
+        return
+      }
+      Object.assign(this.form, values)
+      this.normalizeQosType()
+      this.syncUiStateFromForm()
+    },
+    normalizeQosType () {
+      const hasHypervisorQos = [
+        this.form.diskbytesreadrate,
+        this.form.diskbytesreadratemax,
+        this.form.diskbyteswriterate,
+        this.form.diskbyteswriteratemax,
+        this.form.diskiopsreadrate,
+        this.form.diskiopswriterate
+      ].some(value => value !== undefined && value !== null && value !== '')
+      const hasStorageQos = [
+        this.form.diskiopsmin,
+        this.form.diskiopsmax,
+        this.form.hypervisorsnapshotreserve
+      ].some(value => value !== undefined && value !== null && value !== '') || this.form.iscustomizeddiskiops === true
+
+      if (hasHypervisorQos) {
+        this.form.qostype = 'hypervisor'
+      } else if (hasStorageQos) {
+        this.form.qostype = 'storage'
+      }
+    },
+    syncUiStateFromForm () {
+      this.isPublic = this.form.ispublic !== false
+      this.normalizeDomainSelection()
+      this.normalizeZoneSelection()
     },
     fetchData () {
       this.fetchDomainData()
@@ -440,6 +496,7 @@ export default {
       getAPI('listDomains', params).then(json => {
         const listDomains = json.listdomainsresponse.domain
         this.domains = this.domains.concat(listDomains)
+        this.normalizeDomainSelection()
       }).finally(() => {
         this.domainLoading = false
       })
@@ -453,6 +510,7 @@ export default {
         if (listZones) {
           this.zones = this.zones.concat(listZones)
         }
+        this.normalizeZoneSelection()
       }).finally(() => {
         this.zoneLoading = false
       })
@@ -484,6 +542,35 @@ export default {
         }).then(response => {
           this.storagePolicies = response.listvspherestoragepoliciesresponse.StoragePolicy || []
         })
+      }
+    },
+    normalizeDomainSelection () {
+      if (!Array.isArray(this.form.domainid) || this.form.domainid.length === 0 || this.domains.length === 0) {
+        return
+      }
+      if (typeof this.form.domainid[0] === 'number') {
+        return
+      }
+      const domainIndexes = this.form.domainid.map(domainId => {
+        return this.domains.findIndex(domain => domain.id === domainId)
+      }).filter(index => index >= 0)
+      if (domainIndexes.length > 0) {
+        this.form.domainid = domainIndexes
+      }
+    },
+    normalizeZoneSelection () {
+      if (!Array.isArray(this.form.zoneid) || this.form.zoneid.length === 0 || this.zones.length === 0) {
+        return
+      }
+      if (typeof this.form.zoneid[0] === 'number') {
+        return
+      }
+      const zoneIndexes = this.form.zoneid.map(zoneId => {
+        return this.zones.findIndex(zone => zone.id === zoneId)
+      }).filter(index => index >= 0)
+      if (zoneIndexes.length > 0) {
+        this.form.zoneid = zoneIndexes
+        this.fetchvSphereStoragePolicies(zoneIndexes[0])
       }
     },
     validate () {

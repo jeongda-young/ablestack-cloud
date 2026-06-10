@@ -1929,12 +1929,28 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
                         continue;
                     }
                     List<VolumeVO> volumes = _volsDao.findNonDestroyedVolumesByPoolId(pool.getId(), null);
+                    if (CollectionUtils.isEmpty(volumes)) {
+                        continue;
+                    }
+                    boolean unsupportedVolumeFormat = false;
                     for (VolumeVO volume : volumes) {
-                        if (!List.of(ImageFormat.QCOW2, ImageFormat.VHD, ImageFormat.OVA, ImageFormat.RAW).contains(volume.getFormat()) &&
-                            !List.of(Storage.StoragePoolType.PowerFlex, Storage.StoragePoolType.FiberChannel).contains(pool.getPoolType())) {
-                            logger.warn("Volume stats not implemented for this format type " + volume.getFormat());
+                        ImageFormat volumeFormat = volume.getFormat();
+                        Storage.StoragePoolType poolType = pool.getPoolType();
+                        boolean poolTypeSupportsVolumeStats = poolType != null && List.of(Storage.StoragePoolType.PowerFlex, Storage.StoragePoolType.FiberChannel).contains(poolType);
+                        boolean volumeFormatSupportsVolumeStats = volumeFormat != null && List.of(ImageFormat.QCOW2, ImageFormat.VHD, ImageFormat.OVA, ImageFormat.RAW).contains(volumeFormat);
+                        if (volumeFormat == null && !poolTypeSupportsVolumeStats) {
+                            logger.debug("Skipping volume stats for volume {} on storage pool {} as volume format is unavailable", volume.getUuid(), pool.getUuid());
+                            unsupportedVolumeFormat = true;
                             break;
                         }
+                        if (!volumeFormatSupportsVolumeStats && !poolTypeSupportsVolumeStats) {
+                            logger.warn("Volume stats not implemented for this format type " + volumeFormat);
+                            unsupportedVolumeFormat = true;
+                            break;
+                        }
+                    }
+                    if (unsupportedVolumeFormat) {
+                        continue;
                     }
                     try {
                         Map<String, VolumeStatsEntry> volumeStatsByUuid;
@@ -1947,7 +1963,12 @@ public class StatsCollector extends ManagerBase implements ComponentMethodInterc
                                 }
                             }
                         } else {
-                            volumeStatsByUuid = _userVmMgr.getVolumeStatistics(pool.getClusterId(), pool.getUuid(), pool.getPoolType(), StatsTimeout.value());
+                            Long clusterId = pool.getClusterId();
+                            if (clusterId == null) {
+                                logger.debug("Skipping volume stats for storage pool {} as scope {} has no cluster id", pool.getUuid(), pool.getScope());
+                                continue;
+                            }
+                            volumeStatsByUuid = _userVmMgr.getVolumeStatistics(clusterId, pool.getUuid(), pool.getPoolType(), StatsTimeout.value());
                         }
                         if (volumeStatsByUuid != null) {
                             for (final Map.Entry<String, VolumeStatsEntry> entry : volumeStatsByUuid.entrySet()) {

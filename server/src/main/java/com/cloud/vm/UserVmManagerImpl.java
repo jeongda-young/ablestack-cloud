@@ -2431,8 +2431,16 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
 
     @Override
     public HashMap<String, VolumeStatsEntry> getVolumeStatistics(long clusterId, String poolUuid, StoragePoolType poolType,  int timeout) {
-        List<HostVO> neighbors = _resourceMgr.listHostsInClusterByStatus(clusterId, Status.Up);
         StoragePoolVO storagePool = _storagePoolDao.findPoolByUUID(poolUuid);
+        if (storagePool == null) {
+            logger.debug("Unable to collect volume stats as storage pool {} was not found", poolUuid);
+            return null;
+        }
+        List<HostVO> neighbors = _resourceMgr.listHostsInClusterByStatus(clusterId, Status.Up);
+        if (CollectionUtils.isEmpty(neighbors)) {
+            logger.debug("Unable to collect volume stats for storage pool {} as cluster {} has no Up hosts", poolUuid, clusterId);
+            return null;
+        }
         HashMap<String, VolumeStatsEntry> volumeStatsByUuid = new HashMap<>();
 
         for (HostVO neighbor : neighbors) {
@@ -2451,7 +2459,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
 
                 DataStoreProvider storeProvider = _dataStoreProviderMgr
                         .getDataStoreProvider(storagePool.getStorageProviderName());
-                DataStoreDriver storeDriver = storeProvider.getDataStoreDriver();
+                DataStoreDriver storeDriver = storeProvider != null ? storeProvider.getDataStoreDriver() : null;
 
                 if (storeDriver instanceof PrimaryDataStoreDriver && ((PrimaryDataStoreDriver) storeDriver).canProvideVolumeStats()) {
                     // Get volume stats from the pool directly instead of sending cmd to host

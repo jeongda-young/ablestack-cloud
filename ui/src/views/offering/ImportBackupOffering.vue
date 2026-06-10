@@ -351,7 +351,7 @@ export default {
       if (this.loading) return
       this.formRef.value.validate().then(async () => {
         await this.checkBackupOffering()
-        if (this.useCommvault) {
+        if (this.isCommvaultProvider && this.useCommvault) {
           this.$notification.error({
             message: this.$t('message.request.failed'),
             description: this.$t('message.error.import.backup.offering')

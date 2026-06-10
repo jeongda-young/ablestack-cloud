@@ -3785,6 +3785,8 @@ public class ConfigurationManagerImpl extends ManagerBase implements Configurati
         diskOffering.setMinIops(minIops);
         diskOffering.setMaxIops(maxIops);
         diskOffering.setEncrypt(encrypt);
+        diskOffering.setShareable(shareable);
+        diskOffering.setKvdoEnable(kvdoEnable);
 
         setBytesRate(diskOffering, bytesReadRate, bytesReadRateMax, bytesReadRateMaxLength, bytesWriteRate, bytesWriteRateMax, bytesWriteRateMaxLength);
         setIopsRate(diskOffering, iopsReadRate, iopsReadRateMax, iopsReadRateMaxLength, iopsWriteRate, iopsWriteRateMax, iopsWriteRateMaxLength);

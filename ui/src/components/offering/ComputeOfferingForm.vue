@@ -366,11 +366,11 @@
       <template #label>
         <tooltip-label :title="$t('label.computeonly.offering')" :tooltip="$t('label.computeonly.offering.tooltip')"/>
       </template>
-      <a-switch v-model:checked="form.computeonly" :checked="computeonly" @change="val => { computeonly = val }"/>
+      <a-switch v-model:checked="form.computeonly" />
     </a-form-item>
 
     <a-card style="margin-bottom: 10px;">
-      <span v-if="computeonly">
+      <span v-if="form.computeonly">
         <a-form-item name="storagetype" ref="storagetype">
           <template #label>
             <tooltip-label :title="$t('label.storagetype')" :tooltip="apiParams.storagetype.description"/>
@@ -390,14 +390,28 @@
             <a-radio-button value="fat">{{ $t('label.provisioningtype.fat') }}</a-radio-button>
           </a-radio-group>
         </a-form-item>
-        <a-form-item name="cachemode" ref="cachemode">
+        <a-form-item v-if="!form.shareable" name="kvdoenable" ref="kvdoenable">
+          <template #label>
+            <tooltip-label :title="$t('label.kvdoenable')" :tooltip="apiParams.kvdoenable ? apiParams.kvdoenable.description : ''"/>
+          </template>
+          <a-switch v-model:checked="form.kvdoenable" />
+        </a-form-item>
+
+        <a-form-item v-if="!form.kvdoenable" name="shareable" ref="shareable">
+          <template #label>
+            <tooltip-label :title="$t('label.shareable')" :tooltip="apiParams.shareable ? apiParams.shareable.description : ''"/>
+          </template>
+          <a-switch v-model:checked="form.shareable" />
+        </a-form-item>
+
+        <a-form-item v-if="!form.shareable" name="cachemode" ref="cachemode">
           <template #label>
             <tooltip-label :title="$t('label.cachemode')" :tooltip="apiParams.cachemode.description"/>
           </template>
           <a-radio-group v-model:value="form.cachemode" buttonStyle="solid" @change="selected => { handleCacheModeChange(selected.target.value) }">
-            <a-radio-button value="none">{{ $t('label.nodiskcache') }}</a-radio-button>
             <a-radio-button value="writeback">{{ $t('label.writeback') }}</a-radio-button>
             <a-radio-button value="writethrough">{{ $t('label.writethrough') }}</a-radio-button>
+            <a-radio-button value="none">{{ $t('label.nodiskcache') }}</a-radio-button>
             <a-radio-button value="hypervisor_default">{{ $t('label.hypervisor.default') }}</a-radio-button>
           </a-radio-group>
         </a-form-item>
@@ -517,7 +531,7 @@
           <a-switch v-model:checked="form.encryptdisk" :checked="encryptdisk" @change="val => { encryptdisk = val }" />
         </a-form-item>
       </span>
-      <span v-if="!computeonly">
+      <span v-if="!form.computeonly">
         <a-form-item>
           <a-button type="primary" @click="addDiskOffering()"> {{ $t('label.add.disk.offering') }} </a-button>
           <a-modal
@@ -615,12 +629,14 @@ export default {
         computeonly: true,
         storagetype: 'shared',
         provisioningtype: 'thin',
-        cachemode: 'none',
+        cachemode: 'writeback',
         qostype: '',
         iscustomizeddiskiops: false,
         diskofferingid: null,
         diskofferingstrictness: false,
         encryptdisk: false,
+        kvdoenable: false,
+        shareable: false,
         leaseduration: undefined,
         leaseexpiryaction: undefined
       }, this.initialValues || {})),
@@ -628,7 +644,7 @@ export default {
       // other UI state copied
       storageType: 'shared',
       provisioningType: 'thin',
-      cacheMode: 'none',
+      cacheMode: 'writeback',
       offeringType: 'fixed',
       isCustomizedDiskIops: false,
       isPublic: true,
@@ -670,9 +686,18 @@ export default {
       externalDetailsEnabled: false
     }
   },
+  watch: {
+    initialValues: {
+      deep: true,
+      handler (values) {
+        this.applyInitialValues(values)
+      }
+    }
+  },
   created () {
     this.zones = [{ id: null, name: this.$t('label.all.zone') }]
     this.initForm()
+    this.syncUiStateFromForm()
     this.fetchData()
     this.isPublic = isAdmin()
     this.form.ispublic = this.isPublic
@@ -683,6 +708,28 @@ export default {
       this.rules = reactive({
         name: [{ required: true, message: this.$t('message.error.required.input') }]
       })
+    },
+    applyInitialValues (values) {
+      if (!values) {
+        return
+      }
+      Object.assign(this.form, values)
+      this.syncUiStateFromForm()
+    },
+    syncUiStateFromForm () {
+      this.offeringType = this.form.offeringtype || 'fixed'
+      this.computeonly = this.form.computeonly !== false
+      this.qosType = this.form.qostype || ''
+      this.isCustomizedDiskIops = this.form.iscustomizeddiskiops === true
+      this.selectedDiskOfferingId = this.form.diskofferingid || ''
+      this.diskofferingstrictness = this.form.diskofferingstrictness === true
+      this.encryptdisk = this.form.encryptdisk === true
+      this.selectedGpuCard = this.form.gpucardid || ''
+      this.showLeaseOptions = this.form.leaseduration !== undefined && this.form.leaseduration !== null
+      this.externalDetailsEnabled = !!(this.form.externaldetails && Object.keys(this.form.externaldetails).length > 0)
+      if (this.form.deploymentplanner) {
+        this.handleDeploymentPlannerChange(this.form.deploymentplanner)
+      }
     },
     fetchData () {
       this.fetchDomainData()
@@ -714,12 +761,18 @@ export default {
       this.diskOfferingLoading = true
       getAPI('listDiskOfferings', { listall: true }).then(json => {
         this.diskOfferings = json.listdiskofferingsresponse.diskoffering || []
-        if (this.selectedDiskOfferingId === '') {
+        if (!this.form.diskofferingid) {
           this.selectedDiskOfferingId = this.diskOfferings[0]?.id || ''
+          this.form.diskofferingid = this.selectedDiskOfferingId
         }
       }).finally(() => { this.diskOfferingLoading = false })
     },
-    updateSelectedDiskOffering (id) { if (id) this.selectedDiskOfferingId = id },
+    updateSelectedDiskOffering (id) {
+      if (id) {
+        this.selectedDiskOfferingId = id
+        this.form.diskofferingid = id
+      }
+    },
     closeDiskOfferingModal () { this.fetchDiskOfferings(); this.showDiskOfferingModal = false },
     isDomainAdmin () {
       return ['DomainAdmin'].includes(this.$store.getters.userInfo.roletype)
@@ -771,7 +824,9 @@ export default {
         const planners = json.listdeploymentplannersresponse.deploymentPlanner
         this.deploymentPlanners = this.deploymentPlanners.concat(planners)
         this.deploymentPlanners.unshift({ name: '' })
-        this.form.deploymentplanner = this.deploymentPlanners.length > 0 ? this.deploymentPlanners[0].name : ''
+        if (!this.form.deploymentplanner) {
+          this.form.deploymentplanner = this.deploymentPlanners.length > 0 ? this.deploymentPlanners[0].name : ''
+        }
       }).finally(() => { this.deploymentPlannerLoading = false })
     },
     fetchvSphereStoragePolicies (zoneIndex) {

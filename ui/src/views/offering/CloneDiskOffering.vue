@@ -53,7 +53,7 @@
 <script>
 import DiskOfferingForm from '@/components/offering/DiskOfferingForm'
 import { reactive } from 'vue'
-import { postAPI } from '@/api'
+import { getAPI, postAPI } from '@/api'
 import { isAdmin } from '@/role'
 
 export default {
@@ -78,13 +78,30 @@ export default {
     this.apiParams = this.$getApiParams('cloneDiskOffering')
   },
   created () {
-    this.populateFormFromResource()
+    this.fetchSourceOffering()
   },
   methods: {
-    populateFormFromResource () {
-      if (!this.resource) return
+    fetchSourceOffering () {
+      if (!this.resource?.id) {
+        this.populateFormFromResource()
+        return
+      }
 
-      const r = this.resource
+      getAPI('listDiskOfferings', {
+        id: this.resource.id,
+        listall: true
+      }).then(json => {
+        const offering = json?.listdiskofferingsresponse?.diskoffering?.[0]
+        this.populateFormFromResource(offering || this.resource)
+      }).catch(() => {
+        this.populateFormFromResource()
+      })
+    },
+    populateFormFromResource (sourceResource = this.resource) {
+      if (!sourceResource) return
+
+      const r = sourceResource
+      const isTrueValue = value => value === true || value === 'true' || value === 1 || value === '1'
       this.form.name = r.name + ' - Clone'
       this.form.displaytext = r.displaytext
 
@@ -94,7 +111,9 @@ export default {
       if (r.provisioningtype) {
         this.form.provisioningtype = r.provisioningtype
       }
-      if (r.customized !== undefined) {
+      if (r.iscustomized !== undefined) {
+        this.form.customdisksize = r.iscustomized
+      } else if (r.customized !== undefined) {
         this.form.customdisksize = r.customized
       }
       if (r.disksize) this.form.disksize = r.disksize
@@ -109,8 +128,28 @@ export default {
       if (r.encrypt !== undefined) {
         this.form.encryptdisk = r.encrypt
       }
+      if (r.kvdoenable !== undefined) {
+        this.form.kvdoenable = isTrueValue(r.kvdoenable)
+      }
+      if (r.shareable !== undefined) {
+        this.form.shareable = isTrueValue(r.shareable)
+      }
 
-      if (r.diskBytesReadRate || r.diskBytesReadRateMax || r.diskBytesWriteRate || r.diskBytesWriteRateMax || r.diskIopsReadRate || r.diskIopsWriteRate) {
+      const hasHypervisorQos = [
+        r.diskBytesReadRate,
+        r.diskBytesReadRateMax,
+        r.diskBytesWriteRate,
+        r.diskBytesWriteRateMax,
+        r.diskIopsReadRate,
+        r.diskIopsWriteRate
+      ].some(value => value !== undefined && value !== null)
+      const hasStorageQos = [
+        r.miniops,
+        r.maxiops,
+        r.hypervisorsnapshotreserve
+      ].some(value => value !== undefined && value !== null) || isTrueValue(r.iscustomizediops)
+
+      if (hasHypervisorQos) {
         this.form.qostype = 'hypervisor'
         if (r.diskBytesReadRate) this.form.diskbytesreadrate = r.diskBytesReadRate
         if (r.diskBytesReadRateMax) this.form.diskbytesreadratemax = r.diskBytesReadRateMax
@@ -118,20 +157,31 @@ export default {
         if (r.diskBytesWriteRateMax) this.form.diskbyteswriteratemax = r.diskBytesWriteRateMax
         if (r.diskIopsReadRate) this.form.diskiopsreadrate = r.diskIopsReadRate
         if (r.diskIopsWriteRate) this.form.diskiopswriterate = r.diskIopsWriteRate
-      } else if (r.miniops || r.maxiops) {
+      } else if (hasStorageQos) {
         this.form.qostype = 'storage'
         if (r.miniops) this.form.diskiopsmin = r.miniops
         if (r.maxiops) this.form.diskiopsmax = r.maxiops
         if (r.hypervisorsnapshotreserve) this.form.hypervisorsnapshotreserve = r.hypervisorsnapshotreserve
       }
       if (r.iscustomizediops !== undefined) {
-        this.form.iscustomizeddiskiops = r.iscustomizediops
+        this.form.iscustomizeddiskiops = isTrueValue(r.iscustomizediops)
       }
 
       if (r.tags) {
         this.form.tags = r.tags.split(',')
       }
 
+      if (r.ispublic !== undefined) {
+        this.form.ispublic = isTrueValue(r.ispublic)
+      } else if (typeof r.domainid === 'string' && r.domainid.length > 0) {
+        this.form.ispublic = false
+      }
+      if (typeof r.domainid === 'string' && r.domainid.length > 0) {
+        this.form.domainid = r.domainid.split(',')
+      }
+      if (typeof r.zoneid === 'string' && r.zoneid.length > 0) {
+        this.form.zoneid = r.zoneid.split(',')
+      }
       if (r.vspherestoragepolicy) this.form.storagepolicy = r.vspherestoragepolicy
     },
     isAdmin () {
