@@ -102,44 +102,74 @@
     :title="record.name"
     >
     <div>
-      <a-row justify="space-between">
-        <a-col>
+      <a-row class="object-store-detail-row">
+        <a-col :span="24">
           <tooltip-label :title="$t('label.name')" bold/>
         </a-col>
-        <a-col>
+        <a-col :span="24" class="object-store-detail-value">
           {{ record.name.split('/').pop() }}
         </a-col>
       </a-row>
-      <a-row justify="space-between">
-        <a-col>
+      <a-row class="object-store-detail-row">
+        <a-col :span="24">
           <tooltip-label :title="$t('label.size')" bold/>
         </a-col>
-        <a-col>
+        <a-col :span="24" class="object-store-detail-value">
           {{ convertBytes(record.size) }}
         </a-col>
       </a-row>
-      <a-row justify="space-between">
-        <a-col>
+      <a-row class="object-store-detail-row">
+        <a-col :span="24">
           <tooltip-label :title="$t('label.last.updated')" bold/>
         </a-col>
-        <a-col>
+        <a-col :span="24" class="object-store-detail-value">
           {{ $toLocaleDate(record.lastModified) }}
         </a-col>
       </a-row>
-      <a-row justify="space-between">
-        <a-col>
+      <a-row v-if="isPublicBucket()" class="object-store-detail-row">
+        <a-col :span="24">
           <tooltip-label :title="$t('label.url')" :tooltip="$t('label.object.url.description')" bold/>
         </a-col>
-        <a-col>
-          <a :href="record.url">{{ $t('label.link') }}</a>
+        <a-col :span="24" class="object-store-detail-value">
+          <div class="object-store-url-controls">
+            <a-button type="primary" @click="openObjectUrl">
+              {{ $t('label.object.open.url') }}
+            </a-button>
+          </div>
         </a-col>
       </a-row>
-      <a-row justify="space-between">
-        <a-col>
+      <a-row v-if="!isPublicBucket()" class="object-store-presigned-url-row" justify="space-between">
+        <a-col :span="24">
           <tooltip-label :title="$t('label.object.presigned.url')" :tooltip="$t('label.object.presigned.url.description')" bold />
         </a-col>
-        <a-col>
-          <a :href="record.presignedUrl">{{ $t('label.link') }}</a>
+        <a-col :span="24" class="object-store-detail-value">
+          <div class="object-store-presigned-url-description">
+            {{ $t('label.object.presigned.url.expiry.description') }}
+          </div>
+          <div class="object-store-presigned-url-controls">
+            <a-input-number
+              v-model:value="presignedUrlExpiryValue"
+              :min="1"
+              :max="getPresignedUrlExpiryMaxValue()"
+              :precision="0"
+              :disabled="presignedUrlLoading"/>
+            <a-select
+              v-model:value="presignedUrlExpiryUnit"
+              :disabled="presignedUrlLoading">
+              <a-select-option value="seconds">{{ $t('label.seconds') }}</a-select-option>
+              <a-select-option value="minutes">{{ $t('label.minutes') }}</a-select-option>
+              <a-select-option value="hours">{{ $t('label.hours') }}</a-select-option>
+            </a-select>
+          </div>
+          <div class="object-store-presigned-url-action">
+            <a-button
+              type="primary"
+              :loading="presignedUrlLoading"
+              :disabled="!presignedUrlExpiryValue"
+              @click="generatePresignedUrl">
+              {{ $t('label.copy.share.url') }}
+            </a-button>
+          </div>
         </a-col>
       </a-row>
         <a-divider>
@@ -149,11 +179,11 @@
           v-for="(value,key) in record.metadata"
           :key="key"
           >
-          <a-row justify="space-between">
-            <a-col>
+          <a-row class="object-store-detail-row">
+            <a-col :span="24">
               <tooltip-label :title="key" bold />
             </a-col>
-            <a-col>
+            <a-col :span="24" class="object-store-detail-value">
               {{ value }}
             </a-col>
           </a-row>
@@ -301,9 +331,6 @@ import TooltipButton from '@/components/widgets/TooltipButton'
 import TooltipLabel from '@/components/widgets/TooltipLabel'
 import KeyValuePairInput from '@/components/KeyValuePairInput'
 
-const objectStorePresignedUrlExpiryConfigKey = 'objectstore.presigned.url.expiry.seconds'
-const defaultObjectStorePresignedUrlExpirySeconds = 24 * 60 * 60
-
 const normalizeObjectStorePath = path => {
   if (!path || path === '/') {
     return ''
@@ -378,7 +405,9 @@ export default {
       createFolderName: '',
       createFolderLoading: false,
       bucketUsageSize: this.resource.size,
-      objectStorePresignedUrlExpirySeconds: defaultObjectStorePresignedUrlExpirySeconds,
+      presignedUrlExpiryValue: 1,
+      presignedUrlExpiryUnit: 'hours',
+      presignedUrlLoading: false,
       record: {},
       showObjectDetails: false,
       fetching: false
@@ -397,7 +426,6 @@ export default {
   },
   created () {
     this.fetchData()
-    this.fetchObjectStorePresignedUrlExpirySeconds()
   },
   methods: {
     openCreateFolderModal () {
@@ -685,24 +713,6 @@ export default {
         this.listObjects()
       }
     },
-    fetchObjectStorePresignedUrlExpirySeconds () {
-      api('listConfigurations', { name: objectStorePresignedUrlExpiryConfigKey }).then(json => {
-        const value = json?.listconfigurationsresponse?.configuration?.[0]?.value
-        const expirySeconds = Number(value)
-        if (Number.isFinite(expirySeconds) && expirySeconds > 0) {
-          this.objectStorePresignedUrlExpirySeconds = Math.floor(expirySeconds)
-        }
-      }).catch(error => {
-        console.warn(`Failed to load ${objectStorePresignedUrlExpiryConfigKey}`, error)
-      })
-    },
-    getObjectStorePresignedUrlExpirySeconds () {
-      const expirySeconds = Number(this.objectStorePresignedUrlExpirySeconds)
-      if (!Number.isFinite(expirySeconds) || expirySeconds <= 0) {
-        return defaultObjectStorePresignedUrlExpirySeconds
-      }
-      return Math.floor(expirySeconds)
-    },
     onSelectChange (selectedRow) {
       this.selectedRows = selectedRow
     },
@@ -818,18 +828,70 @@ export default {
       })
     },
     showObjectDescription (record) {
-      this.record = { ...record }
-      this.record.url = this.resource.url + '/' + record.name
-      this.client.presignedGetObject(this.resource.name, record.name, this.getObjectStorePresignedUrlExpirySeconds(), (err, presignedUrl) => {
+      this.record = {
+        ...record,
+        url: this.resource.url + '/' + record.name
+      }
+      this.presignedUrlExpiryValue = 1
+      this.presignedUrlExpiryUnit = 'hours'
+      this.presignedUrlLoading = false
+      this.showObjectDetails = true
+    },
+    isPublicBucket () {
+      return String(this.resource?.policy || '').toLowerCase() === 'public'
+    },
+    openObjectUrl () {
+      if (this.record?.url) {
+        window.open(this.record.url, '_blank', 'noopener')
+      }
+    },
+    getPresignedUrlExpirySeconds () {
+      const value = Number(this.presignedUrlExpiryValue)
+      if (!Number.isFinite(value) || value <= 0) {
+        return 0
+      }
+      const multipliers = {
+        seconds: 1,
+        minutes: 60,
+        hours: 60 * 60,
+        days: 24 * 60 * 60
+      }
+      return Math.floor(value * (multipliers[this.presignedUrlExpiryUnit] || multipliers.hours))
+    },
+    getPresignedUrlExpiryMaxValue () {
+      const maxExpirySeconds = 7 * 24 * 60 * 60
+      const dividers = {
+        seconds: 1,
+        minutes: 60,
+        hours: 60 * 60,
+        days: 24 * 60 * 60
+      }
+      return Math.floor(maxExpirySeconds / (dividers[this.presignedUrlExpiryUnit] || dividers.hours))
+    },
+    generatePresignedUrl () {
+      const expirySeconds = this.getPresignedUrlExpirySeconds()
+      if (expirySeconds <= 0) {
+        return
+      }
+      if (expirySeconds > 7 * 24 * 60 * 60) {
+        return this.$notification.error({
+          message: this.$t('error.execute.api.failed'),
+          description: 'Presigned URL expiry cannot exceed 7 days.'
+        })
+      }
+      this.presignedUrlLoading = true
+      this.client.presignedGetObject(this.resource.name, this.record.name, expirySeconds, (err, presignedUrl) => {
+        this.presignedUrlLoading = false
         if (err) {
           return this.$notification.error({
             message: this.$t('error.execute.api.failed'),
             description: err.message
           })
-        } else {
-          this.record.presignedUrl = presignedUrl
         }
-        this.showObjectDetails = true
+        this.$copyText(presignedUrl)
+        this.$message.success({
+          content: this.$t('label.copied.clipboard')
+        })
       })
     },
     updateMetadata () {
@@ -907,6 +969,64 @@ export default {
 .object-store-upload-current-name {
   color: rgba(0, 0, 0, 0.85);
   margin-top: 2px;
+  word-break: break-all;
+}
+
+.object-store-presigned-url-row {
+  margin-top: 8px;
+}
+
+.object-store-presigned-url-controls {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 6px;
+  margin: 6px 0 8px;
+  width: 100%;
+}
+
+.object-store-presigned-url-controls :deep(.ant-input-number) {
+  width: 100%;
+}
+
+.object-store-presigned-url-controls :deep(.ant-select) {
+  width: 100%;
+}
+
+.object-store-presigned-url-description {
+  color: rgba(0, 0, 0, 0.45);
+  font-size: 12px;
+  margin-top: 2px;
+}
+
+.object-store-presigned-url-action {
+  margin-bottom: 8px;
+  width: 100%;
+}
+
+.object-store-presigned-url-action :deep(.ant-btn) {
+  width: 100%;
+}
+
+.object-store-url-controls {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 6px;
+  width: 100%;
+}
+
+.object-store-url-controls :deep(.ant-btn) {
+  width: 100%;
+}
+
+.object-store-detail-row {
+  margin-bottom: 8px;
+}
+
+.object-store-detail-value {
+  color: rgba(0, 0, 0, 0.85);
+  margin-top: 2px;
+  padding-left: 12px;
+  text-align: left;
   word-break: break-all;
 }
 </style>

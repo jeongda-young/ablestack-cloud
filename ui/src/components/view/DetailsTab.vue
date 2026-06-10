@@ -77,6 +77,12 @@
           <div v-else-if="$route.meta.name === 'vm' && item === 'qemuagentversion'">
             {{ dataResource[item] === 'Not Installed' ? $t('label.state.qemuagentversion.notinstalled') : dataResource[item]}}
           </div>
+          <div v-else-if="$route.meta.name === 'vm' && item === 'ipaddress'">
+            {{ activeNicAddresses('ipaddress') }}
+          </div>
+          <div v-else-if="$route.meta.name === 'vm' && item === 'ip6address'">
+            {{ activeNicAddresses('ip6address') }}
+          </div>
           <div v-else-if="$route.meta.name === 'controllertemplate' && item === 'dctemplate'">
             <div v-for="(dctemplate, idx) in dataResource[item]" :key="idx">
               <router-link :to="{ path: '/template/' + dctemplate.id }">{{ dctemplate.name }}</router-link>
@@ -347,7 +353,7 @@ export default {
         }
         const managementIps = []
         for (const nic of this.resource.nic) {
-          if (managementDeviceIds.includes(parseInt(nic.deviceid)) && nic.ipaddress) {
+          if (managementDeviceIds.includes(parseInt(nic.deviceid)) && nic.linkstate !== false && nic.ipaddress) {
             managementIps.push(nic.ipaddress)
             if (nic.publicip) {
               managementIps.push(nic.publicip)
@@ -391,7 +397,7 @@ export default {
     },
     ipV6Address () {
       if (this.dataResource.nic && this.dataResource.nic.length > 0) {
-        return this.dataResource.nic.filter(e => { return e.ip6address }).map(e => { return e.ip6address }).join(', ')
+        return this.dataResource.nic.filter(e => e.linkstate !== false && e.ip6address).map(e => e.ip6address).join(', ')
       }
       return null
     },
@@ -505,6 +511,13 @@ export default {
       if (val < 1024 * 1024 * 1024) return `${(val / 1024 / 1024).toFixed(2)} GB`
       if (val < 1024 * 1024 * 1024 * 1024) return `${(val / 1024 / 1024 / 1024).toFixed(2)} TB`
       return val
+    },
+    activeNicAddresses (field) {
+      if (!this.dataResource.nic || this.dataResource.nic.length === 0) {
+        return this.dataResource[field]
+      }
+
+      return this.dataResource.nic.filter(e => e.linkstate !== false && e[field]).map(e => e[field]).join(', ')
     },
     getUserSourceLabel (source) {
       if (source === 'saml2') {

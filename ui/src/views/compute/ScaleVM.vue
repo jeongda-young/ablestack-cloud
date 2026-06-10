@@ -30,6 +30,7 @@
       :compute-items="offerings"
       :loading="loading"
       :rowCount="total"
+      :value="resource.serviceofferingid"
       size="small"
       @select-compute-item="($event) => updateComputeOffering($event)"
       @handle-search-filter="($event) => fetchData($event)" />

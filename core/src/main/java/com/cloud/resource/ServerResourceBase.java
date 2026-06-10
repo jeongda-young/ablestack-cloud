@@ -293,10 +293,6 @@ public abstract class ServerResourceBase implements ServerResource {
         }
 
         try {
-            if (ListHostLunDeviceCommand.MODE_SINGLE.equals(lunPathMode)) {
-                return new ListHostLunDeviceAnswer(true, new ArrayList<>(), new ArrayList<>(), new ArrayList<>(), new ArrayList<>());
-            }
-
             ListHostLunDeviceAnswer fast = listHostLunDevicesFast(lunPathMode);
             if (fast != null && fast.getResult()) {
                 return fast;
@@ -1959,11 +1955,11 @@ public abstract class ServerResourceBase implements ServerResource {
             return false;
         }
 
-        if ("lvm".equals(deviceType) || deviceName.startsWith("/dev/mapper/")) {
-            if (deviceName.contains("ceph--") && deviceName.contains("--osd--block--")) {
-                return false;
-            }
-            return true;
+
+        if (deviceName.startsWith("/dev/mapper/")
+            && deviceName.contains("ceph--")
+            && deviceName.contains("--osd--block--")) {
+            return false;
         }
 
         if (device.has("children")) {
@@ -1972,13 +1968,8 @@ public abstract class ServerResourceBase implements ServerResource {
             for (int i = 0; i < children.length(); i++) {
                 JSONObject child = children.getJSONObject(i);
                 String childType = child.optString("type", "");
-                String childName = child.optString("name", "");
 
                 if ("part".equals(childType)) {
-                    return true;
-                }
-
-                if ("lvm".equals(childType)) {
                     return true;
                 }
 
@@ -4082,15 +4073,17 @@ public abstract class ServerResourceBase implements ServerResource {
                 return "파티션 디바이스는 할당할 수 없습니다. 전체 디스크를 사용해주세요: " + devicePath;
             }
 
-            if (isLunDeviceAllocatedToOtherVm(devicePath, vmName)) {
-                return "디바이스가 이미 다른 VM에 할당되어 있습니다: " + devicePath;
+            String allocatedVmName = findLunDeviceAllocatedVmName(devicePath, vmName);
+            if (allocatedVmName != null) {
+                return "디바이스가 이미 다른 VM에 할당되어 있습니다: " + devicePath + " (VM: " + allocatedVmName + ")";
             }
 
             Map<String, DeviceMapping> mappings = buildDeviceMapping();
             DeviceMapping mapping = findMappedDevice(devicePath, mappings);
             if (mapping != null && mapping.getScsiDevicePath() != null) {
-                if (isLunDeviceAllocatedToOtherVm(mapping.getScsiDevicePath(), vmName)) {
-                    return "매핑된 SCSI 디바이스가 이미 다른 VM에 할당되어 있습니다: " + mapping.getScsiDevicePath();
+                String mappedAllocatedVmName = findLunDeviceAllocatedVmName(mapping.getScsiDevicePath(), vmName);
+                if (mappedAllocatedVmName != null) {
+                    return "매핑된 SCSI 디바이스가 이미 다른 VM에 할당되어 있습니다: " + mapping.getScsiDevicePath() + " (VM: " + mappedAllocatedVmName + ")";
                 }
             }
 
@@ -4185,29 +4178,41 @@ public abstract class ServerResourceBase implements ServerResource {
     }
 
     private boolean isLunDeviceAllocatedToOtherVm(String devicePath, String currentVmName) {
+        return findLunDeviceAllocatedVmName(devicePath, currentVmName) != null;
+    }
+
+    private String findLunDeviceAllocatedVmName(String devicePath, String currentVmName) {
         try {
             Script listCommand = new Script("/bin/bash");
             listCommand.add("-c");
-            listCommand.add("virsh list --all | grep -v 'Id' | grep -v '^-' | while read line; do " +
-                           "vm_id=$(echo $line | awk '{print $1}'); " +
-                           "if [ ! -z \"$vm_id\" ] && [ \"$vm_id\" != \"" + currentVmName + "\" ]; then " +
-                           "virsh dumpxml $vm_id | grep -q '" + devicePath + "'; " +
+            listCommand.add("virsh list --all --name | while read vm_name; do " +
+                           "if [ -z \"$vm_name\" ] || [ \"$vm_name\" = \"" + currentVmName + "\" ]; then " +
+                           "continue; " +
+                           "fi; " +
+                           "virsh dumpxml \"$vm_name\" | grep -Fq \"dev='" + devicePath + "'\"; " +
+                           "if [ $? -ne 0 ]; then " +
+                           "virsh dumpxml \"$vm_name\" | grep -Fq 'dev=\"" + devicePath + "\"'; " +
+                           "fi; " +
                            "if [ $? -eq 0 ]; then " +
                            "echo 'allocated'; " +
+                           "echo \"$vm_name\"; " +
                            "break; " +
-                           "fi; " +
                            "fi; " +
                            "done");
             OutputInterpreter.AllLinesParser parser = new OutputInterpreter.AllLinesParser();
             String result = listCommand.execute(parser);
 
             if (result == null && parser.getLines() != null) {
-                return parser.getLines().trim().equals("allocated");
+                String[] lines = parser.getLines().trim().split("\\r?\\n");
+                if (lines.length >= 2 && "allocated".equals(lines[0].trim())) {
+                    String vmName = lines[1].trim();
+                    return vmName.isEmpty() ? "unknown" : vmName;
+                }
             }
-            return false;
+            return null;
         } catch (Exception e) {
             logger.debug("Error checking device allocation to other VMs: {}", e.getMessage());
-            return false;
+            return null;
         }
     }
 

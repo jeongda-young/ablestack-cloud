@@ -1,6 +1,7 @@
 package org.apache.cloudstack.wallAlerts.service;
 
 import com.cloud.alert.AlertManager;
+import com.cloud.utils.concurrency.NamedThreadFactory;
 import com.cloud.utils.component.ManagerBase;
 
 import com.fasterxml.jackson.databind.JsonNode;
@@ -43,7 +44,10 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Iterator;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
 import java.util.concurrent.Semaphore;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.regex.Pattern;
 import java.util.regex.PatternSyntaxException;
 import java.util.regex.Matcher;
@@ -65,20 +69,25 @@ public class WallAlertsServiceImpl extends ManagerBase implements WallAlertsServ
     private AlertManager alertMgr;
     // UID별 중복 전송 방지 캐시
     private final Map<String, Long> recentAlertSentAtMs = new ConcurrentHashMap<>();
-    // 중복 억제 TTL (예: 5분)
-    private static final long DEFAULT_WALL_ALERT_THROTTLE_MS = 300_000L;
 
     @Inject
     private WallApiClient wallApiClient;
+    private ScheduledExecutorService wallAlertPollExecutor;
 
     private static final ZoneId KST = ZoneId.of("Asia/Seoul");
     private static final DateTimeFormatter KST_YMD_HM = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm");
 
     @Override
-    public boolean start() { return true; }
+    public boolean start() {
+        startWallAlertBackgroundPoller();
+        return true;
+    }
 
     @Override
-    public boolean stop() { return true; }
+    public boolean stop() {
+        stopWallAlertBackgroundPoller();
+        return true;
+    }
 
     @Override
     public String getName() { return "WallAlertsService"; }
@@ -96,6 +105,54 @@ public class WallAlertsServiceImpl extends ManagerBase implements WallAlertsServ
     private static final Map<String, CurrentEvalCacheEntry> CURRENT_EVAL_CACHE = new HashMap<>();
     private static final Semaphore DS_QUERY_SEM = new Semaphore(3);
     private static final ObjectMapper JSON = new ObjectMapper();
+
+    private void startWallAlertBackgroundPoller() {
+        final int intervalSeconds = Math.max(0, WallConfigKeys.BACKGROUND_POLL_INTERVAL_SECONDS.value());
+        if (intervalSeconds <= 0) {
+            LOG.info("Wall Alerts background evaluation is disabled by wall.alerts.background.poll.interval.seconds");
+            return;
+        }
+        if (wallAlertPollExecutor != null && !wallAlertPollExecutor.isShutdown()) {
+            return;
+        }
+
+        wallAlertPollExecutor = Executors.newScheduledThreadPool(1, new NamedThreadFactory("Wall-Alerts-Poller"));
+        final int initialDelaySeconds = Math.min(10, intervalSeconds);
+        wallAlertPollExecutor.scheduleWithFixedDelay(new Runnable() {
+            @Override
+            public void run() {
+                evaluateWallAlertsInBackground();
+            }
+        }, initialDelaySeconds, intervalSeconds, TimeUnit.SECONDS);
+        LOG.info(String.format("Started Wall Alerts background evaluation every %s seconds", intervalSeconds));
+    }
+
+    private void stopWallAlertBackgroundPoller() {
+        if (wallAlertPollExecutor != null) {
+            wallAlertPollExecutor.shutdownNow();
+            wallAlertPollExecutor = null;
+            LOG.info("Stopped Wall Alerts background evaluation");
+        }
+    }
+
+    private void evaluateWallAlertsInBackground() {
+        if (!WallConfigKeys.WALL_ALERT_ENABLED.value()) {
+            return;
+        }
+        try {
+            invalidateRulesCache();
+            listWallAlertRules(new ListWallAlertRulesCmd());
+        } catch (ServerApiException e) {
+            LOG.warn("[WallAlerts] background evaluation skipped: " + e.getDescription());
+        } catch (Throwable t) {
+            LOG.warn("[WallAlerts] background evaluation failed: " + t.getMessage(), t);
+        }
+    }
+
+    private long getWallAlertThrottleMs() {
+        final int throttleSeconds = Math.max(0, WallConfigKeys.ALERT_THROTTLE_SECONDS.value());
+        return TimeUnit.SECONDS.toMillis(throttleSeconds);
+    }
 
 
     @Override
@@ -1024,7 +1081,8 @@ public class WallAlertsServiceImpl extends ManagerBase implements WallAlertsServ
                                     final String targetInfo) {
         try {
             final Long last = recentAlertSentAtMs.get(uid);
-            if (last != null && now - last < DEFAULT_WALL_ALERT_THROTTLE_MS) {
+            final long throttleMs = getWallAlertThrottleMs();
+            if (last != null && throttleMs > 0L && now - last < throttleMs) {
                 // TTL 내 중복 전송 방지
                 return;
             }
@@ -1806,7 +1864,9 @@ public class WallAlertsServiceImpl extends ManagerBase implements WallAlertsServ
                 WallConfigKeys.WALL_BASE_URL,
                 WallConfigKeys.WALL_API_TOKEN,
                 WallConfigKeys.CONNECT_TIMEOUT_MS,
-                WallConfigKeys.READ_TIMEOUT_MS
+                WallConfigKeys.READ_TIMEOUT_MS,
+                WallConfigKeys.BACKGROUND_POLL_INTERVAL_SECONDS,
+                WallConfigKeys.ALERT_THROTTLE_SECONDS
         };
     }
 

@@ -46,6 +46,7 @@ public class LibvirtCommvaultTakeBackupCommandWrapper extends CommandWrapper<Com
         final String backupPath = command.getBackupPath();
         List<PrimaryDataStoreTO> volumePools = command.getVolumePools();
         final List<String> volumePaths = command.getVolumePaths();
+        final List<String> volumeUuids = command.getVolumeUuids();
         KVMStoragePoolManager storagePoolMgr = libvirtComputingResource.getStoragePoolMgr();
 
         List<String> diskPaths = new ArrayList<>();
@@ -70,7 +71,8 @@ public class LibvirtCommvaultTakeBackupCommandWrapper extends CommandWrapper<Com
                 "-v", vmName,
                 "-p", backupPath,
                 "-q", command.getQuiesce() != null && command.getQuiesce() ? "true" : "false",
-                "-d", diskPaths.isEmpty() ? "" : String.join(",", diskPaths)
+                "-d", diskPaths.isEmpty() ? "" : String.join(",", diskPaths),
+                "-u", volumeUuids == null || volumeUuids.isEmpty() ? "" : String.join(",", volumeUuids)
         });
 
         Pair<Integer, String> result = Script.executePipedCommands(commands, libvirtComputingResource.getCmdsTimeout());

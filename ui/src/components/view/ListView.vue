@@ -182,9 +182,9 @@
         <a-checkbox :checked="record.adminsonly" disabled v-else />
       </template>
       <template v-if="column.key === 'ipaddress'" href="javascript:;">
-        <router-link v-if="['/publicip', '/privategw'].includes($route.path)" :to="{ path: $route.path + '/' + record.id }">{{ text }}</router-link>
+        <router-link v-if="['/publicip', '/privategw'].includes($route.path)" :to="{ path: $route.path + '/' + record.id }">{{ ipAddress(text, record) }}</router-link>
         <span v-else>
-          <copy-label :label="text" />
+          <copy-label v-if="ipAddress(text, record)" :label="ipAddress(text, record)" />
         </span>
         <span v-if="record.issourcenat">
           &nbsp;
@@ -1183,12 +1183,19 @@ export default {
     removeVMSchedule (record) {
       this.$emit('remove-vm-schedule', record)
     },
+    ipAddress (text, record) {
+      if (!record || !record.nic || record.nic.length === 0) {
+        return text
+      }
+
+      return record.nic.filter(e => e.linkstate !== false && e.ipaddress).map(e => e.ipaddress).join(', ')
+    },
     ipV6Address (text, record) {
       if (!record || !record.nic || record.nic.length === 0) {
         return ''
       }
 
-      return record.nic.filter(e => { return e.ip6address }).map(e => { return e.ip6address }).join(', ') || text
+      return record.nic.filter(e => e.linkstate !== false && e.ip6address).map(e => e.ip6address).join(', ') || text
     },
     generateCommentsPath (record) {
       if (this.entityTypeToPath(record.entitytype) === 'ssh') {

@@ -1702,6 +1702,20 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             backupProvider.syncBackupMetrics(dataCenter.getId());
             for (final VMInstanceVO vm : vms) {
                 try {
+                    Long backupOfferingId = vm.getBackupOfferingId();
+                    if (backupOfferingId == null) {
+                        logger.debug("Skipping VM [{}] because backup offering is not assigned.", vm);
+                        continue;
+                    }
+                    BackupOfferingVO offering = backupOfferingDao.findById(vm.getBackupOfferingId());
+                    if (offering == null) {
+                        logger.debug("Skipping VM [{}] because backup offering [{}] was not found.", vm, backupOfferingId);
+                        continue;
+                    }
+                    if (!backupProvider.getName().equalsIgnoreCase(offering.getProvider())) {
+                        logger.debug("Skipping VM [{}] because backup offering provider [{}] does not match current provider [{}].", vm, offering.getProvider(), backupProvider.getName());
+                        continue;
+                    }
                     logger.debug(String.format("Trying to sync backups of VM [%s] using backup provider [%s].", vm, backupProvider.getName()));
                     // Sync out-of-band backups
                     syncBackups(backupProvider, vm);

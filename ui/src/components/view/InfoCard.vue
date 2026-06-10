@@ -1275,7 +1275,7 @@ export default {
     },
     setData () {
       if (this.resource.nic && this.resource.nic.length > 0) {
-        this.ipaddress = this.resource.nic.filter(e => { return e.ipaddress }).map(e => { return e.ipaddress }).join(', ')
+        this.ipaddress = this.resource.nic.filter(e => e.linkstate !== false && e.ipaddress).map(e => e.ipaddress).join(', ')
       } else {
         this.ipaddress = this.resource.ipaddress
       }

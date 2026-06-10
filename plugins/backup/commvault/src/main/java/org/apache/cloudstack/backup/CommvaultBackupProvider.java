@@ -300,10 +300,11 @@ public class CommvaultBackupProvider extends AdapterBase implements BackupProvid
         BackupVO backupVO = createBackupObject(vm, backupPath);
         CommvaultTakeBackupCommand command = new CommvaultTakeBackupCommand(vm.getInstanceName(), backupPath);
         command.setQuiesce(quiesceVM);
+        List<VolumeVO> vmVolumes = volumeDao.findByInstance(vm.getId());
+        vmVolumes.sort(Comparator.comparing(Volume::getDeviceId));
+        command.setVolumeUuids(vmVolumes.stream().map(VolumeVO::getUuid).collect(Collectors.toList()));
 
         if (VirtualMachine.State.Stopped.equals(vm.getState())) {
-            List<VolumeVO> vmVolumes = volumeDao.findByInstance(vm.getId());
-            vmVolumes.sort(Comparator.comparing(Volume::getDeviceId));
             Pair<List<PrimaryDataStoreTO>, List<String>> volumePoolsAndPaths = getVolumePoolsAndPaths(vmVolumes);
             command.setVolumePools(volumePoolsAndPaths.first());
             command.setVolumePaths(volumePoolsAndPaths.second());

@@ -36,7 +36,6 @@ export default {
         if (store.getters.metrics) {
           params = { details: 'all,stats' }
         }
-        params.isvnf = false
         return params
       },
       filters: () => {
@@ -47,7 +46,7 @@ export default {
         return filters
       },
       columns: () => {
-        const fields = ['name', 'displayname', 'state', 'qemuagentversion', 'ipaddress']
+        const fields = [{ field: 'displayname', customTitle: 'vm.displayname' }, 'state', 'qemuagentversion', 'ipaddress', 'templatetype']
         const metricsFields = ['cpunumber', 'cputotal', 'cpuused', 'memorytotal',
           {
             memoryused: (record) => {
@@ -89,8 +88,8 @@ export default {
       },
       searchFilters: ['name', 'zoneid', 'domainid', 'account', 'groupid', 'tags'],
       details: () => {
-        var fields = ['name', 'qemuagentversion', 'displayname', 'id', 'state', 'publicip', 'ipaddress', 'ip6address', 'templatename', 'ostypename',
-          'serviceofferingname', 'isdynamicallyscalable', 'haenable', 'hypervisor', 'boottype', 'bootmode', 'account',
+        var fields = [{ field: 'name', customTitle: 'vm.name' }, { field: 'displayname', customTitle: 'vm.displayname' }, 'qemuagentversion', 'id', 'state', 'publicip', 'ipaddress', 'ip6address', 'templatename', 'ostypename',
+          'templatetype', 'serviceofferingname', 'isdynamicallyscalable', 'haenable', 'hypervisor', 'boottype', 'bootmode', 'account',
           'domain', 'zonename', 'userdataid', 'userdataname', 'userdataparams', 'userdatadetails', 'userdatapolicy',
           'hostcontrolstate', 'vbmcport', 'deleteprotection']
         const listZoneHaveSGEnabled = store.getters.zones.filter(zone => zone.securitygroupsenabled === true)

@@ -1292,10 +1292,10 @@ public class LoadBalancingRulesManagerImpl<Type> extends ManagerBase implements 
     @Override
     @DB
     @ActionEvent(eventType = EventTypes.EVENT_LB_CERT_ASSIGN, eventDescription = "assigning certificate to load balancer", async = true)
-    public boolean assignCertToLoadBalancer(long lbRuleId, Long certId) {
+    public boolean assignCertToLoadBalancer(long lbRuleId, Long certId, boolean forced) {
         CallContext caller = CallContext.current();
 
-        LoadBalancerVO loadBalancer = _lbDao.findById(Long.valueOf(lbRuleId));
+        LoadBalancerVO loadBalancer = _lbDao.findById(lbRuleId);
         if (loadBalancer == null) {
             throw new InvalidParameterValueException("Invalid load balancer id: " + lbRuleId);
         }
@@ -1317,10 +1317,7 @@ public class LoadBalancingRulesManagerImpl<Type> extends ManagerBase implements 
             throw new InvalidParameterValueException("Ssl termination not supported by the loadbalancer");
         }
 
-        //check if the lb is already bound
-        LoadBalancerCertMapVO certMapRule = _lbCertMapDao.findByLbRuleId(loadBalancer.getId());
-        if (certMapRule != null)
-            throw new InvalidParameterValueException("Another certificate is already bound to the LB");
+        validateCertMapRule(lbRuleId, forced);
 
         //check for correct port
         if (loadBalancer.getLbProtocol() == null || !(loadBalancer.getLbProtocol().equals(NetUtils.SSL_PROTO)))
@@ -1349,6 +1346,18 @@ public class LoadBalancingRulesManagerImpl<Type> extends ManagerBase implements 
             logger.warn("Unable to apply the load balancer config because resource is unavailable.", e);
         }
         return success;
+    }
+
+    private void validateCertMapRule(long lbRuleId, boolean forced) {
+        //check if the lb is already bound
+        LoadBalancerCertMapVO certMapRule = _lbCertMapDao.findByLbRuleId(lbRuleId);
+        if (certMapRule != null) {
+            if (!forced) {
+                throw new InvalidParameterValueException("Another certificate is already bound to the LB");
+            }
+            logger.debug("Another certificate is already bound to the LB, removing it");
+            removeCertFromLoadBalancer(lbRuleId);
+        }
     }
 
     @Override
@@ -2012,7 +2021,7 @@ public class LoadBalancingRulesManagerImpl<Type> extends ManagerBase implements 
         return handled;
     }
 
-    private LoadBalancingRule getLoadBalancerRuleToApply(LoadBalancerVO lb) {
+    protected LoadBalancingRule getLoadBalancerRuleToApply(LoadBalancerVO lb) {
 
         List<LbStickinessPolicy> policyList = getStickinessPolicies(lb.getId());
         Ip sourceIp = getSourceIp(lb);
@@ -2281,12 +2290,17 @@ public class LoadBalancingRulesManagerImpl<Type> extends ManagerBase implements 
         LoadBalancerVO tmplbVo = _lbDao.findById(lbRuleId);
         boolean success = _lbDao.update(lbRuleId, lb);
 
-        // If algorithm is changed, have to reapply the lb config
-        if ((algorithm != null) && (tmplbVo.getAlgorithm().compareTo(algorithm) != 0)){
+        // If algorithm or lb protocol is changed, have to reapply the lb config
+        boolean needToReApplyRule = (algorithm != null && !algorithm.equals(tmplbVo.getAlgorithm()))
+                || (lbProtocol != null && !lbProtocol.equals(tmplbVo.getLbProtocol()));
+        if (needToReApplyRule) {
             try {
                 lb.setState(FirewallRule.State.Add);
                 _lbDao.persist(lb);
                 applyLoadBalancerConfig(lbRuleId);
+                if (!lb.getLbProtocol().equals(NetUtils.SSL_PROTO)) {
+                    removeCertMapIfExists(lb);
+                }
             } catch (ResourceUnavailableException e) {
                 if (isRollBackAllowedForProvider(lb)) {
                     /*
@@ -2302,6 +2316,9 @@ public class LoadBalancingRulesManagerImpl<Type> extends ManagerBase implements 
                     }
                     if (lbBackup.getAlgorithm() != null) {
                         lb.setAlgorithm(lbBackup.getAlgorithm());
+                    }
+                    if (lbBackup.getLbProtocol() != null) {
+                        lb.setLbProtocol(lbBackup.getLbProtocol());
                     }
                     lb.setState(lbBackup.getState());
                     _lbDao.update(lb.getId(), lb);
@@ -2319,6 +2336,14 @@ public class LoadBalancingRulesManagerImpl<Type> extends ManagerBase implements 
         }
 
         return lb;
+    }
+
+    private void removeCertMapIfExists(LoadBalancerVO lb) {
+        LoadBalancerCertMapVO loadBalancerCertMapVO = _lbCertMapDao.findByLbRuleId(lb.getId());
+        if (loadBalancerCertMapVO != null) {
+            logger.debug("Removing SSL cert for load balancer %s as the new protocol is not ssl but %s", lb, lb.getLbProtocol());
+            _lbCertMapDao.remove(loadBalancerCertMapVO.getId());
+        }
     }
 
     @Override

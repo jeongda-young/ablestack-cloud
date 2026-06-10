@@ -663,8 +663,6 @@ export default {
     },
 
     areRelatedDevices (device1, device2) {
-      // SCSI 주소 기반으로 관련 디바이스인지 확인
-      // 실제 구현에서는 백엔드의 디바이스 매핑 정보를 사용할 수 있음
       return device1 === device2
     }
   }

@@ -109,8 +109,7 @@ public class BucketApiServiceImpl extends ManagerBase implements BucketApiServic
                 DefaultMaxProjectBuckets,
                 DefaultMaxProjectObjectStorage,
                 DefaultMaxDomainBuckets,
-                DefaultMaxDomainObjectStorage,
-                ObjectStorePresignedUrlExpirySeconds
+                DefaultMaxDomainObjectStorage
         };
     }
 

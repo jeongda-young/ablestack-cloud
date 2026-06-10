@@ -96,6 +96,7 @@
         <module>hypervisors/xenserver</module>
 
         <module>integrations/cloudian</module>
+        <module>integrations/ppurio-alerts</module>
         <module>integrations/prometheus</module>
         <module>integrations/wall-alerts</module>
         <module>integrations/kubernetes-service</module>
