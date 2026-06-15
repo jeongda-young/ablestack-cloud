@@ -5572,5 +5572,7 @@
   "message.request.no.data": "Não há dados para mostrar.",
   "placeholder.quota.credit.add.min_balance": "Saldo mínimo",
   "placeholder.quota.credit.add.value": "Quantidade de créditos",
-  "message.action.vmsnapshot.disk-only.delete": "Por favor, confirme que você deseja excluir esta snapshot de VM."
+  "message.action.vmsnapshot.disk-only.delete": "Por favor, confirme que você deseja excluir esta snapshot de VM.",
+  "label.guestosrule": "Regra SO guest",
+  "label.guestosasrule": "SO guest como regra JS"
 }

@@ -34,7 +34,9 @@ import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailVO;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
-import org.apache.cloudstack.utils.jsinterpreter.TagAsRuleHelper;
+import org.apache.cloudstack.utils.jsinterpreter.GenericRuleHelper;
+import org.apache.commons.collections.CollectionUtils;
+import org.apache.commons.collections.MapUtils;
 import org.springframework.stereotype.Component;
 
 import com.cloud.api.ApiDBUtils;
@@ -52,7 +54,6 @@ import com.cloud.utils.StringUtils;
 import com.cloud.utils.db.GenericDaoBase;
 import com.cloud.utils.db.SearchBuilder;
 import com.cloud.utils.db.SearchCriteria;
-import org.apache.commons.collections.MapUtils;
 
 import java.util.Map;
 
@@ -398,7 +399,8 @@ public class StoragePoolJoinDaoImpl extends GenericDaoBase<StoragePoolJoinVO, Lo
         String injectableTag = injectableTagsBuilder.toString();
 
         for (StoragePoolJoinVO storagePoolJoinVO : storagePools) {
-            if (TagAsRuleHelper.interpretTagAsRule(storagePoolJoinVO.getTag(), injectableTag, VolumeApiServiceImpl.storageTagRuleExecutionTimeout.value())) {
+            if (GenericRuleHelper.interpretTagAsRule(storagePoolJoinVO.getTag(), injectableTag, VolumeApiServiceImpl.storageTagRuleExecutionTimeout.value(),
+                    VolumeApiServiceImpl.storageTagRuleExecutionTimeout.key())) {
                 StoragePoolVO storagePoolVO = storagePoolDao.findById(storagePoolJoinVO.getId());
                 if (storagePoolVO != null) {
                     filteredPools.add(storagePoolVO);

@@ -7524,5 +7524,7 @@
   "message.request.no.data": "There is no data to show.",
   "placeholder.quota.credit.add.min_balance": "Account's minimum balance",
   "placeholder.quota.credit.add.value": "Amount of credits",
-  "message.action.vmsnapshot.disk-only.delete": "Please confirm that you want to delete this Instance Snapshot."
+  "message.action.vmsnapshot.disk-only.delete": "Please confirm that you want to delete this Instance Snapshot.",
+  "label.guestosrule": "Guest OS rule",
+  "label.guestosasrule": "Guest OS as rule"
 }
