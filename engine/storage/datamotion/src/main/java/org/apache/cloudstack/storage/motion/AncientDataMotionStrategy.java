@@ -29,6 +29,9 @@ import java.util.Objects;
 import javax.inject.Inject;
 import javax.naming.ConfigurationException;
 
+import com.cloud.agent.api.to.DiskTO;
+import com.cloud.storage.clvm.ClvmPoolManager;
+import com.cloud.storage.Storage;
 import org.apache.cloudstack.engine.subsystem.api.storage.ClusterScope;
 import org.apache.cloudstack.engine.subsystem.api.storage.CopyCommandResult;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataMotionStrategy;
@@ -68,7 +71,6 @@ import com.cloud.agent.api.storage.MigrateVolumeCommand;
 import com.cloud.agent.api.to.DataObjectType;
 import com.cloud.agent.api.to.DataStoreTO;
 import com.cloud.agent.api.to.DataTO;
-import com.cloud.agent.api.to.DiskTO;
 import com.cloud.agent.api.to.NfsTO;
 import com.cloud.agent.api.to.VirtualMachineTO;
 import com.cloud.configuration.Config;
@@ -78,9 +80,9 @@ import com.cloud.storage.DataStoreRole;
 import com.cloud.storage.ScopeType;
 import com.cloud.storage.Snapshot.Type;
 import com.cloud.storage.SnapshotVO;
-import com.cloud.storage.Storage;
-import com.cloud.storage.Storage.StoragePoolType;
 import com.cloud.storage.StorageManager;
+import com.cloud.storage.Storage.ImageFormat;
+import com.cloud.storage.Storage.StoragePoolType;
 import com.cloud.storage.StoragePool;
 import com.cloud.storage.VolumeVO;
 import com.cloud.storage.dao.SnapshotDao;
@@ -120,6 +122,8 @@ public class AncientDataMotionStrategy implements DataMotionStrategy {
     StorageCacheManager cacheMgr;
     @Inject
     VolumeDataStoreDao volumeDataStoreDao;
+    @Inject
+    ClvmPoolManager clvmPoolManager;
 
     @Inject
     StorageManager storageManager;
@@ -368,6 +372,7 @@ public class AncientDataMotionStrategy implements DataMotionStrategy {
                 ep = selector.select(srcData, volObj);
             }
 
+            updateLockHostForVolume(ep, volObj);
             CopyCommand cmd = new CopyCommand(srcData.getTO(), addFullCloneAndDiskprovisiongStrictnessFlagOnDest(volObj.getTO()), _createVolumeFromSnapshotWait, VirtualMachineManager.ExecuteInSequence.value());
             Map<String, String> options = getCloneVolumeFromSnapshotOptions(snapshot, volObj);
             if (!options.isEmpty()) {
@@ -456,6 +461,29 @@ public class AncientDataMotionStrategy implements DataMotionStrategy {
         }
         String sanitized = value.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "-").replaceAll("(^-+|-+$)", "");
         return sanitized.isEmpty() ? "unknown" : sanitized;
+    }
+
+    private void updateLockHostForVolume(EndPoint ep, DataObject volObj) {
+        if (ep == null || !(volObj instanceof VolumeInfo)) {
+            return;
+        }
+        VolumeInfo volumeInfo = (VolumeInfo) volObj;
+        StoragePool destPool = (StoragePool) volObj.getDataStore();
+        if (destPool == null || !ClvmPoolManager.isClvmPoolType(destPool.getPoolType())) {
+            return;
+        }
+        Long hostId = ep.getId();
+        Long existingHostId = clvmPoolManager.getClvmLockHostId(
+                volumeInfo.getId(),
+                volumeInfo.getUuid(),
+                volumeInfo.getPath(),
+                destPool,
+                true
+        );
+        if (existingHostId == null) {
+            clvmPoolManager.setClvmLockHostId(volumeInfo.getId(), hostId);
+            logger.debug("Set lock host ID {} for CLVM volume {} being created from snapshot", hostId, volumeInfo.getId());
+        }
     }
 
     protected Answer cloneVolume(DataObject template, DataObject volume) {
@@ -708,6 +736,9 @@ public class AncientDataMotionStrategy implements DataMotionStrategy {
             volumeVo.setPoolId(destPool.getId());
             volumeVo.setPoolType(destPool.getPoolType());
             volumeVo.setLastPoolId(oldPoolId);
+            if (destPool.getPoolType() == StoragePoolType.CLVM) {
+                volumeVo.setFormat(ImageFormat.RAW);
+            }
             // For SMB, pool credentials are also stored in the uri query string.  We trim the query string
             // part  here to make sure the credentials do not get stored in the db unencrypted.
             String folder = destPool.getPath();
