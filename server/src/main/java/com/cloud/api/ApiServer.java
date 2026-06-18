@@ -57,6 +57,9 @@ import javax.naming.ConfigurationException;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.instrumentation.annotations.WithSpan;
+
 import com.cloud.cluster.ManagementServerHostVO;
 import com.cloud.cluster.dao.ManagementServerHostDao;
 import com.cloud.utils.Ternary;
@@ -655,6 +658,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
     }
 
     @Override
+    @WithSpan("ApiServer.handleRequest")
     @SuppressWarnings("rawtypes")
     public String handleRequest(final Map params, final String responseType, final StringBuilder auditTrailSb) throws ServerApiException {
         checkCharacterInkParams(params);
@@ -664,6 +668,10 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
 
         try {
             command = (String[])params.get("command");
+            if (command != null && command.length > 0) {
+                Span.current().updateName("ApiServer.handleRequest " + command[0]);
+                Span.current().setAttribute("api.command", command[0]);
+            }
             if (command == null) {
                 logger.error("invalid request, no command sent");
                 if (logger.isTraceEnabled()) {
