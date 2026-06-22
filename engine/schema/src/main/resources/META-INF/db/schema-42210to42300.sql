@@ -789,7 +789,7 @@ CREATE TABLE IF NOT EXISTS `cloud`.`api_keypair` (
     `user_id` bigint(20) unsigned NOT NULL,
     `start_date` datetime,
     `end_date` datetime,
-    `description` varchar(100),
+    `description` varchar(1024),
     `api_key` varchar(255) NOT NULL,
     `secret_key` varchar(255) NOT NULL,
     `created` datetime NOT NULL,
@@ -818,10 +818,14 @@ CREATE TABLE IF NOT EXISTS `cloud`.`api_keypair_permissions` (
 -- the format expected by the @Encrypt entity field. Legacy columns remain in place
 -- until the cleanup phase, allowing a failed migration to be retried safely.
 
--- Grant access to the "deleteUserKeys" API to the "User", "Domain Admin" and "Resource Admin" roles, similarly to the "registerUserKeys" API
+-- Grant access to the "deleteUserKeys" and "listUserKeyRules" APIs to the "User", "Domain Admin" and "Resource Admin" roles, similarly to the "registerUserKeys" API
 CALL `cloud`.`IDEMPOTENT_UPDATE_API_PERMISSION`('User', 'deleteUserKeys', 'ALLOW');
 CALL `cloud`.`IDEMPOTENT_UPDATE_API_PERMISSION`('Domain Admin', 'deleteUserKeys', 'ALLOW');
 CALL `cloud`.`IDEMPOTENT_UPDATE_API_PERMISSION`('Resource Admin', 'deleteUserKeys', 'ALLOW');
+
+CALL `cloud`.`IDEMPOTENT_UPDATE_API_PERMISSION`('User', 'listUserKeyRules', 'ALLOW');
+CALL `cloud`.`IDEMPOTENT_UPDATE_API_PERMISSION`('Domain Admin', 'listUserKeyRules', 'ALLOW');
+CALL `cloud`.`IDEMPOTENT_UPDATE_API_PERMISSION`('Resource Admin', 'listUserKeyRules', 'ALLOW');
 
 -- Add conserve mode for VPC offerings
 CALL `cloud`.`IDEMPOTENT_ADD_COLUMN`('cloud.vpc_offerings','conserve_mode', 'tinyint(1) unsigned NULL DEFAULT 0 COMMENT ''True if the VPC offering is IP conserve mode enabled, allowing public IP services to be used across multiple VPC tiers'' ');
