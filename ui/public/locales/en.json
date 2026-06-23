@@ -7491,5 +7491,7 @@
   "label.confirm.delete.api.keys": "Please confirm you wish to delete the selected API key pairs",
   "label.action.create.api.key": "Create API key pair for user",
   "label.apikeypair.description": "Description of the API key pair",
-  "message.note.about.keypair.permissions.body": "During the creation of API key pairs, it is possible to define a corresponding set of rule permissions. If a rule set is defined, the API key pair will only have access to APIs for which access has been explicitly granted (i.e., APIs whose corresponding rules are marked as allowed). On the other hand, if no rule set is specified, the API key pair permissions will follow and adapt to the permission set of the user's account role."
+  "message.note.about.keypair.permissions.body": "During the creation of API key pairs, it is possible to define a corresponding set of rule permissions. If a rule set is defined, the API key pair will only have access to APIs for which access has been explicitly granted (i.e., APIs whose corresponding rules are marked as allowed). On the other hand, if no rule set is specified, the API key pair permissions will follow and adapt to the permission set of the user's account role.",
+  "label.tokenurl": "Token URL",
+  "label.authorizeurl": "Authorize URL"
 }
