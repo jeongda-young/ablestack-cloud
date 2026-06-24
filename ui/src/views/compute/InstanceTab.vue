@@ -108,9 +108,14 @@
           :routerlinks="(record) => { return { name: '/securitygroups/' + record.id } }"
           :showSearch="false"/>
       </a-tab-pane>
-      <a-tab-pane :tab="$t('label.schedules')" key="schedules" v-if="'listVMSchedule' in $store.getters.apis">
-        <InstanceSchedules
-          :virtualmachine="vm"
+      <a-tab-pane
+        :tab="$t('label.schedules')"
+        key="schedules"
+        v-if="'listResourceSchedule' in $store.getters.apis && !dataResource.autoscalevmgroupid"
+      >
+        <ResourceSchedules
+          :resource="vm"
+          resourceType="VirtualMachine"
           :loading="loading"/>
       </a-tab-pane>
       <a-tab-pane
@@ -246,7 +251,7 @@ import DetailSettings from '@/components/view/DetailSettings'
 import CreateVolume from '@/views/storage/CreateVolume'
 import NicsTab from '@/views/network/NicsTab'
 import GuestNetworkTab from '@/views/compute/GuestNetworkTab'
-import InstanceSchedules from '@/views/compute/InstanceSchedules.vue'
+import ResourceSchedules from '@/views/compute/ResourceSchedules.vue'
 import ListResourceTable from '@/components/view/ListResourceTable'
 import ResourceIcon from '@/components/view/ResourceIcon'
 import AnnotationsTab from '@/components/view/AnnotationsTab'
@@ -270,7 +275,7 @@ export default {
     DrPlanVmTab,
     GPUTab,
     FtctlTab,
-    InstanceSchedules,
+    ResourceSchedules,
     ListResourceTable,
     SecurityGroupSelection,
     ResourceIcon,

@@ -2637,7 +2637,6 @@
   "label.vmlimit": "Instance limits",
   "label.vmname": "Instance name",
   "label.vms": "Instances",
-  "label.vmscheduleactions": "Actions",
   "label.vmstate": "Instance state",
   "label.vmtotal": "Total of Instances",
   "label.vmware": "VMware",
@@ -3321,7 +3320,6 @@
   "message.error.remove.nic": "There was an error",
   "message.error.remove.secondary.ipaddress": "There was an error removing the secondary IP Address",
   "message.error.remove.tungsten.routing.policy": "Removing Tungsten-Fabric Routing Policy from Network failed",
-  "message.error.remove.vm.schedule": "Removing Instance Schedule failed",
   "message.error.required.input": "Please enter input",
   "message.error.reset.config": "Unable to reset config to default value",
   "message.error.retrieve.kubeconfig": "Unable to retrieve Kubernetes cluster config",
@@ -3730,7 +3728,6 @@
   "message.success.config.backup.schedule": "Successfully configured Instance backup schedule",
   "message.success.config.health.monitor": "Successfully Configure Health Monitor",
   "message.success.config.sticky.policy": "Successfully configured sticky policy",
-  "message.success.config.vm.schedule": "Successfully configured Instance schedule",
   "message.success.copy.clipboard": "Successfully copied to clipboard",
   "message.success.create.account": "Successfully created Account",
   "message.success.create.asnrange": "Successfully created AS Range",
@@ -7526,5 +7523,9 @@
   "placeholder.quota.credit.add.value": "Amount of credits",
   "message.action.vmsnapshot.disk-only.delete": "Please confirm that you want to delete this Instance Snapshot.",
   "label.guestosrule": "Guest OS rule",
-  "label.guestosasrule": "Guest OS as rule"
+  "label.guestosasrule": "Guest OS as rule",
+  "label.scheduleactions": "Actions",
+  "message.success.config.resource.schedule": "Successfully configured schedule for the resource",
+  "message.error.remove.resource.schedule": "Removing Schedule for the resource failed",
+  "label.update.members": "Update members"
 }
