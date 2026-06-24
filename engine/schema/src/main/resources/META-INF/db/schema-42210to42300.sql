@@ -1339,6 +1339,21 @@ WHERE rule = 'quotaStatement' AND NOT EXISTS(SELECT 1 FROM cloud.role_permission
 CALL `cloud_usage`.`IDEMPOTENT_DROP_INDEX`('id', 'cloud_usage.usage_volume');
 CALL `cloud_usage`.`IDEMPOTENT_ADD_UNIQUE_INDEX`('cloud_usage.usage_volume', 'id', '(volume_id ASC, created ASC, vm_id ASC)');
 
+--- Per-VM ISO attachments. user_vm.iso_id remains as the primary/bootable ISO pointer.
+CREATE TABLE IF NOT EXISTS `cloud`.`vm_iso_map` (
+    `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+    `vm_id` bigint(20) unsigned NOT NULL COMMENT 'foreign key to user_vm',
+    `iso_id` bigint(20) unsigned NOT NULL COMMENT 'foreign key to vm_template (ISOs are templates of format ISO)',
+    `device_seq` int(10) unsigned NOT NULL COMMENT 'cdrom slot index used to derive the libvirt device label (3=hdc, 4=hdd)',
+    `created` datetime NOT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uc_vm_iso_map__vm_iso` (`vm_id`, `iso_id`),
+    UNIQUE KEY `uc_vm_iso_map__vm_seq` (`vm_id`, `device_seq`),
+    CONSTRAINT `fk_vm_iso_map__vm_id` FOREIGN KEY (`vm_id`) REFERENCES `cloud`.`user_vm` (`id`) ON DELETE CASCADE,
+    CONSTRAINT `fk_vm_iso_map__iso_id` FOREIGN KEY (`iso_id`) REFERENCES `cloud`.`vm_template` (`id`)
+);
+
+
 -- Creates the 'kvm.memory.dynamic.scaling.capacity' and, for already active ACS environments,
 -- initializes it with the value of the setting 'vm.serviceoffering.ram.size.max'
 INSERT INTO `cloud`.`configuration` (`category`, `instance`, `component`, `name`, `value`, `default_value`, `updated`, `scope`, `is_dynamic`, `group_id`, `subgroup_id`, `display_text`, `description`)

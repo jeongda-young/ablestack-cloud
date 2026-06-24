@@ -305,7 +305,7 @@ export default {
         this.$emit('change-config', { value: newValue })
         this.$store.dispatch('RefreshFeatures')
         this.$messageConfigSuccess(`${this.$t('message.setting.updated')} ${configrecord.name}`, configrecord)
-        this.$notifyConfigurationValueChange(json?.updateconfigurationresponse?.configuration || null)
+        this.$notifyConfigurationValueChange(configRecordEntry)
       }).catch(error => {
         this.editableValue = this.actualValue
         console.error(error)

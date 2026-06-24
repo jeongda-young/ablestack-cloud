@@ -30,10 +30,15 @@
       <a-tab-pane :tab="$t('label.metrics')" key="stats">
         <StatsTab :resource="resource"/>
       </a-tab-pane>
-      <a-tab-pane :tab="$t('label.iso')" key="cdrom" v-if="vm.isoid">
-        <usb-outlined />
-        <router-link :to="{ path: '/iso/' + vm.isoid }">{{ vm.isoname }}</router-link> <br/>
-        <barcode-outlined /> {{ vm.isoid }}
+      <a-tab-pane :tab="$t('label.iso')" key="cdrom" v-if="attachedIsos.length > 0">
+        <div v-for="iso in attachedIsos" :key="iso.id" style="margin-bottom: 12px;">
+          <usb-outlined />
+          <router-link :to="{ path: '/iso/' + iso.id }">{{ iso.displaytext || iso.name }}</router-link>
+          <a-tag style="margin-left: 8px;">{{ slotLabel(iso.deviceseq) }}</a-tag>
+          <a-tag v-if="iso.bootable" color="blue" style="margin-left: 4px;">{{ $t('label.bootable') }}</a-tag>
+          <br/>
+          <barcode-outlined /> {{ iso.id }}
+        </div>
       </a-tab-pane>
       <a-tab-pane :tab="$t('label.volumes')" key="volumes" v-if="'listVolumes' in $store.getters.apis">
         <a-button
@@ -413,6 +418,22 @@ export default {
   mounted () {
     this.setCurrentTab()
   },
+  computed: {
+    attachedIsos () {
+      if (this.vm.isos && this.vm.isos.length > 0) {
+        return [...this.vm.isos].sort((a, b) => (a.deviceseq || 0) - (b.deviceseq || 0))
+      }
+      if (this.vm.isoid) {
+        return [{
+          id: this.vm.isoid,
+          name: this.vm.isoname,
+          displaytext: this.vm.isodisplaytext,
+          deviceseq: 3
+        }]
+      }
+      return []
+    }
+  },
   methods: {
     // 디바이스 이름을 포맷팅하여 괄호 안의 내용을 줄바꿈으로 표시
     formatDeviceName (deviceName) {
@@ -476,6 +497,11 @@ export default {
       }
       const withoutDevice = String(text).replace(/\s*Device:\s*\S+/gi, '')
       return this.formatHostDevicesText(withoutDevice)
+    },
+    slotLabel (deviceseq) {
+      // 3 -> hdc, 4 -> hdd, ... matches LibvirtVMDef.getDevLabel for the IDE bus on KVM.
+      if (typeof deviceseq !== 'number') return ''
+      return 'hd' + String.fromCharCode('a'.charCodeAt(0) + deviceseq - 1)
     },
     setCurrentTab () {
       const routeTab = this.resolveCurrentTabFromRoute()
