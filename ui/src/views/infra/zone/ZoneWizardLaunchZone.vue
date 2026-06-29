@@ -1565,6 +1565,10 @@ export default {
         url = this.linstorURL(server)
         params.provider = 'Linstor'
         params['details[0].resourceGroup'] = this.prefillContent.primaryStorageLinstorResourceGroup
+        if (this.prefillContent.primaryStorageLinstorApiToken) {
+          params['details[0].lin.auth.apitoken'] = this.prefillContent.primaryStorageLinstorApiToken
+        }
+        params['details[0].lin.ssl.insecure'] = (this.prefillContent.primaryStorageLinstorInsecureSsl === true) ? 'true' : 'false'
       } else if (protocol === 'vmfs' || protocol === 'datastorecluster') {
         let path = this.prefillContent.primaryStorageVmfsDatacenter
         if (path.substring(0, 1) !== '/') {

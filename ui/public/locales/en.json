@@ -7537,5 +7537,9 @@
   "label.ontap.ip.tooltip": "The IP for the NetApp ONTAP storage array",
   "label.ontap.svm.name.tooltip": "The SVM Name for the NetApp ONTAP storage array",
   "label.ontap.ip": "Storage Array IP",
-  "label.ontap.svm.name": "SVM Name"
+  "label.ontap.svm.name": "SVM Name",
+  "label.linstor.apitoken": "Controller API token",
+  "label.linstor.ssl.insecure": "Allow self-signed certificate",
+  "message.linstor.apitoken.description": "API token used to authenticate against the Linstor controller. Leave empty to use an auth.json file on the management server and hosts, or for an unauthenticated controller.",
+  "message.linstor.ssl.insecure.description": "Trust self-signed/untrusted TLS certificates from the Linstor controller (disables certificate and hostname verification)."
 }

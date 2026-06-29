@@ -662,6 +662,25 @@ export default {
           }
         },
         {
+          title: 'label.linstor.apitoken',
+          key: 'primaryStorageLinstorApiToken',
+          placeHolder: 'message.linstor.apitoken.description',
+          required: false,
+          display: {
+            primaryStorageProtocol: 'Linstor'
+          }
+        },
+        {
+          title: 'label.linstor.ssl.insecure',
+          key: 'primaryStorageLinstorInsecureSsl',
+          switch: true,
+          checked: false,
+          required: false,
+          display: {
+            primaryStorageProtocol: 'Linstor'
+          }
+        },
+        {
           title: 'label.ismanaged',
           key: 'managed',
           checkbox: true,
