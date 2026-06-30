@@ -304,6 +304,20 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         nasBackupProvider.syncBackups(vm);
     }
 
+    /**
+     * Backups for this provider are NAS-managed (delegated to nasBackupProvider).
+     * Veeam restore points returned by {@link #listRestorePoints(VirtualMachine)} are
+     * a seed source only, not the authoritative backup list. The generic out-of-band
+     * sync reconciles DB backups against listRestorePoints() and DELETES any DB backup
+     * that has no matching Veeam restore point, which would wrongly wipe NAS/agent backups
+     * (e.g. when Veeam Enterprise Manager reports no restore points for the VM display name).
+     * Opt out so those backups are not destroyed; NAS sync is handled via syncBackups(vm).
+     */
+    @Override
+    public boolean supportsOutOfBandBackupSync() {
+        return false;
+    }
+
     @Override
     public boolean checkBackupAgent(Long zoneId) {
         return true;
