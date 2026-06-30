@@ -30,6 +30,7 @@ import network from '@/config/section/network'
 import image from '@/config/section/image'
 import desktop from '@/config/section/desktop'
 import automation from '@/config/section/automation'
+import kms from '@/config/section/kms'
 import project from '@/config/section/project'
 import event from '@/config/section/event'
 import user from '@/config/section/user'
@@ -220,6 +221,7 @@ export function asyncRouterMap () {
 
       generateRouterMap(compute),
       generateRouterMap(storage),
+      generateRouterMap(kms),
       generateRouterMap(network),
       generateRouterMap(image),
       generateRouterMap(disasterRecovery),
