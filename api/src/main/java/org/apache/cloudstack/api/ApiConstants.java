@@ -1599,7 +1599,7 @@ public class ApiConstants {
     }
 
     public enum HostDetails {
-        all, capacity, events, stats, min;
+        all, capacity, core, events, stats, min;
     }
 
     public enum VMDetails {
