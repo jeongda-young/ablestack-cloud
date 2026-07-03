@@ -529,7 +529,7 @@ export default {
       columns: ['name', 'status', 'size', 'virtualsize', 'virtualmachinename', 'backupofferingname', 'intervaltype', 'type', 'created', 'account', 'domain', 'zone'],
       details: ['name', 'description', 'virtualmachinename', 'id', 'intervaltype', 'type', 'externalid', 'size', 'virtualsize', 'volumes', 'backupofferingname', 'zone', 'account', 'domain', 'created'],
       searchFilters: () => {
-        var filters = ['name', 'zoneid', 'domainid', 'account', 'backupofferingname']
+        var filters = ['name', 'zoneid', 'domainid', 'account', 'backupofferingname', 'status']
         return filters
       },
       tabs: [

@@ -7528,5 +7528,9 @@
   "message.quota.usage.resource.warn": "<untraceable>로 표시된 자원은 영구 메타데이터가 없어 삭제 후 정보를 조회할 수 없습니다.",
   "message.request.no.data": "표시할 데이터가 없습니다.",
   "placeholder.quota.credit.add.min_balance": "계정의 최소 잔액",
-  "placeholder.quota.credit.add.value": "크레딧 금액"
+  "placeholder.quota.credit.add.value": "크레딧 금액",
+  "label.backedup": "백업 완료",
+  "label.backingup": "백업 중",
+  "label.queued": "대기 중",
+  "label.restoring": "복원 중"
 }

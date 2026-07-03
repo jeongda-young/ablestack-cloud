@@ -7527,5 +7527,9 @@
   "label.scheduleactions": "Actions",
   "message.success.config.resource.schedule": "Successfully configured schedule for the resource",
   "message.error.remove.resource.schedule": "Removing Schedule for the resource failed",
-  "label.update.members": "Update members"
+  "label.update.members": "Update members",
+  "label.backedup": "BackedUp",
+  "label.backingup": "BackingUp",
+  "label.queued": "Queued",
+  "label.restoring": "Restoring"
 }
