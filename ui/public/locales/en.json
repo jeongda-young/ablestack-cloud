@@ -7531,5 +7531,11 @@
   "label.backedup": "BackedUp",
   "label.backingup": "BackingUp",
   "label.queued": "Queued",
-  "label.restoring": "Restoring"
+  "label.restoring": "Restoring",
+  "label.ontap.username.tooltip": "The Username for the NetApp ONTAP storage array",
+  "label.ontap.password.tooltip": "The Password for the NetApp ONTAP storage array",
+  "label.ontap.ip.tooltip": "The IP for the NetApp ONTAP storage array",
+  "label.ontap.svm.name.tooltip": "The SVM Name for the NetApp ONTAP storage array",
+  "label.ontap.ip": "Storage Array IP",
+  "label.ontap.svm.name": "SVM Name"
 }
