@@ -269,6 +269,15 @@ public class KVMStoragePoolManager {
         return result;
     }
 
+    /** Resolve the registered provider without changing an RBD pool into an NFS pool. */
+    public KVMStoragePool getStoragePoolByUuid(String uuid) {
+        StoragePoolInformation info = _storagePools.get(uuid);
+        if (info == null) {
+            throw new CloudRuntimeException("Storage pool is not registered: " + uuid);
+        }
+        return getStoragePool(info.getPoolType(), uuid);
+    }
+
     public KVMStoragePool getStoragePool(StoragePoolType type, String uuid) {
         return this.getStoragePool(type, uuid, false);
     }
