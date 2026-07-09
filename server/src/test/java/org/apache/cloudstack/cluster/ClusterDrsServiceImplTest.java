@@ -42,6 +42,8 @@ import com.cloud.utils.Ternary;
 import com.cloud.utils.db.GlobalLock;
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.vm.VMInstanceVO;
+import com.cloud.vm.UserVmDetailVO;
+import com.cloud.vm.dao.UserVmDetailsDao;
 import com.cloud.vm.VirtualMachine;
 import com.cloud.vm.dao.VMInstanceDao;
 import org.apache.cloudstack.api.command.admin.cluster.GenerateClusterDrsPlanCmd;
@@ -118,6 +120,9 @@ public class ClusterDrsServiceImplTest {
     private VMInstanceDao vmInstanceDao;
     @Mock
     private VolumeDao volumeDao;
+
+    @Mock
+    private UserVmDetailsDao userVmDetailsDao;
 
     @Spy
     @InjectMocks
@@ -487,5 +492,20 @@ public class ClusterDrsServiceImplTest {
         clusterDrsService.processPlans();
 
         Mockito.verify(clusterDrsService, Mockito.times(2)).executeDrsPlan(Mockito.any(ClusterDrsPlanVO.class));
+    }
+
+    @Test
+    public void skipDrsReadsPersistedDetailBeforeHostLookup() throws ConfigurationException {
+        VirtualMachine vm = Mockito.mock(VirtualMachine.class);
+        Mockito.when(vm.getId()).thenReturn(123L);
+        Mockito.when(vm.getType()).thenReturn(VirtualMachine.Type.User);
+        Mockito.when(vm.getState()).thenReturn(VirtualMachine.State.Running);
+        Mockito.when(userVmDetailsDao.listDetailsForResourceIdsAndKey(List.of(123L), VmDetailConstants.SKIP_DRS))
+                .thenReturn(List.of(new UserVmDetailVO(123L, VmDetailConstants.SKIP_DRS, "TrUe", true)));
+        Pair<VirtualMachine, Host> result = clusterDrsService.getBestMigration(
+                Mockito.mock(Cluster.class), balancedAlgorithm, List.of(vm), Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap());
+        assertEquals(null, result.first());
+        Mockito.verifyNoInteractions(managementServer);
+        Mockito.verify(vm, Mockito.never()).getDetails();
     }
 }
