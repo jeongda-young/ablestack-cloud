@@ -16,7 +16,7 @@
 -- under the License.
 
 --;
--- Schema upgrade from 4.20.1.0 to 4.21.0.0
+-- Schema upgrade from 4.20.4.0 to 4.21.0.0
 --;
 
 -- Re-apply schema change that may be missing from earlier 4.21 installations.
