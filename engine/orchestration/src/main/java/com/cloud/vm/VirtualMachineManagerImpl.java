@@ -3561,7 +3561,8 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
     protected boolean shouldMapVolume(VirtualMachineProfile profile, StoragePoolVO currentPool) {
         boolean isManaged = currentPool.isManaged();
         boolean isNotKvm = HypervisorType.KVM != profile.getHypervisorType();
-        return isNotKvm || isManaged;
+        boolean isClvm = ClvmPoolManager.isClvmPoolType(currentPool.getPoolType());
+        return isNotKvm || isManaged || isClvm;
     }
 
     /**
