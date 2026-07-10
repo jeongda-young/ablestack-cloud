@@ -3710,19 +3710,24 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         if (isDisabled(zoneId)) {
             return new CapacityVO(null, zoneId, null, null, 0L, 0L, Capacity.CAPACITY_TYPE_BACKUP_STORAGE);
         }
-        long totalUsed = 0L;
-        long totalCapacity = 0L;
-        final List<BackupProvider> providers = getBackupProvidersForZone(zoneId);
-        for (BackupProvider backupProvider : providers) {
-            Pair<Long, Long> backupUsage = backupProvider.getBackupStorageStats(zoneId);
-            if (backupUsage != null) {
-                Long used = backupUsage.first();
-                Long capacity = backupUsage.second();
-                if (used != null) totalUsed += used;
-                if (capacity != null) totalCapacity += capacity;
+        try {
+            long totalUsed = 0L;
+            long totalCapacity = 0L;
+            final List<BackupProvider> providers = getBackupProvidersForZone(zoneId);
+            for (BackupProvider backupProvider : providers) {
+                Pair<Long, Long> backupUsage = backupProvider.getBackupStorageStats(zoneId);
+                if (backupUsage != null) {
+                    Long used = backupUsage.first();
+                    Long capacity = backupUsage.second();
+                    if (used != null) totalUsed += used;
+                    if (capacity != null) totalCapacity += capacity;
+                }
             }
+            return new CapacityVO(null, zoneId, null, null, totalUsed, totalCapacity, Capacity.CAPACITY_TYPE_BACKUP_STORAGE);
+        } catch (CloudRuntimeException e) {
+            logger.warn("Backup provider unavailable for zone {}: {}", zoneId, e.getMessage());
+            return new CapacityVO(null, zoneId, null, null, 0L, 0L, Capacity.CAPACITY_TYPE_BACKUP_STORAGE);
         }
-        return new CapacityVO(null, zoneId, null, null, totalUsed, totalCapacity, Capacity.CAPACITY_TYPE_BACKUP_STORAGE);
     }
 
     @Override
