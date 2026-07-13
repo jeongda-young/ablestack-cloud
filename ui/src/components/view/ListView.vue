@@ -209,7 +209,7 @@
         </span>
       </template>
       <template v-if="column.key === 'templatetype'">
-        <span>{{ text }}</span>
+        <router-link :to="{ path: $route.path + '/' + record.templatetype }">{{ text }}</router-link>
       </template>
       <template v-if="column.key === 'gpu'">
         <span v-if="record.gpucardname && record.vgpuprofilename">
@@ -746,20 +746,19 @@
             </span>
           </template>
         </template>
-        <template v-if="text && !text.startsWith('PrjAcct-')">
-          <router-link
-            v-if="'quota' in record && $router.resolve(`${$route.path}/${record.account}`).matched[0].redirect !== '/exception/404'"
-            :to="{ path: `${$route.path}/${record.account}`, query: { account: record.account, domainid: record.domainid, quota: true } }"
-          >{{ text }}</router-link>
-          <router-link
-            :to="{ path: '/account/' + record.accountid }"
-            v-else-if="record.accountid"
-          >{{ text }}</router-link>
-          <router-link
-            :to="{ path: '/account', query: { name: record.account, domainid: record.domainid, dataView: true } }"
-            v-else-if="$store.getters.userInfo.roletype !== 'User'"
-          >{{ text }}</router-link>
-          <span v-else>{{ text }}</span>
+        <template v-if="text">
+          <template v-if="!text.startsWith('PrjAcct-')">
+            <router-link
+              v-if="$route.path.startsWith('/quotasummary') && $router.resolve(`${$route.path}/${record.accountid}`).matched[0].redirect !== '/exception/404'"
+              :to="{ path: `${$route.path}/${record.accountid}` }">{{ text }}</router-link>
+            <span v-else>{{ text }}</span>
+          </template>
+          <template v-else>
+            <router-link
+              v-if="$route.path.startsWith('/quotasummary') && $router.resolve(`${$route.path}/${record.accountid}`).matched[0].redirect !== '/exception/404'"
+              :to="{ path: `${$route.path}/${record.accountid}` }">{{ (record.projectname || record.account).concat(' (').concat($t('label.project')).concat(')') }}</router-link>
+            <span v-else>{{ text }}</span>
+          </template>
         </template>
       </template>
       <template v-if="column.key === 'resource'">
@@ -1146,6 +1145,12 @@
           @onClick="removeVMSchedule(record)"
         />
       </template>
+      <template v-if="column.key === 'scheduleActions'">
+        <slot
+          name="scheduleActions"
+          :record="record"
+        ></slot>
+      </template>
       <template v-if="column.key === 'vgpuActions'">
         <slot name="actionButtons" :record="record" :actions="actions"></slot>
       </template>
@@ -1487,8 +1492,8 @@ export default {
         'vmsnapshot', 'backup', 'guestnetwork', 'vpc', 'publicip', 'vpnuser', 'vpncustomergateway', 'vnfapp',
         'project', 'account', 'systemvm', 'router', 'computeoffering', 'systemoffering',
         'diskoffering', 'backupoffering', 'networkoffering', 'vpcoffering', 'ilbvm', 'kubernetes', 'comment', 'buckets',
-        'webhook', 'webhookdeliveries', 'sharedfs', 'ipv4subnets', 'asnumbers', 'guestos', 'gpucard', 'gpudevices', 'vgpuprofile'
-      ].includes(this.$route.name)
+        'webhook', 'webhookdeliveries', 'sharedfs', 'ipv4subnets', 'asnumbers', 'guestos', 'gpucard', 'gpudevices', 'vgpuprofile',
+        'quotatariff'].includes(this.$route.name)
     },
     getDateAtTimeZone (date, timezone) {
       return date ? moment(date).tz(timezone).format('YYYY-MM-DD HH:mm:ss') : null
