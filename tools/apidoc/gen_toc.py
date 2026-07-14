@@ -344,7 +344,8 @@ known_categories = {
     'StorageIscsi': 'Shared FileSystem',
     'StorageNvmeOf': 'Shared FileSystem',
     'StorageFileShare': 'Shared FileSystem',
-    'StorageVolumeToFileShare': 'Shared FileSystem'
+    'StorageVolumeToFileShare': 'Shared FileSystem',
+    'downloadValidationScreenshot': 'Backup and Recovery'
 }
 
 

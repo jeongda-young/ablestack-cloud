@@ -4716,7 +4716,7 @@
   "alert.login": "LOGIN",
   "label.kvdoenable": "Compress/Dedup",
   "label.action.update.compress.dedup": "Update Compress/Dedup",
-  "label.compress": "Compress Usage Status",
+  "label.compress": "Compress",
   "label.dedup": "Dedup Usage Status",
   "label.usedfsbytes": "Disk FileSystem Usage",
   "message.usedfsbytes": "Usage of file systems mounted and used in virtual machines",
@@ -7546,5 +7546,17 @@
   "label.retry.upload": "Retry Upload",
   "message.ssvm.cert.untrusted": "Unable to reach the upload server.",
   "message.ssvm.cert.trust.instructions": "The upload server may be using a self-signed or untrusted certificate. Click 'Open Certificate Page' to open the server in a new browser tab, accept the certificate warning, then return here and click 'Retry Upload'. If the server remains unreachable, contact your administrator.",
-  "message.ssvm.unreachable.retry": "The upload server is still unreachable. If it uses a self-signed certificate, please accept it in the opened tab and try again."
+  "message.ssvm.unreachable.retry": "The upload server is still unreachable. If it uses a self-signed certificate, please accept it in the opened tab and try again.",
+  "label.allowextractfile": "Allow extract file",
+  "label.allowquickrestore": "Allow quick restore",
+  "label.backup.isolated": "Isolated",
+  "label.backup.chain.finish": "Finish backup chain",
+  "label.backupchainsize": "Backup chain size",
+  "label.compressionstatus": "Compression status",
+  "label.compressionlibrary": "Compression library",
+  "label.create.backup.offering": "Create Backup Offering",
+  "label.quickrestore": "Quick Restore",
+  "label.validate": "Validate",
+  "label.validationstatus": "Validation status",
+  "label.validationsteps": "Validation steps"
 }

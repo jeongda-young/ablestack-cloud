@@ -67,6 +67,7 @@
         <module>backup/ablestack-commvault</module>
         <module>backup/ablestack-netbackup</module>
         <module>backup/bx</module>
+        <module>backup/kboss</module>
 
         <module>ca/root-ca</module>
 

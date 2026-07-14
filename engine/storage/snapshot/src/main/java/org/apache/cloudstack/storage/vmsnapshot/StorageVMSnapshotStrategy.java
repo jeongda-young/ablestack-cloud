@@ -37,6 +37,8 @@ import org.apache.cloudstack.engine.subsystem.api.storage.VMSnapshotOptions;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeDataFactory;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
+import org.apache.cloudstack.storage.datastore.db.SnapshotDataStoreDao;
+import org.apache.cloudstack.storage.datastore.db.SnapshotDataStoreVO;
 import org.apache.cloudstack.storage.to.VolumeObjectTO;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.lang3.StringUtils;
@@ -98,6 +100,8 @@ public class StorageVMSnapshotStrategy extends DefaultVMSnapshotStrategy {
 
     private static final String STORAGE_SNAPSHOT = "kvmStorageSnapshot";
     private static final String CLONE_VM_SNAPSHOT_BACKING_PATH = "clone.vm.snapshot.backing.path.";
+    @Inject
+    private SnapshotDataStoreDao snapshotDataStoreDao;
 
     @Override
     public boolean configure(String name, Map<String, Object> params) throws ConfigurationException {
@@ -376,6 +380,17 @@ public class StorageVMSnapshotStrategy extends DefaultVMSnapshotStrategy {
         if (!VirtualMachine.State.Running.equals(vm.getState())) {
             logger.debug("{} as the VM is not running.", cantHandleLog);
             return StrategyPriority.CANT_HANDLE;
+        }
+
+        for (VolumeVO volume : volumeDao.findByInstance(vmId)) {
+            List<SnapshotDataStoreVO> snapshots = snapshotDataStoreDao.listReadyByVolumeIdAndCheckpointPathNotNull(volume.getId());
+            if (CollectionUtils.isNotEmpty(snapshots)) {
+                logger.debug(
+                        "{} as VM has a volume with incremental snapshots {}. Incremental volume snapshots and StorageVmSnapshotStrategy are not compatible," +
+                                " as restoring VM snapshots will erase the bitmaps and destroy snapshot chains.",
+                        cantHandleLog, snapshots);
+                return StrategyPriority.CANT_HANDLE;
+            }
         }
 
         if (SnapshotManager.VmStorageSnapshotKvm.value() && !snapshotMemory) {

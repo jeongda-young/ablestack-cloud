@@ -5075,7 +5075,7 @@
   "alert.login": "LOGIN",
   "label.kvdoenable": "Compress/Dedup",
   "label.action.update.compress.dedup": "Update Compress/Dedup",
-  "label.compress": "Compress Usage Status",
+  "label.compress": "Comprimir",
   "label.dedup": "Dedup Usage Status",
   "label.usedfsbytes": "Disk FileSystem Usage",
   "message.usedfsbytes": "Usage of file systems mounted and used in virtual machines",
@@ -5578,5 +5578,14 @@
   "label.backedup": "Salvo",
   "label.backingup": "Salvando",
   "label.queued": "Enfileirado",
-  "label.restoring": "Restaurando"
+  "label.restoring": "Restaurando",
+  "label.backup.isolated": "Isolado",
+  "label.backup.chain.finish": "Finalizar cadeia de backup",
+  "label.backupchainsize": "Tamanho da cadeia de backup",
+  "label.compressionlibrary": "Biblioteca de compressão",
+  "label.create.backup.offering": "Criar oferta de backup",
+  "label.quickrestore": "Restauração Rápida",
+  "label.validate": "Validar",
+  "label.validationstatus": "Estado de validação",
+  "label.validationsteps": "Passos de validação"
 }
