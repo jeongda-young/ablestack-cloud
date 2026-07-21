@@ -27,6 +27,7 @@ import com.cloud.hypervisor.kvm.storage.KVMStoragePool;
 import com.cloud.hypervisor.kvm.storage.KVMStoragePoolManager;
 import com.cloud.storage.Storage;
 import com.cloud.utils.Pair;
+import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.utils.script.Script;
 import org.apache.cloudstack.backup.AblestackNasImportVeeamSeedCommand;
 import org.apache.cloudstack.backup.AblestackNasTakeBackupCommand;
@@ -297,14 +298,17 @@ class LibvirtAblestackNasBackupHelper {
 
     private Path mountRepository(AblestackNasTakeBackupCommand command) throws IOException {
         Path mountPoint = Files.createTempDirectory("csbackup.");
-        StringBuilder mount = new StringBuilder()
-                .append("mount -t ").append(shellQuote(command.getBackupRepoType()))
-                .append(" ").append(shellQuote(command.getBackupRepoAddress()))
-                .append(" ").append(shellQuote(mountPoint.toString()));
-        if (command.getMountOptions() != null && !command.getMountOptions().isEmpty()) {
-            mount.append(" -o ").append(shellQuote(command.getMountOptions()));
+        final String mount;
+        try {
+            mount = LibvirtBackupRepositoryMountHelper.buildMountCommand(
+                    command.getBackupRepoAddress(),
+                    command.getBackupRepoType(),
+                    command.getMountOptions(),
+                    mountPoint.toString());
+        } catch (CloudRuntimeException e) {
+            throw new IOException(e.getMessage(), e);
         }
-        if (Script.runSimpleBashScriptForExitValue(mount.toString(), resource.getCmdsTimeout(), false) != 0) {
+        if (Script.runSimpleBashScriptForExitValue(mount, resource.getCmdsTimeout(), false) != 0) {
             throw new IOException("Failed to mount backup repository");
         }
         return mountPoint;
