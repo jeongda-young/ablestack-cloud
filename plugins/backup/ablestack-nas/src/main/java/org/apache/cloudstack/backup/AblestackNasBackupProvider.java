@@ -566,6 +566,18 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         return String.format("%s/checkpoints/%s.xml", backupPath, checkpointName);
     }
 
+    private BackupVO getLatestBackedUpBackup(VirtualMachine vm) {
+        List<Backup> backups = backupDao.listByVmIdAndOffering(vm.getDataCenterId(), vm.getId(), vm.getBackupOfferingId());
+        return backups.stream()
+                .filter(BackupVO.class::isInstance)
+                .map(BackupVO.class::cast)
+                .filter(backup -> Backup.Status.BackedUp.equals(backup.getStatus()))
+                .peek(backupDao::loadDetails)
+                .filter(backup -> getBackupDetail(backup, DETAIL_CHECKPOINT_NAME) != null)
+                .max(Comparator.comparing(BackupVO::getDate))
+                .orElse(null);
+    }
+
     private BackupVO getLatestBackedUpBackup(VirtualMachine vm, Long backupScheduleId) {
         List<Backup> backups = backupDao.listByVmIdAndOffering(vm.getDataCenterId(), vm.getId(), vm.getBackupOfferingId());
         return backups.stream()
