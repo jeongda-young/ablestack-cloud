@@ -47,8 +47,6 @@ MOLD_DATADISK_PATH="/data/backup"
 BACKUP_REPO_ADDRESS="/data/backup"
 BACKUP_REPO_NAME="Ablestack Data Disk"
 NAS_REPO_MOUNT=""
-VEEAM_HOST_REPO_ROOT="E:/opt1/veeam"
-VEEAM_REPO_NAME=""
 
 VEEAM_HOST_BACKUP_PATH="/tmp/mold/veeam"
 STAGING_PATH="/tmp/mold/veeam"

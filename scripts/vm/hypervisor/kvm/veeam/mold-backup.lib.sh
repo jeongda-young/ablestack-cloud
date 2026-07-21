@@ -119,8 +119,6 @@ mold_backup_load_config() {
   BACKUP_REPO_NAME="${BACKUP_REPO_NAME:-Ablestack Data Disk}"
   BACKUP_REPO_PROVIDER="${BACKUP_REPO_PROVIDER:-localfs}"
   MOLD_DATADISK_PATH="${MOLD_DATADISK_PATH:-}"
-  VEEAM_HOST_REPO_ROOT="${VEEAM_HOST_REPO_ROOT:-E:/opt1/veeam}"
-  VEEAM_REPO_NAME="${VEEAM_REPO_NAME:-}"
   BACKUP_STORAGE_MODE="${BACKUP_STORAGE_MODE:-datadisk}"
   BACKUP_STORAGE_ENGINE="${BACKUP_STORAGE_ENGINE:-auto}"
   # Mold→Veeam trigger (bidirectional mode C): start the matching Veeam Agent job
@@ -177,8 +175,6 @@ mold_backup_apply_datadisk_profile() {
   BACKUP_REPO_ADDRESS="${MOLD_DATADISK_PATH}"
   BACKUP_REPO_NAME="${BACKUP_REPO_NAME:-Ablestack Data Disk}"
   NAS_REPO_MOUNT=""
-  VEEAM_HOST_REPO_ROOT="${VEEAM_HOST_REPO_ROOT:-E:/opt1/veeam}"
-  [[ -z "${VEEAM_REPO_NAME:-}" ]] && VEEAM_REPO_NAME="Mold ${KVM_HOSTNAME}"
   # 복원: datadisk bind-mount만 사용 (NAS/GFS 마운트·Veeam chain export 없음)
   RESTORE_SOURCE="mold-only"
   VEEAM_UI_RESTORE_SOURCE="mold-only"
@@ -192,12 +188,6 @@ mold_backup_is_datadisk_mode() {
 mold_backup_datadisk_root() {
   mold_backup_apply_datadisk_profile
   echo "${MOLD_DATADISK_PATH:-${BACKUP_REPO_ADDRESS:-/data/backup}}"
-}
-
-mold_backup_veeam_host_repo_folder() {
-  local host="${KVM_HOSTNAME:-$(hostname -s)}"
-  local root="${VEEAM_HOST_REPO_ROOT:-E:/opt1/veeam}"
-  echo "${root%/}/${host}"
 }
 
 # Read one KEY=value from an env file (strips optional quotes).
@@ -2325,29 +2315,9 @@ mold_backup_registry_get_backup_id_by_checkpoint() {
   [[ -n "$bid" ]] && echo "$bid"
 }
 
-# Keep mold-backup.windows.conf VM_BACKUP_IDS in sync for Veeam restore-watch.
+# Legacy no-op (windows.conf / PowerShell automation removed).
 mold_backup_sync_vm_backup_ids_conf() {
-  local vm="$1" backup_id="$2"
-  local win_conf="${ABLESTACK_VEEAM_ETC_DIR}/mold-backup.windows.conf"
-  local existing entry new_val
-  [[ -n "$vm" && -n "$backup_id" && -f "$win_conf" ]] || return 0
-  entry="${vm}:${backup_id}"
-  existing="$(grep -E '^VM_BACKUP_IDS=' "$win_conf" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')" || true
-  if [[ -z "$existing" ]]; then
-    echo "VM_BACKUP_IDS=\"${entry}\"" >> "$win_conf"
-    return 0
-  fi
-  new_val="$existing"
-  if [[ "$existing" == *"${vm}:"* ]]; then
-    new_val="$(echo "$existing" | sed -E "s#${vm}:[^,;]*#${vm}:${backup_id}#g")"
-  else
-    new_val="${existing},${entry}"
-  fi
-  if grep -qE '^VM_BACKUP_IDS=' "$win_conf" 2>/dev/null; then
-    sed -i "s#^VM_BACKUP_IDS=.*#VM_BACKUP_IDS=\"${new_val}\"#" "$win_conf"
-  else
-    echo "VM_BACKUP_IDS=\"${new_val}\"" >> "$win_conf"
-  fi
+  return 0
 }
 
 mold_backup_registry_save_backup() {
@@ -2485,37 +2455,9 @@ mold_backup_process_vm_pre_notify() {
 }
 
 mold_backup_veeam_restore_chain_to_host() {
-  local backup_id="$1"
-  local chain rp_ids rp_id script_dir ps1
-  chain="$(mold_backup_api_build_restore_chain "$backup_id")" || return 1
-  rp_ids=""
-  local bid
-  for bid in ${chain//,/ }; do
-    [[ -z "$bid" ]] && continue
-    rp_id="$(mold_backup_api_backup_detail_field "$bid" "ablestack.veeam.restore.point.id" 2>/dev/null || true)"
-    [[ -n "$rp_id" ]] && rp_ids="${rp_ids},${rp_id}"
-  done
-  rp_ids="${rp_ids#,}"
-  [[ -n "$rp_ids" ]] || {
-    mold_backup_notify_log warn "No Veeam restore point ids in chain; datadisk restore only"
-    return 0
-  }
-  [[ -n "${VEEAM_SSH_HOST:-}" ]] || {
-    mold_backup_notify_log warn "VEEAM_SSH_HOST not set; skip external Veeam chain restore"
-    return 0
-  }
-  script_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-  ps1="${script_dir}/veeam-restore-chain.ps1"
-  [[ -f "$ps1" ]] || ps1="/usr/share/mold/backup/veeam/veeam-restore-chain.ps1"
-  [[ -f "$ps1" ]] || {
-    mold_backup_notify_log warn "veeam-restore-chain.ps1 not found; datadisk restore only (no Veeam chain export)"
-    return 0
-  }
-  mold_backup_notify_log info "Veeam chain restore RPs=${rp_ids} → ${VEEAM_HOST_BACKUP_PATH}"
-  ssh -i "${VEEAM_SSH_KEY:-/root/.ssh/id_rsa}" -o StrictHostKeyChecking=no \
-    "${VEEAM_SSH_USER:-administrator}@${VEEAM_SSH_HOST}" \
-    "powershell -ExecutionPolicy Bypass -File '${ps1}' -RestorePointIds '${rp_ids}' -DestinationPath '${VEEAM_HOST_BACKUP_PATH}'" \
-    || mold_backup_notify_log warn "Veeam chain restore script failed (continuing Mold restore)"
+  # PowerShell chain export removed — datadisk/mold-only restore only.
+  mold_backup_notify_log info "skip Veeam chain export (mold-only / no PowerShell restore-chain)"
+  return 0
 }
 
 mold_backup_get_domain_disk_paths() {

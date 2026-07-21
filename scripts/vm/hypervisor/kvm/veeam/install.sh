@@ -99,18 +99,8 @@ if [[ ! -f "${ETC_DIR}/mold-backup.env" ]]; then
 else
   echo "Keeping existing ${ETC_DIR}/mold-backup.env"
 fi
-install -m 0644 "${SCRIPT_DIR}/mold-backup.windows.conf.default" "${SHARE_DIR}/mold-backup.windows.conf.default"
-install -m 0644 "${SCRIPT_DIR}/veeam-job-pre-backup.ps1" "${SHARE_DIR}/veeam-job-pre-backup.ps1"
-install -m 0644 "${SCRIPT_DIR}/veeam-job-post-backup.ps1" "${SHARE_DIR}/veeam-job-post-backup.ps1"
-install -m 0644 "${SCRIPT_DIR}/veeam-job-post-restore.ps1" "${SHARE_DIR}/veeam-job-post-restore.ps1"
-install -m 0644 "${SCRIPT_DIR}/install-veeam-job.ps1" "${SHARE_DIR}/install-veeam-job.ps1"
-install -m 0644 "${SCRIPT_DIR}/create-veeam-agent-job.ps1" "${SHARE_DIR}/create-veeam-agent-job.ps1" 2>/dev/null || true
-install -m 0644 "${SCRIPT_DIR}/setup-veeam-mold-job.ps1" "${SHARE_DIR}/setup-veeam-mold-job.ps1" 2>/dev/null || true
 install -m 0755 "${SCRIPT_DIR}/setup-datadisk-veeam-backup.sh" "${ETC_DIR}/setup-datadisk-veeam-backup.sh" 2>/dev/null || true
-install -m 0644 "${SCRIPT_DIR}/setup-veeam-host-repo.ps1" "${SHARE_DIR}/setup-veeam-host-repo.ps1" 2>/dev/null || true
 install -m 0755 "${SCRIPT_DIR}/mold-guest-common.sh" "${ETC_DIR}/mold-guest-common.sh"
-install -m 0755 "${SCRIPT_DIR}/push-to-veeam.sh" "${SHARE_DIR}/push-to-veeam.sh" 2>/dev/null || true
-install -m 0755 "${SCRIPT_DIR}/push-to-veeam.sh" "${ETC_DIR}/push-to-veeam.sh" 2>/dev/null || true
 
 if [[ -f "${SCRIPT_DIR}/README.ko.md" ]]; then
   install -m 0644 "${SCRIPT_DIR}/README.ko.md" "${SHARE_DIR}/README.ko.md"
@@ -165,4 +155,4 @@ echo "  Host backup path: /tmp/mold/veeam"
 echo "  Configure: veeam_config.sh --job-name ... --install"
 echo "  Datadisk setup: ${ETC_DIR}/setup-datadisk-veeam-backup.sh"
 echo "  FLR→Mold: ${ETC_DIR}/enable-veeam-mold-restore.sh"
-echo "  Veeam PS1/Job: ${ETC_DIR}/push-to-veeam.sh"
+echo "  Veeam Job/Pre/Post: configure in Veeam UI (PowerShell automation removed)"
