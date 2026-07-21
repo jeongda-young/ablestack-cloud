@@ -92,7 +92,7 @@ public interface BackupProvider {
     }
 
     /**
-     * Import a Veeam restore point as a NAS backup seed (Ablestack Veeam provider only).
+     * Import a Veeam restore point as a local backup seed (Ablestack Veeam provider only).
      */
     default Pair<Boolean, Backup> importAblestackVeeamBackupSeed(VirtualMachine vm, String veeamRestorePointId,
             List<String> stagingDiskPaths, String sourceDiskFormat, Boolean bootstrapCheckpoint) {

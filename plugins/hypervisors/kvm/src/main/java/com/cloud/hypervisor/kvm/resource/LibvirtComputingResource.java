@@ -435,6 +435,7 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
     private String ableNasBackupPath;
     private String ableCvtBackupPath;
     private String ableNetBackupPath;
+    private String ableVeeamPath;
     private String securityGroupPath;
     private String ovsPvlanDhcpHostPath;
     private String ovsPvlanVmPath;
@@ -877,6 +878,10 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
         return ableNetBackupPath;
     }
 
+    public String getAbleVeeamPath() {
+        return ableVeeamPath;
+    }
+
     public String getOvsPvlanDhcpHostPath() {
         return ovsPvlanDhcpHostPath;
     }
@@ -1252,6 +1257,11 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
         ableNetBackupPath = Script.findScript(kvmScriptsDir, "ablestack_netbackup.sh");
         if (ableNetBackupPath == null) {
             throw new ConfigurationException("Unable to find ablestack_netbackup.sh");
+        }
+
+        ableVeeamPath = Script.findScript(kvmScriptsDir, "ablestack_veeam.sh");
+        if (ableVeeamPath == null) {
+            throw new ConfigurationException("Unable to find ablestack_veeam.sh");
         }
 
         createTmplPath = Script.findScript(storageScriptsDir, "createtmplt.sh");

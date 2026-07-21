@@ -44,7 +44,7 @@ import com.cloud.exception.ResourceUnavailableException;
 import com.cloud.utils.Pair;
 
 @APICommand(name = "listAblestackVeeamBackups",
-        description = "List NAS backups for a VM using the ablestack-veeam backup offering",
+        description = "List backups for a VM using the ablestack-veeam backup offering",
         responseObject = BackupResponse.class,
         since = "4.22.0.0",
         authorized = {RoleType.Admin, RoleType.ResourceAdmin, RoleType.DomainAdmin, RoleType.User})

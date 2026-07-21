@@ -41,7 +41,7 @@ import com.cloud.exception.ResourceAllocationException;
 import com.cloud.exception.ResourceUnavailableException;
 
 @APICommand(name = "importAblestackVeeamBackupSeed",
-        description = "Import a Veeam restore point as a NAS backup seed for Ablestack Veeam incremental KVM backups",
+        description = "Import a Veeam restore point as a local seed for Ablestack Veeam incremental KVM backups",
         responseObject = BackupResponse.class,
         since = "4.22.0.0",
         authorized = {RoleType.Admin, RoleType.ResourceAdmin})

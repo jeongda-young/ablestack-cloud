@@ -40,7 +40,7 @@ import com.cloud.exception.ResourceUnavailableException;
 import com.cloud.utils.exception.CloudRuntimeException;
 
 @APICommand(name = "restoreAblestackVeeamBackup",
-        description = "Restore a VM from an ablestack-veeam NAS backup entry",
+        description = "Restore a VM from an ablestack-veeam backup entry",
         responseObject = SuccessResponse.class,
         since = "4.22.0.0",
         authorized = {RoleType.Admin, RoleType.ResourceAdmin})

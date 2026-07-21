@@ -41,7 +41,7 @@ import com.cloud.exception.ResourceUnavailableException;
 import com.cloud.utils.exception.CloudRuntimeException;
 
 @APICommand(name = "createAblestackVeeamBackup",
-        description = "Create an incremental NAS backup for a VM assigned to the ablestack-veeam offering "
+        description = "Create a backup for a VM assigned to the ablestack-veeam offering "
                 + "(typically after a Veeam job completes)",
         responseObject = SuccessResponse.class,
         since = "4.22.0.0",

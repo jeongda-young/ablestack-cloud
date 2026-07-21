@@ -41,7 +41,7 @@ public class AblestackVeeamBackupOffering implements BackupOffering {
 
     @Override
     public String getDescription() {
-        return "Ablestack Veeam + NAS KVM Backup Offering (Job)";
+        return "Ablestack Veeam KVM Backup Offering";
     }
 
     @Override
@@ -56,7 +56,7 @@ public class AblestackVeeamBackupOffering implements BackupOffering {
 
     @Override
     public String getProvider() {
-        return "ablestack-veeam";
+        return AblestackVeeamBackupProvider.PROVIDER_NAME;
     }
 
     @Override
