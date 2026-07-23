@@ -9,19 +9,25 @@
 | Veeam Job | **Veeam UI**에서 생성·Pre/Post 등록 (PowerShell 자동화 없음) |
 | FLR→Mold | KVM `mold-veeam-restore-agent.timer` → `restoreBackup` |
 
-## 최초 설정 (KVM)
+## 최초 설정 (KVM) — 조회 후 env/conf 자동 생성
+
+호스트 전체 백업이면 **VM 이름을 넣을 필요 없음** (`VM_INCLUDE=*`, 기본 `VM_EXCLUDE=scvm`).
+MS URL·KVM IP·hostname·zone은 agent/API에서 조회합니다. API key/secret만 넘기면 됩니다.
+스크립트가 없으면 이전 배포 패키지입니다 → `veeam-host-deploy/deploy-from-ms.sh` 재실행.
+
+`veeam_config.sh` / pre-notify가 **VeeamBackup offering을 자동 등록**합니다  
+(`importBackupOffering` provider=`ablestack-veeam`, externalid=`veeam`). NAS repository는 만들지 않습니다.
 
 ```bash
-/etc/ablestack/veeam/veeam_config.sh \
-  --job-name "Mold ablecube31-2" \
-  --offering-name "VeeamBackup" \
-  --mold-url "http://10.10.31.20:8080/client/api" \
+# Mold UI → Accounts → API Keys (현재 MS 192.168.1.30 용)
+bash /etc/ablestack/veeam/bootstrap-host-veeam-env.sh \
   --api-key KEY --api-secret 'SECRET' \
-  --zone-id ZONE_UUID \
-  --vm-include "*" \
-  --kvm-host "10.10.31.2" \
-  --backup-mode host \
-  --install
+  --job-name 'Agent Backup Job 1' \
+  --veeam-host 192.168.1.240 \
+  --veeam-password 'Ablecloud1!'
+
+# 또는 수동:
+# /etc/ablestack/veeam/veeam_config.sh --job-name "..." --vm-include "*" --backup-mode host --install
 
 bash /etc/ablestack/veeam/setup-datadisk-veeam-backup.sh --env-file /etc/ablestack/veeam/mold-backup.env
 ```

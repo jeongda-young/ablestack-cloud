@@ -1357,6 +1357,104 @@ except Exception:
 " 2>/dev/null
 }
 
+# Resolve ZONE_ID; if missing/invalid, refresh from listZones.
+mold_backup_api_ensure_zone_id() {
+  local json err
+  if [[ -n "${ZONE_ID:-}" ]]; then
+    json=$(mold_backup_cmk_run listZones "id=${ZONE_ID}" 2>/dev/null || true)
+    err="$(mold_backup_api_extract_error "$json" 2>/dev/null || true)"
+    if [[ -z "$err" ]] && echo "$json" | grep -q '"id"'; then
+      return 0
+    fi
+    mold_backup_notify_log warn "ZONE_ID=${ZONE_ID} invalid — refreshing via listZones"
+    ZONE_ID=""
+  fi
+  ZONE_ID="$(mold_backup_api_first_zone_id 2>/dev/null || true)"
+  [[ -n "$ZONE_ID" ]] || {
+    mold_backup_notify_log err "listZones failed — cannot determine ZONE_ID"
+    return 1
+  }
+  mold_backup_notify_log info "ZONE_ID=${ZONE_ID}"
+  return 0
+}
+
+# Prefer ablestack-veeam if loaded on MS; else stock/custom "veeam".
+mold_backup_api_detect_veeam_provider() {
+  local json names
+  json=$(mold_backup_cmk_run listBackupProviders 2>/dev/null || true)
+  names="$(echo "$json" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    ps = d.get('listbackupprovidersresponse', {}).get('providers', [])
+    if isinstance(ps, dict):
+        ps = [ps]
+    print(' '.join([(p.get('name') or '').lower() for p in ps]))
+except Exception:
+    pass
+" 2>/dev/null || true)"
+  if [[ " $names " == *" ablestack-veeam "* ]]; then
+    echo "ablestack-veeam"
+    return 0
+  fi
+  if [[ " $names " == *" veeam "* ]]; then
+    echo "veeam"
+    return 0
+  fi
+  echo "${VEEAM_PROVIDER_NAME:-ablestack-veeam}"
+}
+
+# Pick externalid for Veeam family: never use NAS repository UUID.
+# ablestack-veeam / Ablestack KVM veeam plugins accept literal "veeam".
+mold_backup_api_pick_offering_external_id() {
+  local provider="${1:-${VEEAM_PROVIDER_NAME}}"
+  local json ext
+  if [[ -n "${OFFERING_EXTERNAL_ID:-}" && "${OFFERING_EXTERNAL_ID}" != "8a4d0113-529b-40eb-9b9d-59e0d3f2d69d" ]]; then
+    # Allow explicit override except the known NAS repo UUID mistake
+    if [[ "${OFFERING_EXTERNAL_ID}" != *"nas"* ]]; then
+      case "${OFFERING_EXTERNAL_ID}" in
+        veeam|netbackup) echo "$OFFERING_EXTERNAL_ID"; return 0 ;;
+      esac
+      # UUID that is NOT already an imported NAS offering — still prefer literal veeam for veeam family
+      :
+    fi
+  fi
+  case "$provider" in
+    ablestack-veeam|veeam)
+      # Prefer fixed external id used by Ablestack KVM Veeam plugins
+      echo "veeam"
+      return 0
+      ;;
+  esac
+  json=$(mold_backup_cmk_run listBackupProviderOfferings "provider=${provider}" "zoneid=${ZONE_ID}" 2>/dev/null || true)
+  ext="$(echo "$json" | python3 -c "
+import json, sys
+provider = (sys.argv[1] or '').lower()
+try:
+    d = json.load(sys.stdin)
+    offs = d.get('listbackupproviderofferingsresponse', {}).get('backupoffering', [])
+    if isinstance(offs, dict):
+        offs = [offs]
+    for o in offs:
+        p = (o.get('provider') or '').lower()
+        n = (o.get('name') or '')
+        e = o.get('externalid') or o.get('id') or ''
+        if p in ('nas', 'ablestack-nas') or 'NAS' in n:
+            continue
+        if provider and p and p != provider and not (
+            provider in ('veeam', 'ablestack-veeam') and p in ('veeam', 'ablestack-veeam')
+        ):
+            continue
+        if e:
+            print(e)
+            raise SystemExit
+except Exception:
+    pass
+" "$provider" 2>/dev/null || true)"
+  [[ -n "$ext" ]] && { echo "$ext"; return 0; }
+  echo "${OFFERING_EXTERNAL_ID:-veeam}"
+}
+
 # First backup repository NFS/CIFS address — used by veeam_config.sh auto-fill.
 mold_backup_api_first_repo_address() {
   local json name="${1:-}"
@@ -1525,26 +1623,36 @@ mold_backup_api_ensure_repository() {
   echo "$repo_id"
 }
 
-# Ensure backup repository + offering exist (NAS/guest). Datadisk host mode uses KVM
-# /data/backup only — assign backup offering in Mold UI; no addBackupRepository.
+# Ensure backup offering exists. Datadisk/host mode: no Mold NAS repository —
+# Prefer MS-loaded provider (ablestack-veeam or veeam) + valid ZONE_ID.
 mold_backup_api_ensure_backup_resources() {
   local offering_id repo_id
-  if mold_backup_is_datadisk_mode; then
-    offering_id="$(mold_backup_api_find_offering_id "${VEEAM_PROVIDER_NAME}" "$(mold_backup_offering_name)" 2>/dev/null || true)"
-    [[ -n "$offering_id" ]] || offering_id="$(mold_backup_api_find_offering_id "${VEEAM_PROVIDER_NAME}" 2>/dev/null || true)"
+  mold_backup_api_ensure_zone_id || return 1
+  VEEAM_PROVIDER_NAME="$(mold_backup_api_detect_veeam_provider)"
+  export VEEAM_PROVIDER_NAME
+  mold_backup_notify_log info "Using backup provider=${VEEAM_PROVIDER_NAME}"
+
+  if mold_backup_is_datadisk_mode || [[ "${VEEAM_PROVIDER_NAME}" == "ablestack-veeam" || "${VEEAM_PROVIDER_NAME}" == "veeam" ]]; then
+    OFFERING_EXTERNAL_ID="$(mold_backup_api_pick_offering_external_id "${VEEAM_PROVIDER_NAME}")"
+    export OFFERING_EXTERNAL_ID
+    offering_id="$(mold_backup_api_ensure_offering)" || true
+    offering_id="$(echo "$offering_id" | awk '/^[0-9a-fA-F-]{36}$/{print; exit}')"
     if [[ -n "$offering_id" ]]; then
+      mold_backup_notify_log info "Backup offering ready id=${offering_id} provider=${VEEAM_PROVIDER_NAME} externalid=${OFFERING_EXTERNAL_ID}"
       echo "$offering_id"
       return 0
     fi
-    mold_backup_notify_log warn "datadisk mode: assign backup offering '$(mold_backup_offering_name)' (${VEEAM_PROVIDER_NAME}) in Mold UI — Mold backup repository is not auto-created"
+    mold_backup_notify_log err "importBackupOffering failed for ${VEEAM_PROVIDER_NAME} (see API error above). Need: Root Admin API key, valid ZONE_ID, provider enabled"
     return 1
   fi
-  repo_id="$(mold_backup_api_ensure_repository 2>/dev/null || true)"
+  repo_id="$(mold_backup_api_ensure_repository)" || true
+  repo_id="$(echo "$repo_id" | awk '/^[0-9a-fA-F-]{36}$/{print; exit}')"
   if [[ -n "$repo_id" ]]; then
     BACKUP_REPOSITORY_UUID="$repo_id"
     OFFERING_EXTERNAL_ID="${OFFERING_EXTERNAL_ID:-$repo_id}"
   fi
-  offering_id="$(mold_backup_api_ensure_offering 2>/dev/null || true)"
+  offering_id="$(mold_backup_api_ensure_offering)" || true
+  offering_id="$(echo "$offering_id" | awk '/^[0-9a-fA-F-]{36}$/{print; exit}')"
   [[ -n "$offering_id" ]] && { echo "$offering_id"; return 0; }
   return 1
 }
@@ -1566,6 +1674,33 @@ try:
 except Exception:
     pass
 " "$offering_id" 2>/dev/null
+}
+
+# True if offering provider is ablestack-veeam / veeam family.
+mold_backup_api_offering_is_veeam() {
+  local offering_id="$1" json provider
+  [[ -n "$offering_id" ]] || return 1
+  json=$(mold_backup_api_list_backup_offerings 2>/dev/null) || return 0
+  provider="$(echo "$json" | python3 -c "
+import json, sys
+oid = sys.argv[1]
+try:
+    d = json.load(sys.stdin)
+    offs = d.get('listbackupofferingsresponse', {}).get('backupoffering', [])
+    if isinstance(offs, dict):
+        offs = [offs]
+    for o in offs:
+        if o.get('id') == oid:
+            print((o.get('provider') or '').lower())
+            break
+except Exception:
+    pass
+" "$offering_id" 2>/dev/null || true)"
+  case "$provider" in
+    ablestack-veeam|veeam) return 0 ;;
+    "") return 0 ;;  # cannot list offerings — let MS decide
+    *) return 1 ;;
+  esac
 }
 
 mold_backup_api_validate_offering_repository() {
@@ -1648,7 +1783,7 @@ try:
     if isinstance(offs, dict): offs = [offs]
     if name:
         for o in offs:
-            if o.get('name') == name:
+            if o.get('name') == name and (o.get('provider') or '').lower() in aliases:
                 print(o.get('id', ''))
                 sys.exit(0)
     for o in offs:
@@ -1663,13 +1798,17 @@ except Exception:
 
 mold_backup_api_ensure_offering() {
   local offering_id json err want_ext ext_id
-  offering_id="$(mold_backup_api_find_offering_id "${VEEAM_PROVIDER_NAME}" 2>/dev/null || true)"
-  want_ext="${OFFERING_EXTERNAL_ID:-${BACKUP_REPOSITORY_UUID:-}}"
+  mold_backup_api_ensure_zone_id || return 1
+  [[ -n "${VEEAM_PROVIDER_NAME:-}" ]] || VEEAM_PROVIDER_NAME="$(mold_backup_api_detect_veeam_provider)"
+  offering_id="$(mold_backup_api_find_offering_id "${VEEAM_PROVIDER_NAME}" "$(mold_backup_offering_name)" 2>/dev/null || true)"
+  [[ -n "$offering_id" ]] || offering_id="$(mold_backup_api_find_offering_id "${VEEAM_PROVIDER_NAME}" 2>/dev/null || true)"
+  want_ext="$(mold_backup_api_pick_offering_external_id "${VEEAM_PROVIDER_NAME}")"
+  OFFERING_EXTERNAL_ID="$want_ext"
   if [[ -n "$offering_id" && -n "$want_ext" ]]; then
     ext_id="$(mold_backup_api_get_offering_external_id "$offering_id" 2>/dev/null || true)"
     if [[ -n "$ext_id" && "$ext_id" != "$want_ext" ]]; then
-      mold_backup_notify_log warn "Backup offering id=${offering_id} externalid=${ext_id} != repository ${want_ext}"
-      mold_backup_notify_log warn "Delete '$(mold_backup_offering_name)' in Mold UI (Infrastructure → Backup Offerings) then re-run: mold_backup_api_ensure_backup_resources"
+      mold_backup_notify_log warn "Backup offering id=${offering_id} externalid=${ext_id} != ${want_ext}"
+      mold_backup_notify_log warn "Delete '$(mold_backup_offering_name)' in Mold UI then re-run ensure (or set OFFERING_EXTERNAL_ID=${ext_id})"
       offering_id=""
     fi
   fi
@@ -1680,12 +1819,12 @@ mold_backup_api_ensure_offering() {
   }
   local name
   name="$(mold_backup_offering_name)"
-  local ext_id="${OFFERING_EXTERNAL_ID:-${BACKUP_REPOSITORY_UUID:-}}"
+  local ext_id="$want_ext"
   if [[ -z "$ext_id" ]]; then
     ext_id="$(mold_backup_api_find_backup_repository_uuid 2>/dev/null || true)"
   fi
   [[ -n "$ext_id" ]] || {
-    mold_backup_notify_log err "No backup repository UUID for importBackupOffering — create Backup Repository in Mold UI or set BACKUP_REPOSITORY_UUID"
+    mold_backup_notify_log err "No externalid for importBackupOffering — listBackupProviderOfferings returned empty (configure Veeam URL or set OFFERING_EXTERNAL_ID)"
     return 1
   }
   local retention="${RETENTION_PERIOD:-P7D}"
@@ -1698,9 +1837,24 @@ mold_backup_api_ensure_offering() {
     "allowuserdrivenbackups=false"
     "retentionperiod=${retention}"
   )
+  mold_backup_notify_log info "importBackupOffering name=${name} provider=${VEEAM_PROVIDER_NAME} externalid=${ext_id} zone=${ZONE_ID}"
   if ! json=$(mold_backup_cmk_run importBackupOffering "${args[@]}" 2>&1); then
     err="$(mold_backup_api_extract_error "$json" 2>/dev/null || true)"
     mold_backup_notify_log err "importBackupOffering failed${err:+: ${err}}"
+    [[ -n "$err" ]] || mold_backup_notify_log err "importBackupOffering raw: ${json:0:500}"
+    job_id="$(mold_backup_api_json_field "$json" "importbackupofferingresponse.jobid")"
+    if [[ -n "$job_id" ]]; then
+      mold_backup_notify_log info "importBackupOffering async job=${job_id}; checking result"
+      local job_json job_err
+      job_json=$(mold_backup_api_wait_async_job "$job_id" 120 2>&1) || true
+      job_err="$(mold_backup_api_extract_async_job_error "$job_json" 2>/dev/null || true)"
+      [[ -n "$job_err" ]] && mold_backup_notify_log err "importBackupOffering async: ${job_err}"
+      offering_id="$(mold_backup_api_json_field "$job_json" "queryasyncjobresultresponse.jobresult.backupoffering.id")"
+      [[ -n "$offering_id" ]] && { echo "$offering_id"; return 0; }
+    fi
+    offering_id="$(mold_backup_api_find_offering_id "${VEEAM_PROVIDER_NAME}" "$name" 2>/dev/null || true)"
+    [[ -n "$offering_id" ]] || offering_id="$(mold_backup_api_find_offering_id "${VEEAM_PROVIDER_NAME}" 2>/dev/null || true)"
+    [[ -n "$offering_id" ]] && { echo "$offering_id"; return 0; }
     return 1
   fi
   err="$(mold_backup_api_extract_error "$json" 2>/dev/null || true)"
@@ -2374,6 +2528,12 @@ mold_backup_process_vm_pre_notify() {
     mold_backup_state_write_line "$state_file" "vm=${vm_name} id=${vm_id} status=fail reason=no-offering"
     return 1
   }
+  # Reject NAS/other offerings early (importAblestackVeeamBackupSeed requires ablestack-veeam).
+  if ! mold_backup_api_offering_is_veeam "$vm_offering"; then
+    mold_backup_notify_log err "VM ${vm_name} offering ${vm_offering} is not ${VEEAM_PROVIDER_NAME} — remove old offering and assign VeeamBackup (ablestack-veeam) in Mold UI"
+    mold_backup_state_write_line "$state_file" "vm=${vm_name} id=${vm_id} status=fail reason=wrong-provider"
+    return 1
+  fi
 
   # Loop guard (bidirectional): if this Veeam run was itself triggered by a Mold
   # backup, the Mold NAS backup already happened — let Veeam do disk-only and skip
@@ -2462,13 +2622,20 @@ mold_backup_veeam_restore_chain_to_host() {
 
 mold_backup_get_domain_disk_paths() {
   local vm_name="$1"
-  VM_NAME="$vm_name"
+  # Export so command-substitution subshells (build_backup_files → list_disk_specs) see VM_NAME.
+  export VM_NAME="$vm_name"
   mold_backup_get_all_disk_paths
 }
 
 mold_backup_run_host_export() {
   local vm_name="$1"
   local backup_subdir checkpoint disk_paths backup_files parent_dir parent_ckpt parent_ckpt_path backup_type op
+  [[ -n "$vm_name" ]] || {
+    mold_backup_notify_log err "Host export: empty vm name"
+    return 1
+  }
+  # Host-wide job conf has empty VM_UUID/VM_NAME; pin the target for all nested helpers.
+  export VM_NAME="$vm_name"
   [[ -x "${CVT_BACKUP_SCRIPT}" ]] || {
     mold_backup_notify_log err "Host backup script not found: ${CVT_BACKUP_SCRIPT} (run veeam/install.sh on this KVM host)"
     return 1
@@ -2478,6 +2645,10 @@ mold_backup_run_host_export() {
   checkpoint="$(basename "$backup_subdir")"
   mkdir -p "${VEEAM_HOST_BACKUP_PATH}/${vm_name}"
   disk_paths=$(mold_backup_get_domain_disk_paths "$vm_name")
+  [[ -n "$disk_paths" ]] || {
+    mold_backup_notify_log err "Host export: no disks for ${vm_name}"
+    return 1
+  }
   parent_dir=""
   parent_ckpt=""
   parent_ckpt_path=""
@@ -4097,20 +4268,14 @@ mold_backup_pre_notify() {
 
   if mold_backup_cmk_bin >/dev/null 2>&1 || command -v curl >/dev/null 2>&1; then
     mold_backup_api_ensure_global_settings || true
+    # Always try to register VeeamBackup (ablestack-veeam, externalid=veeam) — including datadisk/host.
     offering_id="$(mold_backup_api_find_offering_id "${VEEAM_PROVIDER_NAME}" "$(mold_backup_offering_name)" 2>/dev/null || true)"
+    [[ -n "$offering_id" ]] || offering_id="$(mold_backup_api_find_offering_id "${VEEAM_PROVIDER_NAME}" 2>/dev/null || true)"
     if [[ -z "$offering_id" ]]; then
-      if ! mold_backup_api_list_backup_offerings >/dev/null 2>&1; then
-        mold_backup_notify_log err "Cannot list/import backup offerings (check API key/secret or MS DB schema; see mold-ms-backup-schema-fix.sql)"
-      else
-        offering_id="$(mold_backup_api_ensure_backup_resources 2>/dev/null || true)"
-      fi
+      offering_id="$(mold_backup_api_ensure_backup_resources 2>/dev/null || true)"
     fi
     [[ -n "$offering_id" ]] || {
-      if mold_backup_is_datadisk_mode; then
-        mold_backup_notify_log warn "No backup offering '$(mold_backup_offering_name)' for ${VEEAM_PROVIDER_NAME}; assign in Mold UI (datadisk mode does not auto-create backup repository)"
-      else
-        mold_backup_notify_log warn "No backup offering '$(mold_backup_offering_name)' for ${VEEAM_PROVIDER_NAME}; set BACKUP_REPO_ADDRESS + ZONE_ID and re-run veeam_config.sh"
-      fi
+      mold_backup_notify_log warn "No backup offering '$(mold_backup_offering_name)' for ${VEEAM_PROVIDER_NAME}; check Admin API key, ZONE_ID, and backup.framework.provider.plugin=ablestack-veeam"
     }
   fi
 

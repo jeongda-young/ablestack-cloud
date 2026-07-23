@@ -36,6 +36,7 @@ if [[ -f "${SCRIPT_DIR}/ablestack.key.default" ]]; then
 fi
 
 for f in install.sh install-ablestack-secret-key.sh mold-backup.lib.sh mold-backup-secret.sh mold-backup.sh veeam_config.sh \
+  bootstrap-host-veeam-env.sh diagnose-mold-veeam-offering.sh \
   ablestack_veeam_pre_notify.sh ablestack_veeam_post_notify.sh ablestack_veeam_restore_notify.sh ablestack_veeam_restore_event.sh \
   mold-veeam-trigger-hook.sh; do
   [[ -f "${SCRIPT_DIR}/${f}" ]] || continue

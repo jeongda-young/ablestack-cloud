@@ -306,7 +306,11 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         final String canonicalProviderName = BackupProviderNameUtils.canonicalize(providerName);
 
         for (BackupProvider provider : providers) {
-            if (provider.getName().equalsIgnoreCase(canonicalProviderName)) {
+            final boolean nameMatch = provider.getName().equalsIgnoreCase(providerName)
+                    || provider.getName().equalsIgnoreCase(canonicalProviderName)
+                    || (BackupProviderNameUtils.isVeeamFamily(providerName)
+                        && BackupProviderNameUtils.isVeeamFamily(provider.getName()));
+            if (nameMatch) {
                 try {
                     logger.debug("Listing external backup offerings for provider {} in zone {}", provider.getName(), zoneId);
                     List<BackupOffering> offerings = provider.listBackupOfferings(zoneId);
@@ -332,11 +336,21 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
 
         List<BackupProvider> zoneProviders = getBackupProvidersForZone(cmd.getZoneId());
-        boolean providerFound = zoneProviders.stream().anyMatch(p -> p.getName().equalsIgnoreCase(providerName));
-
-        if (!providerFound) {
-            throw new CloudRuntimeException("Provider " + providerName + " is not enabled for zone " + cmd.getZoneId());
+        BackupProvider matchedProvider = null;
+        for (BackupProvider p : zoneProviders) {
+            if (p.getName().equalsIgnoreCase(cmd.getProvider())
+                    || p.getName().equalsIgnoreCase(providerName)
+                    || (BackupProviderNameUtils.isVeeamFamily(cmd.getProvider())
+                        && BackupProviderNameUtils.isVeeamFamily(p.getName()))) {
+                matchedProvider = p;
+                break;
+            }
         }
+        if (matchedProvider == null) {
+            throw new CloudRuntimeException("Provider " + cmd.getProvider() + " is not enabled for zone " + cmd.getZoneId());
+        }
+        // Persist / use the actually loaded plugin name (veeam vs ablestack-veeam).
+        providerName = matchedProvider.getName();
 
         final BackupOffering existingOffering = backupOfferingDao.findByExternalId(cmd.getExternalId(), cmd.getZoneId());
         if (existingOffering != null) {
@@ -360,7 +374,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             filteredDomainIds = domainHelper.filterChildSubDomains(filteredDomainIds);
         }
 
-        final BackupProvider provider = getBackupProvider(providerName);
+        final BackupProvider provider = matchedProvider;
         if (!provider.isValidProviderOffering(cmd.getZoneId(), cmd.getExternalId())) {
             throw new CloudRuntimeException("Backup offering '" + cmd.getExternalId() + "' does not exist on provider " + provider.getName() + " on zone " + cmd.getZoneId());
         }
@@ -2882,11 +2896,24 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         if (StringUtils.isEmpty(name)) {
             throw new CloudRuntimeException("Invalid backup provider name provided");
         }
-        final String canonicalName = BackupProviderNameUtils.canonicalize(name);
-        if (!backupProvidersMap.containsKey(canonicalName)) {
-            throw new CloudRuntimeException("Failed to find backup provider by the name: " + canonicalName);
+        // Prefer exact registered name first (stock plugin registers as "veeam";
+        // ablestack-veeam registers as "ablestack-veeam"). Canonicalize is only a fallback.
+        if (backupProvidersMap.containsKey(name)) {
+            return backupProvidersMap.get(name);
         }
-        return backupProvidersMap.get(canonicalName);
+        final String canonicalName = BackupProviderNameUtils.canonicalize(name);
+        if (backupProvidersMap.containsKey(canonicalName)) {
+            return backupProvidersMap.get(canonicalName);
+        }
+        // Alias: ablestack-veeam ↔ veeam when only one is loaded
+        if (BackupProviderNameUtils.isVeeamFamily(name)) {
+            for (final String alias : new String[] {"ablestack-veeam", "veeam"}) {
+                if (backupProvidersMap.containsKey(alias)) {
+                    return backupProvidersMap.get(alias);
+                }
+            }
+        }
+        throw new CloudRuntimeException("Failed to find backup provider by the name: " + name);
     }
 
     @Override

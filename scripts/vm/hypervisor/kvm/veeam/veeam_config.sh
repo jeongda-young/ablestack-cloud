@@ -256,6 +256,8 @@ veeam_config_auto_mold_url() {
     [[ -f "$props" ]] || continue
     host="$(grep -E '^[[:space:]]*host[[:space:]]*=' "$props" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d ' \r')"
     [[ -n "$host" ]] || continue
+    # agent.properties often uses host=192.168.1.30@static
+    host="${host%%@*}"
     if [[ "$host" == http* ]]; then
       MOLD_API_URL="${host%/}/client/api"
     else
@@ -557,11 +559,11 @@ if [[ "$CONFIGURE_MOLD" == "true" ]]; then
   mold_backup_load_config || true
   if mold_backup_cmk_bin >/dev/null 2>&1 || command -v curl >/dev/null 2>&1; then
     mold_backup_api_ensure_global_settings || true
-    if mold_backup_is_datadisk_mode; then
-      mold_backup_notify_log info "datadisk mode: skipping addBackupRepository/importBackupOffering (assign offering in Mold UI)"
+    # Host/datadisk: importBackupOffering(provider=ablestack-veeam, externalid=veeam). No NAS repo.
+    if mold_backup_api_ensure_backup_resources >/dev/null; then
+      mold_backup_notify_log info "Mold backup offering registered (or already present)"
     else
-      mold_backup_api_ensure_backup_resources >/dev/null \
-        || mold_backup_notify_log warn "addBackupRepository/importBackupOffering skipped or failed (Admin API key + BACKUP_REPO_ADDRESS + ZONE_ID required)"
+      mold_backup_notify_log warn "importBackupOffering failed — Admin API key + ZONE_ID + ablestack-veeam provider enabled required"
     fi
   fi
 fi
