@@ -337,13 +337,32 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
 
         List<BackupProvider> zoneProviders = getBackupProvidersForZone(cmd.getZoneId());
         BackupProvider matchedProvider = null;
+        BackupProvider familyFallback = null;
         for (BackupProvider p : zoneProviders) {
-            if (p.getName().equalsIgnoreCase(cmd.getProvider())
-                    || p.getName().equalsIgnoreCase(providerName)
-                    || (BackupProviderNameUtils.isVeeamFamily(cmd.getProvider())
-                        && BackupProviderNameUtils.isVeeamFamily(p.getName()))) {
+            // Prefer exact API provider name first (ablestack-veeam ≠ veeam/NAS-hybrid).
+            if (p.getName().equalsIgnoreCase(cmd.getProvider())) {
                 matchedProvider = p;
                 break;
+            }
+            if (matchedProvider == null && p.getName().equalsIgnoreCase(providerName)) {
+                matchedProvider = p;
+            }
+            if (familyFallback == null
+                    && BackupProviderNameUtils.isVeeamFamily(cmd.getProvider())
+                    && BackupProviderNameUtils.isVeeamFamily(p.getName())) {
+                familyFallback = p;
+            }
+        }
+        if (matchedProvider == null) {
+            matchedProvider = familyFallback;
+        }
+        // Veeam family: prefer standalone ablestack-veeam over display-name veeam when both loaded.
+        if (matchedProvider != null && BackupProviderNameUtils.isVeeamFamily(cmd.getProvider())) {
+            for (BackupProvider p : zoneProviders) {
+                if (BackupProviderNameUtils.ABLESTACK_VEEAM.equalsIgnoreCase(p.getName())) {
+                    matchedProvider = p;
+                    break;
+                }
             }
         }
         if (matchedProvider == null) {
@@ -1068,7 +1087,8 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             throw new CloudRuntimeException("VM backup offering must use the ablestack-veeam provider");
         }
 
-        final BackupProvider backupProvider = getBackupProvider(offering.getProvider());
+        // Seed import must use standalone ablestack-veeam (not veeam/NAS-hybrid which requires a repository).
+        final BackupProvider backupProvider = getAblestackVeeamBackupProvider(offering.getProvider());
 
         List<String> stagingPaths = null;
         if (org.apache.commons.lang3.StringUtils.isNotBlank(cmd.getStagingDiskPaths())) {
@@ -2914,6 +2934,18 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             }
         }
         throw new CloudRuntimeException("Failed to find backup provider by the name: " + name);
+    }
+
+    /**
+     * Resolve the standalone Ablestack Veeam KVM provider for seed import APIs.
+     * When both "ablestack-veeam" and display-name "veeam" (often NAS-hybrid) are loaded,
+     * prefer ablestack-veeam so host staging import does not require a Mold backup repository.
+     */
+    private BackupProvider getAblestackVeeamBackupProvider(final String offeringProviderName) {
+        if (backupProvidersMap.containsKey(BackupProviderNameUtils.ABLESTACK_VEEAM)) {
+            return backupProvidersMap.get(BackupProviderNameUtils.ABLESTACK_VEEAM);
+        }
+        return getBackupProvider(offeringProviderName);
     }
 
     @Override
