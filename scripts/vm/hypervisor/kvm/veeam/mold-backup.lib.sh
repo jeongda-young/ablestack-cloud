@@ -501,7 +501,41 @@ mold_backup_has_rbd_disk() {
   local csv="$1"
   [[ "$csv" == rbd:* ]] && return 0
   [[ "$csv" == *",rbd:"* ]] && return 0
+  [[ "$csv" == *"protocol=rbd"* ]] && return 0
   return 1
+}
+
+# True if domain XML has any disk driver type=raw (HCI RBD often appears as raw).
+mold_backup_domain_has_raw_disk() {
+  local vm="$1"
+  virsh -c qemu:///system dumpxml "$vm" 2>/dev/null \
+    | grep -qiE "<driver[^>]*type=['\"]raw['\"]" \
+    && return 0
+  return 1
+}
+
+# True if domain uses RBD network disks (even when domblklist path is not rbd:...).
+mold_backup_domain_has_rbd_disk() {
+  local vm="$1" csv="${2:-}"
+  mold_backup_has_rbd_disk "$csv" && return 0
+  virsh -c qemu:///system dumpxml "$vm" 2>/dev/null \
+    | grep -qiE "protocol=['\"]rbd['\"]|<source[^>]*protocol=['\"]rbd" \
+    && return 0
+  return 1
+}
+
+# Prefer rbd: URIs from dumpxml when domblklist only shows sparse paths.
+mold_backup_domain_rbd_disk_paths() {
+  local vm="$1"
+  virsh -c qemu:///system dumpxml "$vm" 2>/dev/null | python3 -c "
+import sys, re
+xml = sys.stdin.read()
+# <source protocol='rbd' name='pool/image'>
+for m in re.finditer(r\"protocol=['\\\"]rbd['\\\"][^>]*name=['\\\"]([^'\\\"]+)['\\\"]\", xml, re.I):
+    print('rbd:' + m.group(1))
+for m in re.finditer(r\"name=['\\\"]([^'\\\"]+)['\\\"][^>]*protocol=['\\\"]rbd['\\\"]\", xml, re.I):
+    print('rbd:' + m.group(1))
+" 2>/dev/null | awk 'NF && !seen[$0]++'
 }
 
 # auto | qcow2 (GFS/file) | rbd (HCI/Ceph primary)
@@ -1379,8 +1413,26 @@ mold_backup_api_ensure_zone_id() {
 }
 
 # Prefer ablestack-veeam if loaded on MS; else stock/custom "veeam".
+# IMPORTANT: provider name stored on the offering must be ablestack-veeam for
+# importAblestackVeeamBackupSeed. The display name "veeam" (Ablestack Veeam+NAS)
+# is a different bean and requires a NAS backup repository.
 mold_backup_api_detect_veeam_provider() {
   local json names
+  # Probe: listBackupProviderOfferings with ablestack-veeam (even if listBackupProviders hides it via display-name merge)
+  if [[ -n "${ZONE_ID:-}" ]]; then
+    json=$(mold_backup_cmk_run listBackupProviderOfferings "provider=ablestack-veeam" "zoneid=${ZONE_ID}" 2>/dev/null || true)
+    if echo "$json" | grep -qE '"externalid"[[:space:]]*:[[:space:]]*"veeam"|"name"[[:space:]]*:[[:space:]]*"veeam"'; then
+      echo "ablestack-veeam"
+      return 0
+    fi
+    # Any successful non-error response that is not clearly NAS-only
+    if ! echo "$json" | grep -qiE 'errortext|errorcode'; then
+      if echo "$json" | grep -qiE 'backupoffering' && ! echo "$json" | grep -qiE '"provider"[[:space:]]*:[[:space:]]*"nas"'; then
+        echo "ablestack-veeam"
+        return 0
+      fi
+    fi
+  fi
   json=$(mold_backup_cmk_run listBackupProviders 2>/dev/null || true)
   names="$(echo "$json" | python3 -c "
 import json, sys
@@ -1394,6 +1446,11 @@ except Exception:
     pass
 " 2>/dev/null || true)"
   if [[ " $names " == *" ablestack-veeam "* ]]; then
+    echo "ablestack-veeam"
+    return 0
+  fi
+  # Force ablestack-veeam when global setting / Mold.jar module is present (list API may only show display name veeam)
+  if [[ "${FORCE_ABLESTACK_VEEAM_PROVIDER:-true}" == "true" ]]; then
     echo "ablestack-veeam"
     return 0
   fi
@@ -1768,13 +1825,13 @@ mold_backup_api_find_offering_id() {
   local offering_name="${2:-$(mold_backup_offering_name)}"
   local json
   json=$(mold_backup_api_list_backup_offerings) || return 1
+  # Do NOT alias ablestack-veeam ↔ veeam: provider=veeam is the NAS-hybrid bean
+  # and fails seed import with "No valid backup repository found for the VM".
   echo "$json" | python3 -c "
 import json, sys
 provider = (sys.argv[1] or '').lower()
 name = sys.argv[2] if len(sys.argv) > 2 else ''
 aliases = {provider}
-if provider in ('ablestack-veeam', 'veeam'):
-    aliases.update(['ablestack-veeam', 'veeam'])
 if provider == 'ablestack-nas':
     aliases.update(['ablestack-nas', 'nas'])
 try:
@@ -1797,13 +1854,27 @@ except Exception:
 }
 
 mold_backup_api_ensure_offering() {
-  local offering_id json err want_ext ext_id
+  local offering_id json err want_ext ext_id bad_id bad_provider
   mold_backup_api_ensure_zone_id || return 1
   [[ -n "${VEEAM_PROVIDER_NAME:-}" ]] || VEEAM_PROVIDER_NAME="$(mold_backup_api_detect_veeam_provider)"
+  # Host/datadisk seed import requires ablestack-veeam (not display-name veeam / NAS hybrid).
+  if mold_backup_is_datadisk_mode || [[ "${FORCE_ABLESTACK_VEEAM_PROVIDER:-true}" == "true" ]]; then
+    VEEAM_PROVIDER_NAME=ablestack-veeam
+    export VEEAM_PROVIDER_NAME
+  fi
   offering_id="$(mold_backup_api_find_offering_id "${VEEAM_PROVIDER_NAME}" "$(mold_backup_offering_name)" 2>/dev/null || true)"
   [[ -n "$offering_id" ]] || offering_id="$(mold_backup_api_find_offering_id "${VEEAM_PROVIDER_NAME}" 2>/dev/null || true)"
   want_ext="$(mold_backup_api_pick_offering_external_id "${VEEAM_PROVIDER_NAME}")"
   OFFERING_EXTERNAL_ID="$want_ext"
+  # Warn if a same-name offering exists under wrong provider=veeam (NAS hybrid).
+  if [[ -z "$offering_id" ]]; then
+    bad_id="$(mold_backup_api_find_offering_id veeam "$(mold_backup_offering_name)" 2>/dev/null || true)"
+    if [[ -n "$bad_id" ]]; then
+      mold_backup_notify_log err "Found '$(mold_backup_offering_name)' with provider=veeam (id=${bad_id}) — NAS hybrid; seed import needs provider=ablestack-veeam"
+      mold_backup_notify_log err "Delete that offering in Mold UI (Backup Offerings), re-assign VMs after: bash diagnose-mold-veeam-offering.sh --import"
+      return 1
+    fi
+  fi
   if [[ -n "$offering_id" && -n "$want_ext" ]]; then
     ext_id="$(mold_backup_api_get_offering_external_id "$offering_id" 2>/dev/null || true)"
     if [[ -n "$ext_id" && "$ext_id" != "$want_ext" ]]; then
@@ -1985,6 +2056,10 @@ mold_backup_api_assign_offering_if_needed() {
   json=$(mold_backup_cmk_run listVirtualMachines "id=${vm_id}" 2>/dev/null) || return 1
   current="$(mold_backup_api_json_field "$json" "listvirtualmachinesresponse.virtualmachine.backupofferingid")"
   [[ "$current" == "$offering_id" ]] && return 0
+  # Do not replace an existing (possibly non-Veeam) offering — caller must skip.
+  if [[ -n "$current" ]]; then
+    return 1
+  fi
   mold_backup_cmk_run assignVirtualMachineToBackupOffering "virtualmachineid=${vm_id}" "backupofferingid=${offering_id}" >/dev/null \
     || mold_backup_notify_log warn "assignVirtualMachineToBackupOffering failed for vm=${vm_id}"
 }
@@ -2514,26 +2589,32 @@ mold_backup_process_vm_pre_notify() {
   local vm_offering json
   json=$(mold_backup_cmk_run listVirtualMachines "id=${vm_id}" 2>/dev/null || true)
   vm_offering="$(mold_backup_api_json_field "$json" "listvirtualmachinesresponse.virtualmachine.backupofferingid")"
-  if [[ -z "$offering_id" && -n "$vm_offering" ]]; then
-    offering_id="$vm_offering"
-    mold_backup_notify_log info "Using VM-assigned backup offering id=${offering_id}"
+
+  # Existing non-Veeam offering → skip (never overwrite / remove).
+  if [[ -n "$vm_offering" ]] && ! mold_backup_api_offering_is_veeam "$vm_offering"; then
+    mold_backup_notify_log info "Skip ${vm_name}: already has non-Veeam offering ${vm_offering}"
+    mold_backup_state_write_line "$state_file" "vm=${vm_name} id=${vm_id} status=skip reason=existing-offering"
+    return 2
   fi
-  if [[ -n "$offering_id" ]]; then
-    mold_backup_api_assign_offering_if_needed "$vm_id" "$offering_id"
-    json=$(mold_backup_cmk_run listVirtualMachines "id=${vm_id}" 2>/dev/null || true)
-    vm_offering="$(mold_backup_api_json_field "$json" "listvirtualmachinesresponse.virtualmachine.backupofferingid")"
+
+  # No offering → assign VeeamBackup once. Already on Veeam → keep.
+  if [[ -z "$vm_offering" && -n "$offering_id" ]]; then
+    if mold_backup_api_assign_offering_if_needed "$vm_id" "$offering_id"; then
+      json=$(mold_backup_cmk_run listVirtualMachines "id=${vm_id}" 2>/dev/null || true)
+      vm_offering="$(mold_backup_api_json_field "$json" "listvirtualmachinesresponse.virtualmachine.backupofferingid")"
+    fi
   fi
   [[ -n "$vm_offering" ]] || {
     mold_backup_notify_log err "VM ${vm_name} has no backup offering (assign '$(mold_backup_offering_name)' / ${VEEAM_PROVIDER_NAME} in Mold UI)"
     mold_backup_state_write_line "$state_file" "vm=${vm_name} id=${vm_id} status=fail reason=no-offering"
     return 1
   }
-  # Reject NAS/other offerings early (importAblestackVeeamBackupSeed requires ablestack-veeam).
   if ! mold_backup_api_offering_is_veeam "$vm_offering"; then
-    mold_backup_notify_log err "VM ${vm_name} offering ${vm_offering} is not ${VEEAM_PROVIDER_NAME} — remove old offering and assign VeeamBackup (ablestack-veeam) in Mold UI"
-    mold_backup_state_write_line "$state_file" "vm=${vm_name} id=${vm_id} status=fail reason=wrong-provider"
-    return 1
+    mold_backup_notify_log info "Skip ${vm_name}: offering ${vm_offering} is not veeam family"
+    mold_backup_state_write_line "$state_file" "vm=${vm_name} id=${vm_id} status=skip reason=existing-offering"
+    return 2
   fi
+  mold_backup_notify_log info "Using VM-assigned backup offering id=${vm_offering}"
 
   # Loop guard (bidirectional): if this Veeam run was itself triggered by a Mold
   # backup, the Mold NAS backup already happened — let Veeam do disk-only and skip
@@ -2649,6 +2730,11 @@ mold_backup_run_host_export() {
     mold_backup_notify_log err "Host export: no disks for ${vm_name}"
     return 1
   }
+  # HCI: prefer explicit rbd: URIs from dumpxml when available
+  local rbd_paths
+  rbd_paths="$(mold_backup_domain_rbd_disk_paths "$vm_name" | paste -sd, - 2>/dev/null || true)"
+  [[ -n "$rbd_paths" ]] && disk_paths="$rbd_paths"
+
   parent_dir=""
   parent_ckpt=""
   parent_ckpt_path=""
@@ -2656,9 +2742,13 @@ mold_backup_run_host_export() {
   op="backup-running"
   backup_files=$(mold_backup_build_backup_files "$disk_paths" "$backup_type")
 
-  if mold_backup_has_rbd_disk "$disk_paths"; then
+  if mold_backup_domain_has_rbd_disk "$vm_name" "$disk_paths"; then
     op="backup-rbd"
     mold_backup_notify_log info "Host export storage engine=rbd (HCI)"
+  elif mold_backup_domain_has_raw_disk "$vm_name"; then
+    # libvirt checkpoint/bitmap unsupported for raw — cvtbackup FULL without checkpoint
+    op="backup-running"
+    mold_backup_notify_log info "Host export: raw disk(s) detected — FULL without checkpoint"
   fi
 
   local latest_parent="${VEEAM_HOST_BACKUP_PATH}/${vm_name}"
@@ -4259,7 +4349,7 @@ mold_backup_pre_notify() {
   mkdir -p "$(mold_backup_state_dir)" "${VEEAM_HOST_BACKUP_PATH}"
 
   local offering_id="" vm_name
-  local success=0 fail=0
+  local success=0 fail=0 skip=0
   local state_file run_id
   run_id="$(date '+%Y%m%d%H%M%S')"
   state_file="$(mold_backup_state_file_for_job "$job" "$run_id")"
@@ -4293,8 +4383,12 @@ mold_backup_pre_notify() {
         fi
         ;;
       host|policy)
-        if mold_backup_process_vm_pre_notify "$vm_name" "$offering_id" "$state_file"; then
+        local _rc=0
+        mold_backup_process_vm_pre_notify "$vm_name" "$offering_id" "$state_file" || _rc=$?
+        if [[ "$_rc" -eq 0 ]]; then
           success=$((success + 1))
+        elif [[ "$_rc" -eq 2 ]]; then
+          skip=$((skip + 1))
         else
           fail=$((fail + 1))
         fi
@@ -4320,7 +4414,7 @@ mold_backup_pre_notify() {
     esac
   done < <(mold_backup_list_target_domains || true)
 
-  if [[ "$success" -eq 0 && "$fail" -eq 0 ]]; then
+  if [[ "$success" -eq 0 && "$fail" -eq 0 && "$skip" -eq 0 ]]; then
     mold_backup_notify_log warn "No target VMs for job=${job} (vm_include=${VM_INCLUDE:-*}). Start VM or set VM_INCLUDE to libvirt name(s)."
     if [[ "${VM_INCLUDE:-*}" != "*" ]]; then
       local _t
@@ -4338,9 +4432,11 @@ mold_backup_pre_notify() {
     fi
   fi
 
-  mold_backup_notify_log info "pre-notify done success=${success} fail=${fail} state=${state_file}"
+  mold_backup_notify_log info "pre-notify done success=${success} skip=${skip} fail=${fail} state=${state_file}"
   [[ -n "$saved_include" ]] && VM_INCLUDE="$saved_include"
   [[ "$success" -gt 0 ]] && return 0
+  # All skipped (existing offerings) is not a hard failure for the Veeam job.
+  [[ "$fail" -eq 0 && "$skip" -gt 0 ]] && return 0
   return 1
 }
 

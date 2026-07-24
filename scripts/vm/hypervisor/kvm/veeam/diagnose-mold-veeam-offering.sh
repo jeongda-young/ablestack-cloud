@@ -56,14 +56,19 @@ mold_backup_cmk_run listBackupOfferings "zoneid=${ZONE_ID}" 2>&1 | head -c 2000 
 if [[ "$DO_IMPORT" == "true" ]]; then
   echo ""
   echo "=== importBackupOffering provider=${VEEAM_PROVIDER_NAME} externalid=${OFFERING_EXTERNAL_ID} ==="
+  # If an offering named VeeamBackup exists under wrong provider=veeam (NAS hybrid), delete tip:
+  echo "  Tip: Mold UI에서 provider=veeam 인 'VeeamBackup' 이 있으면 삭제 후 재import (ablestack-veeam 필요)"
   export OFFERING_EXTERNAL_ID VEEAM_PROVIDER_NAME ZONE_ID
+  # Prefer explicit ablestack-veeam for seed import path
+  VEEAM_PROVIDER_NAME=ablestack-veeam
+  export VEEAM_PROVIDER_NAME
   oid="$(mold_backup_api_ensure_backup_resources)" || true
   echo "  offering_id=${oid:-FAILED}"
   if [[ -n "${oid:-}" && -f "${ETC_DIR}/mold-backup.env" ]]; then
     sed -i "s|^ZONE_ID=.*|ZONE_ID='${ZONE_ID}'|" "${ETC_DIR}/mold-backup.env" || true
     grep -q '^VEEAM_PROVIDER_NAME=' "${ETC_DIR}/mold-backup.env" 2>/dev/null \
-      && sed -i "s|^VEEAM_PROVIDER_NAME=.*|VEEAM_PROVIDER_NAME='${VEEAM_PROVIDER_NAME}'|" "${ETC_DIR}/mold-backup.env" \
-      || echo "VEEAM_PROVIDER_NAME='${VEEAM_PROVIDER_NAME}'" >> "${ETC_DIR}/mold-backup.env"
+      && sed -i "s|^VEEAM_PROVIDER_NAME=.*|VEEAM_PROVIDER_NAME='ablestack-veeam'|" "${ETC_DIR}/mold-backup.env" \
+      || echo "VEEAM_PROVIDER_NAME='ablestack-veeam'" >> "${ETC_DIR}/mold-backup.env"
     grep -q '^OFFERING_EXTERNAL_ID=' "${ETC_DIR}/mold-backup.env" 2>/dev/null \
       && sed -i "s|^OFFERING_EXTERNAL_ID=.*|OFFERING_EXTERNAL_ID='${OFFERING_EXTERNAL_ID}'|" "${ETC_DIR}/mold-backup.env" \
       || echo "OFFERING_EXTERNAL_ID='${OFFERING_EXTERNAL_ID}'" >> "${ETC_DIR}/mold-backup.env"
@@ -71,15 +76,16 @@ if [[ "$DO_IMPORT" == "true" ]]; then
   fi
   if [[ -z "${oid:-}" ]]; then
     echo ""
-    echo "=== If error is 'does not exist on provider' / no ablestack-veeam ==="
-    echo "  MS에 cloud-plugin-backup-ablestack-veeam.jar 가 없습니다."
-    echo "  현재 'veeam' 플러그인은 NAS repository offering만 노출합니다."
-    echo "  → MS에 ablestack-veeam 플러그인 배포 후 MS 재시작이 필요합니다."
+    echo "=== If error mentions repository / provider ==="
+    echo "  1) Mold UI → Backup Offerings → delete 'VeeamBackup' if provider shows as veeam (NAS hybrid)"
+    echo "  2) Re-run: bash $0 --import   # creates provider=ablestack-veeam"
+    echo "  3) Re-assign VMs to the new offering"
   fi
 fi
 
 echo ""
 echo "=== MS note ==="
-echo "  ZONE_ID must be: beb3cc2a-a5af-417f-a17e-85410490eedc (auto-fixed)"
-echo "  Veeam KVM offering externalid should be: veeam (NOT NAS repo UUID)"
+echo "  ZONE_ID: beb3cc2a-a5af-417f-a17e-85410490eedc"
+echo "  Seed import needs offering provider=ablestack-veeam (NOT display-name veeam/NAS hybrid)"
+echo "  externalid=veeam"
 echo "  등록: bash $0 --import"

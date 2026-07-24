@@ -264,7 +264,20 @@ EOF
 backup_running_vm() {
   mkdir -p "$dest/checkpoints" || { echo "Failed to create backup directory $dest"; exit 1; }
   local parent_checkpoint_file=""
-  if [[ "$BACKUP_TYPE" == "INCREMENTAL" && -n "$PARENT_CHECKPOINT_PATH" ]]; then
+  local has_raw=0
+  local disk driver_type target_file index=0
+  # Detect driver type=raw from domain XML (domblklist Type column is file/block/network, NOT raw/qcow2).
+  if virsh -c qemu:///system dumpxml "$VM" 2>/dev/null | grep -qiE "<driver[^>]*type=['\"]raw['\"]"; then
+    has_raw=1
+  fi
+
+  if [[ "$has_raw" -eq 1 && "$BACKUP_TYPE" == "INCREMENTAL" ]]; then
+    echo "Incremental libvirt checkpoint unsupported for raw disks on VM [$VM]; use FULL or backup-rbd"
+    cleanup
+    exit 1
+  fi
+
+  if [[ "$BACKUP_TYPE" == "INCREMENTAL" && -n "$PARENT_CHECKPOINT_PATH" && "$has_raw" -eq 0 ]]; then
     parent_checkpoint_file="$PARENT_CHECKPOINT_PATH"
     if [[ ! -f "$parent_checkpoint_file" ]]; then
       echo "Parent checkpoint file not found for incremental backup: $parent_checkpoint_file"
@@ -275,23 +288,40 @@ backup_running_vm() {
   fi
 
   echo "<domainbackup mode='push'>" > "$dest/backup.xml"
-  if [[ "$BACKUP_TYPE" == "INCREMENTAL" && -n "$PARENT_CHECKPOINT_NAME" ]]; then
+  if [[ "$BACKUP_TYPE" == "INCREMENTAL" && -n "$PARENT_CHECKPOINT_NAME" && "$has_raw" -eq 0 ]]; then
     echo "<incremental>$PARENT_CHECKPOINT_NAME</incremental>" >> "$dest/backup.xml"
   fi
   echo "<disks>" >> "$dest/backup.xml"
-  local index=0
+  index=0
   for disk in $(virsh -c qemu:///system domblklist "$VM" --details 2>/dev/null | awk '/disk/{print $3}'); do
-    local target_file="$dest/$(get_backup_file_by_index "$index")"
-    echo "<disk name='$disk' backup='yes' type='file'><driver type='qcow2'/><target file='$target_file'/></disk>" >> "$dest/backup.xml"
+    driver_type="qcow2"
+    [[ "$has_raw" -eq 1 ]] && driver_type="raw"
+    target_file="$dest/$(get_backup_file_by_index "$index")"
+    if [[ "$driver_type" == "raw" && "$target_file" == *.qcow2 ]]; then
+      target_file="${target_file%.qcow2}.raw"
+    fi
+    echo "<disk name='$disk' backup='yes' type='file'><driver type='$driver_type'/><target file='$target_file'/></disk>" >> "$dest/backup.xml"
     index=$((index + 1))
   done
   echo "</disks></domainbackup>" >> "$dest/backup.xml"
 
-  echo "<domaincheckpoint><name>$CHECKPOINT_NAME</name><disks>" > "$dest/checkpoint.xml"
-  for disk in $(virsh -c qemu:///system domblklist "$VM" --details 2>/dev/null | awk '/disk/{print $3}'); do
-    echo "<disk name='$disk' checkpoint='bitmap'/>" >> "$dest/checkpoint.xml"
-  done
-  echo "</disks></domaincheckpoint>" >> "$dest/checkpoint.xml"
+  local use_checkpoint=1
+  [[ "$has_raw" -eq 1 ]] && use_checkpoint=0
+  if [[ "$use_checkpoint" -eq 1 ]]; then
+    echo "<domaincheckpoint><name>$CHECKPOINT_NAME</name><disks>" > "$dest/checkpoint.xml"
+    for disk in $(virsh -c qemu:///system domblklist "$VM" --details 2>/dev/null | awk '/disk/{print $3}'); do
+      echo "<disk name='$disk' checkpoint='bitmap'/>" >> "$dest/checkpoint.xml"
+    done
+    echo "</disks></domaincheckpoint>" >> "$dest/checkpoint.xml"
+  else
+    log -ne "VM [$VM] has raw disk(s): FULL push backup without libvirt checkpoint"
+    cat > "$dest/checkpoints/$CHECKPOINT_NAME.meta" <<EOF
+checkpoint_name=$CHECKPOINT_NAME
+parent_checkpoint_name=
+mode=full-no-checkpoint
+reason=raw-disk
+EOF
+  fi
 
   local thaw=0
   if [[ ${QUIESCE} == "true" ]]; then
@@ -302,8 +332,14 @@ backup_running_vm() {
 
   local backup_begin=0
   local backup_begin_output=""
-  if backup_begin_output=$(virsh -c qemu:///system backup-begin --domain "$VM" --backupxml "$dest/backup.xml" --checkpointxml "$dest/checkpoint.xml" 2>&1); then
-    backup_begin=1
+  if [[ "$use_checkpoint" -eq 1 ]]; then
+    if backup_begin_output=$(virsh -c qemu:///system backup-begin --domain "$VM" --backupxml "$dest/backup.xml" --checkpointxml "$dest/checkpoint.xml" 2>&1); then
+      backup_begin=1
+    fi
+  else
+    if backup_begin_output=$(virsh -c qemu:///system backup-begin --domain "$VM" --backupxml "$dest/backup.xml" 2>&1); then
+      backup_begin=1
+    fi
   fi
 
   if [[ $thaw -eq 1 ]]; then
@@ -327,7 +363,7 @@ backup_running_vm() {
     sleep 5
   done
 
-  dump_checkpoint_xml "$VM"
+  [[ "$use_checkpoint" -eq 1 ]] && dump_checkpoint_xml "$VM"
   rm -f "$dest/backup.xml" "$dest/checkpoint.xml"
   sync
 }
