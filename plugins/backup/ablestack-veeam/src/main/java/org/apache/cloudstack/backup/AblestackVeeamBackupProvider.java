@@ -317,6 +317,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                 backupVO.setSize(answer.getSize() != null ? answer.getSize() : backupVO.getProtectedSize());
                 backupVO.setDetails(backupDetails);
                 backupVO.setBackedUpVolumes(createVolumeInfoFromVolumes(vmVolumes, backupFiles));
+                backupVO.setStatus(Backup.Status.BackedUp);
                 if (backupDao.update(backupVO.getId(), backupVO)) {
                     return BackupExecutionResult.success(backupVO);
                 }
@@ -799,8 +800,13 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         if (hostId == null && VirtualMachine.State.Running.equals(vm.getState())) {
             throw new CloudRuntimeException(String.format("Unable to find the hypervisor host for %s. Make sure the virtual machine is running", vm.getName()));
         }
-        if (VirtualMachine.State.Stopped.equals(vm.getState())) {
-            hostId = vm.getLastHostId();
+        // RestoreBackup transitions the VM to Restoring before the provider runs; host_id is
+        // already cleared for Stopped VMs, so fall back to last_host_id for Stopped/Restoring.
+        if (hostId == null || VirtualMachine.State.Stopped.equals(vm.getState())
+                || VirtualMachine.State.Restoring.equals(vm.getState())) {
+            if (vm.getLastHostId() != null) {
+                hostId = vm.getLastHostId();
+            }
         }
         if (hostId == null) {
             throw new CloudRuntimeException(String.format("Unable to find the hypervisor host for stopped VM: %s", vm));
