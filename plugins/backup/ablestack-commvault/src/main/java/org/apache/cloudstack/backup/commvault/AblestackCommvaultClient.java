@@ -28,6 +28,7 @@ import org.apache.cloudstack.api.ApiErrorCode;
 import org.apache.cloudstack.api.ServerApiException;
 import org.apache.cloudstack.utils.security.SSLUtils;
 import org.apache.cloudstack.backup.BackupOffering;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.http.HttpHeaders;
 import org.apache.http.HttpResponse;
 import org.apache.http.HttpStatus;
@@ -173,8 +174,24 @@ public class AblestackCommvaultClient {
         if (!(response.getStatusLine().getStatusCode() == HttpStatus.SC_OK ||
                 response.getStatusLine().getStatusCode() == HttpStatus.SC_ACCEPTED) &&
                 response.getStatusLine().getStatusCode() != HttpStatus.SC_NO_CONTENT) {
-            LOG.debug(String.format("HTTP request failed, status code is [%s], response is: [%s].", response.getStatusLine().getStatusCode(), response));
-            throw new ServerApiException(ApiErrorCode.INTERNAL_ERROR, "Got invalid API status code returned by the Commvault server");
+            String responseBody = getResponseBody(response);
+            LOG.debug(String.format("HTTP request failed, status code is [%s], response is: [%s], response body is: [%s].",
+                    response.getStatusLine().getStatusCode(), response, responseBody));
+            throw new ServerApiException(ApiErrorCode.INTERNAL_ERROR, String.format(
+                    "Got invalid API status code returned by the Commvault server. statusCode=%s, responseBody=%s",
+                    response.getStatusLine().getStatusCode(), responseBody));
+        }
+    }
+
+    private String getResponseBody(final HttpResponse response) {
+        if (response == null || response.getEntity() == null) {
+            return "";
+        }
+        try {
+            return EntityUtils.toString(response.getEntity(), "UTF-8");
+        } catch (final IOException e) {
+            LOG.warn("Failed to read Commvault API response body", e);
+            return "";
         }
     }
 
@@ -192,7 +209,7 @@ public class AblestackCommvaultClient {
         final HttpResponse response = httpClient.execute(request);
         checkAuthFailure(response);
 
-        LOG.debug(String.format("Response received in GET request is: [%s] for URL: [%s].", response.toString(), url));
+        LOG.debug("Response received in GET request. statusCode=[{}], URL=[{}].", response.getStatusLine().getStatusCode(), url);
         return response;
     }
 
@@ -204,7 +221,7 @@ public class AblestackCommvaultClient {
         final HttpResponse response = httpClient.execute(request);
         checkAuthFailure(response);
 
-        LOG.debug(String.format("Response received in DELETE request is: [%s] for URL [%s].", response.toString(), url));
+        LOG.debug("Response received in DELETE request. statusCode=[{}], URL=[{}].", response.getStatusLine().getStatusCode(), url);
         return response;
     }
 
@@ -673,6 +690,67 @@ public class AblestackCommvaultClient {
         return false;
     }
 
+    public String getClientCheckReadinessDetails(String clientId) {
+        try {
+            final HttpResponse response = get("/client/" + clientId + "/CheckReadiness?network=true&resourceCapacity=true&includeDisabledClients=false&NeedXmlResp=true&ApplicationReadinessOption=1");
+            checkResponseOK(response);
+            String jsonString = EntityUtils.toString(response.getEntity(), "UTF-8");
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode root = mapper.readTree(jsonString);
+            return extractClientReadinessDetails(root);
+        } catch (final IOException e) {
+            LOG.error("Failed to request getClientCheckReadinessDetails commvault api due to : ", e);
+            checkResponseTimeOut(e);
+            return "Unable to read Commvault client readiness details: " + e.getMessage();
+        }
+    }
+
+    private String extractClientReadinessDetails(JsonNode root) {
+        JsonNode summary = root.path("summary");
+        if (summary.isArray()) {
+            List<String> details = new ArrayList<>();
+            for (JsonNode entity : summary) {
+                String role = entity.path("entity").path("entityName").asText("unknown");
+                String status = normalizeReadinessText(entity.path("status").asText("unknown"));
+                details.add(String.format("role=[%s], status=[%s], reason=[%s]",
+                        StringUtils.defaultIfBlank(role, "unknown"), StringUtils.defaultIfBlank(status, "unknown"),
+                        getReadinessReason(root)));
+            }
+            if (!details.isEmpty()) {
+                return String.join("; ", details);
+            }
+        }
+        return "status=[unknown], reason=[unknown]";
+    }
+
+    private String getReadinessReason(JsonNode root) {
+        JsonNode detail = root.path("detail");
+        if (!detail.isArray()) {
+            return "unknown";
+        }
+        List<String> reasons = new ArrayList<>();
+        for (JsonNode item : detail) {
+            String status = normalizeReadinessText(item.path("ReadinessStatus").asText(null));
+            if (StringUtils.isNotBlank(status) && !StringUtils.equalsIgnoreCase(status, "Ready.")) {
+                reasons.add(status);
+                continue;
+            }
+            JsonNode subclient = item.path("Subclient").path("entityName");
+            if (StringUtils.isNotBlank(subclient.asText(null))) {
+                reasons.add(String.format("subclient=[%s], readinessStatus=[%s]",
+                        subclient.asText(), StringUtils.defaultIfBlank(status, "unknown")));
+            }
+        }
+        if (!reasons.isEmpty()) {
+            return String.join("; ", reasons);
+        }
+        return "Ready.";
+    }
+
+    private String normalizeReadinessText(String value) {
+        return StringUtils.trimToEmpty(value).replaceAll("\\s+", " ");
+    }
+
     // GET https://<commserveIp>/commandcenter/api/plan/<planId>
     // plan 상세 조회하는 API로 없는 경우 null, 있는 경우 planName 반환
     public String getPlanName(String planId) {
@@ -822,6 +900,9 @@ public class AblestackCommvaultClient {
             final HttpResponse response = delete("/backupset/" + backupSetId);
             checkResponseOK(response);
             return true;
+        } catch (final ServerApiException e) {
+            LOG.error("Failed to delete Commvault backupSet [{}]: {}", backupSetId, e.getMessage(), e);
+            throw e;
         } catch (final IOException e) {
             LOG.error("Failed to request deleteBackupSet commvault api due to : ", e);
             checkResponseTimeOut(e);

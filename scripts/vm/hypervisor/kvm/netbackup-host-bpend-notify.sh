@@ -93,13 +93,16 @@ update_netbackup_backup_ids() {
 
   while IFS=$'\t' read -r vm_id backup_path; do
     [[ -z "${vm_id}" || -z "${backup_path}" ]] && continue
-    response="$(invoke_mold_api "POST" "${MOLD_CREATE_BACKUP_API_URL}" "updateNetBackup" \
+    if ! response="$(invoke_mold_api "POST" "${MOLD_CREATE_BACKUP_API_URL}" "updateNetBackup" \
       "virtualmachineid" "${vm_id}" \
       "backupid" "${BACKUP_ID}" \
       "externalid" "${backup_path}" \
       "status" "${final_status}" \
       "membercount" "${member_count}" \
-      "policyid" "${POLICY_NAME}")" || fail "Failed to update NetBackup backup details for vmId=${vm_id} backupPath=${backup_path}"
+      "policyid" "${POLICY_NAME}")"; then
+      log -ne "Failed to update NetBackup backup details vmId=${vm_id} backupId=${BACKUP_ID} backupPath=${backup_path} status=${final_status} memberCount=${member_count} policyName=${POLICY_NAME}"
+      fail "Failed to update NetBackup backup details for vmId=${vm_id} backupId=${BACKUP_ID} backupPath=${backup_path} status=${final_status}"
+    fi
     updated=$((updated + 1))
     log -ne "Updated NetBackup backup details vmId=${vm_id} backupId=${BACKUP_ID} backupPath=${backup_path} status=${final_status} memberCount=${member_count} policyName=${POLICY_NAME}"
   done < <(list_runtime_success_vm_refs)

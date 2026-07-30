@@ -1741,8 +1741,13 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
                 if (backup.getDate() == null || backup.getDate().getTime() > System.currentTimeMillis() - STALE_BACKUP_THRESHOLD_MS) {
                     continue;
                 }
-                LOG.warn("Removing stale NetBackup backup [{}] for VM [{}] stuck in BackingUp for over one day.",
-                        backup.getUuid(), vm.getInstanceName());
+                loadBackupDetailsIfNeeded(backup);
+                LOG.warn("Removing stale NetBackup backup [{}] for VM [{}] stuck in BackingUp for over one day. "
+                                + "NetBackup post notify may have failed before updateNetBackup finalized the backup metadata. "
+                                + "Check NetBackup runtime JSON/context files and catalog before removal if recovery is required. "
+                                + "externalId=[{}], backupId=[{}], policyName=[{}], status=[{}], date=[{}].",
+                        backup.getUuid(), vm.getInstanceName(), backup.getExternalId(), getBackupDetail(backup, DETAIL_BACKUP_ID),
+                        getBackupDetail(backup, DETAIL_POLICY_NAME), backup.getStatus(), backup.getDate());
                 removeBackupWithDetails(backup.getId());
                 continue;
             }

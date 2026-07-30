@@ -1434,7 +1434,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         final List<BackupRepository> repositories = backupRepositoryDao.listByZoneAndProvider(zoneId, BackupProviderNameUtils.toDisplayName(getName()));
         final Host host = resourceManager.findOneRandomRunningHostByHypervisor(Hypervisor.HypervisorType.KVM, zoneId);
         if (host == null) {
-            LOG.warn("Skipping backup storage stats sync for provider [{}] in zone [{}] because no running KVM host was found",
+            LOG.debug("Skipping NAS backup repository stats refresh for provider [{}] in zone [{}] because no Up/Enabled KVM routing host was available at this sync cycle. Backup sync is not affected.",
                     getName(), zoneId);
             return;
         }

@@ -3323,16 +3323,6 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             if (!backupProvider.supportsOutOfBandBackupSync()) {
                 return;
             }
-            if (backupProvider.supportsProviderManagedBackupAgents()) {
-                boolean check = backupProvider.checkBackupAgent(dataCenter.getId());
-                if (!check) {
-                    boolean install = false;
-                    while(!install) {
-                        logger.info("Commvault Backup Agent will attempt to install....");
-                        install = backupProvider.installBackupAgent(dataCenter.getId());
-                    }
-                }
-            }
 
             List<VMInstanceVO> vms = vmInstanceDao.listByZoneAndBackupOffering(dataCenter.getId(), null);
             if (vms == null || vms.isEmpty()) {
@@ -3342,11 +3332,11 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             if (backupProvider.supportsBackupMetricsSync()) {
                 backupProvider.syncBackupMetrics(dataCenter.getId());
             }
+            int syncedVmCount = 0;
             for (final VMInstanceVO vm : vms) {
                 try {
                     Long backupOfferingId = vm.getBackupOfferingId();
                     if (backupOfferingId == null) {
-                        logger.debug("Skipping VM [{}] because backup offering is not assigned.", vm);
                         continue;
                     }
                     BackupOfferingVO offering = backupOfferingDao.findById(vm.getBackupOfferingId());
@@ -3355,9 +3345,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                         continue;
                     }
                     if (!backupProvider.getName().equalsIgnoreCase(offering.getProvider())) {
-                        logger.debug("Skipping VM [{}] because backup offering provider [{}] does not match current provider [{}].", vm, offering.getProvider(), backupProvider.getName());
                         continue;
                     }
+                    syncedVmCount++;
                     logger.debug(String.format("Trying to sync backups of VM [%s] using backup provider [%s].", vm, backupProvider.getName()));
                     // Sync out-of-band backups
                     syncBackups(backupProvider, vm);
@@ -3365,6 +3355,10 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 } catch (final Exception e) {
                     logger.error("Failed to sync backup usage metrics and out-of-band backups of VM [{}] due to: [{}].", vm, e.getMessage(), e);
                 }
+            }
+            if (syncedVmCount == 0) {
+                logger.debug("No VMs assigned to backup provider [{}] in zone [{}] for out-of-band backup sync.",
+                        backupProvider.getName(), dataCenter.getId());
             }
         }
 
@@ -3668,7 +3662,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         response.setSize(backup.getSize());
         response.setProtectedSize(backup.getProtectedSize());
         response.setStatus(backup.getStatus());
-        response.setIntervalType("MANUAL");
+        response.setIntervalType(offering != null && BackupProviderNameUtils.isNetBackupFamily(offering.getProvider()) ? "EXTERNAL" : "MANUAL");
         if (backup.getBackupScheduleId() != null) {
             BackupScheduleVO scheduleVO = backupScheduleDao.findById(backup.getBackupScheduleId());
             if (scheduleVO != null) {
