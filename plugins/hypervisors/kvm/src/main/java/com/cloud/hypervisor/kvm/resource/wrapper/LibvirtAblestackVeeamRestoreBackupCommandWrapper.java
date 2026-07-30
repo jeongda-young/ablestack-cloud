@@ -96,7 +96,8 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
                 restoreVolumesOfExistingVM(storagePoolMgr, restoreVolumePools, restoreVolumePaths, backedVolumeUUIDs,
                         backupPath, backupFiles, backupFileChains, volumeChainStates, timeout, restorePlan);
             } else {
-                throw new CloudRuntimeException("Veeam restore currently supports existing VM and single volume restore only");
+                restoreVolumesOfDestroyedVMs(storagePoolMgr, restoreVolumePools, restoreVolumePaths, backedVolumeUUIDs,
+                        backupPath, backupFiles, backupFileChains, volumeChainStates, timeout, restorePlan);
             }
         } catch (final CloudRuntimeException e) {
             final String errorMessage = e.getMessage() != null ? e.getMessage() : "";
@@ -130,6 +131,15 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
         } finally {
             cleanupBackupDirectory(backupPath, restorePlan);
         }
+    }
+
+    private void restoreVolumesOfDestroyedVMs(final KVMStoragePoolManager storagePoolMgr, final List<PrimaryDataStoreTO> restoreVolumePools,
+            final List<String> restoreVolumePaths, final List<String> backedVolumesUUIDs, final String backupPath, final List<String> backupFiles,
+            final List<String> backupFileChains, final List<BackupVolumeChainState> volumeChainStates, final int timeout,
+            final BackupRestorePlan restorePlan) {
+        // Same disk rewrite as existing-VM restore; createVMFromBackup / destroyed-VM restore land here when vmExists=false.
+        restoreVolumesOfExistingVM(storagePoolMgr, restoreVolumePools, restoreVolumePaths, backedVolumesUUIDs,
+                backupPath, backupFiles, backupFileChains, volumeChainStates, timeout, restorePlan);
     }
 
     private void validateChainStatePlan(final List<BackupVolumeChainState> volumeChainStates, final BackupRestorePlan restorePlan) {
@@ -296,13 +306,27 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
             final QemuImg qemu = new QemuImg(timeout * 1000, true, false);
             srcBackupFile = new QemuImgFile(backupPath, getBackupFileFormat(backupPath));
             final QemuImg.PhysicalDiskFormat targetFormat = getFileVolumeFormat(volumePath);
-            temporaryVolumePath = Files.createTempFile("cs-veeam-restore-volume-", "." + targetFormat.toString().toLowerCase(Locale.ROOT));
+            // Keep the temp file on the same filesystem as the target volume so the final
+            // replace is a rename (mv). Cross-FS Files.copy of multi-GB qcow2 onto GFS/SMP
+            // can hang or take hours.
+            final Path volume = Paths.get(volumePath);
+            final Path parentDir = volume.getParent() != null ? volume.getParent() : Paths.get(".");
+            temporaryVolumePath = parentDir.resolve(String.format("%s.veeam-restore.%d.%s",
+                    volume.getFileName(), ProcessHandle.current().pid(), targetFormat.toString().toLowerCase(Locale.ROOT)));
             Files.deleteIfExists(temporaryVolumePath);
             final QemuImgFile temporaryVolumeFile = new QemuImgFile(temporaryVolumePath.toString(), targetFormat);
             logger.info("Converting Veeam file volume from backup [{}] format [{}] to temporary target [{}] format [{}] before replacing final target [{}]",
                     srcBackupFile.getFileName(), srcBackupFile.getFormat(), temporaryVolumeFile.getFileName(), temporaryVolumeFile.getFormat(), volumePath);
             qemu.convert(srcBackupFile, temporaryVolumeFile);
-            Files.copy(temporaryVolumePath, Paths.get(volumePath), StandardCopyOption.REPLACE_EXISTING);
+            final CommandExecutionResult moveResult = executeBashCommandWithResult(
+                    String.format("mv -f %s %s", quote(temporaryVolumePath.toString()), quote(volumePath)),
+                    Math.max(timeout, 300), "Replace file volume with restored backup");
+            if (moveResult.exitCode != 0) {
+                logger.error("Failed to move restored temporary volume {} onto {}: {}",
+                        temporaryVolumePath, volumePath, moveResult.output);
+                return false;
+            }
+            temporaryVolumePath = null;
             return true;
         } catch (final QemuImgException | LibvirtException | IOException e) {
             final String srcFilename = srcBackupFile != null ? srcBackupFile.getFileName() : null;

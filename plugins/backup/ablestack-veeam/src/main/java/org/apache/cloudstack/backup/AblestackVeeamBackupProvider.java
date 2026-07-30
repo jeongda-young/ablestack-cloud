@@ -129,6 +129,8 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     private static final String DETAIL_BACKUP_ID = "ablestack.veeam.backup.id";
     private static final String DETAIL_MEMBER_COUNT = "ablestack.veeam.backup.member.count";
     private static final String DETAIL_POLICY_NAME = "ablestack.veeam.policy.name";
+    /** KVM host that wrote the local staging backup files under /tmp/mold/veeam/... */
+    private static final String DETAIL_SOURCE_HOST = "ablestack.veeam.source.host";
     private static final String DETAIL_RESTORE_ROOT_JOB_ID = "ablestack.veeam.restore.root.job.id";
     private static final String DETAIL_RESTORE_CHAIN_JOB_ID = "ablestack.veeam.restore.chain.job.id";
     private static final String DETAIL_FAILURE_PHASE = "ablestack.veeam.failure.phase";
@@ -275,6 +277,9 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         final List<String> backupFiles = buildBackupFileNames(vmVolumes, backupEngine, incrementalBackup);
         final Map<String, String> backupDetails = getBackupDetails(vm, backupPath, checkpointName, backupEngine, latestBackup,
                 incrementalBackup, policyName);
+        if (vmHost != null && StringUtils.isNotBlank(vmHost.getName())) {
+            backupDetails.put(DETAIL_SOURCE_HOST, vmHost.getName());
+        }
 
         final BackupVO backupVO = createBackupObject(vm, backupPath, requestedBackupType, backupDetails);
         AblestackVeeamTakeBackupCommand command = new AblestackVeeamTakeBackupCommand(vm.getInstanceName(), backupPath);
@@ -819,12 +824,16 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     }
 
     private Host resolveRestoreHost(final VirtualMachine vm, final Backup backup, final String hostIp) {
-        if (StringUtils.isNotBlank(hostIp)) {
-            return findAvailableKvmRestoreHost(hostIp, "Veeam restore");
-        }
+        // Staging files live on the backup source host's local disk. Prefer that host even when
+        // createVMFromBackup supplies an arbitrary volume-prepare host IP.
         final Host backupSourceHost = resolveBackupSourceHostForRestore(backup);
         if (backupSourceHost != null) {
+            LOG.info("Using Veeam backup source/stage host [{}] for restore of VM [{}] (caller hostIp=[{}])",
+                    backupSourceHost.getName(), vm.getInstanceName(), hostIp);
             return backupSourceHost;
+        }
+        if (StringUtils.isNotBlank(hostIp)) {
+            return findAvailableKvmRestoreHost(hostIp, "Veeam restore");
         }
         return getVMHypervisorHostForBackup(vm);
     }
@@ -848,25 +857,45 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             return null;
         }
         loadBackupDetailsIfNeeded(backup);
-        final String sourceHostName = getBackupDetail(backup, DETAIL_POLICY_NAME);
+        String sourceHostName = getBackupDetail(backup, DETAIL_SOURCE_HOST);
         if (StringUtils.isBlank(sourceHostName)) {
-            return null;
+            // Legacy backups stored the stage host under policy.name
+            sourceHostName = getBackupDetail(backup, DETAIL_POLICY_NAME);
+        }
+        if (StringUtils.isBlank(sourceHostName)) {
+            return resolveOriginalBackupVmHost(backup);
         }
         Host host = hostDao.findByName(sourceHostName);
         if (host == null) {
             host = hostDao.findByIp(sourceHostName);
         }
         if (host == null) {
-            throw new CloudRuntimeException(String.format(
-                    "Unable to find backup source host [%s] for Veeam restore from backup [%s]",
-                    sourceHostName, backup.getUuid()));
+            LOG.warn("Unable to find backup source host [{}] for Veeam restore from backup [{}]; falling back to original VM host",
+                    sourceHostName, backup.getUuid());
+            return resolveOriginalBackupVmHost(backup);
         }
         if (!Status.Up.equals(host.getStatus()) || !Hypervisor.HypervisorType.KVM.equals(host.getHypervisorType())) {
-            throw new CloudRuntimeException(String.format(
-                    "Backup source host [%s] is not an available KVM host for Veeam restore from backup [%s]",
-                    host.getName(), backup.getUuid()));
+            LOG.warn("Backup source host [{}] is not an available KVM host for Veeam restore from backup [{}]; falling back to original VM host",
+                    host.getName(), backup.getUuid());
+            return resolveOriginalBackupVmHost(backup);
         }
         return host;
+    }
+
+    private Host resolveOriginalBackupVmHost(final Backup backup) {
+        if (backup == null || backup.getVmId() == null) {
+            return null;
+        }
+        final VMInstanceVO backedVm = vmInstanceDao.findByIdIncludingRemoved(backup.getVmId());
+        if (backedVm == null) {
+            return null;
+        }
+        try {
+            return getVMHypervisorHostForBackup(backedVm);
+        } catch (final CloudRuntimeException e) {
+            LOG.warn("Unable to resolve original backup VM host for backup [{}]: {}", backup.getUuid(), e.getMessage());
+            return null;
+        }
     }
 
     private Long getClusterIdFromRootVolume(final VirtualMachine vm) {
@@ -1105,16 +1134,28 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
 
             final BackupAnswer answer;
             try {
-                answer = (BackupAnswer) agentManager.send(host.getId(), restoreCommand);
+                answer = requireBackupAnswer(agentManager.send(host.getId(), restoreCommand), host.getName(), "Veeam restore");
             } catch (final AgentUnavailableException e) {
                 throw new CloudRuntimeException("Unable to contact backend control plane to initiate Veeam restore", e);
             } catch (final OperationTimedoutException e) {
                 throw new CloudRuntimeException("Operation to restore Veeam backup timed out, please try again", e);
             }
-            return new Pair<>(answer != null && answer.getResult(), answer != null ? answer.getDetails() : null);
+            return new Pair<>(answer.getResult(), answer.getDetails());
         } finally {
             cleanupRestoreSourcesOnStageHosts(vm.getDataCenterId(), host.getName(), restoreSourcesToPrepare);
         }
+    }
+
+    private BackupAnswer requireBackupAnswer(final Answer rawAnswer, final String hostName, final String operation) {
+        if (rawAnswer == null) {
+            throw new CloudRuntimeException(String.format("%s returned no response from host [%s]", operation, hostName));
+        }
+        if (!(rawAnswer instanceof BackupAnswer)) {
+            throw new CloudRuntimeException(String.format(
+                    "%s is not supported by agent on host [%s] (got %s: %s). Deploy Ablestack Veeam agent plugins to this host, or restore on the backup source host.",
+                    operation, hostName, rawAnswer.getClass().getSimpleName(), rawAnswer.getDetails()));
+        }
+        return (BackupAnswer) rawAnswer;
     }
 
     private void validateVeeamRestoreSnapshotCompatibility(final VirtualMachine vm) {
@@ -1237,14 +1278,14 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
 
             final BackupAnswer answer;
             try {
-                answer = (BackupAnswer) agentManager.send(restoreHost.getId(), restoreCommand);
+                answer = requireBackupAnswer(agentManager.send(restoreHost.getId(), restoreCommand), restoreHost.getName(), "Veeam volume restore");
             } catch (AgentUnavailableException e) {
                 throw new CloudRuntimeException("Unable to contact backend control plane to initiate Veeam restore");
             } catch (OperationTimedoutException e) {
                 throw new CloudRuntimeException("Operation to restore backed up volume timed out, please try again");
             }
 
-            if (answer != null && answer.getResult()) {
+            if (answer.getResult()) {
                 try {
                     volumeDao.persist(restoredVolume);
                 } catch (Exception e) {
@@ -1253,7 +1294,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                 return new Pair<>(true, restoredVolume.getUuid());
             }
 
-            return new Pair<>(false, answer != null ? answer.getDetails() : "Veeam restore agent returned no response");
+            return new Pair<>(false, answer.getDetails());
         } finally {
             cleanupRestoreSourcesOnStageHosts(backup.getZoneId(), restoreHost.getName(), restoreSourcesToPrepare);
         }
@@ -1639,10 +1680,17 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     }
 
     private String getRestoreSourceHost(final Backup backup, final String defaultHostName) {
-        final String sourceHost = getBackupDetail(backup, DETAIL_POLICY_NAME);
+        String sourceHost = getBackupDetail(backup, DETAIL_SOURCE_HOST);
         if (StringUtils.isBlank(sourceHost)) {
-            LOG.warn("Veeam source/stage host detail [{}] is missing for backup [{}]. Falling back to destination host [{}].",
-                    DETAIL_POLICY_NAME, backup != null ? backup.getUuid() : null, defaultHostName);
+            sourceHost = getBackupDetail(backup, DETAIL_POLICY_NAME);
+        }
+        if (StringUtils.isBlank(sourceHost)) {
+            final Host originalHost = resolveOriginalBackupVmHost(backup);
+            if (originalHost != null) {
+                return originalHost.getName();
+            }
+            LOG.warn("Veeam source/stage host detail is missing for backup [{}]. Falling back to destination host [{}].",
+                    backup != null ? backup.getUuid() : null, defaultHostName);
             return defaultHostName;
         }
         return sourceHost;
@@ -1814,6 +1862,9 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             details.put(DETAIL_VEEAM_RESTORE_POINT_ID, veeamRestorePointId);
         }
         details.put(DETAIL_VEEAM_VM_NAME, vm.getInstanceName());
+        if (host != null && StringUtils.isNotBlank(host.getName())) {
+            details.put(DETAIL_SOURCE_HOST, host.getName());
+        }
 
         final BackupVO backupVO = createBackupObject(vm, backupPath, BACKUP_TYPE_FULL, details);
         final AblestackVeeamImportSeedCommand command = new AblestackVeeamImportSeedCommand(vm.getInstanceName(), backupPath);

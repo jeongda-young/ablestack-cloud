@@ -2447,7 +2447,8 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             String host = null;
             String dataStore = null;
             if (!BackupProviderNameUtils.isNasFamily(offering.getProvider()) &&
-                    !BackupProviderNameUtils.isCommvaultFamily(offering.getProvider())) {
+                    !BackupProviderNameUtils.isCommvaultFamily(offering.getProvider()) &&
+                    !BackupProviderNameUtils.isVeeamFamily(offering.getProvider())) {
                 Pair<HostVO, StoragePoolVO> restoreInfo = getRestoreVolumeHostAndDatastore(vm);
                 host = restoreInfo.first().getPrivateIpAddress();
                 dataStore = restoreInfo.second().getUuid();
