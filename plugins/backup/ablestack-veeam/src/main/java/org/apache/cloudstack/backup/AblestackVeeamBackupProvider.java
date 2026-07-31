@@ -1452,7 +1452,8 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     }
 
     private BackupRestorePlan createRestorePlan(final boolean attachRequired) {
-        return AblestackBackupFrameworkUtils.createRestorePlan(attachRequired, true);
+        // Local /tmp/mold/veeam paths are the durable backup store; never schedule CLEANUP_SOURCE.
+        return AblestackBackupFrameworkUtils.createRestorePlan(attachRequired, false);
     }
 
     private List<String> getBackupFileChains(final List<Backup.VolumeInfo> backupVolumes, final Backup backup) {
@@ -1594,46 +1595,12 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     }
 
     private void cleanupRestoreSourcesOnStageHosts(final Long zoneId, final String destinationHostName, final List<Backup> restoreChain) {
-        if (CollectionUtils.isEmpty(restoreChain)) {
-            return;
-        }
-        final LinkedHashMap<String, List<Backup>> groupedRestoreChain = groupRestoreChainByStageHost(destinationHostName, restoreChain);
-        final List<String> destinationRestorePaths = groupedRestoreChain.entrySet().stream()
-                .filter(entry -> !StringUtils.equalsIgnoreCase(entry.getKey(), destinationHostName))
-                .flatMap(entry -> entry.getValue().stream())
-                .map(Backup::getExternalId)
-                .filter(StringUtils::isNotBlank)
-                .distinct()
-                .collect(Collectors.toList());
-        for (final Map.Entry<String, List<Backup>> entry : groupedRestoreChain.entrySet()) {
-            final String sourceHost = entry.getKey();
-            final List<Backup> sourceHostChain = entry.getValue();
-            if (CollectionUtils.isEmpty(sourceHostChain)) {
-                continue;
-            }
-            LOG.info("Cleaning up Veeam restore sources on stage/source host [{}] for backup paths {}",
-                    sourceHost, sourceHostChain.stream().map(Backup::getExternalId).collect(Collectors.toList()));
-            try {
-                cleanupBackupPathsOnHost(zoneId, sourceHost, sourceHostChain.stream()
-                        .map(Backup::getExternalId)
-                        .filter(StringUtils::isNotBlank)
-                        .distinct()
-                        .collect(Collectors.toList()));
-            } catch (final Exception e) {
-                LOG.warn("Failed to cleanup Veeam restore sources on stage/source host [{}]. Restore result will be preserved. paths={}",
-                        sourceHost, sourceHostChain.stream().map(Backup::getExternalId).collect(Collectors.toList()), e);
-            }
-        }
-        if (CollectionUtils.isEmpty(destinationRestorePaths)) {
-            return;
-        }
-        LOG.info("Cleaning up Veeam restore sources on destination host [{}] for backup paths {}",
-                destinationHostName, destinationRestorePaths);
-        try {
-            cleanupBackupPathsOnHost(zoneId, destinationHostName, destinationRestorePaths);
-        } catch (final Exception e) {
-            LOG.warn("Failed to cleanup Veeam restore sources on destination host [{}]. Restore result will be preserved. paths={}",
-                    destinationHostName, destinationRestorePaths, e);
+        // Mold-only Veeam keeps durable QCOW2 chains under /tmp/mold/veeam on the KVM host.
+        // prepareRestoreSourcesOnStageHosts is a no-op for these local paths; cleanup must also be a no-op.
+        // Deleting parent FULL/INCREMENTAL dirs after restore (success or failure) breaks later incremental restores.
+        if (CollectionUtils.isNotEmpty(restoreChain)) {
+            LOG.info("Skipping Veeam restore-source cleanup for local mold staging on host [{}]; preserving paths {}",
+                    destinationHostName, restoreChain.stream().map(Backup::getExternalId).collect(Collectors.toList()));
         }
     }
 

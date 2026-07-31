@@ -1181,13 +1181,15 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             }
         }
         createCheckedBackupVeeam(vm, vmId, backupProvider, cmd.getQuiesceVM(), backupSize, owner, getBackupScheduleId(job),
-                cmd.getName());
+                cmd.getName(), cmd.getIntervalType());
         return true;
     }
 
+    private static final String ABLESTACK_VEEAM_INTERVAL_TYPE_DETAIL = "ablestack.veeam.interval.type";
+
     private void createCheckedBackupVeeam(final VMInstanceVO vm, final Long vmId, final BackupProvider backupProvider,
             final Boolean quiesceVM, final Long backupSize, final Account owner, final Long backupScheduleId,
-            final String backupName)
+            final String backupName, final String intervalType)
             throws ResourceAllocationException {
         try (CheckedReservation backupReservation = new CheckedReservation(owner, Resource.ResourceType.backup,
                 1L, reservationDao, resourceLimitMgr);
@@ -1210,10 +1212,30 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                     vmBackup.setName(backupName);
                 }
                 backupDao.update(vmBackup.getId(), vmBackup);
+                final String normalizedInterval = normalizeVeeamBackupIntervalType(intervalType);
+                if (StringUtils.isNotBlank(normalizedInterval) && backupScheduleId == null) {
+                    backupDetailsDao.removeDetail(vmBackup.getId(), ABLESTACK_VEEAM_INTERVAL_TYPE_DETAIL);
+                    backupDetailsDao.addDetail(vmBackup.getId(), ABLESTACK_VEEAM_INTERVAL_TYPE_DETAIL, normalizedInterval, true);
+                }
                 resourceLimitMgr.incrementResourceCount(vm.getAccountId(), Resource.ResourceType.backup);
                 resourceLimitMgr.incrementResourceCount(vm.getAccountId(), Resource.ResourceType.backup_storage, backup.getSize());
             }
         }
+    }
+
+    private String normalizeVeeamBackupIntervalType(final String intervalType) {
+        if (StringUtils.isBlank(intervalType)) {
+            return null;
+        }
+        final DateUtil.IntervalType parsed = DateUtil.IntervalType.getIntervalType(intervalType.trim());
+        if (parsed != null) {
+            return parsed.name();
+        }
+        if ("MANUAL".equalsIgnoreCase(intervalType.trim())) {
+            return "MANUAL";
+        }
+        logger.warn("Ignoring unsupported Ablestack Veeam backup interval type [{}]", intervalType);
+        return null;
     }
 
     @Override
@@ -3668,6 +3690,12 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             BackupScheduleVO scheduleVO = backupScheduleDao.findById(backup.getBackupScheduleId());
             if (scheduleVO != null) {
                 response.setIntervalType(scheduleVO.getScheduleType().toString());
+            }
+        } else if (offering != null && BackupProviderNameUtils.isVeeamFamily(offering.getProvider())) {
+            final Map<String, String> veeamDetails = getDetailsFromBackupDetails(backup.getId());
+            final String veeamInterval = veeamDetails.get(ABLESTACK_VEEAM_INTERVAL_TYPE_DETAIL);
+            if (StringUtils.isNotBlank(veeamInterval)) {
+                response.setIntervalType(veeamInterval);
             }
         }
         // ACS 4.20: For backups taken prior this release the backup.backed_volumes column would be empty hence use vm_instance.backup_volumes

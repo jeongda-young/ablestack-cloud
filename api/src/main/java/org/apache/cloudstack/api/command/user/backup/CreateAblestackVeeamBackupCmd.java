@@ -70,6 +70,15 @@ public class CreateAblestackVeeamBackupCmd extends BaseAsyncCreateCmd {
             since = "4.22.0.0")
     private String name;
 
+    @Parameter(name = ApiConstants.INTERVAL_TYPE,
+            type = CommandType.STRING,
+            required = false,
+            description = "Backup interval type shown in Mold UI for Veeam-triggered backups. "
+                    + "Valid values: MANUAL, HOURLY, DAILY, WEEKLY, MONTHLY. "
+                    + "Use DAILY when the Veeam job ran from a schedule.",
+            since = "4.22.0.0")
+    private String intervalType;
+
     public Long getVmId() {
         return vmId;
     }
@@ -80,6 +89,10 @@ public class CreateAblestackVeeamBackupCmd extends BaseAsyncCreateCmd {
 
     public String getName() {
         return name;
+    }
+
+    public String getIntervalType() {
+        return intervalType;
     }
 
     @Override
