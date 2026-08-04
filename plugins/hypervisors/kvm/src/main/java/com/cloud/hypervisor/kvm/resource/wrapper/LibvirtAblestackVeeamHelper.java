@@ -122,9 +122,20 @@ class LibvirtAblestackVeeamHelper {
     Pair<Integer, String> executeBackup(AblestackVeeamTakeBackupCommand command) {
         List<String> diskPaths = resolveDiskPaths(command.getVolumePools(), command.getVolumePaths());
         BackupExecutionMode executionMode = determineExecutionMode(command.getVmName(), command.getVolumePools());
-        LOGGER.debug("Veeam backup execution mode=[{}], vm=[{}], backupType=[{}], diskPaths=[{}]",
+        LOGGER.info("Veeam backup execution mode=[{}], vm=[{}], backupType=[{}], diskPaths=[{}]",
                 executionMode, command.getVmName(), command.getBackupType(), diskPaths);
         if (BackupExecutionMode.STOPPED.equals(executionMode)) {
+            // qcow2 incremental needs live dirty-bitmaps on the real domain (backup-running).
+            // Never fall into the dummy-VM STOPPED path for INCREMENTAL — that path does not
+            // preserve the live bitmap chain and must not interfere with a Running guest.
+            if (isIncremental(command)) {
+                String msg = String.format(
+                        "Veeam qcow2 INCREMENTAL requires VM [%s] to be Running in libvirt (backup-running). "
+                                + "Start the VM and retry; STOPPED/dummy backup is FULL-only.",
+                        command.getVmName());
+                LOGGER.error(msg);
+                return new Pair<>(1, msg);
+            }
             return executeStoppedVmBackup(command, diskPaths);
         }
 

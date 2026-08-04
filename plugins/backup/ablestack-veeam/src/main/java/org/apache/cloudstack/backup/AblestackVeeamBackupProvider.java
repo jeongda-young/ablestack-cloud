@@ -448,6 +448,11 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         if (StringUtils.contains(result.details, MISSING_PARENT_QCOW2_BITMAP_ERROR)) {
             return true;
         }
+        // qcow2 INCREMENTAL refused STOPPED/dummy path — fall back to FULL (dummy or running).
+        if (StringUtils.contains(result.details, "INCREMENTAL requires VM")
+                && StringUtils.contains(result.details, "to be Running")) {
+            return true;
+        }
         return vmVolumes.size() > 1;
     }
 
@@ -1485,15 +1490,31 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         final List<Backup> chain = getBackupChain(backup);
         final List<String> files = new ArrayList<>();
         for (final Backup chainBackup : chain) {
-            final Backup.VolumeInfo volumeInfo = getBackedUpVolumeInfo(chainBackup.getBackedUpVolumes(), backupVolume.getUuid());
-            if (volumeInfo != null) {
-                final String filePath = BACKUP_ENGINE_RBD_DIFF.equals(getBackupDetail(chainBackup, DETAIL_BACKUP_ENGINE))
-                        ? String.format("%s/%s", chainBackup.getExternalId(), volumeInfo.getPath())
-                        : String.format("%s/%s", chainBackup.getExternalId(), volumeInfo.getPath());
+            final String filePath = resolveVolumeBackupFilePath(chainBackup, backupVolume);
+            if (StringUtils.isNotBlank(filePath)) {
                 files.add(filePath);
             }
         }
         return files;
+    }
+
+    private String resolveVolumeBackupFilePath(final Backup chainBackup, final Backup.VolumeInfo backupVolume) {
+        if (chainBackup == null || backupVolume == null || StringUtils.isBlank(chainBackup.getExternalId())) {
+            return null;
+        }
+        final Backup.VolumeInfo volumeInfo = getBackedUpVolumeInfo(chainBackup.getBackedUpVolumes(), backupVolume.getUuid());
+        if (volumeInfo != null && StringUtils.isNotBlank(volumeInfo.getPath())) {
+            return String.format("%s/%s", chainBackup.getExternalId(), volumeInfo.getPath());
+        }
+        // Seed imports previously left backed_volumes NULL; synthesize the expected file name.
+        final String diskPrefix = Volume.Type.ROOT.equals(backupVolume.getType()) ? "root" : "datadisk";
+        final String engine = getBackupDetail(chainBackup, DETAIL_BACKUP_ENGINE);
+        final boolean incremental = StringUtils.equalsIgnoreCase(BACKUP_TYPE_INCREMENTAL, chainBackup.getType());
+        if (BACKUP_ENGINE_RBD_DIFF.equals(engine)) {
+            return String.format("%s/%s.%s%s", chainBackup.getExternalId(), diskPrefix, backupVolume.getUuid(),
+                    incremental ? ".rbdiff" : ".raw");
+        }
+        return String.format("%s/%s.%s.qcow2", chainBackup.getExternalId(), diskPrefix, backupVolume.getUuid());
     }
 
     private List<Backup> getBackupChain(final Backup backup) {
@@ -1708,8 +1729,11 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     }
 
     private Backup.VolumeInfo getBackedUpVolumeInfo(final List<Backup.VolumeInfo> backedUpVolumes, final String volumeUuid) {
+        if (CollectionUtils.isEmpty(backedUpVolumes) || StringUtils.isBlank(volumeUuid)) {
+            return null;
+        }
         return backedUpVolumes.stream()
-                .filter(v -> v.getUuid().equals(volumeUuid))
+                .filter(v -> volumeUuid.equals(v.getUuid()))
                 .findFirst()
                 .orElse(null);
     }
@@ -1853,10 +1877,14 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                 removeBackupWithDetails(backupVO.getId());
                 return new Pair<>(false, null);
             }
+            backupVO.setDate(new Date());
             backupVO.setStatus(Backup.Status.BackedUp);
             if (answer.getSize() != null) {
                 backupVO.setSize(answer.getSize());
             }
+            // RBD/QCOW2 restore chains resolve per-disk file names from backed_volumes.
+            // Without this, incremental restore skips the FULL base (.raw) and fails.
+            backupVO.setBackedUpVolumes(createVolumeInfoFromVolumes(vmVolumes, backupFiles));
             backupDao.update(backupVO.getId(), backupVO);
             return new Pair<>(true, backupVO);
         } catch (AgentUnavailableException | OperationTimedoutException e) {
