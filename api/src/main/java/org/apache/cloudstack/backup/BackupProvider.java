@@ -83,6 +83,10 @@ public interface BackupProvider {
         return takeBackup(vm, quiesceVM);
     }
 
+    default Pair<Boolean, Backup> takeBackup(VirtualMachine vm, Boolean quiesceVM, Long backupScheduleId, String veeamJobName) {
+        return takeBackup(vm, quiesceVM, backupScheduleId);
+    }
+
     default Pair<Boolean, Backup> takeNetBackup(VirtualMachine vm, String policyName) {
         throw new UnsupportedOperationException("NetBackup is not supported by provider " + getName());
     }
@@ -138,6 +142,16 @@ public interface BackupProvider {
      * @param vm the machine to get the restore points for
      */
     List<Backup.RestorePoint> listRestorePoints(VirtualMachine vm);
+
+    /**
+     * Restore points from the external backup catalog (Veeam Disk, NetBackup, etc.).
+     * Default is {@link #listRestorePoints(VirtualMachine)}. Providers whose Mold
+     * {@code backups.external_id} is a local staging path (not a catalog id) should
+     * return catalog GUIDs here and Mold-local points from {@code listRestorePoints}.
+     */
+    default List<Backup.RestorePoint> listCatalogRestorePoints(VirtualMachine vm) {
+        return listRestorePoints(vm);
+    }
 
     /**
      * Creates and returns an entry in the backups table by getting the information from restorePoint and vm.

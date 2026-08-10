@@ -79,6 +79,14 @@ public class CreateAblestackVeeamBackupCmd extends BaseAsyncCreateCmd {
             since = "4.22.0.0")
     private String intervalType;
 
+    @Parameter(name = ApiConstants.VEEAM_JOB_NAME,
+            type = CommandType.STRING,
+            required = false,
+            description = "Veeam backup job name that created this backup. "
+                    + "When that job is deleted on the Veeam server, Mold removes matching backup rows.",
+            since = "4.22.0.0")
+    private String veeamJobName;
+
     public Long getVmId() {
         return vmId;
     }
@@ -93,6 +101,10 @@ public class CreateAblestackVeeamBackupCmd extends BaseAsyncCreateCmd {
 
     public String getIntervalType() {
         return intervalType;
+    }
+
+    public String getVeeamJobName() {
+        return veeamJobName;
     }
 
     @Override

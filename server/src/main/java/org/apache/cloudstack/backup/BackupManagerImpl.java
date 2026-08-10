@@ -1138,7 +1138,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         validateVmAblestackVeeamOffering(vm);
         final BackupOffering offering = backupOfferingDao.findById(vm.getBackupOfferingId());
         final BackupProvider backupProvider = getBackupProvider(offering.getProvider());
-        return backupProvider.listRestorePoints(vm);
+        return backupProvider.listCatalogRestorePoints(vm);
     }
 
     @Override
@@ -1181,7 +1181,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             }
         }
         createCheckedBackupVeeam(vm, vmId, backupProvider, cmd.getQuiesceVM(), backupSize, owner, getBackupScheduleId(job),
-                cmd.getName(), cmd.getIntervalType());
+                cmd.getName(), cmd.getIntervalType(), cmd.getVeeamJobName());
         return true;
     }
 
@@ -1189,7 +1189,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
 
     private void createCheckedBackupVeeam(final VMInstanceVO vm, final Long vmId, final BackupProvider backupProvider,
             final Boolean quiesceVM, final Long backupSize, final Account owner, final Long backupScheduleId,
-            final String backupName, final String intervalType)
+            final String backupName, final String intervalType, final String veeamJobName)
             throws ResourceAllocationException {
         try (CheckedReservation backupReservation = new CheckedReservation(owner, Resource.ResourceType.backup,
                 1L, reservationDao, resourceLimitMgr);
@@ -1200,7 +1200,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                     EventTypes.EVENT_VM_BACKUP_CREATE, "creating Ablestack Veeam backup for VM ID:" + vm.getUuid(),
                     vmId, ApiCommandResourceType.VirtualMachine.toString(), true, 0);
 
-            final Pair<Boolean, Backup> result = backupProvider.takeBackup(vm, quiesceVM);
+            final Pair<Boolean, Backup> result = backupProvider.takeBackup(vm, quiesceVM, backupScheduleId, veeamJobName);
             if (!result.first()) {
                 throw new CloudRuntimeException("Failed to create Ablestack Veeam VM backup");
             }
@@ -1216,6 +1216,10 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 if (StringUtils.isNotBlank(normalizedInterval) && backupScheduleId == null) {
                     backupDetailsDao.removeDetail(vmBackup.getId(), ABLESTACK_VEEAM_INTERVAL_TYPE_DETAIL);
                     backupDetailsDao.addDetail(vmBackup.getId(), ABLESTACK_VEEAM_INTERVAL_TYPE_DETAIL, normalizedInterval, true);
+                }
+                if (StringUtils.isNotBlank(veeamJobName)) {
+                    backupDetailsDao.removeDetail(vmBackup.getId(), "ablestack.veeam.job.name");
+                    backupDetailsDao.addDetail(vmBackup.getId(), "ablestack.veeam.job.name", veeamJobName.trim(), false);
                 }
                 resourceLimitMgr.incrementResourceCount(vm.getAccountId(), Resource.ResourceType.backup);
                 resourceLimitMgr.incrementResourceCount(vm.getAccountId(), Resource.ResourceType.backup_storage, backup.getSize());
@@ -3465,8 +3469,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 }
                 if (backup != null && Backup.Status.BackingUp.equals(backup.getStatus())) {
                     final BackupOffering offering = backupOfferingDao.findById(backup.getBackupOfferingId());
-                    if (offering != null && BackupProviderNameUtils.isNetBackupFamily(offering.getProvider())) {
-                        logger.debug("Skipping removal of NetBackup backup [{}] for VM [{}] because it is still BackingUp.",
+                    if (offering != null && (BackupProviderNameUtils.isNetBackupFamily(offering.getProvider())
+                            || BackupProviderNameUtils.isVeeamFamily(offering.getProvider()))) {
+                        logger.debug("Skipping removal of backup [{}] for VM [{}] because it is still BackingUp.",
                                 backup.getId(), vm.getInstanceName());
                         continue;
                     }

@@ -157,6 +157,13 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
         if (resolvedPaths == null || resolvedPaths.isEmpty()) {
             throw new CloudRuntimeException(String.format("No resolved backup chain paths found for volume [%s]", volumePath));
         }
+        for (final String path : resolvedPaths) {
+            if (StringUtils.isBlank(path) || !Files.isRegularFile(Paths.get(path))) {
+                throw new CloudRuntimeException(String.format(
+                        "Backup chain file [%s] is missing for volume [%s]. Refusing to restore so the live RBD/qcow2 image is not deleted.",
+                        path, volumePath));
+            }
+        }
     }
 
     private void cleanupBackupDirectory(final String backupPath, final BackupRestorePlan restorePlan) {
@@ -483,6 +490,10 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
 
     private boolean importRawBackupToRbd(final KVMStoragePool volumeStoragePool, final String volumePath, final String backupPath, final int timeout,
             final boolean createTargetVolume) {
+        if (StringUtils.isBlank(backupPath) || !Files.isRegularFile(Paths.get(backupPath))) {
+            throw new CloudRuntimeException(String.format(
+                    "Raw backup file [%s] is missing; refusing to delete RBD volume [%s]", backupPath, volumePath));
+        }
         if (!createTargetVolume && !deleteExistingRbdVolumeIfPresent(volumeStoragePool, volumePath)) {
             logger.error("Failed to delete existing RBD volume {} before raw import", volumePath);
             return false;
@@ -519,6 +530,19 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
             final String volumePath, final List<String> backupPaths, final int timeout, final boolean createTargetVolume) {
         if (backupPaths.isEmpty() || !backupPaths.get(0).endsWith(".raw")) {
             throw new CloudRuntimeException("Incremental RBD backup chain is missing the base full backup");
+        }
+        if (!Files.isRegularFile(Paths.get(backupPaths.get(0)))) {
+            throw new CloudRuntimeException(String.format(
+                    "Incremental RBD base full backup is missing [%s]. Refusing to restore so the live RBD image is not deleted.",
+                    backupPaths.get(0)));
+        }
+        for (int index = 1; index < backupPaths.size(); index++) {
+            final String incrementalPath = backupPaths.get(index);
+            if (incrementalPath != null && incrementalPath.endsWith(".rbdiff") && !Files.isRegularFile(Paths.get(incrementalPath))) {
+                throw new CloudRuntimeException(String.format(
+                        "Incremental RBD diff is missing [%s]. Refusing to restore so the live RBD image is not deleted.",
+                        incrementalPath));
+            }
         }
 
         final String normalizedVolumePath = normalizeRbdVolumePath(volumePath, storagePoolMgr.getStoragePool(volumePool.getPoolType(), volumePool.getUuid()));

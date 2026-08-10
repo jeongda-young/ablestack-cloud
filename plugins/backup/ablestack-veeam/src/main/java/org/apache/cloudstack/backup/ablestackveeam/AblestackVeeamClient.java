@@ -150,21 +150,35 @@ public class AblestackVeeamClient extends VeeamClient {
     public List<Backup.RestorePoint> listRestorePointsForVmDisplayName(final String vmDisplayName) {
         final String escapedName = vmDisplayName.replace("'", "''");
         final List<String> cmds = Arrays.asList(
+                "$jobMap = @{}",
+                "Get-VBRJob -ErrorAction SilentlyContinue | ForEach-Object { $jobMap[$_.Id.ToString()] = $_.Name; if ($_.Id.Guid) { $jobMap[$_.Id.Guid] = $_.Name } }",
+                "Get-VBRComputerBackupJob -ErrorAction SilentlyContinue | ForEach-Object { $jobMap[$_.Id.ToString()] = $_.Name; if ($_.Id.Guid) { $jobMap[$_.Id.Guid] = $_.Name } }",
                 String.format("$points = Get-VBRRestorePoint | Where-Object { $_.VmName -eq '%s' -or $_.Name -like '*%s*' }", escapedName, escapedName),
-                "if (-not $points) { Exit 0 }",
+                "if (-not $points) { Write-Output 'NO_RESTORE_POINTS'; Exit 0 }",
                 "$points | Sort-Object CreationTime -Descending | ForEach-Object {",
                 "  Write-Output $_.Id.Guid",
                 "  Write-Output $_.CreationTime.ToString('yyyy-MM-ddTHH:mm:ss')",
                 "  Write-Output $_.Type",
+                "  $jn = [string]$_.JobName",
+                "  if ([string]::IsNullOrWhiteSpace($jn) -and $_.JobId) {",
+                "    $key = [string]$_.JobId",
+                "    if ($jobMap.ContainsKey($key)) { $jn = $jobMap[$key] }",
+                "  }",
+                "  if ([string]::IsNullOrWhiteSpace($jn)) { $jn = '' }",
+                "  Write-Output $jn",
                 "  Write-Output '-----'",
                 "}"
         );
         Pair<Boolean, String> response = executePowerShellCommands(cmds);
-        if (response == null || !response.first() || StringUtils.isBlank(response.second())) {
+        if (response == null || !response.first()) {
+            throw new CloudRuntimeException(String.format("Failed to list Veeam restore points for [%s]", vmDisplayName));
+        }
+        final String payload = StringUtils.trimToEmpty(response.second());
+        if (StringUtils.isBlank(payload) || payload.startsWith("NO_RESTORE_POINTS")) {
             return new ArrayList<>();
         }
         final List<Backup.RestorePoint> restorePoints = new ArrayList<>();
-        for (final String block : response.second().split("-----\r\n")) {
+        for (final String block : payload.split("-----\r\n")) {
             final String[] parts = block.trim().split("\r\n");
             if (parts.length < 3) {
                 continue;
@@ -172,11 +186,43 @@ public class AblestackVeeamClient extends VeeamClient {
             try {
                 final SimpleDateFormat fmt = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss");
                 final Date created = fmt.parse(parts[1].trim());
-                restorePoints.add(new Backup.RestorePoint(parts[0].trim(), created, parts[2].trim(), null, null));
+                final Backup.RestorePoint restorePoint = new Backup.RestorePoint(parts[0].trim(), created, parts[2].trim(), null, null);
+                if (parts.length >= 4) {
+                    restorePoint.setJobName(StringUtils.trimToNull(parts[3]));
+                }
+                restorePoints.add(restorePoint);
             } catch (ParseException e) {
                 logger.warn("Skipping unparseable Veeam restore point block: {}", block);
             }
         }
         return restorePoints;
+    }
+
+    /**
+     * Live Veeam job names, including Agent (computer) backup jobs.
+     * An empty list means the query succeeded and Veeam currently has no jobs.
+     */
+    public List<String> listBackupJobNames() {
+        final List<String> cmds = Arrays.asList(
+                "$names = @()",
+                "Get-VBRJob -ErrorAction SilentlyContinue | ForEach-Object { if ($_.Name) { $names += $_.Name } }",
+                "Get-VBRComputerBackupJob -ErrorAction SilentlyContinue | ForEach-Object { if ($_.Name) { $names += $_.Name } }",
+                "if (-not $names -or $names.Count -eq 0) { Write-Output 'NO_JOBS'; Exit 0 }",
+                "$names | Sort-Object -Unique | ForEach-Object { Write-Output $_ }"
+        );
+        final Pair<Boolean, String> response = executePowerShellCommands(cmds);
+        if (response == null || !response.first()) {
+            throw new CloudRuntimeException("Failed to list Veeam backup jobs");
+        }
+        final String payload = StringUtils.trimToEmpty(response.second());
+        if (StringUtils.isBlank(payload) || payload.startsWith("NO_JOBS")) {
+            return new ArrayList<>();
+        }
+        return Arrays.stream(payload.split("\\r?\\n"))
+                .map(String::trim)
+                .filter(StringUtils::isNotBlank)
+                .filter(line -> !"NO_JOBS".equalsIgnoreCase(line))
+                .distinct()
+                .collect(Collectors.toList());
     }
 }

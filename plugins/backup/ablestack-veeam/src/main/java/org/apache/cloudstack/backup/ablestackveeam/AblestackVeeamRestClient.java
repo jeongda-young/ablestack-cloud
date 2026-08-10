@@ -167,7 +167,12 @@ public class AblestackVeeamRestClient {
             }
             final Date created = parseDate(rp.path("creationTime").asText(null));
             final String type = firstNonBlank(rp.path("type").asText(null), rp.path("pointType").asText(null), "");
-            points.add(new Backup.RestorePoint(stripUrn(rawId), created, type, null, null));
+            final Backup.RestorePoint restorePoint = new Backup.RestorePoint(stripUrn(rawId), created, type, null, null);
+            restorePoint.setJobName(StringUtils.trimToNull(firstNonBlank(
+                    rp.path("backupJobName").asText(null),
+                    rp.path("jobName").asText(null),
+                    rp.path("backupName").asText(null))));
+            points.add(restorePoint);
         }
         return points;
     }
