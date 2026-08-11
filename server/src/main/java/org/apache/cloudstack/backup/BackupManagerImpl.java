@@ -1212,7 +1212,10 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                     vmBackup.setName(backupName);
                 }
                 backupDao.update(vmBackup.getId(), vmBackup);
-                final String normalizedInterval = normalizeVeeamBackupIntervalType(intervalType);
+                // Veeam-server-triggered backups (no Mold schedule) always show EXTERNAL in UI.
+                final String normalizedInterval = backupScheduleId == null
+                        ? StringUtils.defaultIfBlank(normalizeVeeamBackupIntervalType(intervalType), "EXTERNAL")
+                        : normalizeVeeamBackupIntervalType(intervalType);
                 if (StringUtils.isNotBlank(normalizedInterval) && backupScheduleId == null) {
                     backupDetailsDao.removeDetail(vmBackup.getId(), ABLESTACK_VEEAM_INTERVAL_TYPE_DETAIL);
                     backupDetailsDao.addDetail(vmBackup.getId(), ABLESTACK_VEEAM_INTERVAL_TYPE_DETAIL, normalizedInterval, true);
@@ -1231,12 +1234,16 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         if (StringUtils.isBlank(intervalType)) {
             return null;
         }
-        final DateUtil.IntervalType parsed = DateUtil.IntervalType.getIntervalType(intervalType.trim());
+        final String trimmed = intervalType.trim();
+        if ("EXTERNAL".equalsIgnoreCase(trimmed)) {
+            return "EXTERNAL";
+        }
+        if ("MANUAL".equalsIgnoreCase(trimmed)) {
+            return "MANUAL";
+        }
+        final DateUtil.IntervalType parsed = DateUtil.IntervalType.getIntervalType(trimmed);
         if (parsed != null) {
             return parsed.name();
-        }
-        if ("MANUAL".equalsIgnoreCase(intervalType.trim())) {
-            return "MANUAL";
         }
         logger.warn("Ignoring unsupported Ablestack Veeam backup interval type [{}]", intervalType);
         return null;
@@ -3690,7 +3697,10 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         response.setSize(backup.getSize());
         response.setProtectedSize(backup.getProtectedSize());
         response.setStatus(backup.getStatus());
-        response.setIntervalType(offering != null && BackupProviderNameUtils.isNetBackupFamily(offering.getProvider()) ? "EXTERNAL" : "MANUAL");
+        final boolean externalProvider = offering != null
+                && (BackupProviderNameUtils.isNetBackupFamily(offering.getProvider())
+                || BackupProviderNameUtils.isVeeamFamily(offering.getProvider()));
+        response.setIntervalType(externalProvider ? "EXTERNAL" : "MANUAL");
         if (backup.getBackupScheduleId() != null) {
             BackupScheduleVO scheduleVO = backupScheduleDao.findById(backup.getBackupScheduleId());
             if (scheduleVO != null) {
