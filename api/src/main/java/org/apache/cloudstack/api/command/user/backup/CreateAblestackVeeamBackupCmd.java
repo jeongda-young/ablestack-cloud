@@ -74,8 +74,8 @@ public class CreateAblestackVeeamBackupCmd extends BaseAsyncCreateCmd {
             type = CommandType.STRING,
             required = false,
             description = "Backup interval type shown in Mold UI for Veeam-triggered backups. "
-                    + "Valid values: MANUAL, HOURLY, DAILY, WEEKLY, MONTHLY. "
-                    + "Use DAILY when the Veeam job ran from a schedule.",
+                    + "Valid values: EXTERNAL, MANUAL, HOURLY, DAILY, WEEKLY, MONTHLY. "
+                    + "Veeam-server backups default to EXTERNAL.",
             since = "4.22.0.0")
     private String intervalType;
 

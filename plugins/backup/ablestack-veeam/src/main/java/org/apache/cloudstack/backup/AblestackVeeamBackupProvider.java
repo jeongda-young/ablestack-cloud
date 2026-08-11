@@ -1834,10 +1834,21 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
 
     protected AblestackVeeamSshClient getSshClient(final Long zoneId) {
         String host = extractHost(AblestackVeeamRestUrl.valueIn(zoneId));
-        if (StringUtils.isBlank(host)) {
+        if (isUnusableVeeamSshHost(host)) {
             host = extractHost(AblestackVeeamUrl.valueIn(zoneId));
         }
+        if (isUnusableVeeamSshHost(host)) {
+            throw new CloudRuntimeException("Unable to resolve Veeam SSH host from backup.plugin.ablestack-veeam.rest.url / url");
+        }
         return new AblestackVeeamSshClient(host, AblestackVeeamUsername.valueIn(zoneId), AblestackVeeamPassword.valueIn(zoneId));
+    }
+
+    private boolean isUnusableVeeamSshHost(final String host) {
+        if (StringUtils.isBlank(host)) {
+            return true;
+        }
+        final String normalized = host.trim().toLowerCase(Locale.ROOT);
+        return "localhost".equals(normalized) || "127.0.0.1".equals(normalized) || "::1".equals(normalized);
     }
 
     private String extractHost(final String url) {
@@ -1918,8 +1929,13 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         for (final String name : queryNames) {
             try {
                 if (!syncedRepository && !Boolean.TRUE.equals(AblestackVeeamUseRestApi.valueIn(vm.getDataCenterId()))) {
-                    getClient(vm.getDataCenterId()).syncBackupRepository();
-                    syncedRepository = true;
+                    try {
+                        getClient(vm.getDataCenterId()).syncBackupRepository();
+                        syncedRepository = true;
+                    } catch (final Exception e) {
+                        LOG.warn("Veeam EM repository sync skipped for VM [{}]: {}", vm.getInstanceName(), e.getMessage());
+                        syncedRepository = true;
+                    }
                 }
                 final List<Backup.RestorePoint> points = listVeeamRestorePointsForObjectName(vm.getDataCenterId(), name);
                 anySuccess = true;
@@ -1948,9 +1964,18 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             return Collections.emptyList();
         }
         if (Boolean.TRUE.equals(AblestackVeeamUseRestApi.valueIn(zoneId))) {
-            return getRestClient(zoneId).listRestorePointsForVm(objectName);
+            try {
+                return getRestClient(zoneId).listRestorePointsForVm(objectName);
+            } catch (final Exception restError) {
+                LOG.warn("Veeam REST restore-point query failed for [{}], falling back to SSH: {}", objectName, restError.getMessage());
+            }
         }
-        return getClient(zoneId).listRestorePointsForVmDisplayName(objectName);
+        try {
+            return getSshClient(zoneId).listRestorePointsForVmDisplayName(objectName);
+        } catch (final Exception sshError) {
+            LOG.warn("Veeam SSH restore-point query failed for [{}], falling back to EM client: {}", objectName, sshError.getMessage());
+            return getClient(zoneId).listRestorePointsForVmDisplayName(objectName);
+        }
     }
 
     private Set<String> getVeeamCatalogHostNames(final VirtualMachine vm) {
@@ -2094,7 +2119,13 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     }
 
     private Set<String> listVeeamBackupJobNames(final Long zoneId) {
-        return new LinkedHashSet<>(getClient(zoneId).listBackupJobNames());
+        // Prefer SSH/PowerShell so job-delete sync works without Enterprise Manager (9398).
+        try {
+            return new LinkedHashSet<>(getSshClient(zoneId).listBackupJobNames());
+        } catch (final Exception sshError) {
+            LOG.warn("Veeam job list over SSH failed, falling back to EM client: {}", sshError.getMessage());
+            return new LinkedHashSet<>(getClient(zoneId).listBackupJobNames());
+        }
     }
 
     private String normalizeVeeamJobName(final String jobName) {
