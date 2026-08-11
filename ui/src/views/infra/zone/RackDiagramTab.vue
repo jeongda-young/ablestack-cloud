@@ -16,7 +16,7 @@
 // under the License.
 
 <template>
-  <div class="p-2 rack-diagram-root" :class="{ 'is-dark': isDarkMode }">
+  <div ref="rackDiagramRootRef" class="p-2 rack-diagram-root" :class="{ 'is-dark': isDarkMode }">
     <div class="toolbar-container" :class="{ 'toolbar-detail': !showRackList }">
 
       <div class="toolbar-view-controls">
@@ -588,14 +588,10 @@
           v-if="selectedDevice"
           ref="rackSidePaneSlotRef"
           class="rack-side-pane-slot"
+          :style="sidePaneSlotStyle"
         >
           <div
-            ref="rackSidePaneRef"
             class="rack-side-pane"
-            :class="{
-              'is-fixed': sidePaneMode === 'fixed'
-            }"
-            :style="sidePaneInlineStyle"
           >
           <a-card size="small" class="rack-side-pane-card">
             <template #title>{{ t('rackDiagram.deviceInfo') }}</template>
@@ -1401,17 +1397,17 @@ const INSPECTOR_FIT_GUTTER = 8
 const isAutoZoomEnabled = ref(true)
 const rackMainPaneRef = ref(null)
 const rackDetailLayoutRef = ref(null)
+const rackDiagramRootRef = ref(null)
 const rackSidePaneSlotRef = ref(null)
-const rackSidePaneRef = ref(null)
-const sidePaneMode = ref('static') // static | fixed
-const sidePaneLeft = ref(0)
-const sidePaneWidth = ref(0)
-const SIDE_PANE_TOP = 64
+const sidePaneAvailableHeight = ref(0)
 let resizeDebounceTimer = null
 let zoomRafId = 0
 let zoomApplyRafId = 0
 let zoomTransitionRafId = 0
+let sidePaneHeightRafId = 0
 let rackMainPaneResizeObserver = null
+let sidePaneViewportResizeObserver = null
+let rackScrollContainer = null
 let expandedLayoutZoomTimer = null
 const router = useRouter()
 const store = useStore()
@@ -1453,7 +1449,6 @@ const toggleExpandedView = () => {
       if (showRackList.value) return
       isAutoZoomEnabled.value = true
       applyResponsiveZoom(true, true)
-      updateSidePanePosition()
     }, 320)
   })
 }
@@ -1545,15 +1540,10 @@ const zoomWrapperStyle = computed(() => {
   }
 })
 
-const sidePaneInlineStyle = computed(() => {
-  if (sidePaneMode.value === 'fixed') {
-    return {
-      left: `${Math.round(sidePaneLeft.value)}px`,
-      top: `${SIDE_PANE_TOP}px`,
-      width: `${Math.round(sidePaneWidth.value)}px`
-    }
-  }
-  return {}
+const sidePaneSlotStyle = computed(() => {
+  if (!sidePaneAvailableHeight.value) return {}
+  const height = `${sidePaneAvailableHeight.value}px`
+  return { height, maxHeight: height }
 })
 
 // 데이터 모델
@@ -2154,27 +2144,31 @@ const openQuickLink = (link) => {
   if (link?.url) window.open(link.url, '_blank')
 }
 
-const updateSidePanePosition = () => {
-  const layout = rackDetailLayoutRef.value
+const updateSidePaneAvailableHeight = () => {
   const slot = rackSidePaneSlotRef.value
-  const pane = rackSidePaneRef.value
-  if (!layout || !slot || !pane || showRackList.value || !selectedDevice.value) {
-    sidePaneMode.value = 'static'
-    return
+  if (!slot || showRackList.value || !selectedDevice.value) return
+
+  if (!rackScrollContainer) {
+    rackScrollContainer = rackDiagramRootRef.value?.closest('.layout-content') || null
   }
 
-  const layoutRect = layout.getBoundingClientRect()
   const slotRect = slot.getBoundingClientRect()
+  const scrollRect = rackScrollContainer?.getBoundingClientRect()
+  const viewportBottom = Math.min(window.innerHeight, scrollRect?.bottom || window.innerHeight)
+  const availableHeight = Math.floor(viewportBottom - slotRect.top - 16)
+  const nextHeight = Math.max(240, availableHeight)
 
-  sidePaneWidth.value = slotRect.width
-
-  if (layoutRect.top > SIDE_PANE_TOP) {
-    sidePaneMode.value = 'static'
-    return
+  if (Math.abs(nextHeight - sidePaneAvailableHeight.value) > 1) {
+    sidePaneAvailableHeight.value = nextHeight
   }
+}
 
-  sidePaneLeft.value = slotRect.left
-  sidePaneMode.value = 'fixed'
+const scheduleSidePaneHeightUpdate = () => {
+  if (sidePaneHeightRafId) cancelAnimationFrame(sidePaneHeightRafId)
+  sidePaneHeightRafId = requestAnimationFrame(() => {
+    sidePaneHeightRafId = 0
+    updateSidePaneAvailableHeight()
+  })
 }
 
 const handleSidePaneBeforeEnter = (element) => {
@@ -2192,11 +2186,12 @@ const handleSidePaneBeforeEnter = (element) => {
 const handleSidePaneAfterEnter = () => {
   nextTick(() => {
     applyResponsiveZoom(false, true)
-    updateSidePanePosition()
+    scheduleSidePaneHeightUpdate()
   })
 }
 
 const handleSidePaneAfterLeave = () => {
+  sidePaneAvailableHeight.value = 0
   nextTick(() => applyResponsiveZoom(false, true))
 }
 // 데이터 변경 여부 추적
@@ -2212,7 +2207,7 @@ watch(zoomPercent, (val) => {
 })
 
 watch(selectedDevice, async (device) => {
-  nextTick(() => updateSidePanePosition())
+  nextTick(() => scheduleSidePaneHeightUpdate())
   selectedDeviceHost.value = null
   deviceInfoActiveTab.value = 'summary'
   if (!device) {
@@ -2235,8 +2230,8 @@ watch(selectedDevice, async (device) => {
 
 watch(showRackList, () => {
   nextTick(() => {
-    updateSidePanePosition()
     syncRackMainPaneResizeObserver()
+    scheduleSidePaneHeightUpdate()
   })
 })
 
@@ -2707,7 +2702,7 @@ const handleResponsiveResize = () => {
     if (zoomRafId) cancelAnimationFrame(zoomRafId)
     zoomRafId = requestAnimationFrame(() => {
       applyResponsiveZoom(false, !!selectedDevice.value)
-      updateSidePanePosition()
+      scheduleSidePaneHeightUpdate()
     })
   }, 120)
 }
@@ -3232,7 +3227,6 @@ const applyInlineDeviceChangesToRack = () => {
     selectedDeviceItemIndex.value = newIndex
   }
   syncSelectedDeviceDraft(rack.items[selectedDeviceItemIndex.value], false)
-  nextTick(() => updateSidePanePosition())
 }
 
 const onDropRackFrame = (targetRIndex, event) => {
@@ -4206,24 +4200,35 @@ onMounted(() => {
 
   // 2. 창 닫기/새로고침 방지 이벤트 리스너 등록
   window.addEventListener('beforeunload', handleBeforeUnload)
-  window.addEventListener('scroll', updateSidePanePosition, { passive: true })
   window.addEventListener('resize', handleResponsiveResize)
   nextTick(() => {
+    rackScrollContainer = rackDiagramRootRef.value?.closest('.layout-content') || null
+    if (rackScrollContainer) {
+      rackScrollContainer.addEventListener('scroll', scheduleSidePaneHeightUpdate, { passive: true })
+    }
+    if (rackScrollContainer && typeof ResizeObserver !== 'undefined') {
+      sidePaneViewportResizeObserver = new ResizeObserver(() => scheduleSidePaneHeightUpdate())
+      sidePaneViewportResizeObserver.observe(rackScrollContainer)
+    }
     applyResponsiveZoom(true)
-    updateSidePanePosition()
+    scheduleSidePaneHeightUpdate()
     syncRackMainPaneResizeObserver()
   })
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
-  window.removeEventListener('scroll', updateSidePanePosition)
   window.removeEventListener('resize', handleResponsiveResize)
+  if (rackScrollContainer) {
+    rackScrollContainer.removeEventListener('scroll', scheduleSidePaneHeightUpdate)
+  }
   if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer)
   if (zoomRafId) cancelAnimationFrame(zoomRafId)
   if (zoomApplyRafId) cancelAnimationFrame(zoomApplyRafId)
   if (zoomTransitionRafId) cancelAnimationFrame(zoomTransitionRafId)
+  if (sidePaneHeightRafId) cancelAnimationFrame(sidePaneHeightRafId)
   if (rackMainPaneResizeObserver) rackMainPaneResizeObserver.disconnect()
+  if (sidePaneViewportResizeObserver) sidePaneViewportResizeObserver.disconnect()
   if (expandedLayoutZoomTimer) clearTimeout(expandedLayoutZoomTimer)
 })
 
@@ -5170,7 +5175,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   overflow-x: auto;
   overflow-y: visible;
-  padding-bottom: 8px;
+  padding-bottom: 0;
 }
 
 .rack-main-pane .rack-zoom-wrapper {
@@ -5183,8 +5188,14 @@ onBeforeUnmount(() => {
   width: clamp(320px, 42%, 460px);
   flex: 0 0 clamp(320px, 42%, 460px);
   margin-left: 12px;
-  position: relative;
+  position: sticky;
+  top: 64px;
   align-self: flex-start;
+  height: calc(100vh - 80px);
+  max-height: calc(100vh - 80px);
+  min-height: 0;
+  overflow: hidden;
+  z-index: 20;
 }
 
 .rack-inspector-enter-active,
@@ -5225,22 +5236,15 @@ onBeforeUnmount(() => {
   --device-scrollbar-thumb: var(--ui-scroll-thumb);
   --device-scrollbar-thumb-hover: var(--ui-scroll-thumb-hover);
   width: 100%;
-  position: -webkit-sticky;
-  position: sticky;
-  top: 64px;
+  position: relative;
   align-self: flex-start;
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 80px);
-  max-height: calc(100vh - 80px);
-  overflow: visible;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
   max-width: 100%;
-  z-index: 20;
-}
-
-.rack-side-pane.is-fixed {
-  position: fixed !important;
-  z-index: 40;
 }
 
 .rack-side-pane-card {
@@ -5250,8 +5254,9 @@ onBeforeUnmount(() => {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
   height: 100%;
-  max-height: inherit;
+  max-height: 100%;
   min-height: 0;
 }
 
@@ -5264,11 +5269,15 @@ onBeforeUnmount(() => {
 }
 
 .rack-side-pane-card :deep(.ant-card-body) {
+  position: relative;
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
-  max-height: none;
+  flex: 1 1 0;
+  box-sizing: border-box;
+  height: 0;
+  max-height: 100%;
   min-height: 0;
+  padding-bottom: 64px !important;
   overflow: hidden;
 }
 
@@ -5372,7 +5381,8 @@ onBeforeUnmount(() => {
 }
 
 .device-info-tabs {
-  flex: 1 1 auto;
+  flex: 1 1 0;
+  height: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -5757,9 +5767,13 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 8px;
   flex: 0 0 auto;
-  position: relative;
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
   z-index: 3;
-  margin: 12px -12px -12px;
+  min-height: 52px;
+  margin: 0;
   padding: 12px;
   border: 1px solid rgba(0,0,0,0.06);
   border-left: 0;
@@ -5976,7 +5990,7 @@ onBeforeUnmount(() => {
   gap: 30px;
   align-items: flex-start;
   width: max-content;
-  padding-bottom: 20px; /* 가로 스크롤바와 랙 사이 여백 */
+  padding-bottom: 0;
 }
 
 .rack-zoom-wrapper {
@@ -6536,34 +6550,30 @@ onBeforeUnmount(() => {
 
 /* 액션 버튼 (호버 시에만 표시) */
 .device-actions {
-  /* 버튼을 장비 둥둥 띄우는 핵심 코드 (이게 빠져서 안 보였던 겁니다!) */
   position: absolute !important;
   top: 50%;
   bottom: auto;
   left: 50%;
   transform: translate(-50%, -50%);
-  z-index: 5; /* 장비나 텍스트 위로 확실히 올림 */
+  z-index: 5;
 
-  /* 디자인 요소 (아까 적용한 예쁜 간격과 배경) */
   display: flex !important;
   justify-content: center;
   align-items: center;
   gap: 4px !important;
-  background: rgba(0, 0, 0, 0.85) !important;
+  box-sizing: border-box;
+  height: 38px;
+  padding: 3px 5px;
+  background: rgba(255, 255, 255, 0.96) !important;
+  border: 1px solid rgba(0, 0, 0, 0.12);
   border-radius: 8px;
-  padding: 6px 10px;
-  height: 36px;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.42);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
 
-  /* 기본적으로는 숨겨둠 (투명도 0, 클릭 방지) */
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s ease;
 }
 
-/* 🟢 복구됨: 장비(부모 요소)에 마우스를 올리면 버튼 그룹이 나타남 */
-/* (참고: 장비를 감싸는 클래스가 .rack-item이거나 .rack-slot일 수 있습니다.
-   만약 호버가 안 먹히면 부모 클래스 이름에 맞게 수정해 주세요) */
 .rack-item:hover .device-actions,
 .rack-slot:hover .device-actions,
 .device-container:hover .device-actions {
@@ -6571,40 +6581,88 @@ onBeforeUnmount(() => {
   pointer-events: auto !important;
 }
 
-/* 버튼 내부 스타일 및 아이콘 크기 (아까와 동일) */
-.device-actions .ant-btn {
-  padding: 0 6px !important;
-  height: 30px;
+.device-actions :deep(.ant-btn.ant-btn-text) {
+  width: 30px !important;
+  min-width: 30px !important;
+  height: 30px !important;
+  padding: 0 !important;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  color: #595959 !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.device-actions :deep(.ant-btn.ant-btn-text:hover),
+.device-actions :deep(.ant-btn.ant-btn-text:focus),
+.device-actions :deep(.ant-btn.ant-btn-text:focus-visible) {
+  color: #1677ff !important;
+  background: rgba(22, 119, 255, 0.08) !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.device-actions :deep(.ant-btn.ant-btn-text:active) {
+  background: rgba(22, 119, 255, 0.14) !important;
 }
 
 .device-actions .ant-btn :deep(.anticon) {
   font-size: 18px !important;
-  color: #ffffff !important;
-  text-shadow: 0 0 1px rgba(255, 255, 255, 0.6);
+  color: #595959 !important;
+  text-shadow: none;
   transition: all 0.2s ease;
 }
 
 .device-actions .ant-btn:hover :deep(.anticon) {
-  color: #40a9ff !important;
+  color: #1677ff !important;
 }
 
 .device-actions .ant-btn:disabled :deep(.anticon) {
-  color: rgba(255, 255, 255, 0.25) !important;
+  color: rgba(0, 0, 0, 0.25) !important;
   text-shadow: none;
 }
 
-.device-actions .ant-btn {
-  color: white;
-}
-
-.device-more-btn {
+.device-actions :deep(.ant-btn.ant-btn-text.device-more-btn) {
   width: 30px !important;
   height: 30px !important;
   border-radius: 8px !important;
-  background: rgba(64, 169, 255, 0.2) !important;
+  background: #e6f4ff !important;
+}
+
+.device-actions :deep(.ant-btn.ant-btn-dangerous),
+.device-actions :deep(.ant-btn.ant-btn-dangerous .anticon) {
+  color: #ff4d4f !important;
+}
+
+.rack-diagram-root.is-dark .device-actions {
+  background: rgba(31, 41, 55, 0.96) !important;
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.36);
+}
+
+.rack-diagram-root.is-dark .device-actions :deep(.ant-btn.ant-btn-text),
+.rack-diagram-root.is-dark .device-actions :deep(.ant-btn.ant-btn-text .anticon) {
+  color: rgba(255, 255, 255, 0.82) !important;
+}
+
+.rack-diagram-root.is-dark .device-actions :deep(.ant-btn.ant-btn-text:hover),
+.rack-diagram-root.is-dark .device-actions :deep(.ant-btn.ant-btn-text:focus),
+.rack-diagram-root.is-dark .device-actions :deep(.ant-btn.ant-btn-text:focus-visible) {
+  color: #69b1ff !important;
+  background: rgba(105, 177, 255, 0.14) !important;
+}
+
+.rack-diagram-root.is-dark .device-actions :deep(.ant-btn.ant-btn-text.device-more-btn) {
+  background: rgba(64, 150, 255, 0.2) !important;
+}
+
+.rack-diagram-root.is-dark .device-actions :deep(.ant-btn.ant-btn-dangerous),
+.rack-diagram-root.is-dark .device-actions :deep(.ant-btn.ant-btn-dangerous .anticon) {
+  color: #ff7875 !important;
 }
 
 .device-more-btn :deep(.anticon) {
@@ -7556,5 +7614,27 @@ onBeforeUnmount(() => {
   color: #ffffff !important;
   fill: currentColor !important;
   -webkit-text-fill-color: #ffffff !important;
+}
+
+/* Keep disabled primary actions visibly inactive in the dark theme. */
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary[disabled]),
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary.ant-btn-disabled),
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary[disabled]:hover),
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary.ant-btn-disabled:hover) {
+  background: #2a3038 !important;
+  border-color: #434a54 !important;
+  color: rgba(255, 255, 255, 0.35) !important;
+  box-shadow: none !important;
+}
+
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary[disabled] > span),
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary[disabled] .anticon),
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary[disabled] .anticon svg),
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary.ant-btn-disabled > span),
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary.ant-btn-disabled .anticon),
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary.ant-btn-disabled .anticon svg) {
+  color: rgba(255, 255, 255, 0.35) !important;
+  fill: currentColor !important;
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.35) !important;
 }
 </style>
