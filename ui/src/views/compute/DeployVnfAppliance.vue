@@ -2377,13 +2377,14 @@ export default {
               successMethod: result => {
                 const vm = result.jobresult.virtualmachine
                 const name = vm.displayname || vm.name || vm.id
+                const passwordEnabled = this.template?.passwordenabled === true
                 const username = vm.vnfdetails?.username || null
-                const password = vm.vnfdetails?.password || null
-                const effectivePassword = vm.password || password
+                const password = passwordEnabled ? vm.vnfdetails?.password || null : null
+                const effectivePassword = passwordEnabled ? (vm.password || password) : null
                 const sshUsername = vm.vnfdetails?.ssh_user || null
-                const sshPassword = vm.vnfdetails?.ssh_password || null
+                const sshPassword = passwordEnabled ? vm.vnfdetails?.ssh_password || null : null
                 const webUsername = vm.vnfdetails?.web_user || null
-                const webPassword = vm.vnfdetails?.web_password || null
+                const webPassword = passwordEnabled ? vm.vnfdetails?.web_password || null : null
                 const credentials = []
                 if (username) {
                   credentials.push(this.$t('label.username') + ' : ' + username)
@@ -2405,8 +2406,6 @@ export default {
                 }
                 if (credentials.length > 0) {
                   credentials.push(this.$t('message.vnf.credentials.change'))
-                } else {
-                  credentials.push(this.$t('message.vnf.no.credentials'))
                 }
                 const credentialsDesc = credentials.join('<br>')
                 this.$notification.success({

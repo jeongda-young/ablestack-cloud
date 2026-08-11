@@ -1,0 +1,22 @@
+[
+  {
+    "InterfaceAlias": "Ethernet 2",
+    "InterfaceIndex": 12,
+    "IPAddress": "172.16.10.20",
+    "PrefixLength": 24,
+    "AddressFamily": "IPv4",
+    "SkipAsSource": false,
+    "AddressState": "Preferred",
+    "DefaultRoute": true
+  },
+  {
+    "InterfaceAlias": "Ethernet 2",
+    "InterfaceIndex": 12,
+    "IPAddress": "172.16.10.21",
+    "PrefixLength": 24,
+    "AddressFamily": "IPv4",
+    "SkipAsSource": true,
+    "AddressState": "Preferred",
+    "DefaultRoute": true
+  }
+]

@@ -113,8 +113,12 @@ public class CreateLoadBalancerRuleCmd extends BaseAsyncCreateCmd /*implements L
         + "rule will be created for. Required when public IP address is not associated with any Guest Network yet (VPC case)")
     private Long networkId;
 
-    @Parameter(name = ApiConstants.PROTOCOL, type = CommandType.STRING, description = "The protocol for the LB such as TCP, UDP or tcp-proxy.")
+    @Parameter(name = ApiConstants.PROTOCOL, type = CommandType.STRING, description = "The protocol for the LB such as tcp, udp, tcp-proxy, ssl or http.")
     private String lbProtocol;
+
+    @Parameter(name = ApiConstants.BACKEND_SSL, type = CommandType.BOOLEAN, since = "4.21.0.0",
+            description = "use SSL when connecting from the load balancer to backend instances; valid only when protocol is ssl")
+    private Boolean backendSsl;
 
     @Parameter(name = ApiConstants.FOR_DISPLAY, type = CommandType.BOOLEAN, description = "An optional field, whether to the display the rule to the end user or not", since = "4.4", authorized = {RoleType.Admin})
     private Boolean display;
@@ -257,6 +261,10 @@ public class CreateLoadBalancerRuleCmd extends BaseAsyncCreateCmd /*implements L
         return StringUtils.trim(StringUtils.lowerCase(lbProtocol));
     }
 
+    public Boolean getBackendSsl() {
+        return backendSsl;
+    }
+
     /////////////////////////////////////////////////////
     /////////////// API Implementation///////////////////
     /////////////////////////////////////////////////////
@@ -304,7 +312,7 @@ public class CreateLoadBalancerRuleCmd extends BaseAsyncCreateCmd /*implements L
             LoadBalancer result =
                 _lbService.createPublicLoadBalancerRule(getXid(), getName(), getDescription(), getSourcePortStart(), getSourcePortEnd(), getDefaultPortStart(),
                     getDefaultPortEnd(), getSourceIpAddressId(), getProtocol(), getAlgorithm(), getNetworkId(), getEntityOwnerId(), getOpenFirewall(), getLbProtocol(), isDisplay(),
-                        getCidrList());
+                        getCidrList(), getBackendSsl());
             this.setEntityId(result.getId());
             this.setEntityUuid(result.getUuid());
         } catch (NetworkRuleConflictException e) {

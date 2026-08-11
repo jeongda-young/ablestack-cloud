@@ -29,6 +29,7 @@ import org.apache.cloudstack.annotation.dao.AnnotationDao;
 import org.apache.cloudstack.api.ApiConstants;
 import org.apache.cloudstack.api.ResponseObject;
 import org.apache.cloudstack.api.response.UserVmResponse;
+import org.apache.cloudstack.backup.dao.BackupDao;
 import org.apache.cloudstack.extension.ExtensionHelper;
 import org.junit.After;
 import org.junit.Assert;
@@ -91,6 +92,8 @@ public class UserVmJoinDaoImplTest extends GenericDaoBaseWithTagInformationBaseT
     private ExtensionHelper extensionHelper;
     @Mock
     private VbmcDao vbmcDao;
+    @Mock
+    private BackupDao backupDao;
 
     private UserVmJoinVO userVm = new UserVmJoinVO();
     private UserVmResponse userVmResponse = new UserVmResponse();
@@ -143,6 +146,7 @@ public class UserVmJoinDaoImplTest extends GenericDaoBaseWithTagInformationBaseT
         Mockito.doReturn(Arrays.asList()).when(_volsDao).findUsableVolumesForInstance(vmId);
         Mockito.doReturn(Arrays.asList()).when(extensionHelper).getExtensionReservedResourceDetails(Mockito.anyLong());
         Mockito.doReturn(Collections.emptyList()).when(vbmcDao).listByVmId(vmId);
+        Mockito.doReturn(Collections.emptyList()).when(backupDao).listByVmId(null, vmId);
 
         VnfTemplateNicVO vnfNic1 = new VnfTemplateNicVO(templateId, 0L, "eth0", true, true, "first");
         VnfTemplateNicVO vnfNic2 = new VnfTemplateNicVO(templateId, 1L, "eth1", true, true, "second");

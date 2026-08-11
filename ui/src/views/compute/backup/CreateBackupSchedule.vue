@@ -126,14 +126,15 @@ export default {
   .vm-selection {
     margin-bottom: 20px;
     padding: 16px;
-    border: 1px solid #d9d9d9;
+    border: 1px solid var(--ui-border);
     border-radius: 6px;
-    background-color: #fafafa;
+    color: var(--ui-text-secondary);
+    background: var(--ui-bg-elevated);
     .ant-form-item {
       margin-bottom: 0;
       .ant-select {
         width: 100%;
-        min-width: 400px;
+        min-width: 0;
       }
     }
   }
@@ -145,6 +146,11 @@ export default {
   .no-vm-selected {
     text-align: center;
     padding: 40px 20px;
+    color: var(--ui-text-secondary);
+  }
+
+  :deep(.ant-form-item-label > label) {
+    color: var(--ui-text-primary);
   }
 }
 </style>

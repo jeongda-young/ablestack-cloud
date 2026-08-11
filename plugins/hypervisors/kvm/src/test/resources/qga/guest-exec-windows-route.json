@@ -1,0 +1,29 @@
+[
+  {
+    "AddressFamily": "IPv4",
+    "DestinationPrefix": "0.0.0.0/0",
+    "NextHop": "10.10.22.1",
+    "InterfaceAlias": "Ethernet",
+    "RouteMetric": 25,
+    "PolicyStore": "ActiveStore",
+    "Protocol": "Dhcp"
+  },
+  {
+    "AddressFamily": "IPv6",
+    "DestinationPrefix": "::/0",
+    "NextHop": "fe80::1",
+    "InterfaceAlias": "Ethernet",
+    "RouteMetric": 25,
+    "PolicyStore": "ActiveStore",
+    "Protocol": "RouterAdvertisement"
+  },
+  {
+    "AddressFamily": "IPv6",
+    "DestinationPrefix": "2001:db8:22::/64",
+    "NextHop": "::",
+    "InterfaceAlias": "Ethernet",
+    "RouteMetric": 256,
+    "PolicyStore": "ActiveStore",
+    "Protocol": "Local"
+  }
+]

@@ -31,6 +31,7 @@ public class CreateSnapshotPayload {
     private boolean kvmIncrementalSnapshot = false;
     private List<Long> storagePoolIds;
     private boolean backup;
+    private String snapshotPath;
 
     public Long getSnapshotPolicyId() {
         return snapshotPolicyId;
@@ -105,5 +106,13 @@ public class CreateSnapshotPayload {
 
     public void setBackup(boolean backup) {
         this.backup = backup;
+    }
+
+    public String getSnapshotPath() {
+        return snapshotPath;
+    }
+
+    public void setSnapshotPath(String snapshotPath) {
+        this.snapshotPath = snapshotPath;
     }
 }

@@ -373,6 +373,9 @@ public class CommandSetupHelper {
             }
             lb.setLbProtocol(lb_protocol);
             lb.setLbSslCert(rule.getLbSslCert());
+            lb.setBackendSsl(rule.isBackendSsl());
+            logger.info("Preparing load balancer command for router {}: ruleId={}, uuid={}, source={}:{}, protocol={}, lbProtocol={}, backendSsl={}, destinations={}",
+                    router.getInstanceName(), rule.getId(), uuid, srcIp, srcPort, protocol, lb_protocol, rule.isBackendSsl(), destinations == null ? 0 : destinations.size());
             lbs[i++] = lb;
         }
         String routerPublicIp = null;

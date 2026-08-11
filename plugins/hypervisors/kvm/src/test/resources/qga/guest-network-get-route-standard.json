@@ -1,0 +1,44 @@
+{
+  "return": [
+    {
+      "family": "ipv4",
+      "destination": "0.0.0.0",
+      "prefix": 0,
+      "gateway": "10.10.22.1",
+      "interface": "eth0",
+      "metric": 100,
+      "table": "main",
+      "protocol": "dhcp",
+      "scope": "global",
+      "default": true
+    },
+    {
+      "family": "ipv4",
+      "destination": "10.10.22.0/24",
+      "interface": "eth0",
+      "metric": 100,
+      "table": "main",
+      "protocol": "kernel",
+      "scope": "link"
+    },
+    {
+      "family": "ipv6",
+      "destination": "::/0",
+      "gateway": "fe80::1",
+      "interface": "eth0",
+      "metric": 100,
+      "table": "main",
+      "protocol": "ra",
+      "default-route": true
+    },
+    {
+      "family": "ipv6",
+      "destination": "2001:db8:22::/64",
+      "interface": "eth0",
+      "metric": 256,
+      "table": "main",
+      "protocol": "kernel",
+      "scope": "link"
+    }
+  ]
+}

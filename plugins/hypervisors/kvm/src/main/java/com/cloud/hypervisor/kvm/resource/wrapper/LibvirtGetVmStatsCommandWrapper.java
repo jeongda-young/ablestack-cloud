@@ -62,8 +62,8 @@ public final class LibvirtGetVmStatsCommandWrapper extends CommandWrapper<GetVmS
                     }
 
                     vmStatsNameMap.put(vmName, statEntry);
-                } catch (LibvirtException e) {
-                    logger.warn("Can't get vm stats: " + e.toString() + ", continue");
+                } catch (Exception e) {
+                    logger.warn("Can't get vm stats for [{}], continue", vmName, e);
                 }
             }
             return new GetVmStatsAnswer(command, vmStatsNameMap);

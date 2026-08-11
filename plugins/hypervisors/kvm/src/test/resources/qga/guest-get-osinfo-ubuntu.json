@@ -1,0 +1,7 @@
+{
+  "return": {
+    "id": "ubuntu",
+    "name": "Ubuntu",
+    "pretty-name": "Ubuntu 22.04.4 LTS"
+  }
+}

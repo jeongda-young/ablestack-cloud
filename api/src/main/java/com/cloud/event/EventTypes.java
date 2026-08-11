@@ -882,6 +882,7 @@ public class EventTypes {
 
     // Backup
     public static final String EVENT_HOST_AGENT_INSTALL = "HOST.AGENT.INSTALL";
+    public static final String EVENT_BACKUP_AGENT_INSTALL = "BACKUP.AGENT.INSTALL";
 
     static {
 
@@ -1433,6 +1434,7 @@ public class EventTypes {
         entityEventDetails.put(EVENT_BACKUP_REPOSITORY_UPDATE, BackupRepositoryService.class);
         // Backup
         entityEventDetails.put(EVENT_HOST_AGENT_INSTALL, Backup.class);
+        entityEventDetails.put(EVENT_BACKUP_AGENT_INSTALL, Host.class);
     }
 
     public static boolean isNetworkEvent(String eventType) {

@@ -1,0 +1,18 @@
+[
+  {
+    "dst": "default",
+    "gateway": "10.10.22.1",
+    "dev": "eth0",
+    "protocol": "dhcp",
+    "metric": 100,
+    "table": "main"
+  },
+  {
+    "dst": "10.10.22.0/24",
+    "dev": "eth0",
+    "protocol": "kernel",
+    "scope": "link",
+    "metric": 100,
+    "table": "main"
+  }
+]

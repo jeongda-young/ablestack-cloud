@@ -63,6 +63,7 @@ import org.apache.cloudstack.affinity.dao.AffinityGroupDomainMapDao;
 import org.apache.cloudstack.affinity.dao.AffinityGroupVMMapDao;
 import org.apache.cloudstack.api.ApiCommandResourceType;
 import org.apache.cloudstack.api.ApiConstants;
+import org.apache.cloudstack.api.ApiConstants.VMDetails;
 import org.apache.cloudstack.api.BaseListProjectAndAccountResourcesCmd;
 import org.apache.cloudstack.api.InternalIdentity;
 import org.apache.cloudstack.api.ResourceDetail;
@@ -126,6 +127,7 @@ import org.apache.cloudstack.api.response.DiskOfferingResponse;
 import org.apache.cloudstack.api.response.DomainResponse;
 import org.apache.cloudstack.api.response.DomainRouterResponse;
 import org.apache.cloudstack.api.response.EventResponse;
+import org.apache.cloudstack.api.response.GuestNetworkSummaryResponse;
 import org.apache.cloudstack.api.response.HostResponse;
 import org.apache.cloudstack.api.response.HostTagResponse;
 import org.apache.cloudstack.api.response.ImageStoreResponse;
@@ -188,6 +190,7 @@ import org.apache.cloudstack.storage.datastore.db.StoragePoolDetailsDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.utils.baremetal.BaremetalUtils;
 import org.apache.cloudstack.vm.lease.VMLeaseManager;
+import org.apache.cloudstack.vm.guestnetwork.VmGuestNetworkApiService;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.collections.MapUtils;
 import org.apache.commons.lang3.EnumUtils;
@@ -655,6 +658,9 @@ public class QueryManagerImpl extends MutualExclusiveIdsManagerBase implements Q
 
     @Inject
     RoleDao roleDao;
+
+    @Inject
+    VmGuestNetworkApiService vmGuestNetworkApiService;
 
     private SearchCriteria<ServiceOfferingJoinVO> getMinimumCpuServiceOfferingJoinSearchCriteria(int cpu) {
         SearchCriteria<ServiceOfferingJoinVO> sc = _srvOfferingJoinDao.createSearchCriteria();
@@ -1262,11 +1268,28 @@ public class QueryManagerImpl extends MutualExclusiveIdsManagerBase implements Q
         if (accountMgr.isRootAdmin(caller.getId())) {
             respView = ResponseView.Full;
         }
-        List<UserVmResponse> vmResponses = ViewResponseHelper.createUserVmResponse(respView, "virtualmachine", cmd.getDetails(), cmd.getAccumulate(), cmd.getShowUserData(),
+        Set<VMDetails> details = cmd.getDetails();
+        List<UserVmResponse> vmResponses = ViewResponseHelper.createUserVmResponse(respView, "virtualmachine", details, cmd.getAccumulate(), cmd.getShowUserData(),
                 result.first().toArray(new UserVmJoinVO[0]));
+        if (details.contains(VMDetails.guestnetwork) || details.contains(VMDetails.all)) {
+            attachGuestNetworkSummaries(result.first(), vmResponses);
+        }
 
         response.setResponses(vmResponses, result.second());
         return response;
+    }
+
+    private void attachGuestNetworkSummaries(List<UserVmJoinVO> rows, List<UserVmResponse> responses) {
+        Map<String, Long> vmIdsByUuid = rows.stream().collect(Collectors.toMap(
+                UserVmJoinVO::getUuid, UserVmJoinVO::getId, (first, ignored) -> first));
+        Map<Long, GuestNetworkSummaryResponse> summaries =
+                vmGuestNetworkApiService.listSummaries(new HashSet<>(vmIdsByUuid.values()));
+        responses.forEach(response -> {
+            Long vmId = vmIdsByUuid.get(response.getId());
+            if (vmId != null) {
+                response.setGuestNetwork(summaries.get(vmId));
+            }
+        });
     }
 
     @Override

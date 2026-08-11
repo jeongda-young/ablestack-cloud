@@ -34,6 +34,14 @@ import static org.mockito.Mockito.when;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Future;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 import javax.naming.ConfigurationException;
 
@@ -44,8 +52,14 @@ import org.junit.runner.RunWith;
 import org.mockito.junit.MockitoJUnitRunner;
 import org.springframework.test.util.ReflectionTestUtils;
 
+import com.cloud.agent.api.Command;
+import com.cloud.agent.api.GetVmGuestNetworkStateCommand;
+import com.cloud.agent.api.PingCommand;
+import com.cloud.agent.transport.Request;
+import com.cloud.host.Host;
 import com.cloud.resource.ServerResource;
 import com.cloud.utils.backoff.impl.ConstantTimeBackoff;
+import com.cloud.utils.concurrency.NamedThreadFactory;
 import com.cloud.utils.nio.Link;
 import com.cloud.utils.nio.NioConnection;
 
@@ -120,6 +134,7 @@ public class AgentTest {
         assertNotNull(agent.selfTaskExecutor);
         assertNotNull(agent.outRequestHandler);
         assertNotNull(agent.basicExecutor);
+        assertNotNull(agent.guestNetworkExecutor);
     }
 
     @Test
@@ -255,5 +270,72 @@ public class AgentTest {
         verify(mockConnection).stop();
         verify(mockConnection).cleanUp();
         verify(mockBackoff, times(3)).waitBeforeRetry();
+    }
+
+    @Test
+    public void testGuestNetworkRequestUsesDedicatedExecutor() {
+        GetVmGuestNetworkStateCommand command = new GetVmGuestNetworkStateCommand(
+                Collections.singletonList("vm-1"), Collections.emptyMap());
+        Request request = new Request(1L, 2L, command, true);
+
+        assertSame(agent.guestNetworkExecutor, agent.selectExecutorForRequest(request));
+        assertTrue(agent.requestContainsGuestNetworkCommand(request));
+    }
+
+    @Test
+    public void testCoreRequestDoesNotUseGuestNetworkExecutor() {
+        Request request = new Request(1L, 2L, new PingCommand(Host.Type.Routing, 1L), true);
+
+        assertSame(agent.basicExecutor, agent.selectExecutorForRequest(request));
+        assertFalse(agent.requestContainsGuestNetworkCommand(request));
+    }
+
+    @Test
+    public void testGuestNetworkCommandCannotBeMixedWithCoreCommand() {
+        Command guestCommand = new GetVmGuestNetworkStateCommand(
+                Collections.singletonList("vm-1"), Collections.emptyMap());
+        Command coreCommand = new PingCommand(Host.Type.Routing, 1L);
+        Request request = new Request(1L, 2L, new Command[] {guestCommand, coreCommand}, true, true);
+
+        assertTrue(agent.requestContainsMixedGuestNetworkCommands(request));
+    }
+
+    @Test
+    public void testSaturatedGuestNetworkExecutorDoesNotBlockBasicExecutor() throws Exception {
+        ThreadPoolExecutor originalGuestNetworkExecutor = agent.guestNetworkExecutor;
+        ThreadPoolExecutor isolatedExecutor = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(1), new NamedThreadFactory("GuestNetwork-Test"),
+                new ThreadPoolExecutor.AbortPolicy());
+        agent.guestNetworkExecutor = isolatedExecutor;
+        CountDownLatch started = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+
+        try {
+            isolatedExecutor.submit(() -> {
+                started.countDown();
+                try {
+                    release.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            });
+            assertTrue(started.await(1, TimeUnit.SECONDS));
+            isolatedExecutor.submit(() -> Arrays.asList("queued"));
+
+            boolean rejected = false;
+            try {
+                isolatedExecutor.submit(() -> Arrays.asList("rejected"));
+            } catch (RejectedExecutionException e) {
+                rejected = true;
+            }
+            assertTrue(rejected);
+
+            Future<String> coreResult = agent.basicExecutor.submit(() -> "core-command-ready");
+            assertEquals("core-command-ready", coreResult.get(1, TimeUnit.SECONDS));
+        } finally {
+            release.countDown();
+            isolatedExecutor.shutdownNow();
+            agent.guestNetworkExecutor = originalGuestNetworkExecutor;
+        }
     }
 }

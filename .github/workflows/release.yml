@@ -20,10 +20,6 @@ name: ABLESTACK Release
 on:
   workflow_dispatch:
     inputs:
-      release_id:
-        description: Release identifier used for the source release, tag, and GitHub Release
-        required: true
-        type: string
       base_branch:
         description: Branch to release from
         required: true
@@ -32,6 +28,26 @@ on:
         options:
           - ablestack-europa
           - ablestack-diplo
+      release_stage:
+        description: Product release stage
+        required: true
+        default: rc
+        type: choice
+        options:
+          - alpha
+          - beta
+          - rc
+          - ga
+      prerelease_number:
+        description: Positive sequence for alpha, beta, or rc; leave empty for ga
+        required: false
+        default: '1'
+        type: string
+      build_date:
+        description: Optional fixed UTC build date in YYYYMMDD format
+        required: false
+        default: ''
+        type: string
       release_seq:
         description: RPM release sequence appended after the timestamp
         required: true
@@ -40,11 +56,11 @@ on:
       pack:
         description: Package variant
         required: false
-        default: oss
+        default: noredist
         type: choice
         options:
-          - oss
           - noredist
+          - oss
       simulator:
         description: Include simulator packaging
         required: false
@@ -53,11 +69,6 @@ on:
         options:
           - default
           - simulator
-      templates:
-        description: Optional template list (for example kvm,xen,vmware)
-        required: false
-        default: ''
-        type: string
       node_version:
         description: Node.js version injected into the Rocky build container
         required: false
@@ -83,14 +94,8 @@ on:
         required: false
         default: true
         type: boolean
-      prerelease:
-        description: Mark the GitHub Release as a prerelease
-        required: false
-        default: false
-        type: boolean
-
 concurrency:
-  group: release-${{ inputs.release_id }}
+  group: release-${{ inputs.base_branch }}-${{ inputs.release_stage }}-${{ inputs.prerelease_number }}
   cancel-in-progress: false
 
 permissions:
@@ -101,27 +106,37 @@ jobs:
     runs-on: ubuntu-24.04
     outputs:
       brand: ${{ steps.derive.outputs.brand }}
+      display_version: ${{ steps.product.outputs.display_version }}
+      release_id: ${{ steps.product.outputs.release_tag }}
+      release_name: ${{ steps.product.outputs.release_name }}
+      is_prerelease: ${{ steps.product.outputs.is_prerelease }}
       package_version: ${{ steps.derive.outputs.package_version }}
       timestamp_value: ${{ steps.derive.outputs.timestamp_value }}
+      metadata_artifact_name: ${{ steps.derive.outputs.metadata_artifact_name }}
       source_artifact_name: ${{ steps.derive.outputs.source_artifact_name }}
       rpm_artifact_name: ${{ steps.derive.outputs.rpm_artifact_name }}
+      systemvm_artifact_name: ${{ steps.derive.outputs.systemvm_artifact_name }}
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ inputs.base_branch }}
           fetch-depth: 0
 
+      - id: product
+        name: Generate product release metadata
+        run: |
+          python3 tools/build/release_metadata.py \
+            --base-branch "${{ inputs.base_branch }}" \
+            --stage "${{ inputs.release_stage }}" \
+            --number "${{ inputs.prerelease_number }}" \
+            --build-date "${{ inputs.build_date }}" \
+            --git-commit "$(git rev-parse HEAD)" \
+            --workflow-run-id "${{ github.run_id }}" \
+            --output dist/release/release-metadata.json \
+            --github-output "$GITHUB_OUTPUT"
+
       - id: derive
         run: |
-          case "${{ inputs.base_branch }}" in
-            ablestack-europa) brand="Mold.Europa" ;;
-            ablestack-diplo) brand="Mold.Diplo" ;;
-            *)
-              echo "::error::Unsupported base branch ${{ inputs.base_branch }}"
-              exit 1
-              ;;
-          esac
-
           pom_version=$(awk '
             /<artifactId>cloudstack<\/artifactId>/ { seen=1; next }
             seen && /<version>/ {
@@ -142,12 +157,21 @@ jobs:
           timestamp_value=$(date -u +%Y%m%d%H%M)
 
           {
-            echo "brand=$brand"
+            echo "brand=${{ steps.product.outputs.brand }}"
             echo "package_version=$package_version"
             echo "timestamp_value=$timestamp_value"
-            echo "source_artifact_name=source-release-${{ inputs.release_id }}"
-            echo "rpm_artifact_name=rocky97-rpm-${{ inputs.release_id }}"
+            echo "metadata_artifact_name=release-metadata-${{ github.run_id }}"
+            echo "source_artifact_name=source-release-${{ steps.product.outputs.artifact_version }}"
+            echo "rpm_artifact_name=rocky97-rpm-${{ steps.product.outputs.artifact_version }}"
+            echo "systemvm_artifact_name=systemvm-kvm-${{ steps.product.outputs.artifact_version }}"
           } >> "$GITHUB_OUTPUT"
+
+      - name: Upload release metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.derive.outputs.metadata_artifact_name }}
+          if-no-files-found: error
+          path: dist/release/release-metadata.json
 
   prepare-source-release:
     needs: metadata
@@ -206,7 +230,7 @@ jobs:
           GPG_PASSPHRASE: ${{ secrets.RELEASE_GPG_PASSPHRASE }}
         run: |
           args=(
-            --release-id "${{ inputs.release_id }}"
+            --release-id "${{ needs.metadata.outputs.release_id }}"
             --branch "${{ inputs.base_branch }}"
             --outputdir "$GITHUB_WORKSPACE/dist/release/source"
             --timestamp "${{ needs.metadata.outputs.timestamp_value }}"
@@ -232,7 +256,7 @@ jobs:
         if: ${{ inputs.push_refs }}
         run: |
           git push origin "${{ steps.prepare.outputs.rc_branch }}"
-          git push origin "refs/tags/${{ inputs.release_id }}"
+          git push origin "refs/tags/${{ needs.metadata.outputs.release_id }}"
 
       - name: Upload source release artifacts
         uses: actions/upload-artifact@v4
@@ -267,18 +291,33 @@ jobs:
       release: ${{ inputs.release_seq }}
       brand: ${{ needs.metadata.outputs.brand }}
       package_version: ${{ needs.metadata.outputs.package_version }}
+      ui_build_version: ${{ needs.metadata.outputs.display_version }}
       use_timestamp: true
       timestamp_value: ${{ needs.metadata.outputs.timestamp_value }}
       build_srpm: true
-      templates: ${{ inputs.templates }}
+      templates: kvm
       node_version: ${{ inputs.node_version }}
       artifact_name: ${{ needs.metadata.outputs.rpm_artifact_name }}
+
+  build-systemvm-kvm:
+    needs:
+      - metadata
+      - prepare-source-release
+      - validate-build
+    uses: ./.github/workflows/systemvm-kvm.yml
+    with:
+      ref: ${{ needs.prepare-source-release.outputs.source_commit_sha }}
+      version: ${{ needs.metadata.outputs.package_version }}
+      build_number: ${{ github.run_number }}
+      artifact_name: ${{ needs.metadata.outputs.systemvm_artifact_name }}
+      release_display_version: ${{ needs.metadata.outputs.display_version }}
 
   publish-release:
     needs:
       - metadata
       - prepare-source-release
       - build-rpm
+      - build-systemvm-kvm
     runs-on: ubuntu-24.04
     steps:
       - name: Download source release artifacts
@@ -287,29 +326,65 @@ jobs:
           name: ${{ needs.metadata.outputs.source_artifact_name }}
           path: download/source
 
+      - name: Download release metadata
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.metadata.outputs.metadata_artifact_name }}
+          path: download/metadata
+
       - name: Download RPM artifacts
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.metadata.outputs.rpm_artifact_name }}
           path: download/rpm
 
+      - name: Download KVM System VM artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ needs.metadata.outputs.systemvm_artifact_name }}
+          path: download/systemvm
+
       - name: Assemble GitHub Release assets
         run: |
           mkdir -p release-assets
           find download/source -type f -exec cp {} release-assets/ \;
+          find download/metadata -type f -exec cp {} release-assets/ \;
           find download/rpm -type f -exec cp {} release-assets/ \;
+          find download/systemvm -type f \
+            \( -name '*.qcow2.bz2' -o -name 'SYSTEMVM-*' \) \
+            -exec cp {} release-assets/ \;
           (
             cd release-assets
-            sha256sum * > SHA256SUMS
+            rm -f SHA256SUMS
+            checksum_file=$(mktemp)
+            find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 \
+              | sort -z \
+              | xargs -0 sha256sum > "$checksum_file"
+            mv "$checksum_file" SHA256SUMS
           )
+
+      - name: Summarize release contents
+        run: |
+          systemvm_image=$(find release-assets -maxdepth 1 -type f -name '*.qcow2.bz2' -printf '%f\n')
+          {
+            echo "## ABLESTACK Release"
+            echo
+            echo "- Release: \`${{ needs.metadata.outputs.release_name }}\`"
+            echo "- Source commit: \`${{ needs.prepare-source-release.outputs.source_commit_sha }}\`"
+            echo "- Package mode: \`${{ inputs.pack }}\`"
+            echo "- System VM hypervisor: \`KVM\`"
+            echo "- System VM architecture: \`x86_64\`"
+            echo "- System VM format: \`qcow2.bz2\`"
+            echo "- System VM image: \`$systemvm_image\`"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ inputs.release_id }}
+          tag_name: ${{ needs.metadata.outputs.release_id }}
           target_commitish: ${{ needs.prepare-source-release.outputs.source_commit_sha }}
-          name: ${{ inputs.release_id }}
+          name: ${{ needs.metadata.outputs.release_name }}
           draft: ${{ inputs.draft }}
-          prerelease: ${{ inputs.prerelease }}
+          prerelease: ${{ needs.metadata.outputs.is_prerelease }}
           generate_release_notes: false
           files: release-assets/*

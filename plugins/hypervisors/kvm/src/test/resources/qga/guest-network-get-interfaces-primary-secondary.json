@@ -1,0 +1,41 @@
+{
+  "return": [
+    {
+      "name": "lo",
+      "hardware-address": "00:00:00:00:00:00",
+      "ip-addresses": [
+        {
+          "ip-address-type": "ipv4",
+          "ip-address": "127.0.0.1",
+          "prefix": 8
+        }
+      ]
+    },
+    {
+      "name": "eth0",
+      "hardware-address": "02:01:00:f4:00:a1",
+      "ip-addresses": [
+        {
+          "ip-address-type": "ipv4",
+          "ip-address": "10.10.254.230",
+          "prefix": 16
+        },
+        {
+          "ip-address-type": "ipv4",
+          "ip-address": "10.10.22.201",
+          "prefix": 16
+        },
+        {
+          "ip-address-type": "ipv4",
+          "ip-address": "10.10.22.202",
+          "prefix": 16
+        },
+        {
+          "ip-address-type": "ipv4",
+          "ip-address": "10.10.22.203",
+          "prefix": 16
+        }
+      ]
+    }
+  ]
+}

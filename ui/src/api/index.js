@@ -62,17 +62,20 @@ export function getAPI (command, args = {}) {
   })
 }
 
+export function appendApiData (params, data = {}) {
+  Object.entries(data).forEach(([key, value]) => {
+    if (value !== undefined && value !== null) {
+      params.append(key, value)
+    }
+  })
+  return params
+}
+
 export function postAPI (command, data = {}) {
   const params = new URLSearchParams()
   params.append('command', command)
   params.append('response', 'json')
-  if (data) {
-    Object.entries(data).forEach(([key, value]) => {
-      if (value !== undefined && value !== null) {
-        params.append(key, value)
-      }
-    })
-  }
+  appendApiData(params, data)
 
   const sessionkey = getSessionKey()
   if (sessionkey && !params.has('sessionkey')) {

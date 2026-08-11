@@ -19,6 +19,7 @@ package org.apache.cloudstack.network.ssl;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.StringReader;
+import java.io.StringWriter;
 import java.security.InvalidAlgorithmParameterException;
 import java.security.InvalidKeyException;
 import java.security.KeyFactory;
@@ -76,6 +77,7 @@ import org.bouncycastle.pkcs.PKCS8EncryptedPrivateKeyInfo;
 import org.bouncycastle.pkcs.PKCSException;
 import org.bouncycastle.util.io.pem.PemObject;
 import org.bouncycastle.util.io.pem.PemReader;
+import org.bouncycastle.util.io.pem.PemWriter;
 
 import com.cloud.domain.DomainVO;
 import com.cloud.domain.dao.DomainDao;
@@ -134,7 +136,8 @@ public class CertServiceImpl implements CertService {
         final String chain = certCmd.getChain();
         final String name = certCmd.getName();
 
-        validate(cert, key, password, chain, certCmd.getEnabledRevocationCheck());
+        final PrivateKey privateKey = validateAndGetPrivateKey(cert, key, password, chain, certCmd.getEnabledRevocationCheck());
+        final String normalizedKey = normalizePrivateKey(privateKey);
         logger.debug("Certificate Validation succeeded");
 
         final String fingerPrint = CertificateHelper.generateFingerPrint(parseCertificate(cert));
@@ -152,7 +155,7 @@ public class CertServiceImpl implements CertService {
         final Long accountId = owner.getId();
         final Long domainId = owner.getDomainId();
 
-        final SslCertVO certVO = new SslCertVO(cert, key, password, chain, accountId, domainId, fingerPrint, name);
+        final SslCertVO certVO = new SslCertVO(cert, normalizedKey, null, chain, accountId, domainId, fingerPrint, name);
         _sslCertDao.persist(certVO);
 
         return createCertResponse(certVO, null);
@@ -288,6 +291,10 @@ public class CertServiceImpl implements CertService {
     }
 
     protected void validate(final String certInput, final String keyInput, final String password, final String chainInput, boolean revocationEnabled) {
+        validateAndGetPrivateKey(certInput, keyInput, password, chainInput, revocationEnabled);
+    }
+
+    protected PrivateKey validateAndGetPrivateKey(final String certInput, final String keyInput, final String password, final String chainInput, boolean revocationEnabled) {
         try {
             List<Certificate> chain = null;
             final Certificate cert = parseCertificate(certInput);
@@ -303,10 +310,35 @@ public class CertServiceImpl implements CertService {
             if (chainInput != null) {
                 validateChain(chain, cert, revocationEnabled);
             }
+
+            return key;
         } catch (final IOException | CertificateException | OperatorCreationException | PKCSException |
                        NoSuchAlgorithmException | InvalidKeySpecException e) {
             logger.warn("Failed to validate certificate", e);
             throw new IllegalStateException("Parsing certificate/key failed: " + e.getMessage(), e);
+        }
+    }
+
+    protected String convertPrivateKeyToPkcs8Pem(final PrivateKey privateKey) {
+        Preconditions.checkNotNull(privateKey);
+        final byte[] encodedKey = privateKey.getEncoded();
+        Preconditions.checkArgument(encodedKey != null && encodedKey.length > 0, "Private key cannot be encoded");
+
+        try (StringWriter stringWriter = new StringWriter(); PemWriter pemWriter = new PemWriter(stringWriter)) {
+            pemWriter.writeObject(new PemObject("PRIVATE KEY", encodedKey));
+            pemWriter.flush();
+            return stringWriter.toString();
+        } catch (IOException e) {
+            throw new CloudRuntimeException("Failed to encode private key to PKCS#8 PEM", e);
+        }
+    }
+
+    protected String normalizePrivateKey(final PrivateKey privateKey) {
+        try {
+            return convertPrivateKeyToPkcs8Pem(privateKey);
+        } catch (RuntimeException e) {
+            logger.warn("Failed to normalize private key to PKCS#8 PEM", e);
+            throw new IllegalStateException("Private key cannot be converted to unencrypted PKCS#8 PEM: " + e.getMessage(), e);
         }
     }
 

@@ -56,6 +56,7 @@ import java.util.List;
 import java.util.Objects;
 import java.util.Set;
 import java.util.stream.Collectors;
+import java.util.concurrent.TimeUnit;
 import javax.xml.xpath.XPath;
 import javax.xml.xpath.XPathConstants;
 import javax.xml.xpath.XPathExpressionException;
@@ -67,6 +68,8 @@ class LibvirtAblestackNasBackupHelper {
     private static final int BACKUP_JOB_POLL_INTERVAL_MS = 10000;
     private static final int UNMOUNT_TIMEOUT_SECONDS = 60;
     private static final DateTimeFormatter SCRIPT_LOG_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss>");
+    private static final String IN_PROGRESS_MARKER = ".backup.inprogress";
+    private static final String COMPLETE_MARKER = ".backup.complete";
 
     enum BackupExecutionMode {
         RUNNING("backup-running"),
@@ -114,7 +117,18 @@ class LibvirtAblestackNasBackupHelper {
         String[] scriptCommand = buildBackupScriptCommand(command, diskPaths, executionMode);
         LOGGER.debug("Executing NAS backup script command=[{}]", String.join(" ", scriptCommand));
         commands.add(scriptCommand);
-        return Script.executePipedCommands(commands, resource.getCmdsTimeout());
+        final int commandWaitSeconds = command.getWait();
+        final long resourceTimeoutMillis = resource.getCmdsTimeout();
+        final long effectiveTimeoutMillis = commandWaitSeconds > 0 ? TimeUnit.SECONDS.toMillis(commandWaitSeconds) : resourceTimeoutMillis;
+        LOGGER.info(
+                "Executing running VM NAS backup for vm=[{}], commandWaitSeconds=[{}], "
+                        + "resourceCmdsTimeoutMillis=[{}], effectiveTimeoutMillis=[{}]",
+                command.getVmName(),
+                commandWaitSeconds,
+                resourceTimeoutMillis,
+                effectiveTimeoutMillis
+        );
+        return Script.executePipedCommands(commands, effectiveTimeoutMillis);
     }
 
     List<String> resolveDiskPaths(List<PrimaryDataStoreTO> volumePools, List<String> volumePaths) {
@@ -244,6 +258,7 @@ class LibvirtAblestackNasBackupHelper {
             mountPoint = mountRepository(command);
             dest = mountPoint.resolve(command.getBackupPath());
             Files.createDirectories(dest.resolve("checkpoints"));
+            markBackupInProgress(dest, command);
 
             conn = LibvirtConnection.getConnection();
             String dummyVmXml = buildDummyVmXml(dummyVmName, diskPaths, conn);
@@ -270,7 +285,8 @@ class LibvirtAblestackNasBackupHelper {
             }
 
             try {
-                waitForBackup(dummyVmName);
+                final long effectiveTimeoutMillis = command.getWait() > 0 ? TimeUnit.SECONDS.toMillis(command.getWait()) : resource.getCmdsTimeout();
+                waitForBackup(dummyVmName, effectiveTimeoutMillis);
             } catch (IOException e) {
                 cancelBackupJob(dummyVmName);
                 throw e;
@@ -285,6 +301,7 @@ class LibvirtAblestackNasBackupHelper {
             Files.deleteIfExists(backupXml);
             Files.deleteIfExists(checkpointXml);
             runCommand(String.format("sync"));
+            markBackupComplete(dest, command);
             String output = listTopLevelFileSizes(dest);
             LOGGER.info("Completed stopped VM NAS backup for vm=[{}], dummyVm=[{}]", command.getVmName(), dummyVmName);
             return new Pair<>(0, output);
@@ -335,6 +352,23 @@ class LibvirtAblestackNasBackupHelper {
             }
         }
         return unmountRepository(command, mountPoint) && success;
+    }
+
+    private void markBackupInProgress(Path dest, AblestackNasTakeBackupCommand command) throws IOException {
+        Files.deleteIfExists(dest.resolve(COMPLETE_MARKER));
+        Files.writeString(dest.resolve(IN_PROGRESS_MARKER),
+                String.format("vm=%s%ncheckpoint=%s%n", command.getVmName(), command.getCheckpointName()),
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+    }
+
+    private void markBackupComplete(Path dest, AblestackNasTakeBackupCommand command) throws IOException {
+        Path completeMarker = dest.resolve(COMPLETE_MARKER);
+        Path tmpMarker = dest.resolve(COMPLETE_MARKER + ".tmp");
+        Files.writeString(tmpMarker,
+                String.format("vm=%s%ncheckpoint=%s%n", command.getVmName(), command.getCheckpointName()),
+                StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+        Files.move(tmpMarker, completeMarker, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+        Files.deleteIfExists(dest.resolve(IN_PROGRESS_MARKER));
     }
 
     private boolean unmountRepository(AblestackNasTakeBackupCommand command, Path mountPoint) {
@@ -533,9 +567,9 @@ class LibvirtAblestackNasBackupHelper {
         return checkpointXml;
     }
 
-    private void waitForBackup(String vmName) throws IOException {
-        int timeout = resource.getCmdsTimeout();
-        while (timeout > 0) {
+    private void waitForBackup(String vmName, long timeoutMillis) throws IOException {
+        long remainingMillis = timeoutMillis;
+        while (remainingMillis > 0) {
             String result = checkBackupJob(vmName);
             if (result != null && result.contains("Completed") && result.contains("Backup")) {
                 return;
@@ -543,15 +577,17 @@ class LibvirtAblestackNasBackupHelper {
             if (result != null && result.contains("Failed")) {
                 throw new IOException("Virsh backup job failed for dummy VM " + vmName);
             }
-            timeout -= BACKUP_JOB_POLL_INTERVAL_MS;
+            long sleepMillis = Math.min(BACKUP_JOB_POLL_INTERVAL_MS, remainingMillis);
             try {
-                Thread.sleep(BACKUP_JOB_POLL_INTERVAL_MS);
+                Thread.sleep(sleepMillis);
             } catch (InterruptedException e) {
                 Thread.currentThread().interrupt();
                 throw new IOException(e);
             }
+            remainingMillis -= sleepMillis;
         }
-        throw new IOException("Timed out waiting for backup job of dummy VM " + vmName);
+        throw new IOException("Timed out waiting for backup job of dummy VM " + vmName + " after " + timeoutMillis + " milliseconds"
+        );
     }
 
     private void cancelBackupJob(String vmName) {

@@ -1,0 +1,7 @@
+{
+  "return": {
+    "id": "debian",
+    "name": "Debian GNU/Linux",
+    "pretty-name": "Debian GNU/Linux 12 (bookworm)"
+  }
+}

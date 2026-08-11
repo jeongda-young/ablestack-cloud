@@ -32,6 +32,7 @@ TIMESTAMP_VALUE=${TIMESTAMP_VALUE:-}
 BUILD_SRPM=${BUILD_SRPM:-false}
 USE_TIMESTAMP=${USE_TIMESTAMP:-false}
 LOCAL_FAST=${LOCAL_FAST:-false}
+ABLESTACK_UI_BUILD_VERSION=${ABLESTACK_UI_BUILD_VERSION:-}
 
 if ! command -v dnf >/dev/null 2>&1; then
     echo "This helper must run inside a Rocky/RHEL-compatible environment with dnf."
@@ -57,6 +58,23 @@ echo "TIMESTAMP_VALUE=${TIMESTAMP_VALUE:-<generated>}"
 echo "BUILD_SRPM=$BUILD_SRPM"
 echo "USE_TIMESTAMP=$USE_TIMESTAMP"
 echo "LOCAL_FAST=$LOCAL_FAST"
+echo "ABLESTACK_UI_BUILD_VERSION=${ABLESTACK_UI_BUILD_VERSION:-<source-config>}"
+
+configure_rocky_vault_repositories() {
+    local repo
+
+    for repo in /etc/yum.repos.d/rocky*.repo; do
+        [ -f "$repo" ] || continue
+        sed -E -i \
+            -e 's|^mirrorlist=|#mirrorlist=|' \
+            -e 's|^#?baseurl=https?://dl\.rockylinux\.org/\$contentdir|baseurl=https://dl.rockylinux.org/vault/rocky|' \
+            "$repo"
+    done
+}
+
+# Rocky 9.7 is archived, so both the container image and its package
+# repositories must use the Rocky vault.
+configure_rocky_vault_repositories
 
 DNF=(dnf --releasever=9.7 -y)
 
@@ -67,6 +85,7 @@ dnf --releasever=9.7 config-manager --set-enabled crb || true
     bash \
     bzip2 \
     ca-certificates \
+    cpio \
     findutils \
     gcc \
     genisoimage \
@@ -106,6 +125,7 @@ if [ ! -x "/opt/node-v${NODE_VERSION}-linux-x64/bin/node" ]; then
     curl -fsSL "https://nodejs.org/dist/v${NODE_VERSION}/node-v${NODE_VERSION}-linux-x64.tar.xz" \
         | tar -xJf - -C /opt
 fi
+NODE_BIN_DIR="/opt/node-v${NODE_VERSION}-linux-x64/bin"
 
 JAVA17_HOME=$(dirname "$(dirname "$(readlink -f "$(command -v javac)")")")
 if [ -d /usr/lib/jvm/java-17-openjdk ]; then
@@ -113,8 +133,9 @@ if [ -d /usr/lib/jvm/java-17-openjdk ]; then
 fi
 
 export JAVA_HOME="$JAVA17_HOME"
-export PATH="/opt/node-v${NODE_VERSION}-linux-x64/bin:$JAVA_HOME/bin:$PATH"
+export PATH="$NODE_BIN_DIR:$JAVA_HOME/bin:$PATH"
 export MAVEN_OPTS="${MAVEN_OPTS:+$MAVEN_OPTS }-Dcom.sun.xml.bind.v2.bytecode.ClassTailor.noOptimize=true --add-opens=java.base/java.lang=ALL-UNNAMED"
+export RPM_NODE_BIN_DIR="$NODE_BIN_DIR"
 
 git config --global --add safe.directory "$ROOT_DIR"
 
@@ -138,6 +159,7 @@ mkdir -p "$ROOT_DIR/dist/rocky97-build"
     echo "build_srpm=$BUILD_SRPM"
     echo "use_timestamp=$USE_TIMESTAMP"
     echo "local_fast=$LOCAL_FAST"
+    echo "ui_build_version=${ABLESTACK_UI_BUILD_VERSION:-<source-config>}"
 } >"$ROOT_DIR/dist/rocky97-build/environment.txt"
 
 build_args=(
@@ -182,8 +204,119 @@ if [ "$LOCAL_FAST" == "true" ]; then
 fi
 
 cd "$ROOT_DIR/packaging"
-./package.sh "${build_args[@]}"
+package_status=0
+./package.sh "${build_args[@]}" || package_status=$?
+
+if [ "$package_status" -ne 0 ]; then
+    echo "RPM packaging failed once; cleaning incomplete Maven downloads and retrying"
+    find /root/.m2/repository -type f -name '*.part' -delete 2>/dev/null || true
+    sleep 5
+    package_status=0
+    ./package.sh "${build_args[@]}" || package_status=$?
+fi
+
+if [ "$package_status" -ne 0 ]; then
+    echo "RPM packaging failed after retry" >&2
+    exit "$package_status"
+fi
 
 cd "$ROOT_DIR"
+
+verify_management_schema_resources() {
+    local management_rpm
+    local extract_dir
+    local packaged_jar
+    local resource
+    local source_resource
+    local extracted_resource
+    local -a packaged_jars
+
+    management_rpm=$(find dist/rpmbuild/RPMS -type f -name 'cloudstack-management-*.rpm' | sort | tail -1)
+    if [ -z "$management_rpm" ]; then
+        echo "cloudstack-management RPM was not generated" >&2
+        return 1
+    fi
+
+    extract_dir=$(mktemp -d /tmp/cloudstack-management-rpm-XXXXXX)
+    (
+        cd "$extract_dir"
+        rpm2cpio "$ROOT_DIR/$management_rpm" | cpio -idm --quiet
+    )
+
+    mapfile -t packaged_jars < <(find "$extract_dir/usr/share/cloudstack-management/lib" -maxdepth 1 -type f -name 'cloudstack-*.jar' | sort)
+    if [ "${#packaged_jars[@]}" -ne 1 ]; then
+        echo "Expected exactly one packaged cloudstack application jar, found ${#packaged_jars[@]}" >&2
+        rm -rf "$extract_dir"
+        return 1
+    fi
+    packaged_jar=${packaged_jars[0]}
+
+    if find "$extract_dir/usr/share/cloudstack-management/lib" -maxdepth 1 -type f -name 'cloud-engine-schema-*.jar' | grep -q .; then
+        echo "Standalone cloud-engine-schema jar must not be packaged beside the application jar" >&2
+        rm -rf "$extract_dir"
+        return 1
+    fi
+
+    for resource in \
+        META-INF/db/schema-Europa-After.sql \
+        META-INF/db/views/cloud.shared_filesystem_view.sql; do
+        source_resource="$ROOT_DIR/engine/schema/src/main/resources/$resource"
+        extracted_resource=$(mktemp /tmp/cloudstack-schema-resource-XXXXXX)
+        if ! unzip -p "$packaged_jar" "$resource" >"$extracted_resource"; then
+            echo "Missing schema resource in packaged application jar: $resource" >&2
+            rm -f "$extracted_resource"
+            rm -rf "$extract_dir"
+            return 1
+        fi
+        if ! cmp -s "$source_resource" "$extracted_resource"; then
+            echo "Packaged schema resource differs from source: $resource" >&2
+            rm -f "$extracted_resource"
+            rm -rf "$extract_dir"
+            return 1
+        fi
+        rm -f "$extracted_resource"
+    done
+
+    rm -rf "$extract_dir"
+    echo "Verified management RPM schema resources: $management_rpm"
+}
+
+verify_management_schema_resources
+
+verify_ui_build_version() {
+    local ui_rpm
+    local extract_dir
+    local packaged_version
+
+    if [ -z "$ABLESTACK_UI_BUILD_VERSION" ]; then
+        echo "Skipping UI build version verification because no release version was supplied"
+        return
+    fi
+
+    ui_rpm=$(find dist/rpmbuild/RPMS -type f -name 'cloudstack-ui-*.rpm' | sort | tail -1)
+    if [ -z "$ui_rpm" ]; then
+        echo "cloudstack-ui RPM was not generated" >&2
+        return 1
+    fi
+
+    extract_dir=$(mktemp -d /tmp/cloudstack-ui-rpm-XXXXXX)
+    (
+        cd "$extract_dir"
+        rpm2cpio "$ROOT_DIR/$ui_rpm" | cpio -idm --quiet
+    )
+    packaged_version=$(jq -r '.buildVersion // empty' \
+        "$extract_dir/etc/cloudstack/ui/config.json")
+    rm -rf "$extract_dir"
+
+    if [ "$packaged_version" != "$ABLESTACK_UI_BUILD_VERSION" ]; then
+        echo "Packaged UI buildVersion mismatch: expected $ABLESTACK_UI_BUILD_VERSION, got $packaged_version" >&2
+        return 1
+    fi
+
+    echo "Verified UI buildVersion in $ui_rpm: $packaged_version"
+}
+
+verify_ui_build_version
+
 find dist/rpmbuild -type f \( -name '*.rpm' -o -name '*.src.rpm' \) | sort \
     > dist/rocky97-build/artifacts.txt

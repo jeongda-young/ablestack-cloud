@@ -99,9 +99,9 @@ while IFS= read -r vm_name; do
 done < <(list_target_vms)
 
 if [[ ${vm_count} -eq 0 ]]; then
-  update_runtime_status "MOLD_BACKUP_FAILED_ALL"
-  log -ne "No running VMs found on host for NetBackup staging"
-  exit 1
+  update_runtime_status "MOLD_BACKUP_SKIPPED_NO_TARGET"
+  log -ne "No target running VMs found on host for NetBackup staging; skipping successfully"
+  exit 0
 fi
 
 if [[ ${success_count} -gt 0 && ${failed_count} -eq 0 ]]; then

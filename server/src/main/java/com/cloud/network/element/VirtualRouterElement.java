@@ -517,7 +517,7 @@ NetworkMigrationResponder, AggregatedCommandExecutor, RedundantResource, DnsServ
         final Map<Capability, String> lbCapabilities = new HashMap<Capability, String>();
         lbCapabilities.put(Capability.SupportedLBAlgorithms, "roundrobin,leastconn,source");
         lbCapabilities.put(Capability.SupportedLBIsolation, "dedicated");
-        lbCapabilities.put(Capability.SupportedProtocols, "tcp, udp, tcp-proxy, ssl");
+        lbCapabilities.put(Capability.SupportedProtocols, "tcp, udp, tcp-proxy, ssl, http");
         lbCapabilities.put(Capability.SupportedStickinessMethods, getHAProxyStickinessCapability());
         lbCapabilities.put(Capability.LbSchemes, LoadBalancerContainer.Scheme.Public.toString());
         // Supports SSL offloading

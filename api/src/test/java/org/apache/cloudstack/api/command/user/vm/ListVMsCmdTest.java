@@ -17,6 +17,7 @@
 package org.apache.cloudstack.api.command.user.vm;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.anyList;
@@ -37,12 +38,14 @@ import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
 
+import org.apache.cloudstack.api.ApiConstants.VMDetails;
 import org.apache.cloudstack.api.ResponseGenerator;
 import org.apache.cloudstack.api.response.ResourceIconResponse;
 import org.apache.cloudstack.api.response.UserVmResponse;
 import org.junit.Before;
 import org.junit.Test;
 import org.mockito.Mockito;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import com.cloud.server.ResourceIcon;
 import com.cloud.server.ResourceIconManager;
@@ -219,5 +222,17 @@ public class ListVMsCmdTest {
         Map<String, ResourceIcon> result = cmd.getResourceIconsUsingOsCategory(responses);
         assertTrue(result.containsKey(vmUuid));
         assertNull(result.get(vmUuid));
+    }
+
+    @Test
+    public void testDefaultDetailsDoNotLoadGuestNetworkSnapshot() {
+        assertFalse(cmd.getDetails().contains(VMDetails.guestnetwork));
+    }
+
+    @Test
+    public void testGuestNetworkCanBeExplicitlyRequested() {
+        ReflectionTestUtils.setField(cmd, "viewDetails", Collections.singletonList("guestnetwork"));
+
+        assertEquals(Collections.singleton(VMDetails.guestnetwork), cmd.getDetails());
     }
 }

@@ -41,6 +41,7 @@ public class LoadBalancerTO {
     boolean revoked;
     boolean alreadyAdded;
     boolean inline;
+    boolean backendSsl;
     String srcIpVlan;
     String srcIpGateway;
     String srcIpNetmask;
@@ -175,6 +176,14 @@ public class LoadBalancerTO {
 
     public boolean isInline() {
         return inline;
+    }
+
+    public boolean isBackendSsl() {
+        return backendSsl;
+    }
+
+    public void setBackendSsl(boolean backendSsl) {
+        this.backendSsl = backendSsl;
     }
 
     public StickinessPolicyTO[] getStickinessPolicies() {

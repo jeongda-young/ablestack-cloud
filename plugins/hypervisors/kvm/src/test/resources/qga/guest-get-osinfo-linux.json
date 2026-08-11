@@ -1,0 +1,7 @@
+{
+  "return": {
+    "id": "linux",
+    "kernel-name": "Linux",
+    "name": "Rocky Linux"
+  }
+}

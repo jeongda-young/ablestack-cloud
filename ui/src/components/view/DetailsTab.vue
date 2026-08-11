@@ -45,6 +45,7 @@
     </template>
   </a-alert>
   <a-list
+    class="resource-details-list"
     size="small"
     :dataSource="fetchDetails()">
     <template #renderItem="{item}">
@@ -785,6 +786,22 @@ export default {
 </script>
 
 <style scoped>
+.resource-details-list {
+  color: var(--ui-text-secondary);
+  background: var(--ui-bg-surface);
+}
+
+:deep(.resource-details-list .ant-list-item) {
+  padding: 12px 8px;
+  color: var(--ui-text-secondary);
+  background: transparent;
+  border-color: var(--ui-border);
+}
+
+:deep(.resource-details-list .ant-list-item strong) {
+  color: var(--ui-text-primary);
+}
+
 .preline {
   white-space: pre-line;
   word-break: break-word;

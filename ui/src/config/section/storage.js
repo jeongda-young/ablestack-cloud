@@ -19,6 +19,14 @@ import { shallowRef, defineAsyncComponent } from 'vue'
 import store from '@/store'
 import { isZoneCreated } from '@/utils/zone'
 
+const activeFastCloneFlattenStatuses = ['pending', 'running']
+
+const isFastCloneFlattenActive = (record) => {
+  return activeFastCloneFlattenStatuses.includes(
+    String(record?.clonefastflattenstatus || record?.details?.['clone.fast.flatten.status'] || '').toLowerCase()
+  )
+}
+
 export default {
   name: 'storage',
   title: 'label.storage',
@@ -146,7 +154,11 @@ export default {
           label: 'label.action.detach.disk',
           message: 'message.detach.disk',
           dataView: true,
-          show: (record) => { return record.virtualmachineid && ['Running', 'Stopped', 'Destroyed'].includes(record.vmstate) }
+          show: (record) => {
+            return record.virtualmachineid &&
+              ['Running', 'Stopped', 'Destroyed'].includes(record.vmstate) &&
+              !isFastCloneFlattenActive(record)
+          }
         },
         {
           api: 'updateVolume',
@@ -764,16 +776,6 @@ export default {
           popup: true,
           args: ['cleanup'],
           show: (record) => { return ['Stopped', 'Ready', 'Detached'].includes(record.state) }
-        },
-        {
-          api: 'changeSharedFileSystemDiskOffering',
-          icon: 'swap-outlined',
-          docHelp: 'adminguide/storage.html#lifecycle-operations',
-          label: 'label.change.disk.offering',
-          dataView: true,
-          popup: true,
-          component: shallowRef(defineAsyncComponent(() => import('@/views/storage/ChangeSharedFSDiskOffering.vue'))),
-          show: (record) => { return ['Stopped', 'Ready'].includes(record.state) }
         },
         {
           api: 'changeSharedFileSystemServiceOffering',

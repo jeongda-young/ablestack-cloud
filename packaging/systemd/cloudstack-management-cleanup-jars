@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements. See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership. The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License. You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied. See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+# Remove first-party CloudStack jars left behind by manual deployments. These
+# jars are visible through the management server wildcard classpath and can
+# shadow resources from the newly installed RPM.
+set -eu
+
+LIB_DIR=${1:-/usr/share/cloudstack-management/lib}
+QUARANTINE_ROOT=${CLOUDSTACK_JAR_QUARANTINE_ROOT:-/var/lib/cloudstack/management/legacy-lib}
+RPM_BIN=${RPM_BIN:-rpm}
+
+if [ ! -d "$LIB_DIR" ]; then
+    exit 0
+fi
+
+timestamp=$(date -u +%Y%m%dT%H%M%SZ)
+quarantine_dir="$QUARANTINE_ROOT/$timestamp"
+moved=0
+
+is_first_party_jar() {
+    case "$(basename "$1")" in
+        cloud-*.jar|cloudstack-*.jar)
+            return 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
+for jar in "$LIB_DIR"/*.jar; do
+    [ -e "$jar" ] || continue
+    is_first_party_jar "$jar" || continue
+    if "$RPM_BIN" -qf "$jar" >/dev/null 2>&1; then
+        continue
+    fi
+
+    if [ "$moved" -eq 0 ]; then
+        install -d -m 0700 "$quarantine_dir"
+    fi
+    echo "Quarantining unmanaged CloudStack jar: $jar"
+    mv -- "$jar" "$quarantine_dir/"
+    moved=$((moved + 1))
+done
+
+if [ "$moved" -gt 0 ]; then
+    echo "Quarantined $moved unmanaged CloudStack jar(s) in $quarantine_dir"
+fi

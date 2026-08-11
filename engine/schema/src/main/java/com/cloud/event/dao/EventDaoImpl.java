@@ -99,6 +99,16 @@ public class EventDaoImpl extends GenericDaoBase<EventVO, Long> implements Event
     }
 
     @Override
+    public boolean existsByTypeAndResource(String type, long resourceId, String resourceType) {
+        SearchCriteria<EventVO> sc = createSearchCriteria();
+        sc.addAnd("type", Op.EQ, type);
+        sc.addAnd("resourceId", Op.EQ, resourceId);
+        sc.addAnd("resourceType", Op.EQ, resourceType);
+        sc.addAnd("archived", Op.EQ, false);
+        return findOneIncludingRemovedBy(sc) != null;
+    }
+
+    @Override
     public void archiveEvents(List<EventVO> events) {
         if (events != null && !events.isEmpty()) {
             TransactionLegacy txn = TransactionLegacy.currentTxn();

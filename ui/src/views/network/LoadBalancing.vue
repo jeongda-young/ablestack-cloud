@@ -68,6 +68,7 @@
             <a-select-option value="tcp" :label="$t('label.tcp')">{{ $t('label.tcp') }}</a-select-option>
             <a-select-option value="udp" :label="$t('label.udp')">{{ $t('label.udp') }}</a-select-option>
             <a-select-option value="ssl" :label="$t('label.ssl')">{{ $t('label.ssl') }}</a-select-option>
+            <a-select-option value="http" :label="$t('label.lb.protocol.http')">{{ $t('label.lb.protocol.http') }}</a-select-option>
           </a-select>
         </div>
         <div class="form__item">
@@ -90,6 +91,10 @@
           <a-button :disabled="!('createLoadBalancerRule' in $store.getters.apis)" type="primary" @click="handleOpenAddSslCertModal(null)">
             {{ this.selectedSsl.id != null ? this.selectedSsl.name : $t('label.add') }}
           </a-button>
+        </div>
+        <div class="form__item" v-if="newRule.protocol === 'ssl'">
+          <div class="form__label">{{ $t('label.backend.ssl') }}</div>
+          <a-switch v-model:checked="newRule.backendssl" />
         </div>
         <div class="form__item" v-if="!newRule.autoscale || newRule.autoscale === 'no'">
           <div class="form__label" style="white-space: nowrap;">{{ $t('label.add.vms') }}</div>
@@ -141,6 +146,9 @@
         </template>
         <template v-if="column.key === 'protocol'">
           {{ getCapitalise(record.protocol) }}
+        </template>
+        <template v-if="column.key === 'backendssl'">
+          {{ record.protocol === 'ssl' && record.backendssl ? $t('label.yes') : $t('label.no') }}
         </template>
         <template v-if="column.key === 'stickiness' && !this.isNetrisZone">
           <a-button @click="() => openStickinessModal(record.id)">
@@ -455,6 +463,7 @@
             <a-select-option value="tcp" :label="$t('label.tcp')">{{ $t('label.tcp') }}</a-select-option>
             <a-select-option value="udp" :label="$t('label.udp')">{{ $t('label.udp') }}</a-select-option>
             <a-select-option value="ssl" :label="$t('label.ssl')">{{ $t('label.ssl') }}</a-select-option>
+            <a-select-option value="http" :label="$t('label.lb.protocol.http')">{{ $t('label.lb.protocol.http') }}</a-select-option>
           </a-select>
         </div>
         <div v-if="lbProvider !== 'Netris'" class="edit-rule__item">
@@ -472,6 +481,10 @@
             v-model:value="editRuleDetails.cidrlist"
             :placeholder="$t('label.sourcecidrlist')"
           />
+        </div>
+        <div class="edit-rule__item" v-if="editRuleDetails.protocol === 'ssl'">
+          <p class="edit-rule__label">{{ $t('label.backend.ssl') }}</p>
+          <a-switch v-model:checked="editRuleDetails.backendssl" />
         </div>
         <div :span="24" class="action-button">
           <a-button @click="() => editRuleModalVisible = false">{{ $t('label.cancel') }}</a-button>
@@ -860,7 +873,8 @@ export default {
         name: '',
         algorithm: '',
         protocol: '',
-        cidrlist: ''
+        cidrlist: '',
+        backendssl: false
       },
       newRule: {
         algorithm: 'roundrobin',
@@ -868,6 +882,7 @@ export default {
         privateport: '',
         publicport: '',
         protocol: 'tcp',
+        backendssl: false,
         virtualmachineid: [],
         vmguestip: [],
         cidrlist: ''
@@ -916,6 +931,10 @@ export default {
         {
           key: 'protocol',
           title: this.$t('label.protocol')
+        },
+        {
+          key: 'backendssl',
+          title: this.$t('label.backend.ssl')
         },
         {
           title: this.$t('label.state'),
@@ -1669,6 +1688,7 @@ export default {
         .map(c => c.trim())
         .filter(c => c)
         .join(',') || ''
+      this.editRuleDetails.backendssl = this.selectedRule.protocol === 'ssl' && !!this.selectedRule.backendssl
     },
     handleSubmitEditForm () {
       if (this.editRuleModalLoading) return
@@ -1677,15 +1697,12 @@ export default {
       const payload = {
         ...this.editRuleDetails,
         id: this.selectedRule.id,
+        backendssl: this.editRuleDetails.protocol === 'ssl' && this.editRuleDetails.backendssl,
         ...(this.editRuleDetails.cidrlist && {
           cidrList: (this.editRuleDetails.cidrlist || '').split(',').map(c => c.trim()).filter(c => c)
         })
       }
-      postAPI('updateLoadBalancerRule', {
-        ...this.editRuleDetails,
-        id: this.selectedRule.id,
-        ...payload
-      }).then(response => {
+      postAPI('updateLoadBalancerRule', payload).then(response => {
         this.$pollJob({
           jobId: response.updateloadbalancerruleresponse.jobid,
           successMessage: this.$t('message.success.edit.rule'),
@@ -2036,7 +2053,8 @@ export default {
         privateport: this.newRule.privateport,
         protocol: this.newRule.protocol,
         publicport: this.newRule.publicport,
-        cidrlist: this.newRule.cidrlist
+        cidrlist: this.newRule.cidrlist,
+        backendssl: this.newRule.protocol === 'ssl' && this.newRule.backendssl
       }).then(response => {
         this.addVmModalVisible = false
         this.addNetworkModalVisible = false

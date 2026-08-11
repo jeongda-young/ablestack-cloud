@@ -1,0 +1,32 @@
+{
+  "return": {
+    "version": "8.2.0",
+    "supported_commands": [
+      {
+        "name": "guest-network-get-interfaces",
+        "enabled": true,
+        "success-response": true
+      },
+      {
+        "name": "guest-get-fsinfo",
+        "enabled": false,
+        "success-response": true
+      },
+      {
+        "name": "guest-network-get-route",
+        "enabled": true,
+        "success-response": true
+      },
+      {
+        "name": "guest-exec",
+        "enabled": true,
+        "success-response": true
+      },
+      {
+        "name": "guest-get-osinfo",
+        "enabled": true,
+        "success-response": true
+      }
+    ]
+  }
+}

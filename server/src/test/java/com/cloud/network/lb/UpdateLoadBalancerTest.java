@@ -57,6 +57,7 @@ import com.cloud.user.AccountManager;
 import com.cloud.user.AccountVO;
 import com.cloud.user.User;
 import com.cloud.user.UserVO;
+import org.apache.cloudstack.resourcedetail.dao.FirewallRuleDetailsDao;
 
 public class UpdateLoadBalancerTest {
 
@@ -67,6 +68,7 @@ public class UpdateLoadBalancerTest {
     private NetworkDao netDao = Mockito.mock(NetworkDao.class);
     private NetworkModel netModel = Mockito.mock(NetworkModel.class);
     private NetworkOfferingServiceMapDao ntwkOffServiceMapDao = Mockito.mock(NetworkOfferingServiceMapDao.class);
+    private FirewallRuleDetailsDao firewallRuleDetailsDao = Mockito.mock(FirewallRuleDetailsDao.class);
     private LoadBalancingServiceProvider lbServiceProvider= Mockito.mock(LoadBalancingServiceProvider.class);
 
     private static long domainId = 5L;
@@ -84,8 +86,12 @@ public class UpdateLoadBalancerTest {
         _lbMgr._lb2VmMapDao = Mockito.mock(LoadBalancerVMMapDao.class);
         _lbMgr._lbCertMapDao = Mockito.mock(LoadBalancerCertMapDao.class);
         _lbMgr._lbDao = lbDao;
+        _lbMgr._firewallRuleDetailsDao = firewallRuleDetailsDao;
         _lbMgr._lbProviders = new ArrayList<LoadBalancingServiceProvider>();
         _lbMgr._lbProviders.add(lbServiceProvider);
+        when(_lbMgr._lb2stickinesspoliciesDao.listByLoadBalancerId(anyLong(), eq(false))).thenReturn(new ArrayList<>());
+        when(_lbMgr._lb2VmMapDao.listByLoadBalancerId(anyLong())).thenReturn(new ArrayList<>());
+        when(_lbMgr._lb2healthcheckDao.listByLoadBalancerIdAndDisplayFlag(anyLong(), isNull())).thenReturn(new ArrayList<>());
 
         updateLbRuleCmd = new UpdateLoadBalancerRuleCmd();
 

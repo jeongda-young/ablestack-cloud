@@ -34,3 +34,11 @@ console.log(JSON.stringify(data, null, 2));
 EOF
 
 mv ${tmpFile} ${configFile}
+
+distConfigFile="$DIR/dist/config.json"
+if [ ! -f "$distConfigFile" ]; then
+    echo "Missing built UI configuration: $distConfigFile" >&2
+    exit 1
+fi
+
+node "$DIR/build.js" "$distConfigFile"

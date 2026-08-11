@@ -360,7 +360,14 @@ public class CloudStackPrimaryDataStoreDriverImpl implements PrimaryDataStoreDri
         CreateCmdResult result = null;
         logger.debug("Taking Snapshot of "+ snapshot);
         try {
-            SnapshotObjectTO snapshotTO = getAndUpdateSnapshotObjectTO(snapshot);
+            SnapshotObjectTO snapshotTO = (SnapshotObjectTO) snapshot.getTO();
+            Object payload = snapshot.getPayload();
+            if (payload != null && payload instanceof CreateSnapshotPayload) {
+                CreateSnapshotPayload snapshotPayload = (CreateSnapshotPayload) payload;
+                snapshotTO.setQuiescevm(snapshotPayload.getQuiescevm());
+                snapshotTO.setPath(snapshotPayload.getSnapshotPath());
+            }
+            snapshotTO.setVmSnapshotName(snapshot.getVmSnapshotName());
 
             boolean encryptionRequired = anyVolumeRequiresEncryption(snapshot);
             CreateObjectCommand cmd = new CreateObjectCommand(snapshotTO);

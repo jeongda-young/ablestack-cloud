@@ -1205,6 +1205,216 @@
     font-weight: bold;
   }
 
+  // Guest network observability
+  //
+  // Keep these rules scoped to the guest network components. Generic
+  // descriptions/card overrides can change established screens that rely on
+  // the existing light label surface while dark mode is enabled.
+  .guest-network-summary,
+  .guest-network-tab {
+    color: @dark-text-color-3;
+
+    .address-list-label,
+    .route-count {
+      color: @dark-text-color-3;
+    }
+
+    .ant-tag {
+      color: @dark-text-color-4;
+      background: #303030;
+      border-color: #595959;
+    }
+
+    .ant-tag-green {
+      color: #b7eb8f;
+      background: #162312;
+      border-color: #274916;
+    }
+
+    .ant-tag-purple {
+      color: #d3adf7;
+      background: #22075e;
+      border-color: #391085;
+    }
+
+    .ant-tag-orange {
+      color: #ffd591;
+      background: #2b1d11;
+      border-color: #593815;
+    }
+
+    .ant-tag-gold {
+      color: #ffe58f;
+      background: #2b2111;
+      border-color: #594214;
+    }
+
+    .ant-tag-red {
+      color: #ffccc7;
+      background: #2a1215;
+      border-color: #58181c;
+    }
+
+    .ant-tag-blue {
+      color: #bae7ff;
+      background: #111d2c;
+      border-color: #15395b;
+    }
+
+    .ant-tag-cyan {
+      color: #b5f5ec;
+      background: #112123;
+      border-color: #144848;
+    }
+  }
+
+  .guest-network-summary {
+    .summary-source {
+      color: @dark-text-color-2;
+      border-color: #595959;
+    }
+
+    .summary-source-guest {
+      color: #69c0ff;
+      border-color: #15395b;
+    }
+
+    .summary-separator {
+      background: @dark-border-color;
+    }
+
+    .primary-address {
+      color: @dark-text-color-4;
+    }
+
+    .summary-more {
+      color: #69c0ff;
+      background: #111d2c;
+      border-color: #15395b;
+    }
+  }
+
+  .guest-network-summary-popover {
+    .address-popover-header,
+    .address-popover-row {
+      color: @dark-text-color-3;
+    }
+
+    .ant-tag {
+      color: @dark-text-color-4;
+      background: #303030;
+      border-color: #595959;
+    }
+
+    .ant-tag-green {
+      color: #b7eb8f;
+      background: #162312;
+      border-color: #274916;
+    }
+
+    .ant-tag-purple {
+      color: #d3adf7;
+      background: #22075e;
+      border-color: #391085;
+    }
+  }
+
+  .guest-network-tab {
+    .ant-divider {
+      color: @dark-text-color-4;
+      border-color: @dark-border-color;
+    }
+
+    .ant-divider-inner-text {
+      color: @dark-text-color-4;
+    }
+
+    .ant-card {
+      color: @dark-text-color-3;
+      background: @dark-secondary-bgColor;
+      border-color: @dark-border-color;
+    }
+
+    .ant-card-head {
+      color: @dark-text-color-4;
+      background: @dark-secondary-bgColor;
+      border-color: @dark-border-color;
+    }
+
+    .ant-card-head-title,
+    .ant-card-body {
+      color: @dark-text-color-3;
+    }
+
+    .address-list {
+      border-color: @dark-border-color;
+    }
+
+    .ant-descriptions {
+      color: @dark-text-color-3;
+    }
+
+    .ant-descriptions-view,
+    .ant-descriptions-row,
+    .ant-descriptions-bordered .ant-descriptions-item-label,
+    .ant-descriptions-bordered .ant-descriptions-item-content {
+      border-color: @dark-border-color;
+    }
+
+    .ant-descriptions-item-label {
+      color: @dark-text-color-4;
+    }
+
+    .ant-descriptions-item-content {
+      color: @dark-text-color-3;
+    }
+
+    .ant-descriptions-bordered .ant-descriptions-item-label {
+      color: @dark-text-color-4;
+      background: @table-header-bgColor;
+    }
+
+    .ant-descriptions-bordered .ant-descriptions-item-content {
+      color: @dark-text-color-3;
+      background: @dark-secondary-bgColor;
+    }
+
+    .ant-alert-info {
+      background: #111d2c;
+      border-color: #15395b;
+
+      .ant-alert-icon {
+        color: #69c0ff;
+      }
+
+      .ant-alert-message,
+      .ant-alert-description {
+        color: #d6e4ff;
+      }
+    }
+
+    .ant-alert-warning {
+      background: #2b2111;
+      border-color: #594214;
+
+      .ant-alert-icon {
+        color: #ffc53d;
+      }
+
+      .ant-alert-message,
+      .ant-alert-description {
+        color: #fff1b8;
+      }
+    }
+
+    .ant-alert-error {
+      .ant-alert-message,
+      .ant-alert-description {
+        color: #ffccc7;
+      }
+    }
+  }
+
   .row-action-button--dataview {
     background: @dropdown-bgColor;
     color: @dark-text-color-4;
@@ -1263,28 +1473,91 @@
     color: #69c0ff;
   }
 
+  .ant-modal,
+  .ant-drawer,
+  .ant-popover,
+  .ant-popconfirm {
+    .ant-alert {
+      color: @dark-text-color-4;
+      background: rgba(24, 144, 255, 0.14);
+      border-color: rgba(64, 169, 255, 0.38);
+    }
+
+    .ant-alert-message,
+    .ant-alert-description {
+      color: inherit;
+    }
+
+    .ant-alert-icon {
+      color: #40a9ff;
+    }
+
+    .ant-alert-info {
+      color: @dark-text-color-4;
+      background: rgba(24, 144, 255, 0.14);
+      border-color: rgba(64, 169, 255, 0.38);
+
+      .ant-alert-icon {
+        color: #40a9ff;
+      }
+    }
+
+    .ant-alert-warning {
+      color: #ffe7a3;
+      background: rgba(250, 173, 20, 0.14);
+      border-color: rgba(250, 173, 20, 0.52);
+
+      .ant-alert-icon {
+        color: #ffc53d;
+      }
+    }
+
+    .ant-alert-error {
+      color: #ffd2d2;
+      background: rgba(255, 77, 79, 0.14);
+      border-color: rgba(255, 77, 79, 0.52);
+
+      .ant-alert-icon {
+        color: #ff7875;
+      }
+    }
+
+    .ant-alert-success {
+      color: #c7f1d5;
+      background: rgba(82, 196, 26, 0.14);
+      border-color: rgba(82, 196, 26, 0.42);
+
+      .ant-alert-icon {
+        color: #73d13d;
+      }
+    }
+  }
+
   .ant-alert-error {
     border: 1px solid #131010;
     background-color: #5f3434;
   }
 
   .auto-alert-banner-container {
-    background-color: rgba(51, 42, 33, 0.5);
-    background: rgba(0, 0, 0, 0.50)
+    color: var(--ui-error-text);
+    background: var(--ui-bg-page);
   }
 
   .auto-alert-banner-container .banner-field {
-      background: rgba(0, 0, 0, 0.85);
+    color: var(--ui-error-text);
+    background: var(--ui-error-bg);
+    border-color: var(--ui-error-border);
   }
 
   .banner-main,
   .field-key {
-    color: #cfc9c9;
+    color: var(--ui-error-text);
   }
 
   .banner-label {
-    color: #cfc9c9;
-    background-color: rgba(150, 96, 96, 0.5);
+    color: var(--ui-error-text);
+    background: var(--ui-error-bg);
+    border-color: var(--ui-error-border);
   }
 
   .ant-modal-confirm-body {

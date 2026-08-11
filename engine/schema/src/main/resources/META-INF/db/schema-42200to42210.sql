@@ -58,3 +58,52 @@ WHERE name = 'user.password.reset.mail.template'
   AND value IN (CONCAT_WS('\n', 'Hello {{username}}!', 'You have requested to reset your password. Please click the following link to reset your password:', 'http://{{{resetLink}}}', 'If you did not request a password reset, please ignore this email.', '', 'Regards,', 'The CloudStack Team'), CONCAT_WS('\n', 'Hello {{username}}!', 'You have requested to reset your password. Please click the following link to reset your password:', '{{{domainUrl}}}{{{resetLink}}}', 'If you did not request a password reset, please ignore this email.', '', 'Regards,', 'The CloudStack Team'));
 
 UPDATE `cloud`.`vm_template` SET guest_os_id = 99 WHERE name = 'kvm-default-vm-import-dummy-template';
+
+-- Storage Service protocol/share/target/rule/domain JSON payloads are larger
+-- than the default JPA string width. Keep the columns as MEDIUMTEXT on upgraded
+-- Europa environments so endpoint, volume, authentication, and runtime metadata
+-- are not truncated.
+SET @storage_service_config_json_ddl = IF(
+    (SELECT COUNT(*) FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = 'cloud' AND TABLE_NAME = 'storage_service_protocol' AND COLUMN_NAME = 'config_json') > 0,
+    'ALTER TABLE `cloud`.`storage_service_protocol` MODIFY COLUMN `config_json` mediumtext DEFAULT NULL',
+    'SELECT 1');
+PREPARE stmt FROM @storage_service_config_json_ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @storage_service_config_json_ddl = IF(
+    (SELECT COUNT(*) FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = 'cloud' AND TABLE_NAME = 'storage_file_share' AND COLUMN_NAME = 'config_json') > 0,
+    'ALTER TABLE `cloud`.`storage_file_share` MODIFY COLUMN `config_json` mediumtext DEFAULT NULL',
+    'SELECT 1');
+PREPARE stmt FROM @storage_service_config_json_ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @storage_service_config_json_ddl = IF(
+    (SELECT COUNT(*) FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = 'cloud' AND TABLE_NAME = 'storage_block_target' AND COLUMN_NAME = 'config_json') > 0,
+    'ALTER TABLE `cloud`.`storage_block_target` MODIFY COLUMN `config_json` mediumtext DEFAULT NULL',
+    'SELECT 1');
+PREPARE stmt FROM @storage_service_config_json_ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @storage_service_config_json_ddl = IF(
+    (SELECT COUNT(*) FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = 'cloud' AND TABLE_NAME = 'storage_access_rule' AND COLUMN_NAME = 'config_json') > 0,
+    'ALTER TABLE `cloud`.`storage_access_rule` MODIFY COLUMN `config_json` mediumtext DEFAULT NULL',
+    'SELECT 1');
+PREPARE stmt FROM @storage_service_config_json_ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;
+
+SET @storage_service_config_json_ddl = IF(
+    (SELECT COUNT(*) FROM information_schema.COLUMNS
+     WHERE TABLE_SCHEMA = 'cloud' AND TABLE_NAME = 'storage_identity_domain' AND COLUMN_NAME = 'config_json') > 0,
+    'ALTER TABLE `cloud`.`storage_identity_domain` MODIFY COLUMN `config_json` mediumtext DEFAULT NULL',
+    'SELECT 1');
+PREPARE stmt FROM @storage_service_config_json_ddl;
+EXECUTE stmt;
+DEALLOCATE PREPARE stmt;

@@ -1506,11 +1506,20 @@ export default {
             customRender[key] = columnKey[key]
           }
         }
+        const sorter = key === 'resources'
+          ? (a, b) => {
+            const cpuCompare = Number(a.cpunumber || 0) - Number(b.cpunumber || 0)
+            if (cpuCompare !== 0) {
+              return cpuCompare
+            }
+            return Number(a.memory || 0) - Number(b.memory || 0)
+          }
+          : (a, b) => genericCompare(a[key] || '', b[key] || '')
         this.columns.push({
           key: key,
           title: this.$t('label.' + String(title).toLowerCase()),
           dataIndex: key,
-          sorter: this.getColumnSorter(key)
+          sorter: sorter
         })
         this.selectedColumns.push(key)
       }
@@ -1544,7 +1553,7 @@ export default {
       if (['listVirtualMachinesMetrics'].includes(this.apiName) && this.dataView) {
         delete params.details
         delete params.isvnf
-        params.details = 'group,nics,secgrp,tmpl,servoff,diskoff,iso,volume,affgrp,backoff'
+        params.details = 'group,nics,secgrp,tmpl,servoff,diskoff,iso,volume,affgrp,backoff,guestnetwork'
       }
 
       if (this.$route.path.startsWith('/cniconfiguration')) {
@@ -1771,6 +1780,7 @@ export default {
         }))
       } else {
         this.modalWidth = '30vw'
+        this.selectedItems = []
       }
       // this.modalWidth = '45vw'
 
@@ -2748,15 +2758,19 @@ export default {
 }
 
 .autogen-action-dropdown__content {
-  background: #fff;
-  border-radius: 8px;
-  border: 1px solid #d9d9d9;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
-  padding: 12px;
+  width: 272px;
+  max-height: ~"min(70vh, 640px)";
+  overflow-x: hidden;
+  overflow-y: auto;
+  padding: 4px;
+  background: var(--ui-bg-elevated);
+  border: 1px solid var(--ui-border);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px var(--ui-shadow);
 }
 
 .autogen-action-dropdown__content :deep(.row-action-button--dataview) {
-  width: max-content;
+  width: 100%;
   min-width: 0;
 }
 

@@ -50,6 +50,8 @@ UNMOUNT_TIMEOUT=60
 CREATED_RBD_SNAPSHOTS=()
 
 EXIT_CLEANUP_FAILED=20
+IN_PROGRESS_MARKER=".backup.inprogress"
+COMPLETE_MARKER=".backup.complete"
 
 log() {
   [[ "$verb" -eq 1 ]] && builtin echo "$@"
@@ -111,6 +113,7 @@ backup_running_vm() {
   mount_operation
   mkdir -p "$dest" || { echo "Failed to create backup directory $dest"; exit 1; }
   mkdir -p "$dest/checkpoints" || { echo "Failed to create checkpoint directory $dest/checkpoints"; exit 1; }
+  mark_backup_in_progress
 
   local parent_checkpoint_file=""
   if [[ "$BACKUP_TYPE" == "INCREMENTAL" && -n "$PARENT_CHECKPOINT_PATH" ]]; then
@@ -183,7 +186,8 @@ backup_running_vm() {
       Failed)
         log -ne "FAILED libvirt backup job vm=[$VM] checkpoint=[$CHECKPOINT_NAME]"
         echo "Virsh backup job failed"
-        cleanup ;;
+        cleanup
+        exit 1 ;;
     esac
     wait_count=$((wait_count + 1))
     if (( wait_count % 12 == 0 )); then
@@ -214,6 +218,7 @@ backup_running_vm() {
   rm -f "$dest/backup.xml"
   rm -f "$dest/checkpoint.xml"
   sync
+  mark_backup_complete
 
   # Print statistics
   virsh -c qemu:///system domjobinfo "$VM" --completed
@@ -227,6 +232,7 @@ backup_rbd_volumes() {
   log -ne "Entered backup_rbd_volumes with DISK_PATHS=[$DISK_PATHS], BACKUP_FILES=[$BACKUP_FILES], BACKUP_DIR=[$BACKUP_DIR]"
   mount_operation
   mkdir -p "$dest" || { echo "Failed to create backup directory $dest"; exit 1; }
+  mark_backup_in_progress
 
   backup_domain_information "$VM"
   trap 'log -ne "FAILED RBD backup unexpected error line=[$LINENO] op=[$OP] vm=[$VM] checkpoint=[$CHECKPOINT_NAME]"; cleanup_created_rbd_snapshots' ERR
@@ -312,6 +318,7 @@ backup_rbd_volumes() {
   CREATED_RBD_SNAPSHOTS=()
 
   sync
+  mark_backup_complete
   log -ne "RBD backup completed checkpoint=[$CHECKPOINT_NAME] parent=[$PARENT_CHECKPOINT_NAME]"
   timeout "$UNMOUNT_TIMEOUT" umount "$mount_point" 2>>"$logFile" || { log "WARNING: umount of $mount_point failed or timed out"; true; }
   rmdir "$mount_point" 2>>"$logFile" || { log "WARNING: rmdir of $mount_point failed"; true; }
@@ -521,6 +528,49 @@ get_backup_stats() {
   rmdir $mount_point
 }
 
+inspect_backup() {
+  mount_operation
+
+  local required_files_present=true
+  local backup_path_exists=false
+  local complete=false
+  local in_progress=false
+  local missing_files=""
+
+  if [[ -d "$dest" ]]; then
+    backup_path_exists=true
+  fi
+  if [[ -f "$dest/$COMPLETE_MARKER" ]]; then
+    complete=true
+  fi
+  if [[ -f "$dest/$IN_PROGRESS_MARKER" ]]; then
+    in_progress=true
+  fi
+
+  while IFS= read -r backup_file; do
+    [[ -z "$backup_file" ]] && continue
+    if [[ ! -s "$dest/$backup_file" ]]; then
+      required_files_present=false
+      missing_files="${missing_files}${missing_files:+,}${backup_file}"
+    fi
+  done < <(split_csv "$BACKUP_FILES")
+
+  if [[ -n "$CHECKPOINT_NAME" && ! -f "$dest/checkpoints/$CHECKPOINT_NAME.xml" && ! -f "$dest/checkpoints/$CHECKPOINT_NAME.meta" ]]; then
+    required_files_present=false
+    missing_files="${missing_files}${missing_files:+,}checkpoints/$CHECKPOINT_NAME"
+  fi
+
+  echo "backupPathExists=$backup_path_exists"
+  echo "complete=$complete"
+  echo "inProgress=$in_progress"
+  echo "requiredFilesPresent=$required_files_present"
+  echo "size=$(du -sb "$dest" 2>/dev/null | cut -f1 || echo 0)"
+  echo "missingFiles=$missing_files"
+
+  umount "$mount_point"
+  rmdir "$mount_point"
+}
+
 mount_operation() {
   mount_point=$(mktemp -d -t csbackup.XXXXX)
   dest="$mount_point/${BACKUP_DIR}"
@@ -556,6 +606,20 @@ mount_operation() {
       echo "Failed to mount ${NAS_TYPE} store"
       exit 1
   fi
+}
+
+mark_backup_in_progress() {
+  rm -f "$dest/$COMPLETE_MARKER"
+  printf 'started_at=%s\nvm=%s\ncheckpoint=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$VM" "$CHECKPOINT_NAME" > "$dest/$IN_PROGRESS_MARKER"
+  sync "$dest/$IN_PROGRESS_MARKER" 2>/dev/null || true
+}
+
+mark_backup_complete() {
+  local tmp_marker="$dest/$COMPLETE_MARKER.tmp"
+  printf 'completed_at=%s\nvm=%s\ncheckpoint=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$VM" "$CHECKPOINT_NAME" > "$tmp_marker"
+  mv -f "$tmp_marker" "$dest/$COMPLETE_MARKER"
+  rm -f "$dest/$IN_PROGRESS_MARKER"
+  sync "$dest/$COMPLETE_MARKER" 2>/dev/null || true
 }
 
 cleanup() {
@@ -776,20 +840,24 @@ parse_rbd_uri() {
 
   if [[ "$uri" == rbd:* ]]; then
     local payload="${uri#rbd:}"
-    RBD_IMAGE="${payload%%:*}"
-
-    if [[ "$uri" =~ :mon_host=([^:]*) ]]; then
-      RBD_MON_HOST="${BASH_REMATCH[1]}"
+    if [[ "$payload" == *":mon_host="* ]]; then
+      RBD_IMAGE="${payload%%:mon_host=*}"
+      local mon_part="${payload#*:mon_host=}"
+      RBD_MON_HOST="${mon_part%%:auth_supported=*}"
       RBD_MON_HOST="${RBD_MON_HOST//\\;/,}"
       RBD_MON_HOST="${RBD_MON_HOST//\\:/:}"
+    else
+      RBD_IMAGE="${payload%%:*}"
     fi
 
-    if [[ "$uri" =~ :id=([^:]*) ]]; then
-      RBD_USER="${BASH_REMATCH[1]}"
+    if [[ "$payload" == *":id="* ]]; then
+      local id_part="${payload#*:id=}"
+      RBD_USER="${id_part%%:*}"
     fi
 
-    if [[ "$uri" =~ :key=([^:]*) ]]; then
-      RBD_KEY="${BASH_REMATCH[1]}"
+    if [[ "$payload" == *":key="* ]]; then
+      local key_part="${payload#*:key=}"
+      RBD_KEY="${key_part%%:*}"
     fi
   elif [[ "$uri" == rbd/* ]]; then
     RBD_IMAGE="$uri"
@@ -1261,6 +1329,8 @@ elif [ "$OP" = "stats" ]; then
   get_backup_stats
 elif [ "$OP" = "import-veeam-seed" ]; then
   import_veeam_seed
+elif [ "$OP" = "inspect" ]; then
+  inspect_backup
 fi
 
 # Optional Mold->Veeam trigger (bidirectional mode C). Best-effort: never affects backup result.

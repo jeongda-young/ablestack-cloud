@@ -22,6 +22,17 @@ import { isAdmin } from '@/role'
 import { isZoneCreated } from '@/utils/zone'
 import { vueProps } from '@/vue-app'
 
+const activeFastCloneStatuses = ['pending', 'running']
+const fastCloneOperationBlockedLabel = 'message.sharedmountpoint.clone.flatten.in.progress'
+
+const getFastCloneStatus = (record) => {
+  return String(record?.clonefaststatus || record?.details?.['clone.fast.status'] || '').toLowerCase()
+}
+
+const isFastCloneFlattenActive = (record) => {
+  return activeFastCloneStatuses.includes(getFastCloneStatus(record))
+}
+
 export default {
   name: 'network',
   title: 'label.network',
@@ -528,7 +539,7 @@ export default {
         },
         {
           api: 'createSnapshot',
-          icon: ['fas', 'camera-retro'],
+          icon: 'camera-outlined',
           label: 'label.action.vmstoragesnapshot.create',
           docHelp: 'adminguide/virtual_machines.html#virtual-machine-snapshots',
           dataView: true,
@@ -564,6 +575,8 @@ export default {
           dataView: true,
           args: ['virtualmachineid'],
           show: (record) => { return record.backupofferingid },
+          disabled: (record) => { return isFastCloneFlattenActive(record) },
+          tooltip: (record) => { return isFastCloneFlattenActive(record) ? fastCloneOperationBlockedLabel : 'label.create.backup' },
           mapping: {
             virtualmachineid: {
               value: (record, params) => { return record.id }

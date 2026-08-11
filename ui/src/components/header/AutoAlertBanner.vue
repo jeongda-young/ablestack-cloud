@@ -30,7 +30,6 @@
           :show-icon="false"
           :closable="false"
           :banner="true"
-          :style="[{ border: '1px solid #ffccc7', background: '#ffffff', borderRadius: '10px', boxShadow: '0 2px 10px rgba(0, 0, 0, 0.08)' }]"
         >
           <template #message>
             <div class="summary-modern">
@@ -2981,6 +2980,7 @@ export default {
   width: 100%;
   isolation: isolate;
   font-size: 0.7em;
+  background: var(--ui-bg-page);
 }
 
 .auto-alert-banner-container.mask-on::before {
@@ -2990,8 +2990,8 @@ export default {
   left: 0;
   right: 0;
   height: var(--autoBannerHeight, 0px);
-  background: var(--layout-bg, #fff);
-  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.06) inset;
+  background: var(--ui-bg-page);
+  box-shadow: 0 1px 0 var(--ui-border) inset;
   pointer-events: none;
   z-index: 0;
   transition: height 180ms ease;
@@ -3008,12 +3008,21 @@ export default {
   flex-direction: column;
   gap: 4px;
   padding: 2px 8px 4px;
+  background: var(--ui-bg-page);
 }
 .banner-list:empty {
   padding: 0;
 }
 
 /* ===== 요약(상단) 배너 ===== */
+
+.alert-summary {
+  color: var(--ui-error-text) !important;
+  background: var(--ui-error-bg) !important;
+  border: 1px solid var(--ui-error-border) !important;
+  border-radius: 8px;
+  box-shadow: 0 4px 14px var(--ui-shadow);
+}
 
 .summary-modern {
   width: 100%;
@@ -3061,6 +3070,7 @@ export default {
   font-size: 18px;
   font-weight: 800;
   line-height: 20px;
+  color: var(--ui-error-text);
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -3070,7 +3080,7 @@ export default {
 .summary-modern-count {
   font-size: 18px;
   font-weight: 700;
-  color: #cf1322;
+  color: var(--ui-error-icon);
   flex: 0 0 auto;
 }
 
@@ -3078,7 +3088,7 @@ export default {
   margin-top: 2px;
   font-size: 12px;
   line-height: 18px;
-  color: rgba(0, 0, 0, 0.65);
+  color: var(--ui-error-text);
   display: flex;
   gap: 6px;
   min-width: 0;
@@ -3799,10 +3809,11 @@ body.dark-mode .solution-popover .sp-body-box {
   border-color: #303030;
   color: rgba(255, 255, 255, 0.88);
 }
-/* 1) 상단 메인 배너(요약)도 어둡게 강제 */
+/* 1) 상단 메인 배너(요약) */
 body.dark-mode .auto-alert-banner-container .ant-alert.alert-summary {
-  background: #141414 !important;
-  border-color: #303030 !important;
+  color: var(--ui-error-text) !important;
+  background: var(--ui-error-bg) !important;
+  border-color: var(--ui-error-border) !important;
 }
 
 body.dark-mode .auto-alert-banner-container .summary-modern-title-text,
@@ -3811,12 +3822,13 @@ body.dark-mode .auto-alert-banner-container .summary-modern-count,
 body.dark-mode .auto-alert-banner-container .summary-modern-actions .ant-btn,
 body.dark-mode .auto-alert-banner-container .summary-modern-actions .ant-btn > span,
 body.dark-mode .auto-alert-banner-container .summary-modern-actions .ant-btn .anticon {
-  color: rgba(255, 255, 255, 0.90) !important;
+  color: var(--ui-error-text) !important;
 }
 
 body.dark-mode .auto-alert-banner-container .summary-modern-actions .ant-btn:not(.ant-btn-primary):not(.ant-btn-dangerous) {
-  background: rgba(255, 255, 255, 0.06) !important;
-  border-color: rgba(255, 255, 255, 0.18) !important;
+  color: var(--ui-text-primary) !important;
+  background: var(--ui-bg-elevated) !important;
+  border-color: var(--ui-border-strong) !important;
 }
 
 /* 2) Drawer 바탕 */

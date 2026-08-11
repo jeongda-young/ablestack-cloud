@@ -34,9 +34,11 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.Timer;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.SynchronousQueue;
@@ -74,6 +76,8 @@ import com.cloud.agent.api.CheckOnHostCommand;
 import com.cloud.agent.api.Command;
 import com.cloud.agent.api.CronCommand;
 import com.cloud.agent.api.CheckVMActivityOnStoragePoolCommand;
+import com.cloud.agent.api.GetVmGuestNetworkStateAnswer;
+import com.cloud.agent.api.GetVmGuestNetworkStateCommand;
 import com.cloud.agent.api.MaintainAnswer;
 import com.cloud.agent.api.MaintainCommand;
 import com.cloud.agent.api.MigrateAgentConnectionAnswer;
@@ -162,6 +166,10 @@ public class Agent implements HandlerFactory, IAgentControl, AgentStatusUpdater 
     private final AtomicReference<StartupTask> startupTask = new AtomicReference<>();
     private static final long DEFAULT_STARTUP_WAIT = 180;
     private static final long EXECUTOR_MONITOR_INTERVAL_MS = 10000L;
+    private static final int DEFAULT_GUEST_NETWORK_WORKERS = 1;
+    private static final int MAX_GUEST_NETWORK_WORKERS = 4;
+    private static final int DEFAULT_GUEST_NETWORK_QUEUE_SIZE = 16;
+    private static final int MAX_GUEST_NETWORK_QUEUE_SIZE = 256;
     private static final String ANSI_GREEN = "\u001B[92m";
     private static final String ANSI_RED = "\u001B[31m";
     private static final String ANSI_RESET = "\u001B[0m";
@@ -175,6 +183,7 @@ public class Agent implements HandlerFactory, IAgentControl, AgentStatusUpdater 
     ThreadPoolExecutor basicExecutor;
     ThreadPoolExecutor statsExecutor;
     ThreadPoolExecutor haExecutor;
+    ThreadPoolExecutor guestNetworkExecutor;
 
     Thread shutdownThread = new ShutdownThread(this);
 
@@ -207,6 +216,8 @@ public class Agent implements HandlerFactory, IAgentControl, AgentStatusUpdater 
         Runtime.getRuntime().addShutdownHook(shutdownThread);
         int statsWorkers = resolveStatsWorkers();
         int haWorkers = resolveHaWorkers();
+        int guestNetworkWorkers = resolveGuestNetworkWorkers();
+        int guestNetworkQueueSize = resolveGuestNetworkQueueSize();
         selfTaskExecutor = Executors.newScheduledThreadPool(1, new NamedThreadFactory("Agent-SelfTask"));
         outRequestHandler = new ThreadPoolExecutor(shell.getPingRetries(), 2 * shell.getPingRetries(), 10, TimeUnit.MINUTES,
                 new SynchronousQueue<>(), new NamedThreadFactory("AgentOutRequest-Handler"));
@@ -216,11 +227,15 @@ public class Agent implements HandlerFactory, IAgentControl, AgentStatusUpdater 
                 new SynchronousQueue<>(), new NamedThreadFactory("Stats-Worker"), new ThreadPoolExecutor.CallerRunsPolicy());
         haExecutor = new ThreadPoolExecutor(haWorkers, 5 * haWorkers, 10, TimeUnit.SECONDS,
                 new SynchronousQueue<>(), new NamedThreadFactory("HA-Worker"), new ThreadPoolExecutor.CallerRunsPolicy());
+        guestNetworkExecutor = new ThreadPoolExecutor(guestNetworkWorkers, guestNetworkWorkers, 0, TimeUnit.MILLISECONDS,
+                new ArrayBlockingQueue<>(guestNetworkQueueSize), new NamedThreadFactory("GuestNetwork-Worker"),
+                new ThreadPoolExecutor.AbortPolicy());
         executorMonitorTimer = new Timer("AgentTaskCheckTimer");
         if (isHostResource()) { // 호스트 리소스인 경우에만 모티터링용 로그 실행(LibvirtComputingResource)
             scheduleExecutorMonitoring("Basic-Worker", basicExecutor);
             scheduleExecutorMonitoring("Stats-Worker", statsExecutor);
             scheduleExecutorMonitoring("HA-Worker", haExecutor);
+            scheduleExecutorMonitoring("GuestNetwork-Worker", guestNetworkExecutor);
         }
     }
 
@@ -327,6 +342,16 @@ public class Agent implements HandlerFactory, IAgentControl, AgentStatusUpdater 
         return Math.max(1, NumbersUtil.parseInt(haWorkersConfig, shell.getWorkers()));
     }
 
+    private int resolveGuestNetworkWorkers() {
+        String workersConfig = shell.getProperties() != null ? shell.getProperties().getProperty("guest.network.workers") : null;
+        return Math.min(MAX_GUEST_NETWORK_WORKERS, Math.max(1, NumbersUtil.parseInt(workersConfig, DEFAULT_GUEST_NETWORK_WORKERS)));
+    }
+
+    private int resolveGuestNetworkQueueSize() {
+        String queueSizeConfig = shell.getProperties() != null ? shell.getProperties().getProperty("guest.network.queue.size") : null;
+        return Math.min(MAX_GUEST_NETWORK_QUEUE_SIZE, Math.max(1, NumbersUtil.parseInt(queueSizeConfig, DEFAULT_GUEST_NETWORK_QUEUE_SIZE)));
+    }
+
     private boolean isHostResource() {
         return serverResource != null && "com.cloud.hypervisor.kvm.resource.LibvirtComputingResource".equals(serverResource.getClass().getName());
     }
@@ -393,7 +418,10 @@ public class Agent implements HandlerFactory, IAgentControl, AgentStatusUpdater 
         }
     }
 
-    private ThreadPoolExecutor selectExecutorForRequest(Request request) {
+    ThreadPoolExecutor selectExecutorForRequest(Request request) {
+        if (requestContainsGuestNetworkCommand(request) && guestNetworkExecutor != null) {
+            return guestNetworkExecutor;
+        }
         if (requestContainsHaCommand(request) && haExecutor != null) {
             return haExecutor;
         }
@@ -407,6 +435,55 @@ public class Agent implements HandlerFactory, IAgentControl, AgentStatusUpdater 
             return statsExecutor;
         }
         return haExecutor;
+    }
+
+    boolean requestContainsGuestNetworkCommand(Request request) {
+        if (request == null || request.getCommands() == null) {
+            return false;
+        }
+        for (Command command : request.getCommands()) {
+            if (command instanceof GetVmGuestNetworkStateCommand) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    boolean requestContainsMixedGuestNetworkCommands(Request request) {
+        if (request == null || request.getCommands() == null) {
+            return false;
+        }
+        boolean hasGuestNetworkCommand = false;
+        boolean hasOtherCommand = false;
+        for (Command command : request.getCommands()) {
+            if (command instanceof GetVmGuestNetworkStateCommand) {
+                hasGuestNetworkCommand = true;
+            } else if (command != null) {
+                hasOtherCommand = true;
+            }
+        }
+        return hasGuestNetworkCommand && hasOtherCommand;
+    }
+
+    private void sendRejectedResponse(Request request, Link link, String details) {
+        if (request == null || link == null || request.getCommands() == null) {
+            return;
+        }
+        Command[] commands = request.getCommands();
+        Answer[] answers = new Answer[commands.length];
+        for (int i = 0; i < commands.length; i++) {
+            Command command = commands[i];
+            if (command instanceof GetVmGuestNetworkStateCommand) {
+                answers[i] = new GetVmGuestNetworkStateAnswer((GetVmGuestNetworkStateCommand) command, false, details);
+            } else {
+                answers[i] = new Answer(command, false, details);
+            }
+        }
+        try {
+            link.send(new Response(request, answers).toBytes());
+        } catch (ClosedChannelException e) {
+            logger.warn("Unable to send rejected guest network request response: {}", details);
+        }
     }
 
     private boolean requestContainsStatsCommand(Request request) {
@@ -553,6 +630,11 @@ public class Agent implements HandlerFactory, IAgentControl, AgentStatusUpdater 
         if (haExecutor != null) {
             haExecutor.shutdown();
             haExecutor = null;
+        }
+
+        if (guestNetworkExecutor != null) {
+            guestNetworkExecutor.shutdownNow();
+            guestNetworkExecutor = null;
         }
 
         if (executorMonitorTimer != null) {
@@ -1508,6 +1590,12 @@ public class Agent implements HandlerFactory, IAgentControl, AgentStatusUpdater 
                         //It's for pinganswer etc, should be processed immediately.
                         processResponse((Response)request, task.getLink());
                     } else {
+                        if (requestContainsMixedGuestNetworkCommands(request)) {
+                            String details = "Guest network state commands cannot be mixed with core agent commands";
+                            logger.warn("Rejecting mixed guest network request: {}", request);
+                            sendRejectedResponse(request, task.getLink(), details);
+                            return;
+                        }
                         //put the requests from mgt server into another thread pool, as the request may take a longer time to finish. Don't block the NIO main thread pool
                         //processRequest(request, task.getLink());
                         ThreadPoolExecutor executor = selectExecutorForRequest(request);
@@ -1516,7 +1604,17 @@ public class Agent implements HandlerFactory, IAgentControl, AgentStatusUpdater 
                             processRequest(request, task.getLink());
                             return;
                         }
-                        executor.submit(new AgentRequestHandler(getType(), getLink(), request));
+                        try {
+                            executor.submit(new AgentRequestHandler(getType(), getLink(), request));
+                        } catch (RejectedExecutionException e) {
+                            if (requestContainsGuestNetworkCommand(request)) {
+                                String details = "Guest network collector is busy; retry later";
+                                logger.warn("Rejecting guest network request because its isolated executor is saturated");
+                                sendRejectedResponse(request, task.getLink(), details);
+                                return;
+                            }
+                            throw e;
+                        }
                     }
                 } catch (final ClassNotFoundException e) {
                     logger.error("Unable to find this request ");

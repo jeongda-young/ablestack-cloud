@@ -58,6 +58,12 @@
       <a-tab-pane :tab="$t('label.nics')" key="nics" v-if="'listNics' in $store.getters.apis">
         <NicsTab :resource="vm"/>
       </a-tab-pane>
+      <a-tab-pane
+        :tab="$t('label.vm.ip.configuration')"
+        key="guestnetwork"
+        v-if="resource.hypervisor === 'KVM' && 'getVirtualMachineGuestNetworkState' in $store.getters.apis">
+        <GuestNetworkTab :resource="vm"/>
+      </a-tab-pane>
       <a-tab-pane :tab="$t('label.vm.snapshots')" key="vmsnapshots" v-if="'listVMSnapshot' in $store.getters.apis">
         <ListResourceTable
           apiName="listVMSnapshot"
@@ -286,6 +292,7 @@ import EventsTab from '@/components/view/EventsTab'
 import DetailSettings from '@/components/view/DetailSettings'
 import CreateVolume from '@/views/storage/CreateVolume'
 import NicsTab from '@/views/network/NicsTab'
+import GuestNetworkTab from '@/views/compute/GuestNetworkTab'
 import InstanceSchedules from '@/views/compute/InstanceSchedules.vue'
 import ListResourceTable from '@/components/view/ListResourceTable'
 import TooltipButton from '@/components/widgets/TooltipButton'
@@ -309,6 +316,7 @@ export default {
     DetailSettings,
     CreateVolume,
     NicsTab,
+    GuestNetworkTab,
     DRTable,
     DRsimulationTestModal,
     DRMirroringVMAdd,

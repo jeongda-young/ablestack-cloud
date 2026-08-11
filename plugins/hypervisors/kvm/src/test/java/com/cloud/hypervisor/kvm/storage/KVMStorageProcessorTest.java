@@ -312,6 +312,41 @@ public class KVMStorageProcessorTest {
     }
 
     @Test
+    public void validateAttachOrDetachDiskShortOverloadDelegatesToWaitDetachOverload() throws Exception {
+        AttachOrDetachDiskOverloadProbe probe = new AttachOrDetachDiskOverloadProbe(storagePoolManager, resource);
+
+        probe.attachOrDetachDisk(null, true, "vm", null, 1, "serial", null, null, null, null, null, null, null, null, null, null, null, null,
+                "writeback", null, "ABLESTACK", "/dev/rbd", false, false, null, null);
+
+        Assert.assertTrue(probe.waitDetachOverloadCalled);
+        Assert.assertEquals(0L, probe.waitDetachDevice);
+    }
+
+    private static class AttachOrDetachDiskOverloadProbe extends KVMStorageProcessor {
+        private boolean waitDetachOverloadCalled;
+        private long waitDetachDevice;
+
+        AttachOrDetachDiskOverloadProbe(KVMStoragePoolManager storagePoolMgr, LibvirtComputingResource resource) {
+            super(storagePoolMgr, resource);
+        }
+
+        @Override
+        protected synchronized void attachOrDetachDisk(final Connect conn, final boolean attach, final String vmName, final KVMPhysicalDisk attachingDisk,
+                                                       final int devId, final String serial, final Long bytesReadRate, final Long bytesReadRateMax,
+                                                       final Long bytesReadRateMaxLength, final Long bytesWriteRate, final Long bytesWriteRateMax,
+                                                       final Long bytesWriteRateMaxLength, final Long iopsReadRate, final Long iopsReadRateMax,
+                                                       final Long iopsReadRateMaxLength, final Long iopsWriteRate, final Long iopsWriteRateMax,
+                                                       final Long iopsWriteRateMaxLength, final String cacheMode,
+                                                       final LibvirtVMDef.DiskDef.LibvirtDiskEncryptDetails encryptDetails, final String provider,
+                                                       final String krbdpath, final boolean shareable, final boolean kvdoEnable,
+                                                       final long waitDetachDevice, final Map<String, String> details,
+                                                       final Map<String, String> controllerInfo) {
+            waitDetachOverloadCalled = true;
+            this.waitDetachDevice = waitDetachDevice;
+        }
+    }
+
+    @Test
     public void validateValidateCopyResultResultIsNullReturn() throws CloudRuntimeException, IOException{
         storageProcessorSpy.validateConvertResult(null, "");
     }

@@ -41,9 +41,14 @@
 .sider .ant-layout-sider-children,
 .sider .ant-menu,
 .sider .ant-menu-root,
+.drawer-sider .ant-layout-sider-children,
+.drawer-sider .ant-menu,
+.drawer-sider .ant-menu-root,
 .sticky-sidebar .sider .ant-layout-sider-children,
 .sticky-sidebar .sider .ant-menu,
 .sticky-sidebar .sider .ant-menu-root {
+  max-width: 100%;
+  overflow-x: hidden;
   scrollbar-width: thin;
 }
 
@@ -58,3 +63,9 @@
 }
 
 @import "dark-mode";
+@import "theme/tokens";
+@import "theme/base";
+@import "theme/components";
+@import "theme/feedback";
+@import "theme/scrollbar";
+@import "components/view/resource-context-menu";

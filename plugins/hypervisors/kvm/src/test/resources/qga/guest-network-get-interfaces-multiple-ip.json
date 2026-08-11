@@ -1,0 +1,63 @@
+{
+  "return": [
+    {
+      "name": "lo",
+      "hardware-address": "00:00:00:00:00:00",
+      "ip-addresses": [
+        {
+          "ip-address-type": "ipv4",
+          "ip-address": "127.0.0.1",
+          "prefix": 8
+        },
+        {
+          "ip-address-type": "ipv6",
+          "ip-address": "::1",
+          "prefix": 128
+        }
+      ]
+    },
+    {
+      "name": "eth0",
+      "hardware-address": "52:54:00:ab:cd:01",
+      "ip-addresses": [
+        {
+          "ip-address-type": "ipv4",
+          "ip-address": "10.10.22.101",
+          "prefix": 24
+        },
+        {
+          "ip-address-type": "ipv6",
+          "ip-address": "2001:db8:22::101",
+          "prefix": 64
+        },
+        {
+          "ip-address-type": "ipv4",
+          "ip-address": "10.10.22.102",
+          "prefix": 24
+        }
+      ]
+    },
+    {
+      "name": "eth1",
+      "hardware-address": "52-54-00-AB-CD-02",
+      "ip-addresses": [
+        {
+          "ip-address-type": "ipv4",
+          "ip-address": "172.16.10.20",
+          "prefix": 24
+        }
+      ]
+    },
+    {
+      "name": "eth2",
+      "hardware-address": "52:54:00:ab:cd:03",
+      "ip-addresses": [
+        {
+          "ip-address-type": "ipv6",
+          "ip-address": "fe80::5054:ff:feab:cd03",
+          "prefix": 64
+        }
+      ]
+    }
+  ]
+}

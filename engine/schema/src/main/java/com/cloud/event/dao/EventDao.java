@@ -33,6 +33,8 @@ public interface EventDao extends GenericDao<EventVO, Long> {
 
     public List<EventVO> listToArchiveOrDeleteEvents(List<Long> ids, String type, Date startDate, Date endDate, List<Long> accountIds);
 
+    boolean existsByTypeAndResource(String type, long resourceId, String resourceType);
+
     public void archiveEvents(List<EventVO> events);
 
 }

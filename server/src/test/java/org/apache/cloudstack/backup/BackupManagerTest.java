@@ -115,11 +115,13 @@ import com.cloud.storage.Storage;
 import com.cloud.storage.VMTemplateVO;
 import com.cloud.storage.Volume;
 import com.cloud.storage.VolumeApiService;
+import com.cloud.storage.VolumeDetailVO;
 import com.cloud.storage.VolumeVO;
 import com.cloud.storage.dao.DiskOfferingDao;
 import com.cloud.storage.dao.GuestOSDao;
 import com.cloud.storage.dao.VMTemplateDao;
 import com.cloud.storage.dao.VolumeDao;
+import com.cloud.storage.dao.VolumeDetailsDao;
 import com.cloud.user.Account;
 import com.cloud.user.AccountManager;
 import com.cloud.user.AccountVO;
@@ -169,6 +171,9 @@ public class BackupManagerTest {
 
     @Mock
     VolumeDao volumeDao;
+
+    @Mock
+    VolumeDetailsDao volumeDetailsDao;
 
     @Mock
     VMInstanceDao vmInstanceDao;
@@ -744,6 +749,44 @@ public class BackupManagerTest {
             Mockito.verify(backupDao, times(1)).update(backupVO.getId(), backupVO);
             Mockito.verify(backupManager, times(1)).deleteOldestBackupFromScheduleIfRequired(vmId, scheduleId);
         }
+    }
+
+    @Test
+    public void createBackupFailsWhenFastCloneFlattenIsActive() {
+        Long vmId = 1L;
+        Long zoneId = 2L;
+        Long backupOfferingId = 4L;
+
+        when(vmInstanceDao.findById(vmId)).thenReturn(vmInstanceVOMock);
+        when(vmInstanceVOMock.getDataCenterId()).thenReturn(zoneId);
+        when(vmInstanceVOMock.getBackupOfferingId()).thenReturn(backupOfferingId);
+
+        overrideBackupFrameworkConfigValue();
+        when(backupOfferingDao.findById(backupOfferingId)).thenReturn(backupOfferingVOMock);
+        when(backupOfferingVOMock.isUserDrivenBackupAllowed()).thenReturn(true);
+        when(backupOfferingVOMock.getProvider()).thenReturn("testbackupprovider");
+
+        BackupProvider backupProvider = mock(BackupProvider.class);
+        when(backupProvider.getName()).thenReturn("testbackupprovider");
+        Map<String, BackupProvider> backupProvidersMap = new HashMap<>();
+        backupProvidersMap.put(backupProvider.getName().toLowerCase(), backupProvider);
+        ReflectionTestUtils.setField(backupManager, "backupProvidersMap", backupProvidersMap);
+
+        VolumeVO volume = mock(VolumeVO.class);
+        when(volume.getId()).thenReturn(11L);
+        when(volume.getUuid()).thenReturn("volume-uuid");
+        when(volumeDao.findByInstance(vmId)).thenReturn(List.of(volume));
+        when(volumeDetailsDao.findDetail(11L, "clone.fast.flatten.status"))
+                .thenReturn(new VolumeDetailVO(11L, "clone.fast.flatten.status", "pending", false));
+
+        CreateBackupCmd cmd = Mockito.mock(CreateBackupCmd.class);
+        when(cmd.getVmId()).thenReturn(vmId);
+        when(cmd.getQuiesceVM()).thenReturn(null);
+
+        CloudRuntimeException exception = Assert.assertThrows(CloudRuntimeException.class, () -> backupManager.createBackup(cmd, asyncJobVOMock));
+
+        assertTrue(exception.getMessage().contains("SharedMountPoint clone flatten is pending"));
+        verify(backupProvider, never()).takeBackup(any(), any(), any());
     }
 
     @Test(expected = ResourceAllocationException.class)

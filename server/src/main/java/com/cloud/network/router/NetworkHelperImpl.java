@@ -985,7 +985,7 @@ public class NetworkHelperImpl implements NetworkHelper {
     }
 
     private void validateHAproxyLbProtocol(String lbProtocol) {
-        List<String> lbProtocols = Arrays.asList("tcp", "udp", "tcp-proxy", "ssl");
+        List<String> lbProtocols = Arrays.asList("tcp", "udp", "tcp-proxy", "ssl", "http");
         if (lbProtocol != null && !lbProtocols.contains(lbProtocol)) {
             throw new InvalidParameterValueException(String.format("protocol %s is not in valid protocols %s", lbProtocol, lbProtocols));
         }

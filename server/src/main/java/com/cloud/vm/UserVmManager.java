@@ -53,11 +53,11 @@ public interface UserVmManager extends UserVmService {
     String AllowUserExpungeRecoverVmCK ="allow.user.expunge.recover.vm";
     String AllowUserForceStopVmCK = "allow.user.force.stop.vm";
     ConfigKey<Boolean> EnableDynamicallyScaleVm = new ConfigKey<Boolean>("Advanced", Boolean.class, EnableDynamicallyScaleVmCK, "true",
-        "Enables/Disables dynamically scaling a vm", true, ConfigKey.Scope.Zone);
+            "Enables/Disables dynamically scaling a vm", true, ConfigKey.Scope.Zone);
     ConfigKey<Boolean> AllowDiskOfferingChangeDuringScaleVm = new ConfigKey<Boolean>("Advanced", Boolean.class, AllowDiskOfferingChangeDuringScaleVmCK, "false",
             "Determines whether to allow or disallow disk offering change for root volume during scaling of a stopped or running vm", true, ConfigKey.Scope.Zone);
     ConfigKey<Boolean> AllowUserExpungeRecoverVm = new ConfigKey<Boolean>("Advanced", Boolean.class, AllowUserExpungeRecoverVmCK, "false",
-        "Determines whether users can expunge or recover their vm", true, ConfigKey.Scope.Account);
+            "Determines whether users can expunge or recover their vm", true, ConfigKey.Scope.Account);
     ConfigKey<Boolean> AllowUserForceStopVm = new ConfigKey<Boolean>("Advanced", Boolean.class, AllowUserForceStopVmCK, "true",
             "Determines whether users are allowed to force stop a vm", true, ConfigKey.Scope.Account);
     ConfigKey<Boolean> DisplayVMOVFProperties = new ConfigKey<Boolean>("Advanced", Boolean.class, "vm.display.ovf.properties", "false",
@@ -112,6 +112,38 @@ public interface UserVmManager extends UserVmService {
 
     ConfigKey<Boolean> AllowDifferentHostTagsOfferingsForVmScale = new ConfigKey<>("Advanced", Boolean.class, "allow.different.host.tags.offerings.for.vm.scale", "false",
             "Enables/Disable allowing to change a VM offering to offerings with different host tags", true);
+
+    ConfigKey<Integer> FlattenInterval = new ConfigKey<>(
+            "Advanced",
+            Integer.class,
+            "flatten.interval",
+            "60",
+            "The interval (in seconds) to wait before running the flatten thread.",
+            true);
+
+    ConfigKey<Integer> FlattenProgressInterval = new ConfigKey<>(
+            "Advanced",
+            Integer.class,
+            "flatten.progress.interval",
+            "30",
+            "The interval (in seconds) to wait before checking running SharedMountPoint clone flatten progress.",
+            true);
+
+    ConfigKey<Integer> FlattenWorkers = new ConfigKey<>(
+            "Advanced",
+            Integer.class,
+            "flatten.workers",
+            "1",
+            "Number of workers performing flatten.",
+            true);
+
+    ConfigKey<Integer> FlattenSharedMountPointBandwidth = new ConfigKey<>(
+            "Advanced",
+            Integer.class,
+            "shared.mount.point.blockpull.bandwidth",
+            "100",
+            "Bandwidth limit (in MiB/s) for SharedMountPoint QCOW2 volume flatten blockpull job.",
+            true);
 
     static final int MAX_USER_DATA_LENGTH_BYTES = 2048;
 

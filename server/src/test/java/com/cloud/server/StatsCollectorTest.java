@@ -76,9 +76,11 @@ import com.cloud.storage.dao.VolumeDao;
 import com.cloud.storage.dao.VolumeStatsDao;
 import com.cloud.user.VmDiskStatisticsVO;
 import com.cloud.utils.exception.CloudRuntimeException;
+import com.cloud.vm.NicVO;
 import com.cloud.vm.UserVmManager;
 import com.cloud.vm.VmStats;
 import com.cloud.vm.VmStatsVO;
+import com.cloud.vm.dao.NicDao;
 import com.cloud.vm.dao.VmStatsDaoImpl;
 import com.google.gson.Gson;
 import com.tngtech.java.junit.dataprovider.DataProvider;
@@ -128,6 +130,9 @@ public class StatsCollectorTest {
     VolumeDao volumeDao = Mockito.mock(VolumeDao.class);
 
     @Mock
+    NicDao nicDao = Mockito.mock(NicDao.class);
+
+    @Mock
     UserVmManager userVmManager = Mockito.mock(UserVmManager.class);
 
     @Mock
@@ -149,6 +154,7 @@ public class StatsCollectorTest {
         ReflectionTestUtils.setField(statsCollector, "_storagePoolDao", storagePoolDao);
         ReflectionTestUtils.setField(statsCollector, "_volsDao", volumeDao);
         ReflectionTestUtils.setField(statsCollector, "_userVmMgr", userVmManager);
+        ReflectionTestUtils.setField(statsCollector, "_nicDao", nicDao);
         Field msStatsGsonField = StatsCollector.class.getDeclaredField("msStatsGson");
         msStatsGsonField.setAccessible(true);
         msStatsGson = (Gson) msStatsGsonField.get(null);
@@ -165,6 +171,43 @@ public class StatsCollectorTest {
     @Test
     public void createInfluxDbConnectionTest() {
         configureAndTestCreateInfluxDbConnection(true);
+    }
+
+    @Test
+    public void vmStatsCollectorCurrentBehaviorUpdatesL2NicUsingGlobalExactMacLookup() {
+        String macAddress = "52:54:00:ab:cd:01";
+        Map<String, String> agentNicMap = Map.of(macAddress, "10.10.22.102");
+        NicVO nic = Mockito.mock(NicVO.class);
+        Mockito.when(nicDao.findByMacAddress(macAddress)).thenReturn(nic);
+        Mockito.when(nic.getId()).thenReturn(42L);
+
+        statsCollector.new VmStatsCollector().updateL2NicAddresses(agentNicMap, List.of(macAddress));
+
+        Mockito.verify(nicDao).findByMacAddress(macAddress);
+        Mockito.verify(nic).setIPv4Address("10.10.22.102");
+        Mockito.verify(nicDao).update(42L, nic);
+    }
+
+    @Test
+    public void vmStatsCollectorCurrentBehaviorDoesNotNormalizeMacAddress() {
+        String agentMacAddress = "52-54-00-AB-CD-01";
+        String cloudMacAddress = "52:54:00:ab:cd:01";
+        NicVO nic = Mockito.mock(NicVO.class);
+        Mockito.when(nicDao.findByMacAddress(agentMacAddress)).thenReturn(nic);
+
+        statsCollector.new VmStatsCollector().updateL2NicAddresses(
+                Map.of(agentMacAddress, "10.10.22.102"), List.of(cloudMacAddress));
+
+        Mockito.verify(nicDao).findByMacAddress(agentMacAddress);
+        Mockito.verify(nic, Mockito.never()).setIPv4Address(Mockito.anyString());
+        Mockito.verify(nicDao, Mockito.never()).update(Mockito.anyLong(), Mockito.any(NicVO.class));
+    }
+
+    @Test
+    public void vmStatsCollectorCurrentBehaviorDoesNotClearIpWhenAgentStopsReportingIt() {
+        statsCollector.new VmStatsCollector().updateL2NicAddresses(Map.of(), List.of("52:54:00:ab:cd:01"));
+
+        Mockito.verifyNoInteractions(nicDao);
     }
 
     @Test(expected = CloudRuntimeException.class)

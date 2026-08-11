@@ -353,6 +353,10 @@ export default {
     selectInitialRow () {
       const selectedId = this.value || this.preFillContent?.computeofferingid
       const selectedRow = this.tableSource.find(row => row.key === selectedId && !row.disabled)
+      if (selectedId && !selectedRow) {
+        this.selectedRowKeys = [selectedId]
+        return
+      }
       const fallbackRow = this.tableSource.find(row => !row.disabled)
       const row = selectedRow || fallbackRow
       if (!row) {

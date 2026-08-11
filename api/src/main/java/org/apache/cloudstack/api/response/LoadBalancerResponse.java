@@ -107,6 +107,10 @@ public class LoadBalancerResponse extends BaseResponse implements ControlledEnti
     @Param(description = "The protocol of the Load Balancer rule")
     private String lbProtocol;
 
+    @SerializedName(ApiConstants.BACKEND_SSL)
+    @Param(description = "whether the load balancer uses SSL when connecting to backend instances", since = "4.21.0.0")
+    private Boolean backendSsl;
+
     @SerializedName(ApiConstants.TAGS)
     @Param(description = "The list of resource tags associated with Load balancer", responseObject = ResourceTagResponse.class)
     private List<ResourceTagResponse> tags;
@@ -203,6 +207,10 @@ public class LoadBalancerResponse extends BaseResponse implements ControlledEnti
 
     public void setLbProtocol(String lbProtocol) {
         this.lbProtocol = lbProtocol;
+    }
+
+    public void setBackendSsl(Boolean backendSsl) {
+        this.backendSsl = backendSsl;
     }
 
     public void setForDisplay(Boolean forDisplay) {

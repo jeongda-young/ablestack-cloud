@@ -20,9 +20,9 @@
 const fs = require('fs')
 const path = require('path')
 
-const CONFIG_PATH = path.resolve(__dirname, './public/config.json')
-const VERSION_PATH = '/mnt/version.txt'
+const CONFIG_PATH = path.resolve(process.argv[2] || path.join(__dirname, 'dist/config.json'))
 const TMP_PATH = CONFIG_PATH + '.tmp'
+const RELEASE_VERSION_PATTERN = /^v\d+\.\d+\.\d+-(Europa|Diplo)-\d{8}(?:-(ALPHA|BETA|RC)\d+)?$/
 
 function readJSON (file) {
   return JSON.parse(fs.readFileSync(file, 'utf8'))
@@ -35,21 +35,20 @@ function writeJSONAtomic (file, obj) {
 }
 
 function getBuildVersion () {
-  try {
-    // 개행/공백 제거해서 그대로 사용
-    const v = fs.readFileSync(VERSION_PATH, 'utf8').trim()
-    if (v) return v
-  } catch (_) {}
-  // fallback: v4.5.0-YYYYMMDD
-  const base = 'v4.5.0'
-  const d = new Date()
-  const yyyy = d.getFullYear()
-  const mm = String(d.getMonth() + 1).padStart(2, '0')
-  const dd = String(d.getDate()).padStart(2, '0')
-  return `${base}-${yyyy}${mm}${dd}`
+  const buildVersion = (process.env.ABLESTACK_UI_BUILD_VERSION || '').trim()
+  if (!buildVersion) return null
+  if (!RELEASE_VERSION_PATTERN.test(buildVersion)) {
+    throw new Error(`Invalid ABLESTACK_UI_BUILD_VERSION: ${buildVersion}`)
+  }
+  return buildVersion
 }
 
 const data = readJSON(CONFIG_PATH)
-data.buildVersion = getBuildVersion()
-writeJSONAtomic(CONFIG_PATH, data)
-console.log('[OK] buildVersion:', data.buildVersion)
+const buildVersion = getBuildVersion()
+if (buildVersion) {
+  data.buildVersion = buildVersion
+  writeJSONAtomic(CONFIG_PATH, data)
+  console.log('[OK] buildVersion:', data.buildVersion)
+} else {
+  console.log('[SKIP] ABLESTACK_UI_BUILD_VERSION is not set; keeping buildVersion:', data.buildVersion)
+}

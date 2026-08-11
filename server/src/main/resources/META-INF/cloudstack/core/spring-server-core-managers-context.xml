@@ -13,7 +13,7 @@
   software distributed under the License is distributed on an
   "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
   KIND, either express or implied. See the License for the
-  specific language governing permissions and limitations
+  specific language govening permissions and limitations
   under the License.
 -->
 <beans xmlns="http://www.springframework.org/schema/beans"
@@ -145,9 +145,9 @@
         <property name="secChecker" value="#{securityCheckersRegistry.registered}" />
     </bean>
 
-    <bean id="externalDeviceUsageManagerImpl" class="com.cloud.network.ExternalDeviceUsageManagerImpl" />
+    <bean id="extenalDeviceUsageManagerImpl" class="com.cloud.network.ExternalDeviceUsageManagerImpl" />
 
-    <bean id="externalNetworkDeviceManagerImpl" class="com.cloud.network.ExternalNetworkDeviceManagerImpl" />
+    <bean id="extenalNetworkDeviceManagerImpl" class="com.cloud.network.ExternalNetworkDeviceManagerImpl" />
 
     <bean id="firewallManagerImpl" class="com.cloud.network.firewall.FirewallManagerImpl" >
         <property name="firewallElements" value="#{firewallServiceProvidersRegistry.registered}" />
@@ -282,6 +282,14 @@
 
     <bean id="statsCollector" class="com.cloud.server.StatsCollector" />
 
+    <bean id="vmGuestNetworkApiServiceImpl" class="com.cloud.vm.guestnetwork.VmGuestNetworkApiServiceImpl" />
+
+    <bean id="vmGuestNetworkStateServiceImpl" class="com.cloud.vm.guestnetwork.VmGuestNetworkStateServiceImpl" />
+
+    <bean id="vmGuestNetworkScheduleServiceImpl" class="com.cloud.vm.guestnetwork.VmGuestNetworkScheduleServiceImpl" />
+
+    <bean id="vmGuestNetworkCollector" class="com.cloud.vm.guestnetwork.VmGuestNetworkCollector" />
+
     <bean id="storagePoolAutomationImpl" class="com.cloud.storage.StoragePoolAutomationImpl" />
 
     <bean id="domainManagerImpl" class="com.cloud.user.DomainManagerImpl" />
@@ -404,8 +412,6 @@
 
     <bean id="GpuServiceImpl" class="org.apache.cloudstack.gpu.GpuServiceImpl" />
 
-    <bean id="ExternalOrchestratorDaoImpl" class="org.apache.cloudstack.hypervisor.external.provisioner.dao.ExternalOrchestratorDaoImpl" />
-    <bean id="ExternalOrchestratorDetailDaoImpl" class="org.apache.cloudstack.hypervisor.external.provisioner.dao.ExternalOrchestratorDetailDaoImpl" />
-    <bean id="ExtensionResourceMapDaoImpl" class="org.apache.cloudstack.hypervisor.external.provisioner.dao.ExtensionResourceMapDaoImpl" />
-    <bean id="ExtensionResourceMapDetailsDaoImpl" class="org.apache.cloudstack.hypervisor.external.provisioner.dao.ExtensionResourceMapDetailsDaoImpl" />
+    <bean id="storageServiceGuestCommandDispatcher" class="org.apache.cloudstack.storage.dataservice.StorageServiceGuestCommandDispatcherImpl" />
+    <bean id="storageServiceManagerImpl" class="org.apache.cloudstack.storage.dataservice.StorageServiceManagerImpl" />
 </beans>

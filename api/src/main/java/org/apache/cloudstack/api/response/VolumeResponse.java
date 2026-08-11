@@ -57,6 +57,10 @@ public class VolumeResponse extends BaseResponseWithTagInformation implements Co
     @Param(description = "The ID of the device on User Instance the volume is attached to. This tag is not returned when the volume is detached.")
     private Long deviceId;
 
+    @SerializedName("clonefastflattenstatus")
+    @Param(description = "SharedMountPoint fast clone flatten status of the volume.")
+    private String cloneFastFlattenStatus;
+
     @SerializedName(ApiConstants.VIRTUAL_MACHINE_ID)
     @Param(description = "ID of the Instance")
     private String virtualMachineId;
@@ -564,6 +568,10 @@ public class VolumeResponse extends BaseResponseWithTagInformation implements Co
 
     public void setStatus(String status) {
         this.status = status;
+    }
+
+    public void setCloneFastFlattenStatus(String cloneFastFlattenStatus) {
+        this.cloneFastFlattenStatus = cloneFastFlattenStatus;
     }
 
     public void setServiceOfferingDisplayText(String serviceOfferingDisplayText) {

@@ -17,7 +17,12 @@
 
 <template>
   <div style="display: inline-flex;">
-    <a-tooltip placement="bottom" :title="getTooltip(text)">
+    <a-tooltip placement="bottom">
+      <template #title>
+        <slot name="tooltip">
+          {{ getTooltip(text) }}
+        </slot>
+      </template>
       <a-badge
         :style="getStyle()"
         :title="text"

@@ -29,8 +29,12 @@ public class QemuCommand {
     public static final String AGENT_THAW = "guest-fsfreeze-thaw";
     public static final String AGENT_FREEZE_STATUS = "guest-fsfreeze-status";
     public static final String AGENT_NETWORK_GET_INTERFACES = "guest-network-get-interfaces";
+    public static final String AGENT_NETWORK_GET_ROUTE = "guest-network-get-route";
     public static final String AGENT_INFO = "guest-info";
     public static final String AGENT_GET_FSINFO = "guest-get-fsinfo";
+    public static final String AGENT_GET_OSINFO = "guest-get-osinfo";
+    public static final String AGENT_EXEC = "guest-exec";
+    public static final String AGENT_EXEC_STATUS = "guest-exec-status";
 
     public static final String QEMU_CMD = "execute";
 

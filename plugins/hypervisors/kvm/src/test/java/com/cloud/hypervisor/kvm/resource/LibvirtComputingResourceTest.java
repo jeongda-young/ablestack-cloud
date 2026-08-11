@@ -6343,6 +6343,22 @@ public class LibvirtComputingResourceTest {
         Assert.assertNotNull(stat);
     }
 
+    @Test
+    public void parseQemuGuestNetworkInterfacesCurrentBehaviorKeepsLastIpv4AndDropsIpv6() throws Exception {
+        Path fixturePath = Path.of(getClass().getClassLoader()
+                .getResource("qga/guest-network-get-interfaces-multiple-ip.json").toURI());
+        String qgaResponse = new String(Files.readAllBytes(fixturePath), java.nio.charset.StandardCharsets.UTF_8);
+
+        Map<String, String> addresses = libvirtComputingResourceSpy.parseQemuGuestNetworkInterfaces(qgaResponse);
+
+        Assert.assertEquals(2, addresses.size());
+        Assert.assertEquals("10.10.22.102", addresses.get("52:54:00:ab:cd:01"));
+        Assert.assertEquals("172.16.10.20", addresses.get("52-54-00-AB-CD-02"));
+        Assert.assertFalse(addresses.containsKey("00:00:00:00:00:00"));
+        Assert.assertFalse(addresses.containsKey("52:54:00:ab:cd:03"));
+        Assert.assertFalse(addresses.containsValue("2001:db8:22::101"));
+    }
+
     private void prepareVmInfoForGetVmCurrentStats() throws LibvirtException {
         final NodeInfo nodeInfo = new NodeInfo();
         nodeInfo.cpus = 8;

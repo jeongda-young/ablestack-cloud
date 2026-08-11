@@ -210,8 +210,10 @@ if [ "%{?_localfast}" == "1" ]; then
 fi
 
 mvn -T 2C -Psystemvm,developer -DskipTests $FLAGS clean package
-# cd ui && npm install && node build.js && npm run build && cd ..
-cd ui && npm install && node build.js && npm run build && cd ..
+cd ui
+env -u NODE_OPTIONS %{_node_bindir}/npm ci --no-audit --no-fund
+env -u NODE_OPTIONS %{_node_bindir}/npm run build
+cd ..
 
 %install
 [ ${RPM_BUILD_ROOT} != "/" ] && rm -rf ${RPM_BUILD_ROOT}
@@ -311,6 +313,7 @@ install -D packaging/centos8/cloud.limits ${RPM_BUILD_ROOT}%{_sysconfdir}/securi
 install -D packaging/centos8/filelimit.conf ${RPM_BUILD_ROOT}%{_sysconfdir}/systemd/system/%{name}-management.service.d
 install -D packaging/systemd/cloudstack-management.service ${RPM_BUILD_ROOT}%{_unitdir}/mold.service
 install -D packaging/systemd/cloudstack-management.default ${RPM_BUILD_ROOT}%{_sysconfdir}/default/%{name}-management
+install -D packaging/systemd/cloudstack-management-cleanup-jars ${RPM_BUILD_ROOT}%{_bindir}/cloudstack-management-cleanup-jars
 install -D server/target/conf/cloudstack-sudoers ${RPM_BUILD_ROOT}%{_sysconfdir}/sudoers.d/%{name}-management
 touch ${RPM_BUILD_ROOT}%{_localstatedir}/run/%{name}-management.pid
 #install -D server/target/conf/cloudstack-catalina.logrotate ${RPM_BUILD_ROOT}%{_sysconfdir}/logrotate.d/%{name}-catalina
@@ -437,8 +440,10 @@ if [ ! -z $python_dir ];then
 fi
 
 %preun management
-/usr/bin/systemctl stop mold || true
-/usr/bin/systemctl disable mold || true
+if [ "$1" == "0" ] ; then
+    /usr/bin/systemctl stop mold || true
+    /usr/bin/systemctl disable mold || true
+fi
 
 %pre management
 id cloud > /dev/null 2>&1 || /usr/sbin/useradd -M -U -c "CloudStack unprivileged user" \
@@ -501,11 +506,21 @@ if [ -f "/usr/share/cloudstack-common/scripts/installer/cloudstack-help-text" ];
     sed -i "s,^ACS_VERSION=.*,ACS_VERSION=%{_maventag},g" /usr/share/cloudstack-common/scripts/installer/cloudstack-help-text
     /usr/share/cloudstack-common/scripts/installer/cloudstack-help-text management
 fi
+/usr/bin/systemctl daemon-reload
 /usr/bin/systemctl enable mold > /dev/null 2>&1 || true
+if ! %{_bindir}/cloudstack-management-cleanup-jars; then
+    echo "Failed to quarantine unmanaged CloudStack jars; refusing to start mold" >&2
+    exit 1
+fi
+if /usr/bin/systemctl is-active --quiet mold; then
+    /usr/bin/systemctl restart mold || true
+else
+    /usr/bin/systemctl start mold || true
+fi
 
 %preun agent
-/sbin/service mold-agent stop || true
 if [ "$1" == "0" ] ; then
+    /sbin/service mold-agent stop || true
     /sbin/chkconfig --del mold-agent > /dev/null 2>&1 || true
 fi
 
@@ -530,6 +545,11 @@ cp -a ${RPM_BUILD_ROOT}%{_datadir}/%{name}-agent/lib/libvirtqemuhook %{_sysconfd
 mkdir -m 0755 -p /usr/share/cloudstack-agent/tmp
 /usr/bin/systemctl restart libvirtd
 /usr/bin/systemctl enable mold-agent > /dev/null 2>&1 || true
+if /usr/bin/systemctl is-active --quiet mold-agent; then
+    /usr/bin/systemctl restart mold-agent || true
+else
+    /usr/bin/systemctl start mold-agent || true
+fi
 /usr/bin/systemctl enable cloudstack-rolling-maintenance@p > /dev/null 2>&1 || true
 /usr/bin/systemctl enable --now rngd > /dev/null 2>&1 || true
 
@@ -558,8 +578,8 @@ id cloud > /dev/null 2>&1 || /usr/sbin/useradd -M -U -c "CloudStack unprivileged
      -r -s /bin/sh -d %{_localstatedir}/cloudstack/management cloud|| true
 
 %preun usage
-/sbin/service mold-usage stop || true
 if [ "$1" == "0" ] ; then
+    /sbin/service mold-usage stop || true
     /sbin/chkconfig --del mold-usage > /dev/null 2>&1 || true
 fi
 
@@ -592,6 +612,15 @@ chown cloud:cloud /usr/local/libexec/sanity-check-last-id
 if [ -f "/usr/share/cloudstack-common/scripts/installer/cloudstack-help-text" ];then
     sed -i "s,^ACS_VERSION=.*,ACS_VERSION=%{_maventag},g" /usr/share/cloudstack-common/scripts/installer/cloudstack-help-text
     /usr/share/cloudstack-common/scripts/installer/cloudstack-help-text usage
+fi
+if [ -f "%{_sysconfdir}/%{name}/management/db.properties" ]; then
+    /usr/bin/systemctl daemon-reload
+    /usr/bin/systemctl enable mold-usage > /dev/null 2>&1 || true
+    if /usr/bin/systemctl is-active --quiet mold-usage; then
+        /usr/bin/systemctl restart mold-usage || true
+    else
+        /usr/bin/systemctl start mold-usage || true
+    fi
 fi
 
 %if 0%{?_localfast} == 0
@@ -636,6 +665,7 @@ pip3 install --upgrade /usr/share/cloudstack-marvin/Marvin-*.tar.gz
 %attr(0755,root,root) %{_bindir}/%{name}-setup-encryption
 %attr(0755,root,root) %{_bindir}/mold
 %attr(0755,root,root) %{_bindir}/mold-update-dbpassword
+%attr(0755,root,root) %{_bindir}/cloudstack-management-cleanup-jars
 %attr(0755,root,root) %{_bindir}/cmk
 %{_datadir}/%{name}-management/cks/conf/*.yml
 %{_datadir}/%{name}-management/setup/*.sql

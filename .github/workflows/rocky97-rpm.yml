@@ -37,11 +37,11 @@ on:
       pack:
         description: Package variant
         required: false
-        default: oss
+        default: noredist
         type: choice
         options:
-          - oss
           - noredist
+          - oss
       simulator:
         description: Include simulator packaging
         required: false
@@ -62,6 +62,11 @@ on:
         type: string
       package_version:
         description: Optional numeric package version override (for example 4.22.0.0)
+        required: false
+        default: ''
+        type: string
+      ui_build_version:
+        description: Optional ABLESTACK display version embedded in the UI config
         required: false
         default: ''
         type: string
@@ -97,7 +102,7 @@ on:
         type: string
       pack:
         required: false
-        default: oss
+        default: noredist
         type: string
       simulator:
         required: false
@@ -112,6 +117,10 @@ on:
         default: ''
         type: string
       package_version:
+        required: false
+        default: ''
+        type: string
+      ui_build_version:
         required: false
         default: ''
         type: string
@@ -162,14 +171,15 @@ jobs:
       run:
         shell: bash
     env:
-      ROCKY97_URL: https://download.rockylinux.org/pub/rocky/9.7/images/x86_64/Rocky-9-Container-Base.latest.x86_64.tar.xz
+      ROCKY97_URL: https://download.rockylinux.org/vault/rocky/9.7/images/x86_64/Rocky-9-Container-Base.latest.x86_64.tar.xz
       ROCKY97_SHA256: 2213bb44c0f1bfd0bbef16118ab5a1ec6875362c5ad6c6dafdecf28d14151ad2
       BUILD_REF: ${{ inputs.ref || github.event.inputs.ref || github.ref }}
-      BUILD_PACK: ${{ inputs.pack || github.event.inputs.pack || 'oss' }}
+      BUILD_PACK: ${{ inputs.pack || github.event.inputs.pack || 'noredist' }}
       BUILD_SIMULATOR: ${{ inputs.simulator || github.event.inputs.simulator || 'default' }}
       BUILD_RELEASE: ${{ inputs.release || github.event.inputs.release || '' }}
       BUILD_BRAND: ${{ inputs.brand || github.event.inputs.brand || '' }}
       BUILD_PACKAGE_VERSION: ${{ inputs.package_version || github.event.inputs.package_version || '' }}
+      BUILD_UI_VERSION: ${{ inputs.ui_build_version || github.event.inputs.ui_build_version || '' }}
       BUILD_USE_TIMESTAMP: ${{ inputs.use_timestamp || github.event.inputs.use_timestamp || 'false' }}
       BUILD_TIMESTAMP_VALUE: ${{ inputs.timestamp_value || github.event.inputs.timestamp_value || '' }}
       BUILD_SRPM: ${{ inputs.build_srpm || github.event.inputs.build_srpm || 'false' }}
@@ -213,6 +223,7 @@ jobs:
             -e RELEASE="$BUILD_RELEASE" \
             -e BRAND="$BUILD_BRAND" \
             -e PACKAGE_VERSION="$BUILD_PACKAGE_VERSION" \
+            -e ABLESTACK_UI_BUILD_VERSION="$BUILD_UI_VERSION" \
             -e USE_TIMESTAMP="$BUILD_USE_TIMESTAMP" \
             -e TIMESTAMP_VALUE="$BUILD_TIMESTAMP_VALUE" \
             -e BUILD_SRPM="$BUILD_SRPM" \

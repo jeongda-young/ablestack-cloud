@@ -33,8 +33,12 @@
 
     <div class="banner-spacer" :style="{ height: combinedBannerHeight + 'px' }" aria-hidden="true"></div>
 
-    <a-layout class="layout" :class="[device]">
-      <div class="sticky-sidebar">
+    <a-layout
+      class="layout global-workbench"
+      :class="[device]"
+      :style="{ height: 'calc(100dvh - ' + combinedBannerHeight + 'px)' }">
+      <div class="global-workbench__main">
+        <div class="sticky-sidebar">
         <template v-if="isSideMenu()">
           <a-drawer
             v-if="isMobile()"
@@ -50,7 +54,6 @@
               :collapsed="false"
               :collapsible="true"
               mode="inline"
-              :style="{ paddingBottom: isSidebarVisible ? '300px' : '0' }"
               @menuSelect="menuSelect"
             />
           </a-drawer>
@@ -62,7 +65,6 @@
             :theme="navTheme"
             :collapsed="collapsed"
             :collapsible="true"
-            :style="{ paddingBottom: isSidebarVisible ? '300px' : '0' }"
           />
         </template>
 
@@ -81,7 +83,6 @@
               :collapsed="false"
               :collapsible="true"
               mode="inline"
-              :style="{ paddingBottom: isSidebarVisible ? '300px' : '0' }"
               @menuSelect="menuSelect"
             />
           </a-drawer>
@@ -90,83 +91,62 @@
         <drawer
           :visible="showSetting"
           placement="right"
+          :showHandler="false"
+          :title="$t('label.theme.page.style.setting')"
           v-if="isAdmin && (isDevelopmentMode || allowSettingTheme)"
         >
-          <template #handler>
-            <div
-              style="position: absolute; bottom: 55px; display: flex; flex-direction: column; gap: 0; align-items: flex-end; z-index: 1001; pointer-events: auto;"
-            >
-              <a-button
-                v-show="!showSetting"
-                type="primary"
-                @click.stop="toggleSidebar"
-                style="width: 40px; height: 40px; padding: 0; background: #aaa; border: none; color: #fff; border-radius: 4px 4px 0 0; display: flex; align-items: center; justify-content: center; cursor: pointer;"
-              >
-                <ScheduleOutlined />
-              </a-button>
-              <a-button
-                type="primary"
-                size="large"
-                @click.stop="toggleSetting(!showSetting)"
-                style="width: 40px; height: 40px; border-radius: 0 0 4px 4px; display: flex; align-items: center; justify-content: center; cursor: pointer;"
-              >
-                <close-outlined v-if="showSetting" />
-                <setting-outlined v-else />
-              </a-button>
-            </div>
-          </template>
           <template #drawer>
             <setting :visible="showSetting" />
           </template>
         </drawer>
-      </div>
-
-      <event-sidebar
-        :isVisible="isSidebarVisible"
-        ref="eventSidebar"
-        @update:isVisible="isSidebarVisible = $event"
-      />
-
-      <a-layout
-        :class="[layoutMode, `content-width-${contentWidth}`]"
-        :style="{ paddingLeft: contentPaddingLeft, minHeight: '100vh', paddingBottom: isSidebarVisible ? '300px' : '0' }"
-      >
-        <div class="sticky-header">
-          <global-header
-            :mode="layoutMode"
-            :menus="menus"
-            :theme="navTheme"
-            :collapsed="collapsed"
-            :device="device"
-            @toggle="toggle"
-          />
         </div>
 
-        <a-button
-          v-if="showClear"
-          type="default"
-          size="small"
-          class="button-clear-notification"
-          @click="onClearNotification"
-        >
-          {{ $t('label.clear.notification') }}
-        </a-button>
+        <div
+          class="global-workbench__workspace"
+          :style="{ paddingLeft: contentPaddingLeft }">
+          <a-layout
+            class="global-workbench__content"
+            :class="[layoutMode, `content-width-${contentWidth}`]">
+            <div class="sticky-header">
+              <global-header
+                :mode="layoutMode"
+                :menus="menus"
+                :theme="navTheme"
+                :collapsed="collapsed"
+                :device="device"
+                @toggle="toggle"
+                @open-activity-panel="toggleSidebar"
+                @open-display-settings="toggleSetting(true)"
+              />
+            </div>
 
-        <a-layout-content
-          class="layout-content"
-          :class="{ 'is-header-fixed': fixedHeader }"
-          :style="{ paddingBottom: isSidebarVisible ? '300px' : '0' }"
-        >
-          <slot />
-        </a-layout-content>
+            <a-button
+              v-if="showClear"
+              type="default"
+              size="small"
+              class="button-clear-notification"
+              @click="onClearNotification"
+            >
+              {{ $t('label.clear.notification') }}
+            </a-button>
 
-        <a-layout-footer
-          style="padding: 0; transition: padding-bottom 0.3s;"
-          :style="{ paddingBottom: isSidebarVisible ? '300px' : '0' }"
-        >
-          <global-footer />
-        </a-layout-footer>
-      </a-layout>
+            <a-layout-content
+              class="layout-content"
+              :class="{ 'is-header-fixed': fixedHeader }">
+              <slot />
+            </a-layout-content>
+
+            <a-layout-footer style="padding: 0">
+              <global-footer />
+            </a-layout-footer>
+          </a-layout>
+
+          <event-sidebar
+            :isVisible="isSidebarVisible"
+            ref="eventSidebar"
+            @update:isVisible="isSidebarVisible = $event" />
+        </div>
+      </div>
     </a-layout>
   </div>
 </template>
@@ -262,8 +242,7 @@ export default {
       if (!Number.isNaN(bootH) && bootH >= 0) {
         this.autoBannerHeight = bootH
         document.documentElement.style.setProperty('--autoBannerHeight', bootH + 'px')
-        // 추가: 첫 프레임부터 --affixTopHeader를 맞춰 메뉴/헤더 정렬
-        this.updateAffixTopVars() // ← 이 한 줄을 debouncedRecalc() 이전에 호출
+        this.updateAffixTopVars()
         this.debouncedRecalc && this.debouncedRecalc()
       }
       */
@@ -382,7 +361,6 @@ export default {
 
     toggleSidebar () {
       this.isSidebarVisible = true
-      this.$refs.eventSidebar.openSiderBar()
     },
     ...mapActions(['setSidebar']),
     toggle () {
@@ -437,6 +415,56 @@ export default {
 </script>
 
 <style lang="less">
+/* Main application and bottom activity panel share the viewport without overlap. */
+.global-workbench {
+  min-height: 0 !important;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column !important;
+
+  &__main {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    overflow: hidden;
+  }
+
+  &__workspace {
+    flex: 1 1 auto;
+    min-height: 0;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-sizing: border-box;
+  }
+
+  &__content {
+    flex: 1 1 auto;
+    min-height: 0 !important;
+    min-width: 0;
+    overflow: hidden;
+
+    > .layout-content {
+      min-height: 0;
+      overflow-y: auto;
+      box-sizing: border-box;
+      padding-block-end: 16px;
+      scroll-padding-block-end: 16px;
+      overscroll-behavior: contain;
+    }
+  }
+
+  .sticky-sidebar {
+    position: relative;
+    top: auto;
+    height: 100%;
+    max-height: 100%;
+    flex: 0 0 auto;
+  }
+}
+
 /* 배너 영역만큼 컨텐츠를 밀어내는 스페이서 */
 .banner-spacer {
   width: 100%;
@@ -466,7 +494,10 @@ body.dark-mode .banner-spacer::before {
 /* 고정 헤더 사용 시 컨텐츠 상단 여백 */
 .layout-content {
   &.is-header-fixed {
-    margin: 78px 12px 0;
+    margin: 78px 0 0;
+    padding-right: 12px;
+    padding-left: 12px;
+    box-sizing: border-box;
     transition: padding-bottom 0.3s ease;
   }
 }

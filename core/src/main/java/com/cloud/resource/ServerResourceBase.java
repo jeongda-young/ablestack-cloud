@@ -108,6 +108,7 @@ public abstract class ServerResourceBase implements ServerResource {
     protected NetworkInterface storageNic2;
     protected IAgentControl agentControl;
     protected static final String DEFAULT_LOCAL_STORAGE_PATH = "/var/lib/libvirt/images/";
+    protected static final Pattern RBD_IMAGE_SIZE_PATTERN = Pattern.compile("^\\s*size\\s+([0-9]+(?:\\.[0-9]+)?)\\s+([KMGTPE]?i?B|B)\\b.*$");
 
     @Override
     public String getName() {
@@ -3353,11 +3354,9 @@ public abstract class ServerResourceBase implements ServerResource {
                     if (infoResult == null && infoParser.getLines() != null) {
                         String[] infoLines = infoParser.getLines().split("\\n");
                         for (String infoLine : infoLines) {
-                            if (infoLine.contains("size")) {
-                                String[] part = infoLine.split(" ");
-                                String numberString = part[1];
-                                double number = Double.parseDouble(numberString);
-                                imageSize = (long) (number * 1024 * 1024 * 1024);
+                            Long parsedImageSize = parseRbdImageSizeInBytes(infoLine);
+                            if (parsedImageSize != null) {
+                                imageSize = parsedImageSize;
                                 sizes.add(imageSize);
                             }
                             if (infoLine.contains("modify_timestamp")) {
@@ -3379,6 +3378,47 @@ public abstract class ServerResourceBase implements ServerResource {
             }
         }
         return new ListDataStoreObjectsAnswer(true, count, names, paths, absPaths, isDirs, sizes, modifiedList);
+    }
+
+    protected Long parseRbdImageSizeInBytes(String infoLine) {
+        if (StringUtils.isBlank(infoLine)) {
+            return null;
+        }
+
+        Matcher matcher = RBD_IMAGE_SIZE_PATTERN.matcher(infoLine);
+        if (!matcher.matches()) {
+            return null;
+        }
+
+        double size = Double.parseDouble(matcher.group(1));
+        String unit = matcher.group(2);
+        long multiplier;
+        switch (unit) {
+            case "B":
+                multiplier = 1L;
+                break;
+            case "KiB":
+                multiplier = 1024L;
+                break;
+            case "MiB":
+                multiplier = 1024L * 1024L;
+                break;
+            case "GiB":
+                multiplier = 1024L * 1024L * 1024L;
+                break;
+            case "TiB":
+                multiplier = 1024L * 1024L * 1024L * 1024L;
+                break;
+            case "PiB":
+                multiplier = 1024L * 1024L * 1024L * 1024L * 1024L;
+                break;
+            case "EiB":
+                multiplier = 1024L * 1024L * 1024L * 1024L * 1024L * 1024L;
+                break;
+            default:
+                return null;
+        }
+        return (long) (size * multiplier);
     }
 
     public void createRBDSecretKeyFileIfNoExist(String uuid, String localPath, String skey) {

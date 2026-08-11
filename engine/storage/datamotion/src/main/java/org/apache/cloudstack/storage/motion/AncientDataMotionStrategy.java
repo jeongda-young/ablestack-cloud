@@ -22,6 +22,7 @@ import java.io.IOException;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Objects;
 
@@ -83,6 +84,8 @@ import com.cloud.storage.StorageManager;
 import com.cloud.storage.StoragePool;
 import com.cloud.storage.VolumeVO;
 import com.cloud.storage.dao.SnapshotDao;
+import com.cloud.storage.dao.SnapshotDetailsDao;
+import com.cloud.storage.dao.SnapshotDetailsVO;
 import com.cloud.storage.dao.VolumeDao;
 import com.cloud.utils.NumbersUtil;
 import com.cloud.utils.db.DB;
@@ -95,6 +98,10 @@ public class AncientDataMotionStrategy implements DataMotionStrategy {
     protected Logger logger = LogManager.getLogger(getClass());
     private static final String NO_REMOTE_ENDPOINT_SSVM = "No remote endpoint to send command, check if host or ssvm is down?";
     private static final String NO_REMOTE_ENDPOINT_WITH_ENCRYPTION = "No remote endpoint to send command, unable to find a valid endpoint. Requires encryption support: %s";
+    private static final String CLONE_TYPE = "cloneType";
+    private static final String LINKED_CLONE_TYPE = "linked";
+    private static final String LINKED_CLONE_BACKING_PATH = "linkedCloneBackingPath";
+    private static final String CLONE_VM_SNAPSHOT_ID = "clone.vm.snapshot.id";
     private static final List<StoragePoolType> SUPPORTED_POOL_TYPES_TO_BYPASS_SECONDARY_STORE = Arrays.asList(
             StoragePoolType.NetworkFilesystem,
             StoragePoolType.Filesystem,
@@ -118,6 +125,8 @@ public class AncientDataMotionStrategy implements DataMotionStrategy {
     StorageManager storageManager;
     @Inject
     SnapshotDao snapshotDao;
+    @Inject
+    SnapshotDetailsDao snapshotDetailsDao;
 
     @Inject
     HeuristicRuleHelper heuristicRuleHelper;
@@ -323,6 +332,10 @@ public class AncientDataMotionStrategy implements DataMotionStrategy {
             }
 
             CopyCommand cmd = new CopyCommand(srcData.getTO(), addFullCloneAndDiskprovisiongStrictnessFlagOnVMwareDest(volObj.getTO()), _createVolumeFromSnapshotWait, VirtualMachineManager.ExecuteInSequence.value());
+            Map<String, String> options = getCloneVolumeFromSnapshotOptions(snapshot, volObj);
+            if (!options.isEmpty()) {
+                cmd.setOptions(options);
+            }
 
             Answer answer = null;
             if (ep == null) {
@@ -342,6 +355,70 @@ public class AncientDataMotionStrategy implements DataMotionStrategy {
                 releaseSnapshotCacheChain((SnapshotInfo)srcData);
             }
         }
+    }
+
+    protected Map<String, String> getCloneVolumeFromSnapshotOptions(SnapshotInfo snapshot, DataObject volObj) {
+        Map<String, String> options = new HashMap<>();
+        if (!(snapshot.getSnapshotVO() instanceof SnapshotVO)) {
+            return options;
+        }
+        SnapshotVO snapshotVO = (SnapshotVO)snapshot.getSnapshotVO();
+        if (!LINKED_CLONE_TYPE.equalsIgnoreCase(snapshotVO.getCloneType())) {
+            return options;
+        }
+        DataTO destTO = volObj.getTO();
+        if (!(destTO instanceof VolumeObjectTO)) {
+            return options;
+        }
+        VolumeObjectTO destVolume = (VolumeObjectTO)destTO;
+        if (!(destVolume.getDataStore() instanceof PrimaryDataStoreTO)) {
+            return options;
+        }
+        PrimaryDataStoreTO destStore = (PrimaryDataStoreTO)destVolume.getDataStore();
+        if (destStore.getPoolType() != StoragePoolType.SharedMountPoint || destVolume.getFormat() != Storage.ImageFormat.QCOW2) {
+            return options;
+        }
+
+        String backingPath = String.format("clone/vmsnapshot-%s/%s-%s",
+                getVmSnapshotPathToken(snapshot),
+                sanitizePathToken(getSourceVolumeName(snapshot)),
+                getSourceVolumeUuidShort(snapshot));
+        options.put(CLONE_TYPE, LINKED_CLONE_TYPE);
+        options.put(LINKED_CLONE_BACKING_PATH, backingPath);
+        return options;
+    }
+
+    protected String getVmSnapshotPathToken(SnapshotInfo snapshot) {
+        SnapshotDetailsVO vmSnapshotId = snapshotDetailsDao.findDetail(snapshot.getId(), CLONE_VM_SNAPSHOT_ID);
+        if (vmSnapshotId != null && vmSnapshotId.getValue() != null && !vmSnapshotId.getValue().trim().isEmpty()) {
+            return sanitizePathToken(vmSnapshotId.getValue());
+        }
+        return String.valueOf(snapshot.getId());
+    }
+
+    protected String getSourceVolumeName(SnapshotInfo snapshot) {
+        VolumeInfo baseVolume = snapshot.getBaseVolume();
+        if (baseVolume != null && baseVolume.getName() != null) {
+            return baseVolume.getName();
+        }
+        return "volume-" + snapshot.getVolumeId();
+    }
+
+    protected String getSourceVolumeUuidShort(SnapshotInfo snapshot) {
+        VolumeInfo baseVolume = snapshot.getBaseVolume();
+        String uuid = baseVolume != null ? baseVolume.getUuid() : snapshot.getUuid();
+        if (uuid == null) {
+            return String.valueOf(snapshot.getVolumeId());
+        }
+        return uuid.length() <= 8 ? sanitizePathToken(uuid) : sanitizePathToken(uuid.substring(0, 8));
+    }
+
+    protected String sanitizePathToken(String value) {
+        if (value == null) {
+            return "unknown";
+        }
+        String sanitized = value.toLowerCase(Locale.ROOT).replaceAll("[^a-z0-9]+", "-").replaceAll("(^-+|-+$)", "");
+        return sanitized.isEmpty() ? "unknown" : sanitized;
     }
 
     protected Answer cloneVolume(DataObject template, DataObject volume) {
@@ -855,6 +932,10 @@ public class AncientDataMotionStrategy implements DataMotionStrategy {
             }
 
             CopyCommand cmd = new CopyCommand(srcData.getTO(), addFullCloneAndDiskprovisiongStrictnessFlagOnVMwareDest(volObj.getTO()), _createVolumeFromSnapshotWait, VirtualMachineManager.ExecuteInSequence.value());
+            Map<String, String> options = getCloneVolumeFromSnapshotOptions(snapshot, volObj);
+            if (!options.isEmpty()) {
+                cmd.setOptions(options);
+            }
 
             Answer answer = null;
             if (ep == null) {

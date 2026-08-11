@@ -290,6 +290,7 @@ public class ListVMsCmd extends BaseListRetrieveOnlyResourceCountCmd implements 
             Set<VMDetails> allDetails = new HashSet<>(Set.of(VMDetails.values()));
             allDetails.remove(VMDetails.stats);
             allDetails.remove(VMDetails.all);
+            allDetails.remove(VMDetails.guestnetwork);
             return EnumSet.copyOf(allDetails);
         }
 

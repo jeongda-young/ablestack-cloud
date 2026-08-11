@@ -1,0 +1,1795 @@
+<!doctype html>
+<!--
+Licensed to the Apache Software Foundation (ASF) under one
+or more contributor license agreements.  See the NOTICE file
+distributed with this work for additional information
+regarding copyright ownership.  The ASF licenses this file
+to you under the Apache License, Version 2.0 (the
+"License"); you may not use this file except in compliance
+with the License.  You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing,
+software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, either express or implied.  See the License for the
+specific language governing permissions and limitations
+under the License.
+-->
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ABLESTACK 게스트 네트워크 UI 프로토타입</title>
+  <link rel="stylesheet" href="../../../ui/node_modules/ant-design-vue/dist/antd.min.css">
+  <style>
+    :root {
+      --primary: #1890ff;
+      --layout-bg: #f0f2f5;
+      --border: #d9d9d9;
+      --heading: rgba(0, 0, 0, 0.85);
+      --text: rgba(0, 0, 0, 0.65);
+      --secondary: rgba(0, 0, 0, 0.45);
+      --success: #52c41a;
+      --warning: #faad14;
+      --error: #f5222d;
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    html,
+    body,
+    #app {
+      margin: 0;
+      min-height: 100%;
+      width: 100%;
+    }
+
+    body {
+      background: var(--layout-bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans KR",
+        "Helvetica Neue", Arial, sans-serif;
+    }
+
+    [v-cloak] {
+      display: none;
+    }
+
+    .app-layout {
+      min-height: 100vh;
+    }
+
+    .app-sider {
+      background: #fff !important;
+      border-right: 1px solid #eee;
+      box-shadow: 2px 0 8px rgba(0, 0, 0, 0.05);
+      height: 100vh;
+      left: 0;
+      overflow: hidden;
+      position: fixed;
+      top: 0;
+      z-index: 20;
+    }
+
+    .app-logo {
+      align-items: center;
+      border-bottom: 1px solid #f0f0f0;
+      display: flex;
+      height: 64px;
+      justify-content: center;
+      overflow: hidden;
+      padding: 7px 10px;
+    }
+
+    .app-logo img {
+      height: auto;
+      max-width: 230px;
+      width: 100%;
+    }
+
+    .side-scroll {
+      height: calc(100vh - 64px);
+      overflow-y: auto;
+      padding-bottom: 28px;
+    }
+
+    .side-menu {
+      border-right: 0 !important;
+    }
+
+    .side-menu .ant-menu-item,
+    .side-menu .ant-menu-submenu-title {
+      height: 44px;
+      line-height: 44px;
+      margin: 0 !important;
+      width: 100%;
+    }
+
+    .side-menu .ant-menu-item-selected {
+      background: #e6f7ff !important;
+      border-right: 3px solid var(--primary);
+    }
+
+    .menu-glyph {
+      color: #777;
+      display: inline-block;
+      font-size: 16px;
+      margin-right: 10px;
+      text-align: center;
+      width: 18px;
+    }
+
+    .app-main {
+      margin-left: 256px;
+      min-width: 980px;
+    }
+
+    .app-header {
+      align-items: center;
+      background: #fff !important;
+      box-shadow: 0 1px 4px rgba(0, 21, 41, 0.08);
+      display: flex;
+      height: 64px;
+      justify-content: space-between;
+      line-height: normal;
+      padding: 0 26px 0 20px;
+      position: sticky;
+      top: 0;
+      z-index: 15;
+    }
+
+    .header-left,
+    .header-right,
+    .toolbar-left,
+    .toolbar-right,
+    .inline-row {
+      align-items: center;
+      display: flex;
+    }
+
+    .header-left {
+      gap: 18px;
+    }
+
+    .header-right {
+      gap: 18px;
+    }
+
+    .header-trigger {
+      color: #555;
+      font-size: 20px;
+    }
+
+    .header-view-select {
+      width: 450px;
+    }
+
+    .header-icon {
+      color: #555;
+      font-size: 18px;
+    }
+
+    .header-user {
+      color: #555;
+      gap: 9px;
+    }
+
+    .page-content {
+      background: var(--layout-bg);
+      min-height: calc(100vh - 64px);
+      padding: 12px;
+    }
+
+    .toolbar-card {
+      border: 0;
+      border-radius: 0;
+      margin-bottom: 12px;
+    }
+
+    .toolbar-card > .ant-card-body {
+      padding: 14px 16px;
+    }
+
+    .toolbar {
+      align-items: center;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .toolbar-left,
+    .toolbar-right {
+      gap: 10px;
+    }
+
+    .toolbar-search {
+      width: 500px;
+    }
+
+    .prototype-note {
+      color: var(--secondary);
+      font-size: 12px;
+      margin-left: 8px;
+    }
+
+    .list-card {
+      border: 0;
+      border-radius: 0;
+    }
+
+    .list-card > .ant-card-body {
+      padding: 0;
+    }
+
+    .vm-table .ant-table-thead > tr > th {
+      background: #fafafa;
+      color: rgba(0, 0, 0, 0.7);
+      font-size: 13px;
+      font-weight: 600;
+      padding: 12px 10px;
+      white-space: nowrap;
+    }
+
+    .vm-table .ant-table-tbody > tr > td {
+      padding: 11px 10px;
+      vertical-align: middle;
+    }
+
+    .vm-name {
+      align-items: center;
+      display: flex;
+      gap: 10px;
+    }
+
+    .os-mark {
+      align-items: center;
+      color: #777;
+      display: inline-flex;
+      font-size: 23px;
+      height: 28px;
+      justify-content: center;
+      width: 28px;
+    }
+
+    .state-dot {
+      border-radius: 50%;
+      display: inline-block;
+      height: 10px;
+      margin-right: 7px;
+      width: 10px;
+    }
+
+    .state-dot.running {
+      background: var(--success);
+    }
+
+    .state-dot.stopped {
+      background: var(--error);
+    }
+
+    .agent-tag {
+      margin: 0;
+    }
+
+    .ip-summary-compact {
+      align-items: center;
+      display: flex;
+      gap: 7px;
+      min-width: 0;
+      white-space: nowrap;
+    }
+
+    .ip-source {
+      align-items: center;
+      border: 1px solid #d9d9d9;
+      border-radius: 50%;
+      color: var(--secondary);
+      display: inline-flex;
+      flex: 0 0 18px;
+      font-size: 10px;
+      font-weight: 700;
+      height: 18px;
+      justify-content: center;
+      line-height: 16px;
+      width: 18px;
+    }
+
+    .ip-source.guest {
+      border-color: #91d5ff;
+      color: #096dd9;
+    }
+
+    .ip-separator {
+      background: #e8e8e8;
+      display: inline-block;
+      height: 18px;
+      margin: 0 2px;
+      width: 1px;
+    }
+
+    .guest-primary {
+      color: var(--heading);
+      font-size: 13px;
+    }
+
+    .guest-empty {
+      color: var(--secondary);
+    }
+
+    .ip-more.ant-btn {
+      border-radius: 10px;
+      color: #096dd9;
+      font-size: 11px;
+      height: 20px;
+      line-height: 18px;
+      padding: 0 7px;
+    }
+
+    .family-hint.ant-tag,
+    .guest-health.ant-tag {
+      border-radius: 10px;
+      font-size: 10px;
+      line-height: 18px;
+      margin: 0;
+      padding: 0 6px;
+    }
+
+    .address-popover {
+      min-width: 310px;
+    }
+
+    .address-popover-title {
+      color: var(--heading);
+      font-size: 12px;
+      font-weight: 600;
+      margin-bottom: 8px;
+    }
+
+    .address-popover-row {
+      align-items: center;
+      display: flex;
+      gap: 7px;
+      margin: 5px 0;
+    }
+
+    .address-popover-row .ant-tag {
+      font-size: 10px;
+      margin: 0;
+      min-width: 42px;
+      text-align: center;
+    }
+
+    .address-popover-address {
+      color: var(--heading);
+      font-family: Consolas, "SFMono-Regular", monospace;
+      font-size: 12px;
+    }
+
+    .pagination-row {
+      align-items: center;
+      display: flex;
+      justify-content: flex-end;
+      padding: 12px 16px;
+    }
+
+    .detail-grid {
+      align-items: flex-start;
+    }
+
+    .info-card,
+    .detail-card {
+      border-radius: 2px;
+    }
+
+    .info-card > .ant-card-body {
+      padding: 30px;
+    }
+
+    .resource-title {
+      align-items: center;
+      display: flex;
+      gap: 18px;
+      margin-bottom: 18px;
+    }
+
+    .resource-avatar {
+      align-items: center;
+      border: 2px solid #8c8c8c;
+      border-radius: 50%;
+      color: #777;
+      display: flex;
+      font-size: 34px;
+      height: 54px;
+      justify-content: center;
+      width: 54px;
+    }
+
+    .resource-name {
+      color: var(--heading);
+      font-size: 18px;
+      font-weight: 600;
+      line-height: 1.35;
+      margin-bottom: 9px;
+      word-break: break-all;
+    }
+
+    .resource-tags {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .resource-tags .ant-tag {
+      margin: 0;
+    }
+
+    .info-item {
+      margin-bottom: 19px;
+    }
+
+    .info-label {
+      color: var(--heading);
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+
+    .info-value {
+      align-items: flex-start;
+      display: flex;
+      gap: 9px;
+      line-height: 22px;
+      word-break: break-all;
+    }
+
+    .info-icon {
+      color: #888;
+      flex: 0 0 16px;
+      text-align: center;
+    }
+
+    .detail-card > .ant-card-body {
+      min-height: 760px;
+      padding: 28px 26px;
+    }
+
+    .detail-tabs > .ant-tabs-nav {
+      min-width: 118px;
+    }
+
+    .detail-tabs > .ant-tabs-content-holder {
+      padding-left: 24px;
+    }
+
+    .detail-tabs .ant-tabs-tab {
+      padding: 11px 18px 11px 0;
+    }
+
+    .guest-panel {
+      min-width: 0;
+    }
+
+    .guest-panel .ant-alert {
+      margin-bottom: 16px;
+      white-space: normal;
+    }
+
+    .collection-summary {
+      margin-bottom: 18px;
+    }
+
+    .collection-summary .ant-descriptions-item-label {
+      font-weight: 600;
+      white-space: nowrap;
+    }
+
+    .section-block {
+      margin-top: 22px;
+    }
+
+    .section-heading {
+      align-items: center;
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 10px;
+    }
+
+    .section-title {
+      color: var(--heading);
+      font-size: 16px;
+      font-weight: 600;
+      margin: 0;
+    }
+
+    .section-subtitle {
+      color: var(--secondary);
+      font-size: 12px;
+      margin-top: 2px;
+    }
+
+    .interface-table .ant-table-thead > tr > th,
+    .route-table .ant-table-thead > tr > th {
+      background: #fafafa;
+      padding: 9px 8px;
+      white-space: nowrap;
+    }
+
+    .interface-table .ant-table-tbody > tr > td,
+    .route-table .ant-table-tbody > tr > td {
+      padding: 9px 8px;
+      vertical-align: top;
+    }
+
+    .interface-name {
+      color: var(--heading);
+      font-weight: 600;
+    }
+
+    .interface-meta {
+      color: var(--secondary);
+      font-size: 11px;
+      margin-top: 3px;
+    }
+
+    .address-stack {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 4px;
+      max-width: 410px;
+    }
+
+    .address-stack .ant-tag {
+      margin: 0;
+    }
+
+    .address-scope {
+      color: var(--secondary);
+      font-size: 10px;
+      margin-left: 4px;
+    }
+
+    .dns-card {
+      border-radius: 2px;
+    }
+
+    .dns-card > .ant-card-head {
+      min-height: 42px;
+    }
+
+    .dns-card > .ant-card-head .ant-card-head-title {
+      padding: 10px 0;
+    }
+
+    .dns-card > .ant-card-body {
+      padding: 14px 16px 8px;
+    }
+
+    .dns-card .ant-descriptions-item-label {
+      color: var(--secondary);
+      width: 125px;
+    }
+
+    .route-filters {
+      display: flex;
+      gap: 6px;
+    }
+
+    .default-route {
+      color: var(--primary);
+      font-size: 11px;
+      font-weight: 600;
+      margin-left: 5px;
+    }
+
+    .muted {
+      color: var(--secondary);
+    }
+
+    body.prototype-dark {
+      --layout-bg: #171b20;
+      --border: #434343;
+      --heading: rgba(255, 255, 255, 0.85);
+      --text: rgba(255, 255, 255, 0.65);
+      --secondary: rgba(255, 255, 255, 0.45);
+    }
+
+    .prototype-dark .app-sider,
+    .prototype-dark .app-header,
+    .prototype-dark .toolbar-card,
+    .prototype-dark .list-card,
+    .prototype-dark .ant-layout,
+    .prototype-dark .ant-card {
+      background: #22282f !important;
+      color: var(--text);
+    }
+
+    .prototype-dark .app-sider,
+    .prototype-dark .app-logo,
+    .prototype-dark .app-header {
+      border-color: #353b42;
+    }
+
+    .prototype-dark .side-menu,
+    .prototype-dark .side-menu .ant-menu-submenu,
+    .prototype-dark .side-menu .ant-menu-item,
+    .prototype-dark .side-menu .ant-menu-submenu-title {
+      background: #22282f !important;
+      color: var(--text);
+    }
+
+    .prototype-dark .side-menu .ant-menu-item-selected {
+      background: #111d2c !important;
+      color: #40a9ff;
+    }
+
+    .prototype-dark .page-content {
+      background: #171b20;
+    }
+
+    .prototype-dark .ant-breadcrumb,
+    .prototype-dark .ant-breadcrumb a,
+    .prototype-dark .ant-breadcrumb-separator,
+    .prototype-dark .header-trigger,
+    .prototype-dark .header-icon,
+    .prototype-dark .header-user {
+      color: var(--text);
+    }
+
+    .prototype-dark .vm-table .ant-table,
+    .prototype-dark .vm-table .ant-table-container,
+    .prototype-dark .vm-table .ant-table-content,
+    .prototype-dark .vm-table .ant-table-tbody > tr > td {
+      background: #22282f;
+      color: var(--text);
+    }
+
+    .prototype-dark .vm-table .ant-table-thead > tr > th {
+      background: #20262d;
+      border-color: #434343;
+      color: var(--heading);
+    }
+
+    .prototype-dark .vm-table .ant-table-tbody > tr > td {
+      border-color: #434343;
+    }
+
+    .prototype-dark .vm-table .ant-table-tbody > tr:hover > td {
+      background: #282f37;
+    }
+
+    .prototype-dark .ip-source {
+      border-color: #595959;
+      color: var(--secondary);
+    }
+
+    .prototype-dark .ip-source.guest {
+      border-color: #15395b;
+      color: #69c0ff;
+    }
+
+    .prototype-dark .ip-separator {
+      background: #434343;
+    }
+
+    .prototype-dark .ip-more.ant-btn {
+      background: #111d2c;
+      border-color: #15395b;
+      color: #69c0ff;
+    }
+
+    .prototype-dark .vm-table .ant-tag {
+      background: #303030;
+      border-color: #595959;
+      color: rgba(255, 255, 255, 0.85);
+    }
+
+    .prototype-dark .vm-table .ant-tag-success,
+    .prototype-dark .vm-table .ant-tag-green {
+      background: #162312;
+      border-color: #274916;
+      color: #b7eb8f;
+    }
+
+    .prototype-dark .vm-table .ant-tag-purple {
+      background: #22075e;
+      border-color: #391085;
+      color: #d3adf7;
+    }
+
+    .prototype-dark .vm-table .ant-tag-warning,
+    .prototype-dark .vm-table .ant-tag-orange,
+    .prototype-dark .vm-table .ant-tag-gold {
+      background: #2b2111;
+      border-color: #594214;
+      color: #ffd591;
+    }
+
+    .prototype-dark .ant-btn:not(.ant-btn-primary),
+    .prototype-dark .ant-input,
+    .prototype-dark .ant-input-affix-wrapper,
+    .prototype-dark .ant-select-selector {
+      background: #22282f !important;
+      border-color: #434343 !important;
+      color: var(--text) !important;
+    }
+
+    .prototype-dark .ant-pagination,
+    .prototype-dark .ant-pagination-total-text,
+    .prototype-dark .ant-pagination-item a {
+      color: var(--text);
+    }
+
+    .prototype-dark .ant-pagination-item,
+    .prototype-dark .ant-pagination-prev .ant-pagination-item-link,
+    .prototype-dark .ant-pagination-next .ant-pagination-item-link {
+      background: #22282f;
+      border-color: #434343;
+    }
+
+    @media (max-width: 1180px) {
+      .app-sider {
+        width: 220px !important;
+      }
+
+      .app-main {
+        margin-left: 220px;
+      }
+
+      .header-view-select {
+        width: 300px;
+      }
+
+      .toolbar-search {
+        width: 320px;
+      }
+    }
+  </style>
+</head>
+<body>
+  <div id="app" v-cloak>
+    <a-layout class="app-layout">
+      <a-layout-sider class="app-sider" width="256" theme="light">
+        <div class="app-logo">
+          <img src="../../../ui/public/assets/logo-ablestack.png" alt="ABLESTACK">
+        </div>
+        <div class="side-scroll">
+          <a-menu
+            class="side-menu"
+            mode="inline"
+            :selected-keys="['vm']"
+            :open-keys="['compute']">
+            <a-menu-item key="dashboard">
+              <span class="menu-glyph">◴</span>
+              <span>대시보드</span>
+            </a-menu-item>
+            <a-sub-menu key="compute">
+              <template #title>
+                <span class="menu-glyph">☁</span>
+                <span>컴퓨트</span>
+              </template>
+              <a-menu-item key="vm" @click="openList">
+                <span class="menu-glyph">▣</span>
+                <span>가상머신</span>
+              </a-menu-item>
+              <a-menu-item key="vmsnapshot">
+                <span class="menu-glyph">▧</span>
+                <span>VM 스냅샷</span>
+              </a-menu-item>
+              <a-menu-item key="kubernetes">
+                <span class="menu-glyph">◉</span>
+                <span>쿠버네티스</span>
+              </a-menu-item>
+              <a-menu-item key="autoscale">
+                <span class="menu-glyph">⌗</span>
+                <span>오토스케일 VM 그룹</span>
+              </a-menu-item>
+              <a-menu-item key="vmgroup">
+                <span class="menu-glyph">⌘</span>
+                <span>가상머신 그룹</span>
+              </a-menu-item>
+              <a-menu-item key="ssh">
+                <span class="menu-glyph">⚿</span>
+                <span>SSH 키 쌍</span>
+              </a-menu-item>
+              <a-menu-item key="userdata">
+                <span class="menu-glyph">▤</span>
+                <span>사용자 데이터 라이브러리</span>
+              </a-menu-item>
+              <a-menu-item key="affinity">
+                <span class="menu-glyph">⇄</span>
+                <span>Affinity 그룹</span>
+              </a-menu-item>
+            </a-sub-menu>
+            <a-sub-menu key="storage">
+              <template #title>
+                <span class="menu-glyph">▥</span>
+                <span>스토리지</span>
+              </template>
+              <a-menu-item key="volumes">볼륨</a-menu-item>
+              <a-menu-item key="snapshots">스냅샷</a-menu-item>
+              <a-menu-item key="sharedfs">공유 파일 시스템</a-menu-item>
+            </a-sub-menu>
+            <a-sub-menu key="network">
+              <template #title>
+                <span class="menu-glyph">⌁</span>
+                <span>네트워크</span>
+              </template>
+              <a-menu-item key="guestnetwork">IP 구성</a-menu-item>
+              <a-menu-item key="publicip">공인 IP 주소</a-menu-item>
+            </a-sub-menu>
+            <a-sub-menu key="image">
+              <template #title>
+                <span class="menu-glyph">▧</span>
+                <span>이미지</span>
+              </template>
+              <a-menu-item key="template">템플릿</a-menu-item>
+              <a-menu-item key="iso">ISO</a-menu-item>
+            </a-sub-menu>
+            <a-menu-item key="event">
+              <span class="menu-glyph">▣</span>
+              <span>이벤트</span>
+            </a-menu-item>
+            <a-menu-item key="project">
+              <span class="menu-glyph">▤</span>
+              <span>프로젝트</span>
+            </a-menu-item>
+            <a-menu-item key="account">
+              <span class="menu-glyph">♙</span>
+              <span>계정</span>
+            </a-menu-item>
+          </a-menu>
+        </div>
+      </a-layout-sider>
+
+      <a-layout class="app-main">
+        <a-layout-header class="app-header">
+          <div class="header-left">
+            <span class="header-trigger">☰</span>
+            <a-select class="header-view-select" value="기본 보기">
+              <a-select-option value="기본 보기">▣ 기본 보기</a-select-option>
+            </a-select>
+          </div>
+          <div class="header-right">
+            <a-button type="primary">생성⌄</a-button>
+            <span class="header-icon">A⇄</span>
+            <span class="header-icon">♧</span>
+            <span class="inline-row header-user">
+              <a-avatar style="background-color:#1890ff">AC</a-avatar>
+              <span>admin cloud</span>
+            </span>
+          </div>
+        </a-layout-header>
+
+        <a-layout-content class="page-content">
+          <template v-if="view === 'list'">
+            <a-card class="toolbar-card">
+              <div class="toolbar">
+                <div class="toolbar-left">
+                  <a-breadcrumb>
+                    <a-breadcrumb-item>⌂</a-breadcrumb-item>
+                    <a-breadcrumb-item>가상머신</a-breadcrumb-item>
+                  </a-breadcrumb>
+                  <a-button shape="round" size="small">↻ 업데이트</a-button>
+                  <a-select size="small" value="모두" style="width:95px">
+                    <a-select-option value="모두">모두</a-select-option>
+                  </a-select>
+                  <a-switch checked-children="메트릭" un-checked-children="메트릭"></a-switch>
+                  <a-switch checked-children="프로젝트" un-checked-children="프로젝트"></a-switch>
+                </div>
+                <div class="toolbar-right">
+                  <a-button type="primary" shape="round">＋ 가상머신 추가</a-button>
+                  <a-button>▽</a-button>
+                  <a-input-search
+                    class="toolbar-search"
+                    placeholder="검색"
+                    enter-button>
+                  </a-input-search>
+                </div>
+              </div>
+            </a-card>
+
+            <a-card class="list-card">
+              <a-table
+                class="vm-table"
+                size="middle"
+                :columns="listColumns"
+                :data-source="vms"
+                :pagination="false"
+                :scroll="{ x: 1460 }"
+                row-key="name">
+                <template #bodyCell="{ column, record }">
+                  <template v-if="column.key === 'select'">
+                    <a-checkbox></a-checkbox>
+                  </template>
+                  <template v-else-if="column.key === 'name'">
+                    <div class="vm-name">
+                      <span class="os-mark">{{ record.os }}</span>
+                      <a href="#" @click.prevent="openDetail(record)">{{ record.name }}</a>
+                    </div>
+                  </template>
+                  <template v-else-if="column.key === 'state'">
+                    <span :class="['state-dot', record.running ? 'running' : 'stopped']"></span>
+                    {{ record.running ? '실행 중' : '정지된 상태' }}
+                  </template>
+                  <template v-else-if="column.key === 'agent'">
+                    <a-tag
+                      class="agent-tag"
+                      :color="record.agent === '미설치' ? 'error' : 'success'">
+                      {{ record.agent }}
+                    </a-tag>
+                  </template>
+                  <template v-else-if="column.key === 'ip'">
+                    <div class="ip-summary-compact">
+                      <a-tooltip title="Cloud 관리 IP">
+                        <span class="ip-source">C</span>
+                      </a-tooltip>
+                      <a href="javascript:;">{{ record.cloudIp }}</a>
+                      <span class="ip-separator"></span>
+                      <a-tooltip title="게스트 OS 관측 IP">
+                        <span class="ip-source guest">G</span>
+                      </a-tooltip>
+                      <span
+                        v-if="record.primaryGuestAddress"
+                        class="guest-primary">
+                        {{ record.primaryGuestAddress.value }}
+                      </span>
+                      <span v-else class="guest-empty">—</span>
+                      <a-popover
+                        v-if="record.remainingAddressCount > 0"
+                        placement="bottomLeft"
+                        trigger="click">
+                        <template #content>
+                          <div class="address-popover">
+                            <div class="address-popover-title">
+                              게스트 IP 전체 {{ record.guestAddresses.length }}개
+                            </div>
+                            <div
+                              v-for="address in record.guestAddresses"
+                              :key="address.value"
+                              class="address-popover-row">
+                              <a-tag :color="address.family === 'IPv6' ? 'purple' : 'green'">
+                                {{ address.family }}
+                              </a-tag>
+                              <span class="address-popover-address">{{ address.value }}</span>
+                            </div>
+                          </div>
+                        </template>
+                        <a-button class="ip-more" size="small">
+                          +{{ record.remainingAddressCount }}
+                        </a-button>
+                      </a-popover>
+                      <a-tag
+                        v-if="record.hasIpv6"
+                        class="family-hint"
+                        color="purple">
+                        v6
+                      </a-tag>
+                      <a-tooltip :title="record.health">
+                        <a-tag
+                          class="guest-health"
+                          :color="healthColor(record.health)">
+                          {{ record.healthLabel }}
+                        </a-tag>
+                      </a-tooltip>
+                    </div>
+                  </template>
+                  <template v-else-if="column.key === 'host'">
+                    <a href="javascript:;" v-if="record.host">{{ record.host }}</a>
+                    <span v-else>—</span>
+                  </template>
+                  <template v-else-if="column.key === 'account'">
+                    <a href="javascript:;">{{ record.account }}</a>
+                  </template>
+                  <template v-else-if="column.key === 'zone'">
+                    <a href="javascript:;">{{ record.zone }}</a>
+                  </template>
+                </template>
+              </a-table>
+              <div class="pagination-row">
+                <a-pagination
+                  size="small"
+                  :total="33"
+                  :page-size="20"
+                  :show-total="total => `전체 ${total} 개 항목 중 1-20 표시`"
+                  show-size-changer>
+                </a-pagination>
+              </div>
+            </a-card>
+          </template>
+
+          <template v-else>
+            <a-card class="toolbar-card">
+              <div class="toolbar">
+                <div class="toolbar-left">
+                  <a-breadcrumb>
+                    <a-breadcrumb-item><a href="#" @click.prevent="openList">⌂</a></a-breadcrumb-item>
+                    <a-breadcrumb-item><a href="#" @click.prevent="openList">가상머신</a></a-breadcrumb-item>
+                    <a-breadcrumb-item>erp-app-01</a-breadcrumb-item>
+                  </a-breadcrumb>
+                  <a-button shape="round" size="small">↻ 업데이트</a-button>
+                </div>
+                <div class="toolbar-right">
+                  <a-button type="primary">⌄ 작업</a-button>
+                </div>
+              </div>
+            </a-card>
+
+            <a-row :gutter="12" class="detail-grid">
+              <a-col :span="7">
+                <a-card class="info-card">
+                  <div class="resource-title">
+                    <div class="resource-avatar">◔</div>
+                    <div>
+                      <div class="resource-name">erp-app-01</div>
+                      <div class="resource-tags">
+                        <a-tag>i-2-184-VM</a-tag>
+                        <a-tag>x86_64</a-tag>
+                        <a-tag>KVM</a-tag>
+                        <a-tag>HA 활성화</a-tag>
+                      </div>
+                    </div>
+                  </div>
+
+                  <a-divider></a-divider>
+
+                  <div class="info-item">
+                    <div class="info-label">상태</div>
+                    <div class="info-value">
+                      <span class="state-dot running"></span>
+                      <span>실행 중</span>
+                    </div>
+                  </div>
+                  <div class="info-item">
+                    <div class="info-label">아이디</div>
+                    <div class="info-value">
+                      <span class="info-icon">▥</span>
+                      <a href="javascript:;">51f9e99c-7d4a-40f4-9b87-83f061ec1e10</a>
+                    </div>
+                  </div>
+                  <div class="info-item">
+                    <div class="info-label">OS 유형</div>
+                    <div class="info-value">
+                      <span class="info-icon">◔</span>
+                      <a href="javascript:;">Rocky Linux 9 (64-bit)</a>
+                    </div>
+                  </div>
+                  <div class="info-item">
+                    <div class="info-label">IP</div>
+                    <div class="info-value">
+                      <span class="info-icon">⌾</span>
+                      <a href="javascript:;">192.168.10.20</a>
+                    </div>
+                  </div>
+                  <div class="info-item">
+                    <div class="info-label">CPU</div>
+                    <div class="info-value">
+                      <span class="info-icon">▦</span>
+                      <span>4 CPU x 2.40 GHz</span>
+                      <a-tag>x86_64</a-tag>
+                    </div>
+                  </div>
+                  <div class="info-item">
+                    <div class="info-label">메모리</div>
+                    <div class="info-value">
+                      <span class="info-icon">▤</span>
+                      <span>8192 MB 메모리</span>
+                    </div>
+                  </div>
+                  <div class="info-item">
+                    <div class="info-label">네트워크</div>
+                    <div class="info-value">
+                      <span class="info-icon">⌁</span>
+                      <div>
+                        <div>2 NIC(s)</div>
+                        <div><strong>eth0</strong>&nbsp; <a href="javascript:;">192.168.10.20</a>&nbsp; <a-tag>기본</a-tag></div>
+                        <div><strong>eth1</strong>&nbsp; <a href="javascript:;">10.50.0.15</a></div>
+                      </div>
+                    </div>
+                  </div>
+                  <div class="info-item">
+                    <div class="info-label">컴퓨트 오퍼링</div>
+                    <div class="info-value">
+                      <span class="info-icon">☁</span>
+                      <a href="javascript:;">NoLimit-HA-WB</a>
+                    </div>
+                  </div>
+                  <div class="info-item">
+                    <div class="info-label">호스트</div>
+                    <div class="info-value">
+                      <span class="info-icon">▣</span>
+                      <a href="javascript:;">ablecube22-1</a>
+                    </div>
+                  </div>
+                </a-card>
+              </a-col>
+
+              <a-col :span="17">
+                <a-card class="detail-card">
+                  <a-tabs
+                    class="detail-tabs"
+                    tab-position="left"
+                    :animated="false"
+                    v-model:active-key="detailTab">
+                    <a-tab-pane key="details" tab="상세">
+                      <a-empty description="상세 탭"></a-empty>
+                    </a-tab-pane>
+                    <a-tab-pane key="stats" tab="메트릭">
+                      <a-empty description="메트릭 탭"></a-empty>
+                    </a-tab-pane>
+                    <a-tab-pane key="volumes" tab="볼륨">
+                      <a-empty description="볼륨 탭"></a-empty>
+                    </a-tab-pane>
+                    <a-tab-pane key="nics" tab="NIC">
+                      <a-empty description="NIC 탭"></a-empty>
+                    </a-tab-pane>
+                    <a-tab-pane key="guestnetwork" tab="IP 구성">
+                      <div class="guest-panel">
+                        <a-alert
+                          type="info"
+                          show-icon
+                          message="QEMU Guest Agent가 VM 운영체제 내부에서 관측한 정보입니다. Cloud NIC 설정과 다를 수 있습니다.">
+                        </a-alert>
+
+                        <a-descriptions
+                          class="collection-summary"
+                          size="small"
+                          bordered
+                          :column="2">
+                          <a-descriptions-item label="수집 상태">
+                            <a-badge status="success" text="정상"></a-badge>
+                          </a-descriptions-item>
+                          <a-descriptions-item label="마지막 성공">18초 전</a-descriptions-item>
+                          <a-descriptions-item label="QGA">8.2.0</a-descriptions-item>
+                          <a-descriptions-item label="수집 결과">3 NIC / 7 IP</a-descriptions-item>
+                        </a-descriptions>
+
+                        <div class="section-block">
+                          <div class="section-heading">
+                            <div>
+                              <h3 class="section-title">인터페이스 및 IP 주소</h3>
+                              <div class="section-subtitle">게스트 OS에 설정된 모든 IPv4·IPv6 주소</div>
+                            </div>
+                            <a-tag>Cloud NIC 2 / guest-only 1</a-tag>
+                          </div>
+                          <a-table
+                            class="interface-table"
+                            size="small"
+                            :columns="interfaceColumns"
+                            :data-source="interfaces"
+                            :pagination="false"
+                            row-key="name">
+                            <template #bodyCell="{ column, record }">
+                              <template v-if="column.key === 'name'">
+                                <div class="interface-name">{{ record.name }}</div>
+                                <div class="interface-meta">{{ record.mac }}</div>
+                              </template>
+                              <template v-else-if="column.key === 'state'">
+                                <a-badge
+                                  :status="record.state === 'UP' ? 'success' : 'default'"
+                                  :text="record.state">
+                                </a-badge>
+                              </template>
+                              <template v-else-if="column.key === 'cloud'">
+                                <template v-if="record.cloudNic">
+                                  <a href="javascript:;">NIC {{ record.cloudNic }}</a>
+                                  <div class="interface-meta">{{ record.network }}</div>
+                                </template>
+                                <a-tag v-else>guest-only</a-tag>
+                              </template>
+                              <template v-else-if="column.key === 'addresses'">
+                                <div class="address-stack">
+                                  <a-tag
+                                    v-for="address in record.addresses"
+                                    :key="address.value"
+                                    :color="address.family === 'IPv6' ? 'purple' : 'green'">
+                                    {{ address.family }} {{ address.value }}
+                                    <span class="address-scope">{{ address.scope }}</span>
+                                  </a-tag>
+                                </div>
+                              </template>
+                            </template>
+                          </a-table>
+                        </div>
+
+                        <div class="section-block">
+                          <a-card
+                            class="dns-card"
+                            size="small"
+                            title="DNS">
+                            <template #extra>
+                              <a-badge status="success" text="정상"></a-badge>
+                            </template>
+                            <a-descriptions size="small" :column="1">
+                              <a-descriptions-item label="전역 DNS">
+                                <a-tag>10.10.22.10</a-tag>
+                                <a-tag color="purple">2001:db8::53</a-tag>
+                              </a-descriptions-item>
+                              <a-descriptions-item label="수집 source">
+                                systemd-resolved
+                              </a-descriptions-item>
+                              <a-descriptions-item label="인터페이스별">
+                                <div style="display:flex; flex-direction:column; gap:3px">
+                                  <div><strong>eth0</strong>: 10.10.22.11</div>
+                                  <div><strong>eth1</strong>: 10.50.0.2</div>
+                                </div>
+                              </a-descriptions-item>
+                              <a-descriptions-item label="검색 도메인">
+                                <a-tag>corp.example.internal</a-tag>
+                                <a-tag>svc.local</a-tag>
+                              </a-descriptions-item>
+                            </a-descriptions>
+                          </a-card>
+                        </div>
+
+                        <div class="section-block">
+                          <div class="section-heading">
+                            <div>
+                              <h3 class="section-title">라우팅</h3>
+                              <div class="section-subtitle">IPv4·IPv6 전체 route와 default route</div>
+                            </div>
+                            <div class="route-filters">
+                              <a-button
+                                v-for="filter in routeFilters"
+                                :key="filter"
+                                size="small"
+                                :type="routeFilter === filter ? 'primary' : 'default'"
+                                @click="routeFilter = filter">
+                                {{ filter }}
+                              </a-button>
+                            </div>
+                          </div>
+                          <a-table
+                            class="route-table"
+                            size="small"
+                            :columns="routeColumns"
+                            :data-source="filteredRoutes"
+                            :pagination="false"
+                            :scroll="{ x: 760 }"
+                            row-key="key">
+                            <template #bodyCell="{ column, record }">
+                              <template v-if="column.key === 'destination'">
+                                {{ record.destination }}
+                                <span v-if="record.default" class="default-route">DEFAULT</span>
+                              </template>
+                              <template v-else-if="column.key === 'family'">
+                                <a-tag :color="record.family === 'IPv6' ? 'purple' : 'green'">
+                                  {{ record.family }}
+                                </a-tag>
+                              </template>
+                            </template>
+                          </a-table>
+                        </div>
+                      </div>
+                    </a-tab-pane>
+                    <a-tab-pane key="snapshots" tab="VM 스냅샷">
+                      <a-empty description="VM 스냅샷 탭"></a-empty>
+                    </a-tab-pane>
+                    <a-tab-pane key="backups" tab="백업">
+                      <a-empty description="백업 탭"></a-empty>
+                    </a-tab-pane>
+                    <a-tab-pane key="schedules" tab="스케줄">
+                      <a-empty description="스케줄 탭"></a-empty>
+                    </a-tab-pane>
+                    <a-tab-pane key="devices" tab="장치">
+                      <a-empty description="장치 탭"></a-empty>
+                    </a-tab-pane>
+                    <a-tab-pane key="settings" tab="설정">
+                      <a-empty description="설정 탭"></a-empty>
+                    </a-tab-pane>
+                    <a-tab-pane key="events" tab="이벤트">
+                      <a-empty description="이벤트 탭"></a-empty>
+                    </a-tab-pane>
+                    <a-tab-pane key="comments" tab="코멘트">
+                      <a-empty description="코멘트 탭"></a-empty>
+                    </a-tab-pane>
+                  </a-tabs>
+                </a-card>
+              </a-col>
+            </a-row>
+          </template>
+        </a-layout-content>
+      </a-layout>
+    </a-layout>
+
+  </div>
+
+  <script src="../../../ui/node_modules/vue/dist/vue.global.prod.js"></script>
+  <script src="../../../ui/node_modules/dayjs/dayjs.min.js"></script>
+  <script src="../../../ui/node_modules/dayjs/plugin/advancedFormat.js"></script>
+  <script src="../../../ui/node_modules/dayjs/plugin/customParseFormat.js"></script>
+  <script src="../../../ui/node_modules/dayjs/plugin/localeData.js"></script>
+  <script src="../../../ui/node_modules/dayjs/plugin/quarterOfYear.js"></script>
+  <script src="../../../ui/node_modules/dayjs/plugin/weekOfYear.js"></script>
+  <script src="../../../ui/node_modules/dayjs/plugin/weekYear.js"></script>
+  <script src="../../../ui/node_modules/dayjs/plugin/weekday.js"></script>
+  <script src="../../../ui/node_modules/ant-design-vue/dist/antd.min.js"></script>
+  <script>
+    const { createApp, computed, h, reactive, ref } = Vue;
+
+    createApp({
+      setup() {
+        const params = new URLSearchParams(window.location.search);
+        const theme = params.get('theme') === 'dark' ? 'dark' : 'light';
+        document.body.classList.toggle('prototype-dark', theme === 'dark');
+        const view = ref(params.get('view') === 'detail' ? 'detail' : 'list');
+        const detailTab = ref('guestnetwork');
+        const routeFilter = ref('전체 8');
+        const routeFilters = ['전체 8', 'IPv4 5', 'IPv6 3', 'Default 2'];
+
+        const listColumns = [
+          {
+            title: '',
+            key: 'select',
+            width: 42,
+            fixed: 'left',
+            customRender: () => h(antd.Checkbox)
+          },
+          {
+            title: '이름',
+            dataIndex: 'name',
+            key: 'name',
+            width: 240,
+            fixed: 'left',
+            customRender: ({ record }) => h('div', { class: 'vm-name' }, [
+              h('span', { class: 'os-mark' }, record.os),
+              h('a', {
+                href: '#',
+                onClick: event => {
+                  event.preventDefault();
+                  openDetail(record);
+                }
+              }, record.name)
+            ])
+          },
+          {
+            title: '상태',
+            key: 'state',
+            width: 115,
+            customRender: ({ record }) => h('span', {}, [
+              h('span', { class: ['state-dot', record.running ? 'running' : 'stopped'] }),
+              record.running ? '실행 중' : '정지된 상태'
+            ])
+          },
+          {
+            title: '에이전트 버전',
+            key: 'agent',
+            width: 115,
+            customRender: ({ record }) => h(
+              antd.Tag,
+              {
+                class: 'agent-tag',
+                color: record.agent === '미설치' ? 'error' : 'success'
+              },
+              () => record.agent
+            )
+          },
+          { title: '내부 이름', dataIndex: 'instanceName', key: 'instanceName', width: 120 },
+          {
+            title: 'IP 주소',
+            key: 'ip',
+            width: 390,
+            customRender: ({ record }) => {
+              const summary = [
+                h(
+                  antd.Tooltip,
+                  { title: 'Cloud 관리 IP' },
+                  { default: () => h('span', { class: 'ip-source' }, 'C') }
+                ),
+                h('a', { href: 'javascript:;' }, record.cloudIp),
+                h('span', { class: 'ip-separator' }),
+                h(
+                  antd.Tooltip,
+                  { title: '게스트 OS 관측 IP' },
+                  { default: () => h('span', { class: 'ip-source guest' }, 'G') }
+                ),
+                record.primaryGuestAddress
+                  ? h('span', { class: 'guest-primary' }, record.primaryGuestAddress.value)
+                  : h('span', { class: 'guest-empty' }, '—')
+              ];
+
+              if (record.remainingAddressCount > 0) {
+                summary.push(h(
+                  antd.Popover,
+                  {
+                    placement: 'bottomLeft',
+                    trigger: 'click'
+                  },
+                  {
+                    default: () => h(
+                      antd.Button,
+                      { class: 'ip-more', size: 'small' },
+                      () => `+${record.remainingAddressCount}`
+                    ),
+                    content: () => h('div', { class: 'address-popover' }, [
+                      h(
+                        'div',
+                        { class: 'address-popover-title' },
+                        `게스트 IP 전체 ${record.guestAddresses.length}개`
+                      ),
+                      ...record.guestAddresses.map(address => h(
+                        'div',
+                        { class: 'address-popover-row', key: address.value },
+                        [
+                          h(
+                            antd.Tag,
+                            { color: address.family === 'IPv6' ? 'purple' : 'green' },
+                            () => address.family
+                          ),
+                          h('span', { class: 'address-popover-address' }, address.value)
+                        ]
+                      ))
+                    ])
+                  }
+                ));
+              }
+
+              if (record.hasIpv6) {
+                summary.push(h(
+                  antd.Tag,
+                  { class: 'family-hint', color: 'purple' },
+                  () => 'v6'
+                ));
+              }
+
+              summary.push(h(
+                antd.Tooltip,
+                { title: record.health },
+                {
+                  default: () => h(
+                    antd.Tag,
+                    {
+                      class: 'guest-health',
+                      color: healthColor(record.health)
+                    },
+                    () => record.healthLabel
+                  )
+                }
+              ));
+
+              return h('div', { class: 'ip-summary-compact' }, summary);
+            }
+          },
+          { title: 'CPU 아키텍처', dataIndex: 'arch', key: 'arch', width: 120 },
+          {
+            title: '호스트',
+            key: 'host',
+            width: 135,
+            customRender: ({ record }) => record.host
+              ? h('a', { href: 'javascript:;' }, record.host)
+              : h('span', {}, '—')
+          },
+          {
+            title: '계정',
+            key: 'account',
+            width: 95,
+            customRender: ({ record }) => h('a', { href: 'javascript:;' }, record.account)
+          },
+          {
+            title: 'Zone',
+            key: 'zone',
+            width: 105,
+            customRender: ({ record }) => h('a', { href: 'javascript:;' }, record.zone)
+          }
+        ];
+
+        const vmSeed = [
+          {
+            name: 'WESTPAC-Manager-VM',
+            os: '◔',
+            running: false,
+            agent: '9.1.0',
+            instanceName: 'i-2-193-VM',
+            cloudIp: '10.1.1.211',
+            guestAddresses: [],
+            health: '수집 불가',
+            arch: 'x86_64',
+            host: '',
+            account: 'admin',
+            zone: 'Zone-22'
+          },
+          {
+            name: 'WESTPAC-ConnectorServer-VM',
+            os: '◔',
+            running: false,
+            agent: '9.1.0',
+            instanceName: 'i-2-195-VM',
+            cloudIp: '10.1.1.187',
+            guestAddresses: [],
+            health: '수집 불가',
+            arch: 'x86_64',
+            host: '',
+            account: 'admin',
+            zone: 'Zone-22'
+          },
+          {
+            name: 'WESTPAC-WinSever2022AD-VM',
+            os: '⊞',
+            running: false,
+            agent: '109.1.0',
+            instanceName: 'i-2-207-VM',
+            cloudIp: '10.1.1.93',
+            guestAddresses: [],
+            health: '수집 불가',
+            arch: 'x86_64',
+            host: '',
+            account: 'admin',
+            zone: 'Zone-22'
+          },
+          {
+            name: 'WESTPAC-Win11-VM',
+            os: '⊞',
+            running: false,
+            agent: '109.1.0',
+            instanceName: 'i-2-216-VM',
+            cloudIp: '10.1.1.155',
+            guestAddresses: [],
+            health: '수집 불가',
+            arch: 'x86_64',
+            host: '',
+            account: 'admin',
+            zone: 'Zone-22'
+          },
+          {
+            name: 'BASTION-SERVER-NEW',
+            os: '◔',
+            running: false,
+            agent: '9.1.0',
+            instanceName: 'i-2-232-VM',
+            cloudIp: '10.1.1.87',
+            guestAddresses: [],
+            health: '수집 불가',
+            arch: 'x86_64',
+            host: '',
+            account: 'admin',
+            zone: 'Zone-22'
+          },
+          {
+            name: 'bctp-ktcheon',
+            os: '◔',
+            running: false,
+            agent: '8.2.0',
+            instanceName: 'i-2-235-VM',
+            cloudIp: '10.10.254.229',
+            guestAddresses: [],
+            health: '수집 불가',
+            arch: 'x86_64',
+            host: '',
+            account: 'admin',
+            zone: 'Zone-22'
+          },
+          {
+            name: 'foms-control-19ce0ede800',
+            os: '◔',
+            running: true,
+            agent: '7.2.22',
+            instanceName: 'i-2-253-VM',
+            cloudIp: '10.1.1.153',
+            guestAddresses: [
+              { family: 'IPv4', value: '10.1.1.153/24' },
+              { family: 'IPv4', value: '127.0.0.1/8' },
+              { family: 'IPv4', value: '192.168.110.0/32' },
+              { family: 'IPv6', value: '::1/128' },
+              { family: 'IPv6', value: 'fe80::5054:ff:fe12:3456/64' }
+            ],
+            health: '부분 수집 · 일부 인터페이스 주소 없음',
+            arch: 'x86_64',
+            host: 'ablecube22-1',
+            account: 'admin',
+            zone: 'Zone-22'
+          },
+          {
+            name: 'foms-node-19ce0ee2f6e',
+            os: '◔',
+            running: true,
+            agent: '7.2.22',
+            instanceName: 'i-2-254-VM',
+            cloudIp: '10.1.1.162',
+            guestAddresses: [
+              { family: 'IPv4', value: '10.1.1.162/24' },
+              { family: 'IPv4', value: '127.0.0.1/8' },
+              { family: 'IPv6', value: '2001:db8:22::162/64' }
+            ],
+            health: '정상 · 18초 전',
+            arch: 'x86_64',
+            host: 'ablecube22-3',
+            account: 'admin',
+            zone: 'Zone-22'
+          }
+        ];
+
+        const vms = reactive(vmSeed.map(vm => ({
+          ...vm,
+          get primaryGuestAddress() {
+            return this.guestAddresses.length > 0 ? this.guestAddresses[0] : null;
+          },
+          get remainingAddressCount() {
+            return Math.max(0, this.guestAddresses.length - 1);
+          },
+          get hasIpv6() {
+            return this.guestAddresses.some(address => address.family === 'IPv6');
+          },
+          get healthLabel() {
+            if (this.health.startsWith('정상')) return '정상';
+            if (this.health.startsWith('부분')) return '일부 수집';
+            if (this.health.startsWith('오래됨')) return '오래됨';
+            if (this.health.startsWith('마지막')) return '마지막 값';
+            return '미수집';
+          }
+        })));
+
+        const interfaceColumns = [
+          {
+            title: '인터페이스 / Cloud 연결',
+            key: 'name',
+            width: 205,
+            customRender: ({ record }) => h('div', {}, [
+              h('div', { class: 'interface-name' }, [
+                record.name,
+                h(antd.Badge, {
+                  style: { marginLeft: '9px' },
+                  status: record.state === 'UP' ? 'success' : 'default',
+                  text: record.state
+                })
+              ]),
+              h('div', { class: 'interface-meta' }, record.mac),
+              record.cloudNic !== null
+                ? h('div', { class: 'interface-meta' }, [
+                    h('a', { href: 'javascript:;' }, `Cloud NIC ${record.cloudNic}`),
+                    ` · ${record.network}`
+                  ])
+                : h(antd.Tag, { style: { marginTop: '4px' } }, () => 'guest-only')
+            ])
+          },
+          {
+            title: 'IP 주소',
+            key: 'addresses',
+            customRender: ({ record }) => h(
+              'div',
+              { class: 'address-stack' },
+              record.addresses.map(address => h(
+                antd.Tag,
+                {
+                  color: address.family === 'IPv6' ? 'purple' : 'green',
+                  key: address.value
+                },
+                () => [
+                  `${address.family} ${address.value}`,
+                  h('span', { class: 'address-scope' }, address.scope)
+                ]
+              ))
+            )
+          }
+        ];
+
+        const interfaces = [
+          {
+            name: 'eth0',
+            mac: '52:54:00:12:34:56',
+            state: 'UP',
+            cloudNic: 0,
+            network: 'L2-Network',
+            addresses: [
+              { family: 'IPv4', value: '192.168.10.20/24', scope: 'private' },
+              { family: 'IPv4', value: '192.168.10.21/24', scope: 'secondary' },
+              { family: 'IPv6', value: '2001:db8::20/64', scope: 'global' },
+              { family: 'IPv6', value: 'fe80::5054:ff:fe12:3456/64', scope: 'link-local' }
+            ]
+          },
+          {
+            name: 'eth1',
+            mac: '52:54:00:aa:bb:cc',
+            state: 'UP',
+            cloudNic: 1,
+            network: 'Backup-Network',
+            addresses: [
+              { family: 'IPv4', value: '10.50.0.15/24', scope: 'private' },
+              { family: 'IPv6', value: 'fe80::5054:ff:feaa:bbcc/64', scope: 'link-local' }
+            ]
+          },
+          {
+            name: 'lo',
+            mac: 'MAC 없음',
+            state: 'UP',
+            cloudNic: null,
+            network: '',
+            addresses: [
+              { family: 'IPv4', value: '127.0.0.1/8', scope: 'loopback' },
+              { family: 'IPv6', value: '::1/128', scope: 'loopback' }
+            ]
+          }
+        ];
+
+        const routeColumns = [
+          {
+            title: 'Family',
+            key: 'family',
+            width: 82,
+            customRender: ({ record }) => h(
+              antd.Tag,
+              { color: record.family === 'IPv6' ? 'purple' : 'green' },
+              () => record.family
+            )
+          },
+          {
+            title: 'Destination',
+            dataIndex: 'destination',
+            key: 'destination',
+            width: 170,
+            customRender: ({ record }) => h('span', {}, [
+              record.destination,
+              record.default
+                ? h('span', { class: 'default-route' }, 'DEFAULT')
+                : null
+            ])
+          },
+          { title: 'Gateway / Next hop', dataIndex: 'gateway', key: 'gateway', width: 165 },
+          { title: 'Interface', dataIndex: 'interface', key: 'interface', width: 90 },
+          { title: 'Metric', dataIndex: 'metric', key: 'metric', width: 70 },
+          { title: 'Table', dataIndex: 'table', key: 'table', width: 70 },
+          { title: 'Protocol', dataIndex: 'protocol', key: 'protocol', width: 85 }
+        ];
+
+        const routes = [
+          { key: 'r1', family: 'IPv4', destination: '0.0.0.0/0', gateway: '192.168.10.1', interface: 'eth0', metric: 100, table: 'main', protocol: 'dhcp', default: true },
+          { key: 'r2', family: 'IPv4', destination: '192.168.10.0/24', gateway: '—', interface: 'eth0', metric: 100, table: 'main', protocol: 'kernel' },
+          { key: 'r3', family: 'IPv4', destination: '10.50.0.0/24', gateway: '—', interface: 'eth1', metric: 101, table: 'main', protocol: 'kernel' },
+          { key: 'r4', family: 'IPv4', destination: '10.60.0.0/16', gateway: '10.50.0.1', interface: 'eth1', metric: 110, table: 'main', protocol: 'static' },
+          { key: 'r5', family: 'IPv4', destination: '127.0.0.0/8', gateway: '—', interface: 'lo', metric: 0, table: 'local', protocol: 'kernel' },
+          { key: 'r6', family: 'IPv6', destination: '::/0', gateway: 'fe80::1', interface: 'eth0', metric: 100, table: 'main', protocol: 'ra', default: true },
+          { key: 'r7', family: 'IPv6', destination: '2001:db8::/64', gateway: '—', interface: 'eth0', metric: 256, table: 'main', protocol: 'kernel' },
+          { key: 'r8', family: 'IPv6', destination: 'fe80::/64', gateway: '—', interface: 'eth1', metric: 256, table: 'main', protocol: 'kernel' }
+        ];
+
+        const filteredRoutes = computed(() => {
+          if (routeFilter.value.startsWith('IPv4')) {
+            return routes.filter(route => route.family === 'IPv4');
+          }
+          if (routeFilter.value.startsWith('IPv6')) {
+            return routes.filter(route => route.family === 'IPv6');
+          }
+          if (routeFilter.value.startsWith('Default')) {
+            return routes.filter(route => route.default);
+          }
+          return routes;
+        });
+
+        const healthColor = health => {
+          if (health.startsWith('정상')) return 'success';
+          if (health.startsWith('부분')) return 'warning';
+          if (health.startsWith('오래됨')) return 'error';
+          return 'default';
+        };
+
+        const setView = nextView => {
+          view.value = nextView;
+          const url = new URL(window.location.href);
+          url.searchParams.set('view', nextView);
+          window.history.replaceState({}, '', url);
+          window.scrollTo(0, 0);
+        };
+
+        const openList = () => setView('list');
+        const openDetail = () => setView('detail');
+
+        return {
+          detailTab,
+          filteredRoutes,
+          healthColor,
+          interfaceColumns,
+          interfaces,
+          listColumns,
+          openDetail,
+          openList,
+          routeColumns,
+          routeFilter,
+          routeFilters,
+          view,
+          vms
+        };
+      }
+    }).use(antd).mount('#app');
+  </script>
+</body>
+</html>

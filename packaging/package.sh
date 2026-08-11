@@ -235,6 +235,12 @@ function packaging() {
         --define "_rel ${REL_VALUE}"
         --define "_unitdir ${UNITDIR}"
     )
+    NODE_BIN_DIR=${RPM_NODE_BIN_DIR:-$(dirname "$(command -v node)")}
+    if [ ! -x "$NODE_BIN_DIR/node" ] || [ ! -x "$NODE_BIN_DIR/npm" ]; then
+        echo "Node.js toolchain not found in NODE_BIN_DIR=$NODE_BIN_DIR"
+        exit 3
+    fi
+    RPMBUILD_ARGS+=(--define "_node_bindir ${NODE_BIN_DIR}")
     if [ -n "$TEMP_VALUE" ]; then
         RPMBUILD_ARGS+=(--define "_temp ${TEMP_VALUE}")
     else

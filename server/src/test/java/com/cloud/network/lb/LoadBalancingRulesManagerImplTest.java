@@ -44,6 +44,8 @@ import org.apache.cloudstack.api.ApiConstants;
 import org.apache.cloudstack.api.ServerApiException;
 import org.apache.cloudstack.api.command.user.loadbalancer.UpdateLoadBalancerRuleCmd;
 import org.apache.cloudstack.context.CallContext;
+import org.apache.cloudstack.resourcedetail.FirewallRuleDetailVO;
+import org.apache.cloudstack.resourcedetail.dao.FirewallRuleDetailsDao;
 import org.apache.cloudstack.engine.orchestration.service.NetworkOrchestrationService;
 import org.junit.Assert;
 import org.junit.Test;
@@ -91,6 +93,9 @@ public class LoadBalancingRulesManagerImplTest{
 
     @Mock
     LoadBalancerCertMapDao _lbCertMapDao;
+
+    @Mock
+    FirewallRuleDetailsDao _firewallRuleDetailsDao;
 
     @Mock
     NetworkOfferingServiceMapDao _networkOfferingServiceDao;
@@ -211,8 +216,6 @@ public class LoadBalancingRulesManagerImplTest{
         when(loadBalancerMock.getId()).thenReturn(lbRuleId);
         when(loadBalancerMock.getNetworkId()).thenReturn(networkId);
 
-        when(_networkDao.findById(networkId)).thenReturn(networkMock);
-
         Mockito.doNothing().when(_accountMgr).checkAccess(Mockito.any(Account.class), Mockito.isNull(SecurityChecker.AccessType.class), Mockito.eq(true), Mockito.any(LoadBalancerVO.class));
 
         LoadBalancingRule loadBalancingRule = Mockito.mock(LoadBalancingRule.class);
@@ -225,6 +228,12 @@ public class LoadBalancingRulesManagerImplTest{
         LoadBalancerCertMapVO certMapRule = Mockito.mock(LoadBalancerCertMapVO.class);
         when(_lbCertMapDao.findByLbRuleId(lbRuleId)).thenReturn(certMapRule);
         when(certMapRule.getId()).thenReturn(certMapRuleId);
+    }
+
+    private void mockBackendSslDetail(boolean enabled) {
+        FirewallRuleDetailVO backendSslDetail = Mockito.mock(FirewallRuleDetailVO.class);
+        when(backendSslDetail.getValue()).thenReturn(Boolean.toString(enabled));
+        when(_firewallRuleDetailsDao.findDetail(lbRuleId, ApiConstants.BACKEND_SSL)).thenReturn(backendSslDetail);
     }
 
     @Test
@@ -255,6 +264,23 @@ public class LoadBalancingRulesManagerImplTest{
 
         lbr.updateLoadBalancerRule(cmd);
 
+        Mockito.verify(_lbCertMapDao, times(1)).remove(anyLong());
+        Mockito.verify(lbr, times(1)).applyLoadBalancerConfig(lbRuleId);
+    }
+
+    @Test
+    public void testUpdateLoadBalancerRuleFromSslToTcpRemovesBackendSslDetail() throws Exception {
+        setupUpdateLoadBalancerRule();
+        mockBackendSslDetail(true);
+
+        UpdateLoadBalancerRuleCmd cmd = new UpdateLoadBalancerRuleCmd();
+        ReflectionTestUtils.setField(cmd, ApiConstants.ID, lbRuleId);
+        ReflectionTestUtils.setField(cmd, "lbProtocol", NetUtils.TCP_PROTO);
+        when(loadBalancerMock.getLbProtocol()).thenReturn(NetUtils.SSL_PROTO).thenReturn(NetUtils.TCP_PROTO);
+
+        lbr.updateLoadBalancerRule(cmd);
+
+        Mockito.verify(_firewallRuleDetailsDao, times(1)).removeDetail(lbRuleId, ApiConstants.BACKEND_SSL);
         Mockito.verify(_lbCertMapDao, times(1)).remove(anyLong());
         Mockito.verify(lbr, times(1)).applyLoadBalancerConfig(lbRuleId);
     }
@@ -293,6 +319,21 @@ public class LoadBalancingRulesManagerImplTest{
 
         Mockito.verify(lbr, never()).applyLoadBalancerConfig(lbRuleId);
         Mockito.verify(_lbCertMapDao, never()).remove(anyLong());
+    }
+
+    @Test
+    public void testUpdateLoadBalancerRuleBackendSsl() throws Exception {
+        setupUpdateLoadBalancerRule();
+
+        UpdateLoadBalancerRuleCmd cmd = new UpdateLoadBalancerRuleCmd();
+        ReflectionTestUtils.setField(cmd, ApiConstants.ID, lbRuleId);
+        ReflectionTestUtils.setField(cmd, "backendSsl", Boolean.TRUE);
+        when(loadBalancerMock.getLbProtocol()).thenReturn(NetUtils.SSL_PROTO);
+
+        lbr.updateLoadBalancerRule(cmd);
+
+        Mockito.verify(_firewallRuleDetailsDao, times(1)).addDetail(lbRuleId, ApiConstants.BACKEND_SSL, Boolean.TRUE.toString(), false);
+        Mockito.verify(lbr, times(1)).applyLoadBalancerConfig(lbRuleId);
     }
 
     @Test(expected = CloudRuntimeException.class)

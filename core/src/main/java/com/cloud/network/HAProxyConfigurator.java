@@ -529,8 +529,16 @@ public class HAProxyConfigurator implements LoadBalancerConfigurator {
                     .append(" ")
                     .append(dest.getDestIp())
                     .append(":")
-                    .append(dest.getDestPort())
-                    .append(" check");
+                    .append(dest.getDestPort());
+
+            logger.info("Generating HAProxy server line for load balancer {}: source={}:{}, protocol={}, lbProtocol={}, backendSsl={}, sslOffloading={}, destination={}:{}, revoked={}",
+                    lbTO.getUuid(), lbTO.getSrcIp(), lbTO.getSrcPort(), lbTO.getProtocol(), lbTO.getLbProtocol(), lbTO.isBackendSsl(), sslOffloading,
+                    dest.getDestIp(), dest.getDestPort(), dest.isRevoked());
+            if (lbTO.isBackendSsl()) {
+                sb.append(" ssl verify none check");
+            } else {
+                sb.append(" check");
+            }
 
             if (sslOffloading) {
                 sb.append(SSL_CONFIGURATION_INTERMEDIATE);
@@ -573,7 +581,7 @@ public class HAProxyConfigurator implements LoadBalancerConfigurator {
             logger.warn("Haproxy stickiness policy for lb rule: " + lbTO.getSrcIp() + ":" + lbTO.getSrcPort() + ": Not Applied, cause:  backends are unavailable");
         }
         boolean keepAliveEnabled = lbCmd.keepAliveEnabled;
-        boolean http = (publicPort == NetUtils.HTTP_PORT && !keepAliveEnabled);
+        boolean http = (publicPort == NetUtils.HTTP_PORT && !keepAliveEnabled) || NetUtils.HTTP_PROTO.equals(lbTO.getLbProtocol());
         if (http || httpbasedStickiness || sslOffloading) {
             frontendConfigs.add("\tmode http");
             String keepAliveLine = keepAliveEnabled ? "\tno option forceclose" : "\toption httpclose";

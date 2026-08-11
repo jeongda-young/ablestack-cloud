@@ -46,6 +46,7 @@ import org.junit.Assert;
 import org.junit.Assume;
 import org.junit.Before;
 import org.junit.Test;
+import org.mockito.ArgumentCaptor;
 import org.mockito.ArgumentMatchers;
 import org.mockito.Mockito;
 
@@ -58,6 +59,7 @@ import java.nio.charset.Charset;
 import java.security.KeyPair;
 import java.security.KeyPairGenerator;
 import java.security.NoSuchAlgorithmException;
+import java.security.PrivateKey;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -267,6 +269,14 @@ public class CertServiceTest {
         passField.set(uploadCmd, password);
 
         certService.uploadSslCert(uploadCmd);
+
+        ArgumentCaptor<SslCertVO> certCaptor = ArgumentCaptor.forClass(SslCertVO.class);
+        Mockito.verify(certService._sslCertDao).persist(certCaptor.capture());
+        SslCertVO persistedCert = certCaptor.getValue();
+        Assert.assertNull(persistedCert.getPassword());
+        Assert.assertTrue(persistedCert.getKey().contains("-----BEGIN PRIVATE KEY-----"));
+        Assert.assertFalse(persistedCert.getKey().contains("ENCRYPTED"));
+        certService.parsePrivateKey(persistedCert.getKey(), null);
     }
 
     @Test
@@ -316,6 +326,41 @@ public class CertServiceTest {
         certService.uploadSslCert(uploadCmd);
         Mockito.verify(uploadCmd, Mockito.atLeastOnce()).getAccountName();
         Mockito.verify(uploadCmd, Mockito.times(1)).getCert();
+    }
+
+    @Test
+    public void runUploadSslCertShouldNotPersistWhenPrivateKeyCannotBeNormalized() throws Exception {
+
+        final String certFile = URLDecoder.decode(getClass().getResource("/certs/rsa_self_signed.crt").getFile(),Charset.defaultCharset().name());
+        final String keyFile = URLDecoder.decode(getClass().getResource("/certs/rsa_self_signed.key").getFile(),Charset.defaultCharset().name());
+
+        final String cert = readFileToString(new File(certFile));
+        final String key = readFileToString(new File(keyFile));
+
+        final CertServiceImpl certService = Mockito.spy(new CertServiceImpl());
+        certService._sslCertDao = Mockito.mock(SslCertDao.class);
+        Mockito.doThrow(new IllegalStateException("Private key cannot be converted to unencrypted PKCS#8 PEM"))
+                .when(certService).normalizePrivateKey(ArgumentMatchers.any(PrivateKey.class));
+
+        final UploadSslCertCmd uploadCmd = new UploadSslCertCmdExtn();
+        final Class<?> klazz = uploadCmd.getClass().getSuperclass();
+
+        final Field certField = klazz.getDeclaredField("cert");
+        certField.setAccessible(true);
+        certField.set(uploadCmd, cert);
+
+        final Field keyField = klazz.getDeclaredField("key");
+        keyField.setAccessible(true);
+        keyField.set(uploadCmd, key);
+
+        try {
+            certService.uploadSslCert(uploadCmd);
+            Assert.fail("Given a private key that cannot be normalized to PKCS#8 PEM, upload should fail.");
+        } catch (final Exception e) {
+            Assert.assertTrue("Did not expect message: " + e.getMessage(),
+                    e.getMessage().contains("Private key cannot be converted to unencrypted PKCS#8 PEM"));
+        }
+        Mockito.verify(certService._sslCertDao, Mockito.never()).persist(ArgumentMatchers.any(SslCertVO.class));
     }
 
     @Test
@@ -860,7 +905,12 @@ public class CertServiceTest {
         String password = "strongpassword";
         String key = generateEncryptedPrivateKey(password);
         final CertServiceImpl certService = new CertServiceImpl();
-        certService.parsePrivateKey(key, password);
+        PrivateKey privateKey = certService.parsePrivateKey(key, password);
+        String normalizedKey = certService.convertPrivateKeyToPkcs8Pem(privateKey);
+
+        Assert.assertTrue(normalizedKey.contains("-----BEGIN PRIVATE KEY-----"));
+        Assert.assertFalse(normalizedKey.contains("ENCRYPTED"));
+        certService.parsePrivateKey(normalizedKey, null);
     }
 
     @Test

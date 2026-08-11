@@ -122,6 +122,7 @@ export default {
         }
         this.loading = true
         postAPI('createBackup', data).then(response => {
+          this.$emit('refresh-data')
           this.$pollJob({
             jobId: response.createbackupresponse.jobid,
             title: this.$t('label.create.backup'),

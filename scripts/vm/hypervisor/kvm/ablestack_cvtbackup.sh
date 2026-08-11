@@ -42,6 +42,8 @@ logFile="/var/log/cloudstack/agent/agent.log"
 CREATED_RBD_SNAPSHOTS=()
 
 EXIT_CLEANUP_FAILED=20
+STAGING_IN_PROGRESS_MARKER=".staging.inprogress"
+STAGING_COMPLETE_MARKER=".staging.complete"
 
 log() {
   [[ "$verb" -eq 1 ]] && builtin echo "$@"
@@ -238,20 +240,24 @@ parse_rbd_uri() {
 
   if [[ "$uri" == rbd:* ]]; then
     local payload="${uri#rbd:}"
-    RBD_IMAGE="${payload%%:*}"
-
-    if [[ "$uri" =~ :mon_host=([^:]*) ]]; then
-      RBD_MON_HOST="${BASH_REMATCH[1]}"
+    if [[ "$payload" == *":mon_host="* ]]; then
+      RBD_IMAGE="${payload%%:mon_host=*}"
+      local mon_part="${payload#*:mon_host=}"
+      RBD_MON_HOST="${mon_part%%:auth_supported=*}"
       RBD_MON_HOST="${RBD_MON_HOST//\\;/,}"
       RBD_MON_HOST="${RBD_MON_HOST//\\:/:}"
+    else
+      RBD_IMAGE="${payload%%:*}"
     fi
 
-    if [[ "$uri" =~ :id=([^:]*) ]]; then
-      RBD_USER="${BASH_REMATCH[1]}"
+    if [[ "$payload" == *":id="* ]]; then
+      local id_part="${payload#*:id=}"
+      RBD_USER="${id_part%%:*}"
     fi
 
-    if [[ "$uri" =~ :key=([^:]*) ]]; then
-      RBD_KEY="${BASH_REMATCH[1]}"
+    if [[ "$payload" == *":key="* ]]; then
+      local key_part="${payload#*:key=}"
+      RBD_KEY="${key_part%%:*}"
     fi
   elif [[ "$uri" == rbd/* ]]; then
     RBD_IMAGE="$uri"
@@ -387,6 +393,7 @@ EOF
 
 backup_running_vm() {
   mkdir -p "$dest/checkpoints" || { echo "Failed to create backup directory $dest"; exit 1; }
+  mark_staging_in_progress
   local parent_checkpoint_file=""
   if [[ "$BACKUP_TYPE" == "INCREMENTAL" && -n "$PARENT_CHECKPOINT_PATH" ]]; then
     parent_checkpoint_file="$PARENT_CHECKPOINT_PATH"
@@ -455,7 +462,7 @@ backup_running_vm() {
       Completed) break ;;
       Failed)
         log -ne "FAILED libvirt backup job vm=[$VM] checkpoint=[$CHECKPOINT_NAME]"
-        echo "Virsh backup job failed"; cleanup ;;
+        echo "Virsh backup job failed"; cleanup; exit 1 ;;
     esac
     wait_count=$((wait_count + 1))
     if (( wait_count % 12 == 0 )); then
@@ -468,10 +475,12 @@ backup_running_vm() {
   dump_checkpoint_xml "$VM"
   rm -f "$dest/backup.xml" "$dest/checkpoint.xml"
   sync
+  mark_staging_complete
 }
 
 backup_rbd_volumes() {
   mkdir -p "$dest/checkpoints" || { echo "Failed to create backup directory $dest"; exit 1; }
+  mark_staging_in_progress
   backup_domain_information "$VM"
   trap 'log -ne "FAILED RBD backup unexpected error line=[$LINENO] op=[$OP] vm=[$VM] checkpoint=[$CHECKPOINT_NAME]"; cleanup_created_rbd_snapshots' ERR
   trap 'log -ne "FAILED RBD backup interrupted op=[$OP] vm=[$VM] checkpoint=[$CHECKPOINT_NAME]"; cleanup_created_rbd_snapshots; exit 1' INT TERM
@@ -540,6 +549,8 @@ backup_rbd_volumes() {
   trap - ERR
   trap - INT TERM
   CREATED_RBD_SNAPSHOTS=()
+  sync
+  mark_staging_complete
 }
 
 has_child_backup() {
@@ -664,6 +675,20 @@ cleanup_unreferenced_qcow2_bitmaps() {
     log -ne "Cleaning up unreferenced qcow2 bitmap [$checkpoint_name] from VM [$vm_name]"
     delete_qcow2_bitmap_if_present "$vm_name" "$checkpoint_name"
   done < <(split_csv "$CLEANUP_CHECKPOINT_NAMES")
+}
+
+mark_staging_in_progress() {
+  rm -f "$dest/$STAGING_COMPLETE_MARKER"
+  printf 'started_at=%s\nvm=%s\ncheckpoint=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$VM" "$CHECKPOINT_NAME" > "$dest/$STAGING_IN_PROGRESS_MARKER"
+  sync "$dest/$STAGING_IN_PROGRESS_MARKER" 2>/dev/null || true
+}
+
+mark_staging_complete() {
+  local tmp_marker="$dest/$STAGING_COMPLETE_MARKER.tmp"
+  printf 'completed_at=%s\nvm=%s\ncheckpoint=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$VM" "$CHECKPOINT_NAME" > "$tmp_marker"
+  mv -f "$tmp_marker" "$dest/$STAGING_COMPLETE_MARKER"
+  rm -f "$dest/$STAGING_IN_PROGRESS_MARKER"
+  sync "$dest/$STAGING_COMPLETE_MARKER" 2>/dev/null || true
 }
 
 delete_backup() {
