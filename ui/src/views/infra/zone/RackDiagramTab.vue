@@ -1335,7 +1335,7 @@
             <a-tooltip :title="vm.displayname || vm.name || vm.id">
               <div class="host-vm-name">{{ vm.displayname || vm.name || vm.id }}</div>
             </a-tooltip>
-            <div class="host-vm-meta">{{ vm.state || '-' }} / {{ vm.ostypename || vm.hypervisor || '-' }}</div>
+            <div class="host-vm-meta">{{ vm.state || '-' }} / {{ vm.hypervisor || '-' }}</div>
             <a-tooltip :title="getVmPrimaryIpText(vm)">
               <div class="host-vm-ip">{{ getVmPrimaryIpText(vm) }}</div>
             </a-tooltip>
@@ -2290,7 +2290,6 @@ const fetchRackData = () => {
     // DB에 저장된 데이터가 있고, 내용(content)이 존재하는 경우
     if (layouts && layouts.length > 0 && layouts[0].content) {
       parsedRacks.value = normalizeLoadedRackLayouts(JSON.parse(layouts[0].content))
-      message.success(t('rackDiagram.msg.rackLoaded'))
     } else {
       // 최초 배포/접속 시에는 임의 랙을 만들지 않는다.
       // 사용자가 명시적으로 "새 랙 추가"를 눌렀을 때만 생성일/위치가 있는 랙을 만든다.
@@ -2915,6 +2914,7 @@ const hostVmModalTitle = ref(t('rackDiagram.hostVmList'))
 const hostVmLoading = ref(false)
 const hostVmList = ref([])
 const hostVmFallbackList = ref([])
+const vmOsTypeCache = new Map()
 const dragSource = ref({ rIndex: -1, iIndex: -1 })
 const quickLinksError = ref('')
 const quickLinkRows = ref([])
@@ -2964,22 +2964,41 @@ const HOST_ACTIVE_VM_STATES = new Set(['running', 'starting', 'stopping', 'migra
 
 const buildVmMockList = (hostId, hostName = 'sample') => {
   const osPool = [
-    'CentOS Linux (Sample)',
-    'Rocky Linux (Sample)',
-    'Ubuntu Linux (Sample)',
-    'Windows Server (Sample)',
-    'Windows 11 Pro (Sample)'
+    { id: '8b8c0681-8ed7-11f1-b7da-00248162d5a3', name: 'Windows Server 2022 (64-bit)' },
+    { id: '7cca2285-8ed7-11f1-b7da-00248162d5a3', name: 'Rocky Linux 9' },
+    { id: '1f54dd03-800f-4403-b003-810b16debd42', name: 'Ubuntu 22.04 LTS' },
+    { id: '7cc9bfb8-8ed7-11f1-b7da-00248162d5a3', name: 'CentOS 9' },
+    { id: '0fc630a1-9bb6-4eb0-b91b-5e929d73f3c7', name: 'Debian GNU/Linux 12 (64-bit)' },
+    { id: '5725f729-8ed7-11f1-b7da-00248162d5a3', name: 'SUSE Linux Enterprise Server 15 (64-bit)' },
+    { id: '9a61346d-39f6-4e64-b142-1e9b5de9a276', name: 'Red Hat Enterprise Linux 9.0' },
+    { id: 'e1cb87b9-94f3-4d2c-a0da-85ceb188373a', name: 'Fedora Linux (64 bit)' },
+    { id: '7cc997b3-8ed7-11f1-b7da-00248162d5a3', name: 'AlmaLinux 9' },
+    { id: 'df5c8d1d-8ed6-11f1-b7da-00248162d5a3', name: 'Other Linux (64-bit)' }
   ]
+  const statePool = ['Running', 'Starting', 'Migrating', 'Stopping']
   const list = []
   for (let i = 1; i <= 20; i++) {
     const idx = i - 1
     const no = String(i).padStart(2, '0')
+    const os = osPool[idx % osPool.length]
     list.push({
       id: `sample-${hostId}-${no}`,
       name: `${hostName}-vm-${no}`,
       displayname: `${hostName}-vm-${no}`,
-      state: 'Running',
-      ostypename: osPool[idx % osPool.length]
+      state: statePool[idx % statePool.length],
+      hostid: hostId,
+      hostname: hostName,
+      hypervisor: 'KVM',
+      guestosid: os.id,
+      ostypeid: os.id,
+      osdisplayname: os.name,
+      ipaddress: `10.10.254.${100 + i}`,
+      nic: [{
+        id: `sample-nic-${hostId}-${no}`,
+        ipaddress: `10.10.254.${100 + i}`,
+        isdefault: true,
+        traffictype: 'Guest'
+      }]
     })
   }
   return list
@@ -3365,7 +3384,7 @@ const openLinkedHostVmModal = async (item) => {
       vms = allVms.filter(isVmAssignedToHost)
     }
 
-    hostVmList.value = vms
+    hostVmList.value = await resolveVmOsTypeNames(vms)
 
     // 개발환경 fallback: host 매핑 샘플 제공
     if (ENABLE_VM_FALLBACK_MOCK && !hostVmList.value.length) {
@@ -3383,17 +3402,73 @@ const openLinkedHostVmModal = async (item) => {
   }
 }
 
+const getVmOsTypeId = (vm) => String(vm?.ostypeid || vm?.guestosid || '')
+
+const getVmOsTypeInfo = (vm) => {
+  const cached = vmOsTypeCache.get(getVmOsTypeId(vm)) || {}
+  const displayName = String(
+    vm?.ostypename ||
+    vm?.osdisplayname ||
+    vm?.guestosname ||
+    cached.description ||
+    cached.name ||
+    ''
+  ).trim()
+  const categoryName = String(vm?.oscategoryname || cached.categoryName || '').trim()
+
+  return {
+    displayName,
+    searchText: [displayName, cached.name, cached.description, categoryName]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+  }
+}
+
+const resolveVmOsTypeNames = async (vms) => {
+  const unresolvedIds = [...new Set(vms
+    .filter(vm => !getVmOsTypeInfo(vm).displayName)
+    .map(getVmOsTypeId)
+    .filter(id => id && !vmOsTypeCache.has(id)))]
+
+  if (unresolvedIds.length) {
+    try {
+      const json = await api('listOsTypes', { listall: true })
+      const osTypes = json?.listostypesresponse?.ostype || []
+      osTypes.forEach(osType => {
+        if (osType?.id) {
+          vmOsTypeCache.set(String(osType.id), {
+            name: String(osType.name || ''),
+            description: String(osType.description || ''),
+            categoryName: String(osType.oscategoryname || '')
+          })
+        }
+      })
+    } catch (e) {
+      console.warn('listOsTypes failed:', e)
+    }
+  }
+
+  return vms
+}
+
 const getVmOsLogo = (vm) => {
-  const osname = String(vm?.ostypename || vm?.name || '').toLowerCase()
+  const osname = getVmOsTypeInfo(vm).searchText
+  // Font Awesome에는 Rocky/Alma/Amazon/Oracle Linux 전용 브랜드가 없어 Linux로 통일한다.
+  if (
+    osname.includes('rocky') ||
+    osname.includes('alma') ||
+    osname.includes('amazon linux') ||
+    osname.includes('oracle linux')
+  ) return 'linux'
   if (osname.includes('centos')) return 'centos'
   if (osname.includes('debian')) return 'debian'
   if (osname.includes('ubuntu')) return 'ubuntu'
-  if (osname.includes('suse')) return 'suse'
-  if (osname.includes('redhat')) return 'redhat'
+  if (osname.includes('suse') || osname.includes('opensuse')) return 'suse'
+  if (osname.includes('redhat') || osname.includes('red hat') || osname.includes('rhel')) return 'redhat'
   if (osname.includes('fedora')) return 'fedora'
-  if (osname.includes('windows') || osname.includes('dos')) return 'windows'
-  // Rocky는 전용 브랜드 아이콘이 없어서 Linux 계열로 표현
-  if (osname.includes('rocky') || osname.includes('linux')) return 'linux'
+  if (osname.includes('windows') || osname.includes('microsoft') || osname.includes('dos')) return 'windows'
+  if (osname.includes('linux')) return 'linux'
   if (osname.includes('bsd')) return 'freebsd'
   if (osname.includes('apple') || osname.includes('mac')) return 'apple'
   return 'linux'
