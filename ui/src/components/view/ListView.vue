@@ -282,13 +282,10 @@
         <label>{{ getTimeZone(record.timezone) }}</label>
       </template>
       <template v-if="column.key === 'displayname'">
-        <QuickView
-          style="margin-left: 5px"
-          :actions="actions"
-          :resource="record"
-          :enabled="quickViewEnabled(actions, columns, column.key)"
-          @exec-action="$parent.execAction"
-        />
+        <span v-if="$route.path.split('/')[1] === 'vm'" style="margin-right: 5px">
+          <resource-icon v-if="record.icon && record.icon.base64image" :image="record.icon.base64image" size="2x"/>
+          <os-logo v-else :osId="record.ostypeid" :osName="record.ostypename || record.osdisplayname" size="xl" />
+        </span>
         <router-link :to="{ path: $route.path + '/' + record.id }">{{ text }}</router-link>
       </template>
       <template v-if="column.key === 'username'">

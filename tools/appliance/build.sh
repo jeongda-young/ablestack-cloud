@@ -237,7 +237,7 @@ function retry() {
 function create_definition() {
   if [ "${appliance}" != "${appliance_build_name}" ]; then
     cp -r "${appliance}" "${appliance_build_name}"
-    sed ${sed_regex_option} -i -e "s/^CREATE_DATE=/CREATE_DATE='${CREATE_DATE_FMT}'/" \
+    sed ${sed_regex_option} -i -e "s/^CREATE_DATE=.*/CREATE_DATE='${CREATE_DATE_FMT}'/" \
           "${appliance_build_name}/scripts/configure_systemvm_services.sh"
     set +e
     if [ ! -z "${version}" ]; then
