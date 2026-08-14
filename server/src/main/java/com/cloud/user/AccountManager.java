@@ -24,6 +24,7 @@ import com.cloud.api.auth.SetupUserTwoFactorAuthenticationCmd;
 import com.cloud.exception.ResourceAllocationException;
 import org.apache.cloudstack.acl.ControlledEntity;
 import org.apache.cloudstack.acl.apikeypair.ApiKeyPair;
+import org.apache.cloudstack.acl.Role;
 import org.apache.cloudstack.api.command.admin.account.UpdateAccountCmd;
 import org.apache.cloudstack.api.command.admin.user.DeleteUserCmd;
 import org.apache.cloudstack.api.command.admin.user.MoveUserCmd;
@@ -212,4 +213,5 @@ public interface AccountManager extends AccountService, Configurable {
     void verifyCallerPrivilegeForUserOrAccountOperations(User user);
 
     void checkCallerRoleTypeAllowedForUserOrAccountOperations(Account userAccount, User user);
+    void refreshRoleCheckersCacheOnPermissionsChange(Role role);
 }
