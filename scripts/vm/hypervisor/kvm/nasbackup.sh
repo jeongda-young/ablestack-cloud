@@ -120,6 +120,23 @@ get_linstor_uuid_from_path() {
   echo "$volUuid"
 }
 
+get_linstor_uuid_from_device() {
+  local fullpath="$1"
+  # VMs started before the /dev/drbd/by-res/ change still reference the raw DRBD
+  # device node (e.g. /dev/drbd1098) in their live libvirt XML. Ask udev for the
+  # device's symlinks and map it back to the volume UUID via the by-res symlink.
+  local link
+  for link in $(udevadm info --query=symlink --name="$fullpath" 2>/dev/null || true); do
+    if [[ "$link" == drbd/by-res/cs-* ]]; then
+      get_linstor_uuid_from_path "/dev/$link"
+      return 0
+    fi
+  done
+  # Without a by-res symlink we cannot derive the volume UUID. Falling back to the
+  # raw device name would produce a backup that restore cannot find, so fail hard.
+  return 1
+}
+
 backup_running_vm() {
   mount_operation
   mkdir -p "$dest" || { echo "Failed to create backup directory $dest"; exit 1; }
@@ -223,6 +240,12 @@ print(len(files))
         volUuid="${volume_uuid_arr[$disk_index]}"
     elif [[ "$fullpath" == /dev/drbd/by-res/* ]]; then
         volUuid=$(get_linstor_uuid_from_path "$fullpath")
+    elif [[ "$fullpath" == /dev/drbd[0-9]* ]]; then
+        if ! volUuid=$(get_linstor_uuid_from_device "$fullpath"); then
+            echo "Failed to resolve LINSTOR volume UUID for $fullpath"
+            cleanup
+            exit 1
+        fi
     else
         volUuid="${fullpath##*/}"
     fi
@@ -311,8 +334,20 @@ print(len(files))
   fi
   local disk_idx=0
   while read -r disk fullpath; do
+    if [[ ${#volume_uuid_arr[@]} -gt $disk_idx && -n "${volume_uuid_arr[$disk_idx]}" ]]; then
+        volUuid="${volume_uuid_arr[$disk_idx]}"
+    elif [[ "$fullpath" == /dev/drbd/by-res/* ]]; then
+        volUuid=$(get_linstor_uuid_from_path "$fullpath")
+    elif [[ "$fullpath" == /dev/drbd[0-9]* ]]; then
+        if ! volUuid=$(get_linstor_uuid_from_device "$fullpath"); then
+            echo "Failed to resolve LINSTOR volume UUID for $fullpath"
+            cleanup
+            exit 1
+        fi
+    else
+        volUuid="${fullpath##*/}"
+    fi
     if [[ "$effective_mode" == "incremental" ]]; then
-      volUuid="${fullpath##*/}"
       # Pick this disk's specific parent file. Each volume's backup is named after its
       # own UUID, so a single PARENT_PATH would wrongly rebase data disks onto the root
       # parent.
@@ -339,10 +374,11 @@ print(len(files))
       disk_idx=$((disk_idx + 1))
       continue
     fi
-    if [[ "$fullpath" != /dev/drbd/by-res/* ]]; then
+    if [[ "$fullpath" != /dev/drbd/by-res/* && "$fullpath" != /dev/drbd[0-9]* ]]; then
+      name="datadisk"
+      disk_idx=$((disk_idx + 1))
       continue
     fi
-    volUuid=$(get_linstor_uuid_from_path "$fullpath")
     if ! qemu-img convert -O qcow2 "$dest/$name.$volUuid.qcow2" "$dest/$name.$volUuid.qcow2.tmp" >> "$logFile" 2> >(cat >&2); then
       echo "qemu-img convert failed for $dest/$name.$volUuid.qcow2"
       cleanup
@@ -351,6 +387,7 @@ print(len(files))
 
     mv "$dest/$name.$volUuid.qcow2.tmp" "$dest/$name.$volUuid.qcow2"
     name="datadisk"
+    disk_idx=$((disk_idx + 1))
   done < <(
     virsh -c qemu:///system domblklist "$VM" --details 2>/dev/null | awk '$2=="disk"{print $3, $4}'
   )
@@ -421,6 +458,12 @@ backup_stopped_vm() {
       volUuid=$(get_ceph_uuid_from_path "$disk")
     elif [[ "$disk" == /dev/drbd/by-res/* ]]; then
       volUuid=$(get_linstor_uuid_from_path "$disk")
+    elif [[ "$disk" == /dev/drbd[0-9]* ]]; then
+      if ! volUuid=$(get_linstor_uuid_from_device "$disk"); then
+        echo "Failed to resolve LINSTOR volume UUID for $disk"
+        cleanup
+        exit 1
+      fi
     else
       volUuid="${disk##*/}"
     fi
