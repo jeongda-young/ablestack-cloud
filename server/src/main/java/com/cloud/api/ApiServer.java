@@ -1020,7 +1020,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
             // if userId not null, that mean that user is logged in
             if (userId != null) {
                 final User user = ApiDBUtils.findUserById(userId);
-                return commandAvailable(remoteAddress, commandName, user);
+                return commandAvailable(remoteAddress, commandName, user, null);
             } else {
                 if (commandName.equalsIgnoreCase(ListGuiThemesCmd.class.getAnnotation(APICommand.class).name())) {
                     return true;
@@ -1133,7 +1133,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
                 return false;
             }
 
-            if (!commandAvailable(remoteAddress, commandName, user)) {
+            if (!commandAvailable(remoteAddress, commandName, user, null)) {
                 return false;
             }
 
@@ -1169,7 +1169,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
             CallContext.register(user, account);
 
             List<ApiKeyPairPermission> keyPairPermissions = keyPairManager.findAllPermissionsByKeyPairId(keyPair.getId(), account.getRoleId());
-            if (commandAvailable(remoteAddress, commandName, user, keyPairPermissions.toArray(new ApiKeyPairPermission[0]))) {
+            if (commandAvailable(remoteAddress, commandName, user, keyPair, keyPairPermissions.toArray(new ApiKeyPairPermission[0]))) {
                 logger.info("API accessed through API Key Pair. API Key: [{}].", keyPair.getApiKey());
                 return true;
             }
@@ -1183,9 +1183,9 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
         return false;
     }
 
-    private boolean commandAvailable(final InetAddress remoteAddress, final String commandName, final User user, ApiKeyPairPermission... rolePermissions) {
+    private boolean commandAvailable(final InetAddress remoteAddress, final String commandName, final User user, ApiKeyPair keyPair, ApiKeyPairPermission... rolePermissions) {
         try {
-            checkCommandAvailable(user, commandName, remoteAddress, rolePermissions);
+            checkCommandAvailable(user, commandName, remoteAddress, keyPair, rolePermissions);
         } catch (final RequestLimitException ex) {
             logger.debug(ex.getMessage());
             throw new ServerApiException(ApiErrorCode.API_LIMIT_EXCEED, ex.getMessage());
@@ -1542,7 +1542,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
         return domainIdArr[0];
     }
 
-    private void checkCommandAvailable(final User user, final String commandName, final InetAddress remoteAddress, ApiKeyPairPermission ... apiKeyPairPermissions) throws PermissionDeniedException {
+    private void checkCommandAvailable(final User user, final String commandName, final InetAddress remoteAddress, ApiKeyPair keyPair, ApiKeyPairPermission... apiKeyPairPermissions) throws PermissionDeniedException {
         if (user == null) {
             throw new PermissionDeniedException("User is null for role based API access check for command" + commandName);
         }
@@ -1560,7 +1560,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
         }
 
         for (final APIChecker apiChecker : apiAccessCheckers) {
-            apiChecker.checkAccess(user, commandName, apiKeyPairPermissions);
+            apiChecker.checkAccess(user, commandName, keyPair, apiKeyPairPermissions);
         }
     }
 

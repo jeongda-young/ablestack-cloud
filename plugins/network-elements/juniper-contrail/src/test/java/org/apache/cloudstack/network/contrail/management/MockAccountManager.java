@@ -614,4 +614,9 @@ public class MockAccountManager extends ManagerBase implements AccountManager {
     @Override
     public void checkCallerRoleTypeAllowedForUserOrAccountOperations(Account userAccount, User user) {
     }
+
+    @Override
+    public List<? extends ApiKeyPairPermission> getAllExplicitKeyPairPermissions(Long keyPairId) {
+        return null;
+    }
 }

@@ -3881,7 +3881,9 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         if (expunge) {
             String jobParamsString = ((AsyncJobVO) cmd.getJob()).getCmdInfo();
             HashMap<String,String> jobParams = GsonHelper.getGson().fromJson(jobParamsString, jobParamsType);
-            String apiKey = jobParams.get("apiKey");
+            String apiKey = jobParams.entrySet().stream()
+                    .filter(e -> ApiConstants.API_KEY.equalsIgnoreCase(e.getKey()))
+                    .map(Map.Entry::getValue).findFirst().orElse(null);
             checkExpungeVmPermission(ctx.getCallingAccount(), apiKey);
         }
 
