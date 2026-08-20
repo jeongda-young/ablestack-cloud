@@ -1362,7 +1362,10 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
 
     @Override
     public List<Backup.RestorePoint> listCatalogRestorePoints(final VirtualMachine vm) {
-        return queryVeeamCatalogRestorePoints(vm).restorePoints;
+        final List<Backup> moldBackups = backupDao.listByVmId(vm.getDataCenterId(), vm.getId()).stream()
+                .filter(this::isVeeamBackup)
+                .collect(Collectors.toList());
+        return queryVeeamCatalogRestorePoints(vm, moldBackups).restorePoints;
     }
 
     private String getVeeamSourceVmName(final VirtualMachine vm) {
