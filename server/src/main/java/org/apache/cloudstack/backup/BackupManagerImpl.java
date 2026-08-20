@@ -56,6 +56,7 @@ import org.apache.cloudstack.api.command.admin.backup.UpdateNetBackupCmd;
 import org.apache.cloudstack.api.command.admin.vm.CreateVMFromBackupCmdByAdmin;
 import org.apache.cloudstack.api.command.user.backup.AssignVirtualMachineToBackupOfferingCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateAblestackVeeamBackupCmd;
+import org.apache.cloudstack.api.command.user.backup.UpdateAblestackVeeamBackupCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateBackupCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateNetBackupCmd;
 import org.apache.cloudstack.api.command.user.backup.ImportAblestackVeeamBackupSeedCmd;
@@ -1194,6 +1195,37 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
         createCheckedBackupVeeam(vm, vmId, backupProvider, cmd.getQuiesceVM(), backupSize, owner, getBackupScheduleId(job),
                 cmd.getName(), cmd.getIntervalType(), cmd.getVeeamJobName());
+        return true;
+    }
+
+    @Override
+    public boolean updateAblestackVeeamBackup(final UpdateAblestackVeeamBackupCmd cmd) {
+        final Account caller = CallContext.current().getCallingAccount();
+        final BackupVO backup = backupDao.findById(cmd.getId());
+        if (backup == null) {
+            throw new CloudRuntimeException(String.format("Backup [%s] was not found", cmd.getId()));
+        }
+        final VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(backup.getVmId());
+        if (vm != null) {
+            accountManager.checkAccess(caller, null, true, vm);
+            validateBackupForZone(vm.getDataCenterId());
+        }
+        final BackupOfferingVO offering = backupOfferingDao.findById(backup.getBackupOfferingId());
+        if (offering == null || !BackupProviderNameUtils.isVeeamFamily(offering.getProvider())) {
+            throw new CloudRuntimeException(String.format("Backup [%s] is not an ablestack-veeam backup", backup.getUuid()));
+        }
+        if (StringUtils.isNotBlank(cmd.getVeeamRestorePointId())) {
+            backupDetailsDao.removeDetail(backup.getId(), "ablestack.veeam.restore.point.id");
+            backupDetailsDao.addDetail(backup.getId(), "ablestack.veeam.restore.point.id",
+                    cmd.getVeeamRestorePointId().trim(), false);
+        }
+        if (StringUtils.isNotBlank(cmd.getVeeamJobName())) {
+            backupDetailsDao.removeDetail(backup.getId(), "ablestack.veeam.job.name");
+            backupDetailsDao.addDetail(backup.getId(), "ablestack.veeam.job.name",
+                    cmd.getVeeamJobName().trim(), false);
+        }
+        logger.info("Updated Ablestack Veeam backup [{}] metadata restorePointId=[{}] jobName=[{}]",
+                backup.getUuid(), cmd.getVeeamRestorePointId(), cmd.getVeeamJobName());
         return true;
     }
 
@@ -3046,6 +3078,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         cmdList.add(ImportAblestackVeeamBackupSeedCmd.class);
         cmdList.add(ListVeeamRestorePointsCmd.class);
         cmdList.add(CreateAblestackVeeamBackupCmd.class);
+        cmdList.add(UpdateAblestackVeeamBackupCmd.class);
         cmdList.add(RestoreAblestackVeeamBackupCmd.class);
         cmdList.add(ListAblestackVeeamBackupsCmd.class);
         cmdList.add(ListBackupsCmd.class);

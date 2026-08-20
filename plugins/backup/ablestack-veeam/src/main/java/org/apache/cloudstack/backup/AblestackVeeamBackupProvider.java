@@ -1036,37 +1036,13 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
 
     @Override
     public boolean deleteBackup(final Backup backup, final boolean forced) {
-        if (backup == null) {
-            return false;
-        }
-        loadBackupDetailsIfNeeded(backup);
-        final VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(backup.getVmId());
-        final Host host;
-        if (vm != null) {
-            host = getVMHypervisorHost(vm);
-        } else {
-            host = resourceManager.findOneRandomRunningHostByHypervisor(Hypervisor.HypervisorType.KVM, backup.getZoneId());
-        }
-        if (host == null) {
-            throw new CloudRuntimeException("Unable to find a KVM host to delete Veeam backup " + backup.getUuid());
-        }
-        final AblestackDeleteBackupCommand command = new AblestackDeleteBackupCommand(
-                backup.getExternalId(), null, null, null, forced);
-        command.setBackupProvider(getName());
-        command.setVmName(vm != null ? vm.getInstanceName() : null);
-        command.setCheckpointName(getBackupDetail(backup, DETAIL_CHECKPOINT_NAME));
-        command.setDiskPaths(getBackupDetail(backup, DETAIL_RBD_DISK_PATHS));
-        try {
-            final BackupAnswer answer = (BackupAnswer) agentManager.send(host.getId(), command);
-            if (answer == null || !answer.getResult()) {
-                throw new CloudRuntimeException(answer != null ? answer.getDetails()
-                        : "No response while deleting Veeam backup " + backup.getUuid());
-            }
-        } catch (AgentUnavailableException | OperationTimedoutException e) {
-            throw new CloudRuntimeException("Failed to delete Veeam backup " + backup.getUuid() + ": " + e.getMessage(), e);
-        }
-        removeBackupWithDetails(backup.getId());
-        return true;
+        // Align with NetBackup: retention/expiry lives in the external catalog (Veeam B&R).
+        // Mold must not delete individual backup rows; syncMoldBackupsWithVeeamCatalog removes
+        // Mold metadata after restore points disappear from the Veeam catalog.
+        throw new CloudRuntimeException(
+                "Veeam backups are managed by Veeam Backup & Replication (Agent Job retention / UI) "
+                        + "and cannot be deleted individually from Mold. Delete or expire restore points in Veeam; "
+                        + "Mold backup history is cleaned up by catalog sync.");
     }
 
     @Override
@@ -1903,7 +1879,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
 
         final VeeamCatalogQueryResult catalog;
         try {
-            catalog = queryVeeamCatalogRestorePoints(vm);
+            catalog = queryVeeamCatalogRestorePoints(vm, moldBackups);
         } catch (final Exception e) {
             LOG.warn("Skipping Veeam catalog delete sync for VM [{}]: {}", vm.getInstanceName(), e.getMessage());
             return;
@@ -1914,7 +1890,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         deleteMoldBackupsMissingFromVeeamCatalog(vm, moldBackups, catalog);
     }
 
-    private VeeamCatalogQueryResult queryVeeamCatalogRestorePoints(final VirtualMachine vm) {
+    private VeeamCatalogQueryResult queryVeeamCatalogRestorePoints(final VirtualMachine vm, final List<Backup> moldBackups) {
         final Map<String, Backup.RestorePoint> byId = new LinkedHashMap<>();
         boolean anySuccess = false;
         boolean hostQuerySucceeded = false;
@@ -1924,6 +1900,12 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         addIfNotBlank(queryNames, getVeeamSourceVmName(vm));
         addIfNotBlank(queryNames, vm.getInstanceName());
         queryNames.addAll(hostNames);
+        // Agent file-level jobs are keyed by Job name (e.g. ablecube3), not guest VM name.
+        for (final Backup backup : moldBackups) {
+            loadBackupDetailsIfNeeded(backup);
+            addIfNotBlank(queryNames, getBackupDetail(backup, DETAIL_VEEAM_JOB_NAME));
+            addIfNotBlank(queryNames, getBackupDetail(backup, DETAIL_POLICY_NAME));
+        }
 
         boolean syncedRepository = false;
         for (final String name : queryNames) {
@@ -2008,12 +1990,6 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             addIfNotBlank(usedRestorePointIds, normalizeVeeamRestorePointId(getBackupDetail(backup, DETAIL_VEEAM_RESTORE_POINT_ID)));
         }
 
-        final List<Backup.RestorePoint> unusedPoints = catalogPoints.stream()
-                .filter(restorePoint -> restorePoint.getCreated() != null)
-                .filter(restorePoint -> !usedRestorePointIds.contains(normalizeVeeamRestorePointId(restorePoint.getId())))
-                .sorted(Comparator.comparing(Backup.RestorePoint::getCreated))
-                .collect(Collectors.toList());
-
         final List<Backup> unstampedBackups = moldBackups.stream()
                 .peek(this::loadBackupDetailsIfNeeded)
                 .filter(backup -> StringUtils.isBlank(getBackupDetail(backup, DETAIL_VEEAM_RESTORE_POINT_ID)))
@@ -2021,29 +1997,63 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                 .sorted(Comparator.comparing(Backup::getDate))
                 .collect(Collectors.toList());
 
-        int backupIndex = 0;
-        int restorePointIndex = 0;
-        while (backupIndex < unstampedBackups.size() && restorePointIndex < unusedPoints.size()) {
-            final Backup backup = unstampedBackups.get(backupIndex);
-            final Backup.RestorePoint restorePoint = unusedPoints.get(restorePointIndex);
-            final long delta = Math.abs(restorePoint.getCreated().getTime() - backup.getDate().getTime());
-            if (delta <= VEEAM_RP_TIME_MATCH_MS) {
-                final String restorePointId = normalizeVeeamRestorePointId(restorePoint.getId());
-                updateBackupDetail(backup, DETAIL_VEEAM_RESTORE_POINT_ID, restorePointId);
-                if (StringUtils.isNotBlank(restorePoint.getJobName())
-                        && StringUtils.isBlank(getBackupDetail(backup, DETAIL_VEEAM_JOB_NAME))) {
-                    updateBackupDetail(backup, DETAIL_VEEAM_JOB_NAME, restorePoint.getJobName().trim());
-                }
-                LOG.info("Stamped Veeam restore point [{}] onto Mold backup [{}] for catalog sync", restorePointId, backup.getUuid());
-                backupIndex++;
-                restorePointIndex++;
+        final List<Backup.RestorePoint> unusedPoints = catalogPoints.stream()
+                .filter(restorePoint -> restorePoint.getCreated() != null)
+                .filter(restorePoint -> !usedRestorePointIds.contains(normalizeVeeamRestorePointId(restorePoint.getId())))
+                .sorted(Comparator.comparing(Backup.RestorePoint::getCreated))
+                .collect(Collectors.toList());
+
+        // Prefer job-name + time matches so Agent host jobs stamp correctly onto guest VM rows.
+        for (final Backup backup : unstampedBackups) {
+            if (StringUtils.isNotBlank(getBackupDetail(backup, DETAIL_VEEAM_RESTORE_POINT_ID))) {
                 continue;
             }
-            if (backup.getDate().before(restorePoint.getCreated())) {
-                backupIndex++;
-            } else {
-                restorePointIndex++;
+            final String backupJob = StringUtils.trimToNull(getBackupDetail(backup, DETAIL_VEEAM_JOB_NAME));
+            Backup.RestorePoint best = null;
+            long bestDelta = Long.MAX_VALUE;
+            for (final Backup.RestorePoint restorePoint : unusedPoints) {
+                final String rpId = normalizeVeeamRestorePointId(restorePoint.getId());
+                if (StringUtils.isBlank(backupJob) && usedRestorePointIds.contains(rpId)) {
+                    continue;
+                }
+                if (StringUtils.isNotBlank(backupJob)
+                        && StringUtils.isNotBlank(restorePoint.getJobName())
+                        && !normalizeVeeamJobName(backupJob).equals(normalizeVeeamJobName(restorePoint.getJobName()))) {
+                    continue;
+                }
+                final long delta = Math.abs(restorePoint.getCreated().getTime() - backup.getDate().getTime());
+                if (delta <= VEEAM_RP_TIME_MATCH_MS && delta < bestDelta) {
+                    best = restorePoint;
+                    bestDelta = delta;
+                }
             }
+            if (best == null && StringUtils.isBlank(backupJob)) {
+                for (final Backup.RestorePoint restorePoint : unusedPoints) {
+                    final String rpId = normalizeVeeamRestorePointId(restorePoint.getId());
+                    if (usedRestorePointIds.contains(rpId)) {
+                        continue;
+                    }
+                    final long delta = Math.abs(restorePoint.getCreated().getTime() - backup.getDate().getTime());
+                    if (delta <= VEEAM_RP_TIME_MATCH_MS && delta < bestDelta) {
+                        best = restorePoint;
+                        bestDelta = delta;
+                    }
+                }
+            }
+            if (best == null) {
+                continue;
+            }
+            final String restorePointId = normalizeVeeamRestorePointId(best.getId());
+            updateBackupDetail(backup, DETAIL_VEEAM_RESTORE_POINT_ID, restorePointId);
+            // Agent host jobs produce one Veeam RP per run for many guest VMs — allow reuse when job matches.
+            if (StringUtils.isBlank(backupJob)) {
+                usedRestorePointIds.add(restorePointId);
+            }
+            if (StringUtils.isNotBlank(best.getJobName())
+                    && StringUtils.isBlank(getBackupDetail(backup, DETAIL_VEEAM_JOB_NAME))) {
+                updateBackupDetail(backup, DETAIL_VEEAM_JOB_NAME, best.getJobName().trim());
+            }
+            LOG.info("Stamped Veeam restore point [{}] onto Mold backup [{}] for catalog sync", restorePointId, backup.getUuid());
         }
     }
 
@@ -2149,6 +2159,20 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             final String restorePointId = normalizeVeeamRestorePointId(getBackupDetail(backup, DETAIL_VEEAM_RESTORE_POINT_ID));
             if (StringUtils.isNotBlank(restorePointId)) {
                 if (!catalogIds.contains(restorePointId)) {
+                    toRemove.add(backup.getId());
+                }
+                continue;
+            }
+            final String jobName = StringUtils.trimToNull(getBackupDetail(backup, DETAIL_VEEAM_JOB_NAME));
+            if (StringUtils.isNotBlank(jobName) && backup.getDate() != null) {
+                // Host Agent: one Veeam RP per job run may cover multiple guest VM Mold rows.
+                // If that RP is deleted from Veeam, no time-matched RP remains for the job.
+                final boolean matchedLiveRp = catalog.restorePoints.stream()
+                        .filter(rp -> rp.getCreated() != null)
+                        .filter(rp -> StringUtils.isBlank(rp.getJobName())
+                                || normalizeVeeamJobName(jobName).equals(normalizeVeeamJobName(rp.getJobName())))
+                        .anyMatch(rp -> Math.abs(rp.getCreated().getTime() - backup.getDate().getTime()) <= VEEAM_RP_TIME_MATCH_MS);
+                if (!matchedLiveRp) {
                     toRemove.add(backup.getId());
                 }
                 continue;

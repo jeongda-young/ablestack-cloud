@@ -27,6 +27,7 @@ import org.apache.cloudstack.api.command.admin.backup.ImportBackupOfferingCmd;
 import org.apache.cloudstack.api.command.admin.backup.UpdateNetBackupCmd;
 import org.apache.cloudstack.api.command.admin.backup.UpdateBackupOfferingCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateAblestackVeeamBackupCmd;
+import org.apache.cloudstack.api.command.user.backup.UpdateAblestackVeeamBackupCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateBackupCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateNetBackupCmd;
 import org.apache.cloudstack.api.command.user.backup.ImportAblestackVeeamBackupSeedCmd;
@@ -266,6 +267,12 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
     List<BackupRestorePointResponse> createVeeamRestorePointResponses(List<Backup.RestorePoint> points);
 
     boolean createAblestackVeeamBackup(CreateAblestackVeeamBackupCmd cmd, Object job) throws ResourceAllocationException;
+
+    /**
+     * Stamp Veeam restore-point / job metadata onto an existing Ablestack Veeam backup row
+     * so out-of-band catalog sync can remove Mold history when Veeam deletes the restore point.
+     */
+    boolean updateAblestackVeeamBackup(UpdateAblestackVeeamBackupCmd cmd);
 
     boolean restoreAblestackVeeamBackup(Long backupId);
 
