@@ -95,6 +95,9 @@ export default {
           case 'error':
             state = this.$t('state.error')
             break
+          case 'failed':
+            state = this.$t('state.failed')
+            break
           case 'readonly':
             state = this.$t('state.readonly')
             break

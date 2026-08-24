@@ -83,6 +83,7 @@ import javax.xml.xpath.XPathFactory;
 import java.io.StringReader;
 import java.io.StringWriter;
 import java.net.URISyntaxException;
+import java.nio.file.Path;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.text.SimpleDateFormat;
@@ -112,11 +113,14 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
 
     private static final Logger LOG = LogManager.getLogger(AblestackVeeamBackupProvider.class);
 
-    private static final String BACKUP_ROOT = "/tmp/mold/veeam";
+    private static final String DEFAULT_STAGE_ROOT_PATH = "/tmp/mold/veeam";
     private static final String BACKUP_TYPE_FULL = "FULL";
     private static final String BACKUP_TYPE_INCREMENTAL = "INCREMENTAL";
     private static final String BACKUP_ENGINE_QCOW2 = "QCOW2";
     private static final String BACKUP_ENGINE_RBD_DIFF = "RBD_DIFF";
+    private static final String BACKUP_TRACE = "[ABLESTACK_VEEAM_BACKUP_TRACE]";
+    private static final String RESTORE_TRACE = "[ABLESTACK_VEEAM_RESTORE_TRACE]";
+    private static final long STAGE_SPACE_BUFFER_BYTES = 10L * 1024L * 1024L * 1024L;
     private static final String DETAIL_CHECKPOINT_NAME = "ablestack.veeam.checkpoint.name";
     private static final String DETAIL_CHECKPOINT_PATH = "ablestack.veeam.checkpoint.path";
     private static final String DETAIL_CHECKPOINT_XML = "ablestack.veeam.checkpoint.xml";
@@ -190,6 +194,11 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             "backup.plugin.ablestack-veeam.staging.path", "/var/ablestack-veeam-staging",
             "Shared staging directory on the Veeam server for disk export before seed import.",
             true, ConfigKey.Scope.Zone, BackupFrameworkEnabled.key());
+
+    private ConfigKey<String> AblestackVeeamStageRootPath = new ConfigKey<>("Advanced", String.class,
+            "backup.plugin.ablestack-veeam.stage.root.path", DEFAULT_STAGE_ROOT_PATH,
+            "Local KVM host directory used for ABLESTACK Veeam backup staging (host Agent job SelectedFiles root).",
+            true, ConfigKey.Scope.Global);
 
     public ConfigKey<Boolean> AblestackVeeamUseRestApi = new ConfigKey<>("Advanced", Boolean.class,
             "backup.plugin.ablestack-veeam.use.rest.api", "false",
@@ -267,7 +276,9 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         if (!result.success && incrementalBackup && canRetryFailedIncrementalAsFull(result) && shouldRetryAsFullAfterIncrementalFailure(result, vmVolumes)) {
             failedIncrementalBackup = result.backup;
             cleanupFailedBackupForFullRetry(host, failedIncrementalBackup);
-            LOG.warn("Incremental Veeam backup failed for VM [{}] due to [{}]. Retrying as full backup.", vm.getInstanceName(), result.details);
+            LOG.warn("{} phase=[INCREMENTAL_FALLBACK_TO_FULL], vmId=[{}], vmName=[{}], failedBackupUuid=[{}], reason=[{}]",
+                    BACKUP_TRACE, vm.getId(), vm.getInstanceName(),
+                    failedIncrementalBackup != null ? failedIncrementalBackup.getUuid() : null, result.details);
             result = executeBackup(vm, quiesceVM, host, vmVolumes, volumePoolsAndPaths, null, false,
                     resolvedJobName);
             if (result.success && failedIncrementalBackup != null) {
@@ -292,6 +303,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         final String checkpointName = backupPath.substring(backupPath.lastIndexOf("/") + 1);
         final String backupEngine = areAllVolumesOnRbdPool(volumePoolsAndPaths.first()) ? BACKUP_ENGINE_RBD_DIFF : BACKUP_ENGINE_QCOW2;
         final String requestedBackupType = incrementalBackup ? BACKUP_TYPE_INCREMENTAL : BACKUP_TYPE_FULL;
+        validateBackupStageCapacity(vmHost, getBackupStageRootPath(), vmVolumes, vm.getInstanceName(), requestedBackupType, backupEngine);
         final List<String> backupFiles = buildBackupFileNames(vmVolumes, backupEngine, incrementalBackup);
         final Map<String, String> backupDetails = getBackupDetails(vm, backupPath, checkpointName, backupEngine, latestBackup,
                 incrementalBackup, policyName);
@@ -300,6 +312,9 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         }
 
         final BackupVO backupVO = createBackupObject(vm, backupPath, requestedBackupType, backupDetails);
+        LOG.info("{} phase=[BEGIN], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], backupPath=[{}], host=[{}]",
+                BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
+                backupPath, vmHost != null ? vmHost.getName() : null);
         AblestackVeeamTakeBackupCommand command = new AblestackVeeamTakeBackupCommand(vm.getInstanceName(), backupPath);
         final int commandTimeout = BackupCommandTimeout.value();
         if (commandTimeout > 0) {
@@ -342,10 +357,13 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                 backupVO.setBackedUpVolumes(createVolumeInfoFromVolumes(vmVolumes, backupFiles));
                 backupVO.setStatus(Backup.Status.BackedUp);
                 if (backupDao.update(backupVO.getId(), backupVO)) {
+                    LOG.info("{} phase=[SUCCESS], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], size=[{}]",
+                            BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType,
+                            backupEngine, backupVO.getSize());
                     return BackupExecutionResult.success(backupVO);
                 }
-                LOG.error("Veeam staging completed for VM [{}], but backup [{}] metadata update failed. Leaving it in Error state.",
-                        vm.getInstanceName(), backupVO.getUuid());
+                LOG.error("{} phase=[METADATA_UPDATE_FAILED], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}]",
+                        BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine);
                 markBackupFailure(backupVO, "metadata-update", "Failed to update Veeam backup metadata");
                 backupVO.setStatus(Backup.Status.Error);
                 backupDao.update(backupVO.getId(), backupVO);
@@ -353,7 +371,8 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             }
 
             final String details = answer != null ? answer.getDetails() : "No answer received";
-            LOG.error("Failed to take Veeam backup for VM {}: {}", vm.getInstanceName(), details);
+            LOG.error("{} phase=[AGENT_FAILED], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], details=[{}]",
+                    BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine, details);
             markBackupFailure(backupVO, "agent-answer", details);
             final boolean cleanupSuccessful = cleanupFailedBackupArtifacts(vmHost, backupVO);
             backupVO.setStatus(cleanupSuccessful ? Backup.Status.Failed : Backup.Status.Error);
@@ -685,8 +704,108 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     }
 
     private String buildBackupPath(final VirtualMachine vm) {
-        return String.format("%s/%s/%s", BACKUP_ROOT, vm.getInstanceName(),
+        return String.format("%s/%s/%s", getBackupStageRootPath(), vm.getInstanceName(),
                 new SimpleDateFormat("yyyy.MM.dd.HH.mm.ss.SSS").format(new Date()));
+    }
+
+    private String getBackupStageRootPath() {
+        return Path.of(StringUtils.defaultIfBlank(AblestackVeeamStageRootPath.value(), DEFAULT_STAGE_ROOT_PATH))
+                .toAbsolutePath()
+                .normalize()
+                .toString();
+    }
+
+    private void validateBackupStageCapacity(final Host stageHost, final String stageRootPath, final List<VolumeVO> vmVolumes,
+            final String vmName, final String backupType, final String backupEngine) {
+        final long requiredBytes = estimateRequiredStageBytesForBackup(vmVolumes);
+        final long bufferBytes = Math.max(STAGE_SPACE_BUFFER_BYTES, requiredBytes / 5L);
+        final long minimumAvailableBytes = requiredBytes + bufferBytes;
+        final long availableBytes = getAvailableBytesOnHostPath(stageHost, stageRootPath);
+        LOG.info("{} phase=[STAGE_SPACE_CHECK], vm=[{}], host=[{}], backupType=[{}], backupEngine=[{}], stageRoot=[{}], requiredBytes=[{}], bufferBytes=[{}], minimumAvailableBytes=[{}], availableBytes=[{}]",
+                BACKUP_TRACE, vmName, stageHost != null ? stageHost.getName() : null, backupType, backupEngine, stageRootPath,
+                requiredBytes, bufferBytes, minimumAvailableBytes, availableBytes);
+        if (availableBytes < minimumAvailableBytes) {
+            throw new CloudRuntimeException(String.format(
+                    "Insufficient stage space on host [%s] for Veeam backup. Required at least [%d] bytes including buffer, but only [%d] bytes are available under [%s].",
+                    stageHost != null ? stageHost.getName() : null, minimumAvailableBytes, availableBytes, stageRootPath));
+        }
+    }
+
+    private long estimateRequiredStageBytesForBackup(final List<VolumeVO> vmVolumes) {
+        if (CollectionUtils.isEmpty(vmVolumes)) {
+            return 0L;
+        }
+        return vmVolumes.stream()
+                .filter(volume -> Volume.State.Ready.equals(volume.getState()))
+                .mapToLong(VolumeVO::getSize)
+                .sum();
+    }
+
+    private long getAvailableBytesOnHostPath(final Host host, final String path) {
+        if (host == null || StringUtils.isBlank(path)) {
+            throw new CloudRuntimeException("Host and path are required to query available Veeam stage space");
+        }
+        try {
+            final Answer answer = agentManager.send(host.getId(), new AblestackVeeamGetAvailableBytesCommand(path));
+            if (answer == null || !answer.getResult()) {
+                throw new CloudRuntimeException(String.format("Failed to query available stage space on host %s due to: %s",
+                        host.getName(), answer != null ? answer.getDetails() : "no answer received"));
+            }
+            return Long.parseLong(answer.getDetails());
+        } catch (NumberFormatException e) {
+            throw new CloudRuntimeException(String.format("Failed to parse available stage space on host %s for path %s", host.getName(), path), e);
+        } catch (AgentUnavailableException e) {
+            throw new CloudRuntimeException(String.format("Unable to contact host %s to query available stage space", host.getName()), e);
+        } catch (OperationTimedoutException e) {
+            throw new CloudRuntimeException(String.format("Timed out querying available stage space on host %s", host.getName()), e);
+        } catch (RuntimeException e) {
+            throw new CloudRuntimeException(String.format("Failed to query available stage space on host %s due to: %s", host.getName(), e.getMessage()), e);
+        }
+    }
+
+    private void ensureStageHostHasCapacityForRestore(final Host stageHost, final List<Backup> restoreChain,
+            final Set<String> requiredVolumeUuids, final String vmName, final String backupUuid, final String volumeUuid) {
+        if (stageHost == null || CollectionUtils.isEmpty(restoreChain)) {
+            return;
+        }
+        final String stageRootPath = getBackupStageRootPath();
+        final long requiredBytes = estimateRequiredStageBytesForRestore(restoreChain, requiredVolumeUuids);
+        final long bufferBytes = Math.max(STAGE_SPACE_BUFFER_BYTES, requiredBytes / 5L);
+        final long minimumAvailableBytes = requiredBytes + bufferBytes;
+        final long availableBytes = getAvailableBytesOnHostPath(stageHost, stageRootPath);
+        LOG.info("{} phase=[STAGE_SPACE_CHECK], vm=[{}], backupUuid=[{}], volumeUuid=[{}], host=[{}], stageRoot=[{}], requiredBytes=[{}], bufferBytes=[{}], minimumAvailableBytes=[{}], availableBytes=[{}], restoreChain=[{}]",
+                RESTORE_TRACE, vmName, backupUuid, volumeUuid, stageHost.getName(), stageRootPath, requiredBytes,
+                bufferBytes, minimumAvailableBytes, availableBytes,
+                restoreChain.stream().map(Backup::getExternalId).collect(Collectors.toList()));
+        if (availableBytes < minimumAvailableBytes) {
+            throw new CloudRuntimeException(String.format(
+                    "Insufficient stage space on host [%s] for Veeam restore. Required at least [%d] bytes including buffer, but only [%d] bytes are available under [%s].",
+                    stageHost.getName(), minimumAvailableBytes, availableBytes, stageRootPath));
+        }
+    }
+
+    private long estimateRequiredStageBytesForRestore(final List<Backup> restoreChain, final Set<String> requiredVolumeUuids) {
+        long totalBytes = 0L;
+        for (final Backup restoreBackup : restoreChain) {
+            if (restoreBackup == null) {
+                continue;
+            }
+            if (CollectionUtils.isEmpty(requiredVolumeUuids)) {
+                totalBytes += Math.max(restoreBackup.getSize(), 0L);
+                continue;
+            }
+            final List<Backup.VolumeInfo> backedUpVolumes = restoreBackup.getBackedUpVolumes();
+            if (CollectionUtils.isEmpty(backedUpVolumes)) {
+                totalBytes += Math.max(restoreBackup.getSize(), 0L);
+                continue;
+            }
+            final long volumeBytes = backedUpVolumes.stream()
+                    .filter(volume -> requiredVolumeUuids.contains(volume.getUuid()))
+                    .mapToLong(Backup.VolumeInfo::getSize)
+                    .sum();
+            totalBytes += volumeBytes > 0L ? volumeBytes : Math.max(restoreBackup.getSize(), 0L);
+        }
+        return totalBytes;
     }
 
     private BackupVO getLatestBackedUpBackup(final VirtualMachine vm) {
@@ -1098,11 +1217,15 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         final List<Backup> restoreChain = getRestoreChainForBackup(backup);
         final List<Backup> stagedRestoreChain = getStagedRestoreChainForBackup(backup);
         final boolean incrementalRestore = StringUtils.equalsIgnoreCase(BACKUP_TYPE_INCREMENTAL, backup.getType());
-        LOG.info("Veeam restore flow starting. vm=[{}], backup=[{}], restoreHost=[{}], preparedSourcesAlreadyPrepared=[{}], incrementalRestore=[{}], restoreChain={}",
-                vm.getInstanceName(), backup.getUuid(), host.getName(), restoreSourcesAlreadyPrepared, incrementalRestore,
+        LOG.info("{} phase=[BEGIN], vm=[{}], backup=[{}], restoreHost=[{}], preparedSourcesAlreadyPrepared=[{}], incrementalRestore=[{}], restoreChain={}",
+                RESTORE_TRACE, vm.getInstanceName(), backup.getUuid(), host.getName(), restoreSourcesAlreadyPrepared, incrementalRestore,
                 restoreChain.stream().map(Backup::getExternalId).collect(Collectors.toList()));
         final List<Backup> restoreSourcesToPrepare = incrementalRestore && !restoreSourcesAlreadyPrepared ? restoreChain : stagedRestoreChain;
         try {
+            if (!restoreSourcesAlreadyPrepared || incrementalRestore) {
+                ensureStageHostHasCapacityForRestore(host, restoreSourcesToPrepare, null,
+                        vm.getInstanceName(), backup.getUuid(), null);
+            }
             if (incrementalRestore) {
                 if (restoreSourcesAlreadyPrepared) {
                     LOG.info("Skipping Veeam root restore job completion wait for prepared incremental restore. vm=[{}], backup=[{}], restoreHost=[{}], rootPath=[{}]",
@@ -1258,6 +1381,8 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         final List<Backup> stagedRestoreChain = getStagedRestoreChainForBackup(backup);
         final List<Backup> restoreSourcesToPrepare = StringUtils.equalsIgnoreCase(BACKUP_TYPE_INCREMENTAL, backup.getType()) ? restoreChain : stagedRestoreChain;
         try {
+            ensureStageHostHasCapacityForRestore(restoreHost, restoreSourcesToPrepare, Collections.singleton(matchingVolume.getUuid()),
+                    vmNameAndState.first(), backup.getUuid(), matchingVolume.getUuid());
             prepareRestoreSourcesOnStageHosts(backup.getZoneId(), restoreHost.getName(), restoreSourcesToPrepare,
                     Collections.singleton(matchingVolume.getUuid()));
 
@@ -1459,6 +1584,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                 AblestackVeeamTaskPollInterval,
                 AblestackVeeamTaskPollMaxRetry,
                 AblestackVeeamStagingPath,
+                AblestackVeeamStageRootPath,
                 AblestackVeeamUseRestApi,
                 AblestackVeeamRestUrl,
                 AblestackVeeamRestApiVersion
@@ -1673,7 +1799,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             return false;
         }
         try {
-            final Answer answer = agentManager.send(host.getId(), new AblestackVeeamCleanupCommand(backupPaths));
+            final Answer answer = agentManager.send(host.getId(), new AblestackVeeamCleanupCommand(backupPaths, getBackupStageRootPath()));
             if (answer == null || !answer.getResult()) {
                 LOG.warn("Veeam restore cleanup command failed on host [{}]: {}",
                         host.getName(), answer != null ? answer.getDetails() : "no answer received");

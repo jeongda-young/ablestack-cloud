@@ -23,6 +23,7 @@ import java.util.List;
 
 public class AblestackVeeamCleanupCommand extends Command {
     private List<String> backupPaths;
+    private String backupRootPath;
     private String checkpointName;
     private List<String> cleanupCheckpointNames;
     private String diskPaths;
@@ -36,12 +37,25 @@ public class AblestackVeeamCleanupCommand extends Command {
         this.backupPaths = backupPaths;
     }
 
+    public AblestackVeeamCleanupCommand(final List<String> backupPaths, final String backupRootPath) {
+        this.backupPaths = backupPaths;
+        this.backupRootPath = backupRootPath;
+    }
+
     public List<String> getBackupPaths() {
         return backupPaths;
     }
 
     public void setBackupPaths(final List<String> backupPaths) {
         this.backupPaths = backupPaths;
+    }
+
+    public String getBackupRootPath() {
+        return backupRootPath;
+    }
+
+    public void setBackupRootPath(final String backupRootPath) {
+        this.backupRootPath = backupRootPath;
     }
 
     public String getCheckpointName() {

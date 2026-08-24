@@ -30,9 +30,12 @@ import org.apache.commons.lang3.StringUtils;
 
 @ResourceWrapper(handles = AblestackVeeamTakeBackupCommand.class)
 public class LibvirtAblestackVeeamTakeBackupCommandWrapper extends CommandWrapper<AblestackVeeamTakeBackupCommand, Answer, LibvirtComputingResource> {
+    private static final String BACKUP_TRACE = "[ABLESTACK_VEEAM_BACKUP_TRACE]";
 
     @Override
     public Answer execute(final AblestackVeeamTakeBackupCommand command, final LibvirtComputingResource libvirtComputingResource) {
+        logger.info("{} phase=[AGENT_ENTER], vm=[{}], backupPath=[{}], backupType=[{}]",
+                BACKUP_TRACE, command.getVmName(), command.getBackupPath(), command.getBackupType());
         final AblestackVeeamTakeBackupCommand delegate = new AblestackVeeamTakeBackupCommand(command.getVmName(), command.getBackupPath());
         delegate.setWait(command.getWait());
         delegate.setQuiesce(command.getQuiesce());
@@ -52,7 +55,8 @@ public class LibvirtAblestackVeeamTakeBackupCommandWrapper extends CommandWrappe
         if (result.first() != 0) {
             final String failureDetails = StringUtils.defaultIfBlank(result.second(),
                     "Veeam backup helper returned failure without details");
-            logger.warn("Failed to take Veeam VM backup for [{}]: {}", command.getVmName(), failureDetails);
+            logger.warn("{} phase=[AGENT_FAILED], vm=[{}], backupPath=[{}], backupType=[{}], resultCode=[{}], reason=[{}]",
+                    BACKUP_TRACE, command.getVmName(), command.getBackupPath(), command.getBackupType(), result.first(), failureDetails);
             final BackupAnswer answer = new BackupAnswer(command, false, failureDetails);
             if (result.first() == LibvirtAblestackVeeamHelper.EXIT_CLEANUP_FAILED) {
                 answer.setNeedsCleanup(true);
@@ -64,9 +68,11 @@ public class LibvirtAblestackVeeamTakeBackupCommandWrapper extends CommandWrappe
         try {
             answer.setSize(backupHelper.calculateBackupSize(delegate));
         } catch (RuntimeException e) {
-            logger.warn("Failed to calculate Veeam backup size for vm=[{}], backupPath=[{}]",
-                    command.getVmName(), command.getBackupPath(), e);
+            logger.warn("{} phase=[SIZE_CALC_FAILED], vm=[{}], backupPath=[{}], error=[{}]",
+                    BACKUP_TRACE, command.getVmName(), command.getBackupPath(), e.getMessage());
         }
+        logger.info("{} phase=[AGENT_DONE], vm=[{}], backupPath=[{}], backupType=[{}]",
+                BACKUP_TRACE, command.getVmName(), command.getBackupPath(), command.getBackupType());
         return answer;
     }
 }

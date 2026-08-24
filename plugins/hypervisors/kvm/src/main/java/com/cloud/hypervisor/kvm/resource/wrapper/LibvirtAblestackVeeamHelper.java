@@ -64,6 +64,7 @@ import javax.xml.xpath.XPathFactory;
 class LibvirtAblestackVeeamHelper {
     protected Logger LOGGER = LogManager.getLogger(LibvirtAblestackVeeamHelper.class);
     static final Integer EXIT_CLEANUP_FAILED = 20;
+    private static final String BACKUP_TRACE = "[ABLESTACK_VEEAM_BACKUP_TRACE]";
     private static final int BACKUP_JOB_POLL_INTERVAL_MS = 10000;
     private static final DateTimeFormatter SCRIPT_LOG_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss>");
 
@@ -122,8 +123,8 @@ class LibvirtAblestackVeeamHelper {
     Pair<Integer, String> executeBackup(AblestackVeeamTakeBackupCommand command) {
         List<String> diskPaths = resolveDiskPaths(command.getVolumePools(), command.getVolumePaths());
         BackupExecutionMode executionMode = determineExecutionMode(command.getVmName(), command.getVolumePools());
-        LOGGER.info("Veeam backup execution mode=[{}], vm=[{}], backupType=[{}], diskPaths=[{}]",
-                executionMode, command.getVmName(), command.getBackupType(), diskPaths);
+        LOGGER.info("{} phase=[HELPER_ENTER], mode=[{}], vm=[{}], backupType=[{}], diskPaths=[{}]",
+                BACKUP_TRACE, executionMode, command.getVmName(), command.getBackupType(), diskPaths);
         if (BackupExecutionMode.STOPPED.equals(executionMode)) {
             // qcow2 incremental needs live dirty-bitmaps on the real domain (backup-running).
             // Never fall into the dummy-VM STOPPED path for INCREMENTAL — that path does not
