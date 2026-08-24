@@ -44,12 +44,14 @@ set -o pipefail
 HOSTNAME_NOW="$(hostname -s 2>/dev/null || hostname)"
 CMDLINE_FILE="/var/cache/cloud/cmdline"
 SYSTEMVM_TYPE=""
+SCRIPT_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
 
 BACKUP_DIR="/root/pam_security_backup_$(date +%Y%m%d_%H%M%S)"
 
 LOGIN_DEFS="/etc/login.defs"
 PWQUALITY_CONF="/etc/security/pwquality.conf"
 FAILLOCK_CONF="/etc/security/faillock.conf"
+SYSTEMVM_PACKAGE_DIR="/usr/share/ablestack/systemvm"
 
 COMMON_AUTH="/etc/pam.d/common-auth"
 COMMON_ACCOUNT="/etc/pam.d/common-account"
@@ -144,6 +146,89 @@ backup_file()
     fi
 }
 
+install_local_debs()
+{
+    local DEB_FILES=()
+    local DEB_FILE
+    local PACKAGE_NAME
+
+    # 패키지 디렉터리 확인
+    if [ ! -d "$SYSTEMVM_PACKAGE_DIR" ]; then
+        echo "[ ERROR ] 패키지 디렉터리가 없습니다."
+        echo "         $SYSTEMVM_PACKAGE_DIR"
+        exit 1
+    fi
+
+    # .deb 파일 검색
+    while IFS= read -r -d '' DEB_FILE; do
+        DEB_FILES+=("$DEB_FILE")
+    done < <(
+        find "$SYSTEMVM_PACKAGE_DIR" \
+            -maxdepth 1 \
+            -type f \
+            -name '*.deb' \
+            -print0 |
+        sort -z
+    )
+
+    # .deb 존재 여부 확인
+    if [ "${#DEB_FILES[@]}" -eq 0 ]; then
+        echo "[ ERROR ] 설치할 .deb 패키지가 없습니다."
+        echo "         $SYSTEMVM_PACKAGE_DIR"
+        exit 1
+    fi
+
+    echo "[INFO] 로컬 .deb 패키지 ${#DEB_FILES[@]}개 발견"
+
+    for DEB_FILE in "${DEB_FILES[@]}"; do
+        echo "       $(basename "$DEB_FILE")"
+    done
+
+    echo
+    echo "[INFO] 모든 로컬 .deb 패키지 설치"
+
+    # 모든 .deb 설치
+    if ! dpkg -i "${DEB_FILES[@]}"; then
+        echo
+        echo "[WARN] dpkg 설치 중 의존성 문제가 발생했습니다."
+        echo "[INFO] apt-get -f install 실행"
+
+        if ! apt-get -f install -y; then
+            echo "[ ERROR ] 패키지 의존성 복구 실패"
+            exit 1
+        fi
+    fi
+
+    echo
+    echo "[INFO] 패키지 설치 결과 확인"
+
+    # 설치 결과 확인
+    for DEB_FILE in "${DEB_FILES[@]}"; do
+
+        PACKAGE_NAME="$(dpkg-deb -f "$DEB_FILE" Package 2>/dev/null || true)"
+
+        if [ -z "$PACKAGE_NAME" ]; then
+            echo "[ ERROR ] 유효하지 않은 .deb 파일:"
+            echo "          $(basename "$DEB_FILE")"
+            exit 1
+        fi
+
+        if dpkg-query -W -f='${Status}' "$PACKAGE_NAME" 2>/dev/null |
+            grep -q "install ok installed"; then
+
+            echo "[ OK ] $PACKAGE_NAME"
+
+        else
+            echo "[ ERROR ] $PACKAGE_NAME 설치 확인 실패"
+            exit 1
+        fi
+
+    done
+
+    echo
+    echo "[ OK ] 모든 로컬 .deb 패키지 설치 완료"
+}
+
 ###############################################################################
 # [1] Session Timeout
 ###############################################################################
@@ -206,21 +291,9 @@ echo "======================================="
 
 export DEBIAN_FRONTEND=noninteractive
 
-if ! dpkg -s libpam-pwquality >/dev/null 2>&1; then
+echo "[INFO] SYSTEMVM_PACKAGE_DIR의 모든 .deb 패키지를 확인합니다."
 
-    echo "[INFO] libpam-pwquality 설치"
-
-    apt-get update
-    apt-get install -y libpam-pwquality
-
-    if [ $? -ne 0 ]; then
-        echo "[ ERROR ] libpam-pwquality 설치 실패"
-        exit 1
-    fi
-
-else
-    echo "[ OK ] libpam-pwquality 설치됨"
-fi
+install_local_debs
 
 ###############################################################################
 # faillock command check
@@ -228,15 +301,8 @@ fi
 
 if ! command -v faillock >/dev/null 2>&1; then
 
-    echo "[INFO] faillock 명령 설치"
-
-    apt-get update
-    apt-get install -y libpam-modules
-
-    if [ $? -ne 0 ]; then
-        echo "[ ERROR ] libpam-modules 설치 실패"
-        exit 1
-    fi
+    echo "[INFO] faillock 명령을 찾을 수 없습니다."
+    echo "[INFO] pam_faillock.so 파일 존재 여부만 확인합니다."
 
 fi
 
