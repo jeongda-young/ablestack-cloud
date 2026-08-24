@@ -23,6 +23,7 @@ HOOK_OUTPUT_DIR = Path(os.environ.get("HOOK_OUTPUT_DIR", "/usr/openv/netbackup/b
 CONFIG_OUTPUT_DIR = Path(os.environ.get("CONFIG_OUTPUT_DIR", "/etc/ablestack/netbackup"))
 SECRET_OUTPUT_DIR = Path(os.environ.get("SECRET_OUTPUT_DIR", "/etc/ablestack/netbackup/secrets"))
 BACKUP_STAGING_ROOT = Path(os.environ.get("BACKUP_STAGING_ROOT", "/tmp/mold/netbackup"))
+NETBACKUP_STAGE_ROOT_CONFIG_NAME = "backup.plugin.netbackup.stage.root.path"
 WATCHER_OUTPUT_PATH = Path(os.environ.get("WATCHER_OUTPUT_PATH", "/usr/local/sbin/netbackup-host-restore-watcher"))
 RESTORE_NOTIFY_OUTPUT_PATH = Path(os.environ.get("RESTORE_NOTIFY_OUTPUT_PATH", "/usr/local/sbin/netbackup-host-restore-notify"))
 WATCHER_SERVICE_PATH = Path(os.environ.get("WATCHER_SERVICE_PATH", "/etc/systemd/system/netbackup-host-restore-watcher.service"))
@@ -290,6 +291,14 @@ def ensure_backup_framework_configuration(zone_id: str, cluster_id: str, args: a
             update_configuration_value("backup.chain.size", desired_chain_size, args.mold_url, args.admin_apikey, args.admin_secretkey)
             print(f"Updated global configuration: backup.chain.size={desired_chain_size}")
 
+    desired_stage_root = str(BACKUP_STAGING_ROOT)
+    log_info(f"Checking global configuration: {NETBACKUP_STAGE_ROOT_CONFIG_NAME}")
+    current = get_configuration_value(NETBACKUP_STAGE_ROOT_CONFIG_NAME, args.mold_url, args.admin_apikey, args.admin_secretkey)
+    if current != desired_stage_root:
+        log_info(f"Updating global configuration: {NETBACKUP_STAGE_ROOT_CONFIG_NAME}={desired_stage_root}")
+        update_configuration_value(NETBACKUP_STAGE_ROOT_CONFIG_NAME, desired_stage_root, args.mold_url, args.admin_apikey, args.admin_secretkey)
+        print(f"Updated global configuration: {NETBACKUP_STAGE_ROOT_CONFIG_NAME}={desired_stage_root}")
+
     log_info("Checking zone configuration: backup.framework.provider.plugin")
     current = get_configuration_value("backup.framework.provider.plugin", args.mold_url, args.admin_apikey, args.admin_secretkey, zone_id)
     updated = append_provider_if_missing(current, NETBACKUP_PROVIDER_DISPLAY_NAME)
@@ -467,6 +476,8 @@ def render_policy_template(template_path: Path, replacements: dict[str, str]) ->
     for key, value in replacements.items():
         if key not in seen and key not in {"VM_INCLUDE", "VM_EXCLUDE", "MOLD_URL", "ADMIN_APIKEY"}:
             rendered.append(f"{key}={value}")
+        elif key not in seen:
+            rendered.append(f'{key}="{value}"')
 
     return "\n".join(rendered) + "\n"
 
@@ -761,6 +772,7 @@ def generate_host_outputs(zone_id: str, args: argparse.Namespace) -> None:
     print(f"  Service    : {WATCHER_SERVICE_PATH}")
     print(f"  Logrotate  : {LOGROTATE_CONFIG_PATH}")
     print(f"  Staging dir: {BACKUP_STAGING_ROOT}")
+    print(f"  Mold config: {NETBACKUP_STAGE_ROOT_CONFIG_NAME}={BACKUP_STAGING_ROOT}")
     print(f"  Zone ID    : {zone_id}")
 
 
@@ -771,6 +783,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vm-exclude", default="")
     parser.add_argument("--backup-chain-size", type=int,
                         help="Update global backup.chain.size.")
+    parser.add_argument("--backup-staging-root", default=str(BACKUP_STAGING_ROOT),
+                        help="Local NetBackup staging directory used by host hooks and Mold backup.plugin.netbackup.stage.root.path.")
     parser.add_argument("--mold-url", required=True)
     parser.add_argument("--admin-apikey", required=True)
     parser.add_argument("--admin-secretkey", required=True)
@@ -780,12 +794,19 @@ def parse_args() -> argparse.Namespace:
 
 
 def validate_args(args: argparse.Namespace) -> None:
+    global BACKUP_STAGING_ROOT
     if not args.policy_name:
         fail("--policy-name is required")
     if not args.vm_include:
         args.vm_include = "*"
     if args.backup_chain_size is not None and args.backup_chain_size <= 0:
         fail("--backup-chain-size must be a positive integer")
+    if not args.backup_staging_root:
+        fail("--backup-staging-root is required")
+    BACKUP_STAGING_ROOT = Path(args.backup_staging_root).expanduser()
+    if not BACKUP_STAGING_ROOT.is_absolute():
+        fail("--backup-staging-root must be an absolute path")
+    BACKUP_STAGING_ROOT = BACKUP_STAGING_ROOT.resolve(strict=False)
     if not args.netbackup_url:
         fail("--netbackup-url is required")
     if not args.netbackup_apikey:

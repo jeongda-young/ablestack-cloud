@@ -26,6 +26,7 @@ CONFIG_ROOT_DEFAULT="/etc/ablestack/netbackup"
 SECRET_HELPER_DEFAULT="/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/netbackup-host-secret-helper.sh"
 SECRET_SUBDIR_DEFAULT="secrets"
 BACKUP_STAGING_ROOT_DEFAULT="/tmp/mold/netbackup"
+NETBACKUP_STAGE_ROOT_CONFIG_NAME="backup.plugin.netbackup.stage.root.path"
 
 CONFIG_ROOT="${CONFIG_ROOT:-$CONFIG_ROOT_DEFAULT}"
 STATE_ROOT="${STATE_ROOT:-$STATE_ROOT_DEFAULT}"
@@ -419,6 +420,31 @@ load_admin_secretkey() {
   [[ -n "${ADMIN_SECRETKEY}" ]] || fail "Decrypted ADMIN_SECRETKEY is empty."
 }
 
+load_backup_staging_root_from_mold() {
+  local response
+  local configured_root
+
+  response="$(invoke_mold_api \
+    "${MOLD_LIST_VMS_API_METHOD}" \
+    "${MOLD_LIST_VMS_API_URL}" \
+    "listConfigurations" \
+    "name" "${NETBACKUP_STAGE_ROOT_CONFIG_NAME}")" || \
+    fail "Failed to query Mold global configuration ${NETBACKUP_STAGE_ROOT_CONFIG_NAME}"
+
+  configured_root="$(extract_json_value_by_key "${response}" "value" || true)"
+  if [[ -z "${configured_root}" ]]; then
+    log -ne "Mold global configuration ${NETBACKUP_STAGE_ROOT_CONFIG_NAME} is blank; using default ${BACKUP_STAGING_ROOT_DEFAULT}"
+    BACKUP_STAGING_ROOT="${BACKUP_STAGING_ROOT_DEFAULT}"
+    return 0
+  fi
+  if [[ "${configured_root}" != /* ]]; then
+    fail "Invalid ${NETBACKUP_STAGE_ROOT_CONFIG_NAME}=${configured_root}. It must be an absolute path."
+  fi
+
+  BACKUP_STAGING_ROOT="${configured_root}"
+  log -ne "Loaded ${NETBACKUP_STAGE_ROOT_CONFIG_NAME}=${BACKUP_STAGING_ROOT}"
+}
+
 load_policy_schedule_config() {
   local config_file
   config_file="$(resolve_config_file_path)"
@@ -450,6 +476,7 @@ load_policy_schedule_config() {
   [[ "${MOLD_ASYNC_JOB_TIMEOUT}" =~ ^[1-9][0-9]*$ ]] || fail "Invalid MOLD_ASYNC_JOB_TIMEOUT=${MOLD_ASYNC_JOB_TIMEOUT}. It must be a positive integer."
 
   load_admin_secretkey
+  load_backup_staging_root_from_mold
 
   log -ne "VM selection include=${VM_INCLUDE} exclude=${VM_EXCLUDE}"
 }

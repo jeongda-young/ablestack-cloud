@@ -84,6 +84,7 @@ import org.apache.xml.utils.URI;
 import org.json.JSONException;
 import org.json.JSONObject;
 import java.net.URISyntaxException;
+import java.nio.file.Path;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.text.ParseException;
@@ -133,6 +134,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
     private static final String DETAIL_RBD_DISK_PATHS = "commvault.rbd.disk.paths";
     private static final String MISSING_PARENT_RBD_SNAPSHOT_ERROR = "Parent RBD snapshot";
     private static final String MISSING_PARENT_QCOW2_BITMAP_ERROR = "Parent qcow2 bitmap";
+    private static final String BACKUP_TRACE = "[ABLESTACK_COMMVAULT_BACKUP_TRACE]";
     private static final String DETAIL_STAGE_HOST = "commvault.stage.host";
     private static final String DETAIL_CHAIN_SEALED = "commvault.chain.sealed";
     private static final String DETAIL_CHAIN_SEAL_REASON = "commvault.chain.seal.reason";
@@ -146,7 +148,6 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
     private static final int BASE_FR = 32;
     private static final int BASE_MT = 89;
     private static final Pattern VERSION_PATTERN = Pattern.compile("^(\\d+)\\s*SP\\s*(\\d+)(?:\\.(\\d+))?$", Pattern.CASE_INSENSITIVE);
-    private static final String COMMVAULT_DIRECTORY = "/tmp/mold/backup";
     private static final long STAGE_SPACE_BUFFER_BYTES = 10L * 1024L * 1024L * 1024L;
     private static final long BACKING_UP_SYNC_GRACE_PERIOD_MS = 24L * 60L * 60L * 1000L;
 
@@ -169,6 +170,10 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
     private ConfigKey<Integer> CommvaultApiRequestTimeout = new ConfigKey<>("Advanced", Integer.class,
             "backup.plugin.commvault.request.timeout", "300",
             "Commvault Command Center API request timeout in seconds.", true, ConfigKey.Scope.Zone);
+
+    private ConfigKey<String> CommvaultStageRootPath = new ConfigKey<>("Advanced", String.class,
+            "backup.plugin.commvault.stage.root.path", "/tmp/mold/backup",
+            "Local KVM host directory used for ABLESTACK Commvault backup staging.", true, ConfigKey.Scope.Global);
 
     @Inject
     private BackupDao backupDao;
@@ -356,9 +361,12 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                 latestBackup, incrementalBackup, incrementalBackup && vmVolumes.size() > 1);
         if (!result.success && incrementalBackup && shouldRetryAsFullAfterIncrementalFailure(result, vmVolumes)) {
             cleanupFailedBackupForFullRetry(result.backup);
+            LOG.warn("{} phase=[INCREMENTAL_FALLBACK_TO_FULL], vmId=[{}], vmName=[{}], failedBackupUuid=[{}], reason=[{}]",
+                    BACKUP_TRACE, vm.getId(), vm.getInstanceName(), result.backup != null ? result.backup.getUuid() : null, result.details);
             LOG.warn("Incremental backup failed for VM [{}] due to [{}]. Retrying as full backup.", vm, result.details);
             String fallbackBackupPath = buildBackupPath(vm);
-            result = executeBackup(vm, quiesceVM, vmHost, vmHostVO, client, planId, fallbackBackupPath, backupContentPath, vmVolumes, volumePoolsAndPaths,
+            String fallbackBackupContentPath = buildBackupContentPath(vm);
+            result = executeBackup(vm, quiesceVM, vmHost, vmHostVO, client, planId, fallbackBackupPath, fallbackBackupContentPath, vmVolumes, volumePoolsAndPaths,
                     null, false, false);
         }
         return new Pair<>(result.success, result.backup);
@@ -666,6 +674,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         final String checkpointName = backupPath.substring(backupPath.lastIndexOf("/") + 1);
         final String backupEngine = areAllVolumesOnRbdPool(volumePoolsAndPaths.first()) ? BACKUP_ENGINE_RBD_DIFF : BACKUP_ENGINE_QCOW2;
         final String requestedBackupType = incrementalBackup ? BACKUP_TYPE_INCREMENTAL : BACKUP_TYPE_FULL;
+        validateBackupStageCapacity(vmHostVO, getBackupStageRootPath(), vmVolumes, vm.getInstanceName(), requestedBackupType, backupEngine);
         final List<String> backupFiles = buildBackupFileNames(vmVolumes, backupEngine, incrementalBackup);
         final Map<String, String> backupDetails = getBackupDetails(vm, backupPath, checkpointName, backupEngine, latestBackup,
                 BACKUP_TYPE_INCREMENTAL.equalsIgnoreCase(requestedBackupType), vmHost.getName());
@@ -690,6 +699,10 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
             command.setParentCheckpointXmlChain(getParentCheckpointXmlChain(latestBackup));
         }
 
+        final long backupStartTime = System.currentTimeMillis();
+        LOG.info("{} phase=[START], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], parentBackupUuid=[{}], hostId=[{}], hostName=[{}], backupPath=[{}], timeoutSeconds=[{}]",
+                BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
+                latestBackup != null ? latestBackup.getUuid() : null, vmHost.getId(), vmHost.getName(), backupPath, command.getWait());
         LOG.info("Submitting Commvault backup staging command for VM [{}] on host [{}] with backup [{}], path [{}], state [{}], timeout [{}] seconds, volumes [{}]",
                 vm.getInstanceName(), vmHost.getName(), backupVO.getUuid(), backupPath, vm.getState(), command.getWait(), vmVolumes.size());
         try {
@@ -697,12 +710,18 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
             try {
                 answer = (BackupAnswer) agentManager.send(vmHost.getId(), command);
             } catch (AgentUnavailableException e) {
+                LOG.error("{} phase=[FAILED], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], backupPath=[{}], elapsedMs=[{}], reason=[{}]",
+                        BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
+                        backupPath, System.currentTimeMillis() - backupStartTime, "Unable to contact backend control plane to initiate backup");
                 LOG.error("Unable to contact backend control plane to initiate backup for VM {}", vm.getInstanceName());
                 markBackupFailure(backupVO, "agent-send", "Unable to contact backend control plane to initiate backup");
                 backupVO.setStatus(Backup.Status.Failed);
                 removeBackupWithDetails(backupVO.getId());
                 throw new CloudRuntimeException("Unable to contact backend control plane to initiate backup");
             } catch (OperationTimedoutException e) {
+                LOG.error("{} phase=[FAILED], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], backupPath=[{}], elapsedMs=[{}], reason=[{}]",
+                        BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
+                        backupPath, System.currentTimeMillis() - backupStartTime, "Operation to initiate backup timed out");
                 LOG.error("Operation to initiate backup timed out for VM {}", vm.getInstanceName());
                 markBackupFailure(backupVO, "agent-send-timeout", "Operation to initiate backup timed out");
                 backupVO.setStatus(Backup.Status.Failed);
@@ -769,6 +788,9 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                                         updateBackupAsCompleted(backupVO, externalId, jobDetails, backupDetails,
                                                 createVolumeInfoFromVolumes(vmVolumes, backupFiles));
                                         if (backupDao.update(backupVO.getId(), backupVO)) {
+                                            LOG.info("{} phase=[DONE], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], backupPath=[{}], externalId=[{}], elapsedMs=[{}]",
+                                                    BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
+                                                    backupPath, externalId, System.currentTimeMillis() - backupStartTime);
                                             cleanupBackupPathsAfterSuccessfulBackup(vmHostVO, Collections.singletonList(backupPath), backupVO);
                                             return BackupExecutionResult.success(backupVO);
                                         }
@@ -797,6 +819,9 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                     }
                 }
                 markBackupFailure(backupVO, "commvault-job", "Failed to complete Commvault backup job");
+                LOG.error("{} phase=[FAILED], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], backupPath=[{}], elapsedMs=[{}], reason=[{}]",
+                        BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
+                        backupPath, System.currentTimeMillis() - backupStartTime, "Failed to complete Commvault backup job");
                 backupVO.setStatus(Backup.Status.Failed);
                 removeBackupWithDetails(backupVO.getId());
                 cleanupBackupPathsOnHost(vmHostVO, Collections.singletonList(backupPath));
@@ -804,6 +829,9 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
             }
 
             final String details = answer != null ? answer.getDetails() : "No answer received";
+            LOG.error("{} phase=[FAILED], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], backupPath=[{}], elapsedMs=[{}], reason=[{}]",
+                    BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
+                    backupPath, System.currentTimeMillis() - backupStartTime, details);
             LOG.error("Failed to take backup for VM {}: {}", vm.getInstanceName(), details);
             markBackupFailure(backupVO, "agent-answer", details);
             if (retryAsFullOnFailure) {
@@ -819,6 +847,9 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
             }
             return BackupExecutionResult.failure(details, backupVO);
         } catch (RuntimeException e) {
+            LOG.error("{} phase=[FAILED], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], backupPath=[{}], elapsedMs=[{}], reason=[{}]",
+                    BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
+                    backupPath, System.currentTimeMillis() - backupStartTime, e.getMessage());
             LOG.error("Unexpected failure while executing Commvault backup for VM {}. Cleaning up incomplete backup entry [{}].",
                     vm.getInstanceName(), backupVO.getUuid(), e);
             markBackupFailure(backupVO, "unexpected-runtime", e.getMessage());
@@ -837,6 +868,8 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
 
     private BackupExecutionResult failCompletedCommvaultBackupMetadata(BackupVO backupVO, String externalId, String details) {
         backupVO.setExternalId(externalId);
+        LOG.error("{} phase=[FAILED], backupId=[{}], backupUuid=[{}], vmId=[{}], backupType=[{}], backupPath=[{}], externalId=[{}], reason=[{}]",
+                BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), backupVO.getVmId(), backupVO.getType(), getBackupPathFromExternalId(backupVO), externalId, details);
         markBackupFailure(backupVO, "metadata-finalize", details);
         backupVO.setStatus(Backup.Status.Error);
         backupDao.update(backupVO.getId(), backupVO);
@@ -885,12 +918,19 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
     }
 
     private String buildBackupPath(VirtualMachine vm) {
-        return String.format("%s/%s/%s", COMMVAULT_DIRECTORY, vm.getInstanceName(),
+        return String.format("%s/%s/%s", getBackupStageRootPath(), vm.getInstanceName(),
                 new SimpleDateFormat("yyyy.MM.dd.HH.mm.ss.SSS").format(new Date()));
     }
 
     private String buildBackupContentPath(VirtualMachine vm) {
-        return String.format("%s/%s", COMMVAULT_DIRECTORY, vm.getInstanceName());
+        return String.format("%s/%s", getBackupStageRootPath(), vm.getInstanceName());
+    }
+
+    private String getBackupStageRootPath() {
+        return Path.of(StringUtils.defaultIfBlank(CommvaultStageRootPath.value(), "/tmp/mold/backup"))
+                .toAbsolutePath()
+                .normalize()
+                .toString();
     }
 
     private void validateVolumePoolTypes(List<PrimaryDataStoreTO> volumePools) {
@@ -1236,6 +1276,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
             throw new CloudRuntimeException("Failed to get vm backup set guid commvault api");
         }
 
+        ensureStageHostHasCapacityForRestore(backup, clientName, restoreSourcePaths);
         String restoreJobId = client.restoreFullVM(subclientId, displayName, backupsetGUID, clientId, companyId, companyName, instanceName,
                 appName, applicationId, clientName, backupsetId, instanceId, backupsetName, commCellId, endTime, restoreSourcePaths);
         if (restoreJobId == null) {
@@ -1283,7 +1324,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
             return;
         }
         try {
-            final Answer answer = agentManager.send(host.getId(), new AblestackCommvaultCleanupCommand(backupPaths));
+            final Answer answer = agentManager.send(host.getId(), new AblestackCommvaultCleanupCommand(backupPaths, getBackupStageRootPath()));
             if (answer == null || !answer.getResult()) {
                 LOG.warn("Failed to cleanup Commvault paths {} on host [{}]: {}", backupPaths, host.getName(),
                         answer != null ? answer.getDetails() : "no answer received");
@@ -1385,6 +1426,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         final List<String> restoreSourcePaths = getRestoreSourcePathsForStageHost(backup, clientName);
         LOG.info(String.format("Restoring vm %s from backup %s on the Commvault Backup Provider", vm, backup));
         try {
+            ensureStageHostHasCapacityForRestore(backup, clientName, restoreSourcePaths);
             String jobId2 = client.restoreFullVM(subclientId, displayName, backupsetGUID, clientId, companyId, companyName, instanceName, appName, applicationId, clientName, backupsetId, instanceId, backupsetName, commCellId, endTime, restoreSourcePaths);
             if (jobId2 != null) {
                 String jobStatus = client.getJobStatus(jobId2);
@@ -1691,14 +1733,40 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         long requiredBytes = estimateRequiredStageBytesForRestore(backup, restoreSourcePaths);
         long bufferBytes = Math.max(STAGE_SPACE_BUFFER_BYTES, requiredBytes / 5L);
         long minimumAvailableBytes = requiredBytes + bufferBytes;
-        long availableBytes = getAvailableBytesOnHostPath(stageHost, COMMVAULT_DIRECTORY);
+        String stageRootPath = getBackupStageRootPath();
+        long availableBytes = getAvailableBytesOnHostPath(stageHost, stageRootPath);
         LOG.info("Checking Commvault restore stage capacity on host [{}]: required={} bytes, buffer={} bytes, minimumAvailable={} bytes, available={} bytes, sourcePaths={}",
                 stageHost.getName(), requiredBytes, bufferBytes, minimumAvailableBytes, availableBytes, restoreSourcePaths);
         if (availableBytes < minimumAvailableBytes) {
             throw new CloudRuntimeException(String.format(
                     "Insufficient stage space on host [%s] for Commvault restore. Required at least [%d] bytes including buffer, but only [%d] bytes are available under [%s].",
-                    stageHost.getName(), minimumAvailableBytes, availableBytes, COMMVAULT_DIRECTORY));
+                    stageHost.getName(), minimumAvailableBytes, availableBytes, stageRootPath));
         }
+    }
+
+    private void validateBackupStageCapacity(HostVO stageHost, String stageRootPath, List<VolumeVO> vmVolumes, String vmName, String backupType, String backupEngine) {
+        long requiredBytes = estimateRequiredStageBytesForBackup(vmVolumes);
+        long bufferBytes = Math.max(STAGE_SPACE_BUFFER_BYTES, requiredBytes / 5L);
+        long minimumAvailableBytes = requiredBytes + bufferBytes;
+        long availableBytes = getAvailableBytesOnHostPath(stageHost, stageRootPath);
+        LOG.info("{} phase=[STAGE_SPACE_CHECK], vm=[{}], host=[{}], backupType=[{}], backupEngine=[{}], stageRoot=[{}], requiredBytes=[{}], bufferBytes=[{}], minimumAvailableBytes=[{}], availableBytes=[{}]",
+                BACKUP_TRACE, vmName, stageHost != null ? stageHost.getName() : null, backupType, backupEngine, stageRootPath,
+                requiredBytes, bufferBytes, minimumAvailableBytes, availableBytes);
+        if (availableBytes < minimumAvailableBytes) {
+            throw new CloudRuntimeException(String.format(
+                    "Insufficient stage space on host [%s] for Commvault backup. Required at least [%d] bytes including buffer, but only [%d] bytes are available under [%s].",
+                    stageHost != null ? stageHost.getName() : null, minimumAvailableBytes, availableBytes, stageRootPath));
+        }
+    }
+
+    private long estimateRequiredStageBytesForBackup(List<VolumeVO> vmVolumes) {
+        if (CollectionUtils.isEmpty(vmVolumes)) {
+            return 0L;
+        }
+        return vmVolumes.stream()
+                .filter(volume -> Volume.State.Ready.equals(volume.getState()))
+                .mapToLong(VolumeVO::getSize)
+                .sum();
     }
 
     private long estimateRequiredStageBytesForRestore(Backup backup, List<String> restoreSourcePaths) {
@@ -2016,7 +2084,8 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                 CommvaultUsername,
                 CommvaultPassword,
                 CommvaultValidateSSLSecurity,
-                CommvaultApiRequestTimeout
+                CommvaultApiRequestTimeout,
+                CommvaultStageRootPath
         };
     }
 

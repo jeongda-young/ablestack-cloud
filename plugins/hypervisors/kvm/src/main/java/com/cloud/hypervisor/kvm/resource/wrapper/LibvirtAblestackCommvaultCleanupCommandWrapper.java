@@ -36,7 +36,7 @@ import java.util.stream.Stream;
 @ResourceWrapper(handles = AblestackCommvaultCleanupCommand.class)
 public class LibvirtAblestackCommvaultCleanupCommandWrapper
         extends CommandWrapper<AblestackCommvaultCleanupCommand, Answer, LibvirtComputingResource> {
-    private static final Path BACKUP_ROOT = Path.of("/tmp/mold/backup").toAbsolutePath().normalize();
+    private static final Path LEGACY_BACKUP_ROOT = Path.of("/tmp/mold/backup").toAbsolutePath().normalize();
 
     @Override
     public Answer execute(final AblestackCommvaultCleanupCommand command, final LibvirtComputingResource serverResource) {
@@ -46,7 +46,7 @@ public class LibvirtAblestackCommvaultCleanupCommandWrapper
 
         final List<String> failures = command.getBackupPaths().stream()
                 .distinct()
-                .map(this::cleanupPath)
+                .map(path -> cleanupPath(command, path))
                 .filter(result -> result != null)
                 .collect(Collectors.toList());
         if (CollectionUtils.isNotEmpty(failures)) {
@@ -55,12 +55,12 @@ public class LibvirtAblestackCommvaultCleanupCommandWrapper
         return new Answer(command, true, "Commvault restore cleanup completed.");
     }
 
-    private String cleanupPath(final String backupPath) {
+    private String cleanupPath(final AblestackCommvaultCleanupCommand command, final String backupPath) {
         if (StringUtils.isBlank(backupPath)) {
             return null;
         }
         final Path path = Path.of(backupPath).toAbsolutePath().normalize();
-        if (!path.startsWith(BACKUP_ROOT) || path.equals(BACKUP_ROOT)) {
+        if (!isSafeCleanupPath(command, path)) {
             return String.format("Skipping unsafe Commvault cleanup path [%s]", path);
         }
         if (!Files.exists(path)) {
@@ -75,5 +75,16 @@ public class LibvirtAblestackCommvaultCleanupCommandWrapper
         } catch (final IOException e) {
             return String.format("Failed to cleanup Commvault path [%s]: %s", path, e.getMessage());
         }
+    }
+
+    private boolean isSafeCleanupPath(final AblestackCommvaultCleanupCommand command, final Path path) {
+        final Path configuredRoot = StringUtils.isNotBlank(command.getBackupRootPath())
+                ? Path.of(command.getBackupRootPath()).toAbsolutePath().normalize()
+                : LEGACY_BACKUP_ROOT;
+        return isChildPath(path, configuredRoot) || isChildPath(path, LEGACY_BACKUP_ROOT);
+    }
+
+    private boolean isChildPath(final Path path, final Path root) {
+        return path.startsWith(root) && !path.equals(root);
     }
 }

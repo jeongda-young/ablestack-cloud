@@ -31,8 +31,12 @@ import java.util.List;
 
 @ResourceWrapper(handles = AblestackNasTakeBackupCommand.class)
 public class LibvirtAblestackNasTakeBackupCommandWrapper extends CommandWrapper<AblestackNasTakeBackupCommand, Answer, LibvirtComputingResource> {
+    private static final String BACKUP_TRACE = "[ABLESTACK_NAS_BACKUP_TRACE]";
+
     @Override
     public Answer execute(AblestackNasTakeBackupCommand command, LibvirtComputingResource libvirtComputingResource) {
+        logger.info("{} phase=[AGENT_ENTER], vm=[{}], backupPath=[{}], backupType=[{}]",
+                BACKUP_TRACE, command.getVmName(), command.getBackupPath(), command.getBackupType());
         logger.info("LibvirtTakeBackupCommandWrapper entering execute for vm=[{}], backupPath=[{}], backupType=[{}]",
                 command.getVmName(), command.getBackupPath(), command.getBackupType());
         LibvirtAblestackNasBackupHelper backupHelper = new LibvirtAblestackNasBackupHelper(libvirtComputingResource);
@@ -40,6 +44,13 @@ public class LibvirtAblestackNasTakeBackupCommandWrapper extends CommandWrapper<
         logger.info("LibvirtTakeBackupCommandWrapper invoking helper for vm=[{}], diskPaths=[{}]",
                 command.getVmName(), diskPaths);
         Pair<Integer, String> result = backupHelper.executeBackup(command);
+        if (result.first() == 0) {
+            logger.info("{} phase=[AGENT_DONE], vm=[{}], backupPath=[{}], backupType=[{}]",
+                    BACKUP_TRACE, command.getVmName(), command.getBackupPath(), command.getBackupType());
+        } else {
+            logger.warn("{} phase=[AGENT_FAILED], vm=[{}], backupPath=[{}], backupType=[{}], resultCode=[{}], reason=[{}]",
+                    BACKUP_TRACE, command.getVmName(), command.getBackupPath(), command.getBackupType(), result.first(), result.second());
+        }
         logger.info("LibvirtTakeBackupCommandWrapper helper returned for vm=[{}], resultCode=[{}], details=[{}]",
                 command.getVmName(), result.first(), result.second());
 

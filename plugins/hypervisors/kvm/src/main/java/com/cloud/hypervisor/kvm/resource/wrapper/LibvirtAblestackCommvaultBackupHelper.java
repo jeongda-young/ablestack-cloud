@@ -67,6 +67,7 @@ class LibvirtAblestackCommvaultBackupHelper {
     private static final DateTimeFormatter SCRIPT_LOG_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss>");
     private static final String STAGING_IN_PROGRESS_MARKER = ".staging.inprogress";
     private static final String STAGING_COMPLETE_MARKER = ".staging.complete";
+    private static final String BACKUP_TRACE = "[ABLESTACK_COMMVAULT_BACKUP_TRACE]";
 
     enum BackupExecutionMode {
         RUNNING("backup-running"),
@@ -177,9 +178,10 @@ class LibvirtAblestackCommvaultBackupHelper {
         String dummyVmName = String.format("DUMMY-VM-%s", command.getCheckpointName().replace('.', '-'));
         Path dest = Path.of(command.getBackupPath());
         Connect conn = null;
+        long startedAt = System.currentTimeMillis();
         try {
-            LOGGER.info("Starting stopped VM Commvault backup for vm=[{}], dummyVm=[{}], backupType=[{}]",
-                    command.getVmName(), dummyVmName, command.getBackupType());
+            LOGGER.info("{} phase=[STOPPED_BACKUP_START], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName());
             validateStoppedBackupDiskPaths(diskPaths);
             if (isIncremental(command)) {
                 resource.validateLibvirtAndQemuVersionForIncrementalSnapshots();
@@ -190,6 +192,8 @@ class LibvirtAblestackCommvaultBackupHelper {
             conn = LibvirtConnection.getConnection();
             String dummyVmXml = buildDummyVmXml(dummyVmName, diskPaths);
             resource.startVM(conn, dummyVmName, dummyVmXml, Domain.CreateFlags.PAUSED);
+            LOGGER.info("{} phase=[DUMMY_CREATED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName());
 
             ensureParentCheckpointMaterialized(command);
             if (isIncremental(command) && command.getParentCheckpointPath() != null && !command.getParentCheckpointPath().isEmpty()) {
@@ -208,34 +212,50 @@ class LibvirtAblestackCommvaultBackupHelper {
                 String failureDetails = formatScriptStyleLog(String.format(
                         "Failed to start stopped VM Commvault backup for dummy domain [%s]: %s",
                         dummyVmName, sanitizeCommandOutput(backupBeginResult.second())));
+                LOGGER.error("{} phase=[BACKUP_BEGIN_FAILED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], reason=[{}]",
+                        BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(), failureDetails);
                 LOGGER.error(failureDetails);
                 return new Pair<>(backupBeginResult.first(), failureDetails);
             }
+            LOGGER.info("{} phase=[BACKUP_JOB_STARTED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
+                    System.currentTimeMillis() - startedAt);
 
             try {
                 final long effectiveTimeoutMillis = command.getWait() > 0 ? TimeUnit.SECONDS.toMillis(command.getWait()) : resource.getCmdsTimeout();
                 waitForBackup(dummyVmName, effectiveTimeoutMillis);
+                LOGGER.info("{} phase=[BACKUP_JOB_COMPLETED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}]",
+                        BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
+                        System.currentTimeMillis() - startedAt);
             } catch (IOException e) {
                 cancelBackupJob(dummyVmName);
                 throw e;
             }
 
             dumpCheckpointXml(dummyVmName, command.getCheckpointName(), dest);
+            LOGGER.info("{} phase=[CHECKPOINT_DUMPED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName());
             Files.deleteIfExists(backupXml);
             Files.deleteIfExists(checkpointXml);
             Script.runSimpleBashScriptForExitValue("sync", resource.getCmdsTimeout(), false);
             markStagingComplete(dest, command);
-            LOGGER.info("Completed stopped VM Commvault backup for vm=[{}], dummyVm=[{}]", command.getVmName(), dummyVmName);
+            LOGGER.info("{} phase=[STOPPED_BACKUP_DONE], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
+                    System.currentTimeMillis() - startedAt);
             return new Pair<>(0, "success");
         } catch (Exception e) {
-            LOGGER.error("Stopped VM Commvault backup failed for vm=[{}], dummyVm=[{}] due to: {}",
-                    command.getVmName(), dummyVmName, e.getMessage(), e);
+            LOGGER.error("{} phase=[STOPPED_BACKUP_FAILED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}], reason=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
+                    System.currentTimeMillis() - startedAt, e.getMessage(), e);
             if (!cleanupStoppedBackupPath(dest)) {
                 return new Pair<>(EXIT_CLEANUP_FAILED, String.format("Backup cleanup failed after stopped VM Commvault backup failure: %s", e.getMessage()));
             }
             return new Pair<>(1, e.getMessage());
         } finally {
             cleanupDummyVm(dummyVmName);
+            LOGGER.info("{} phase=[DUMMY_CLEANED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
+                    System.currentTimeMillis() - startedAt);
         }
     }
 

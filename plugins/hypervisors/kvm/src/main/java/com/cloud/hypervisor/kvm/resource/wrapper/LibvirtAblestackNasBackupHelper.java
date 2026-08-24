@@ -70,6 +70,7 @@ class LibvirtAblestackNasBackupHelper {
     private static final DateTimeFormatter SCRIPT_LOG_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss>");
     private static final String IN_PROGRESS_MARKER = ".backup.inprogress";
     private static final String COMPLETE_MARKER = ".backup.complete";
+    private static final String BACKUP_TRACE = "[ABLESTACK_NAS_BACKUP_TRACE]";
 
     enum BackupExecutionMode {
         RUNNING("backup-running"),
@@ -248,9 +249,10 @@ class LibvirtAblestackNasBackupHelper {
         Path dest = null;
         String dummyVmName = String.format("DUMMY-VM-%s", command.getCheckpointName().replace('.', '-'));
         Connect conn = null;
+        long startedAt = System.currentTimeMillis();
         try {
-            LOGGER.info("Starting stopped VM NAS backup for vm=[{}], dummyVm=[{}], backupType=[{}]",
-                    command.getVmName(), dummyVmName, command.getBackupType());
+            LOGGER.info("{} phase=[STOPPED_BACKUP_START], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName());
             validateStoppedBackupDiskPaths(diskPaths);
             if (isIncremental(command)) {
                 resource.validateLibvirtAndQemuVersionForIncrementalSnapshots();
@@ -263,6 +265,8 @@ class LibvirtAblestackNasBackupHelper {
             conn = LibvirtConnection.getConnection();
             String dummyVmXml = buildDummyVmXml(dummyVmName, diskPaths, conn);
             resource.startVM(conn, dummyVmName, dummyVmXml, Domain.CreateFlags.PAUSED);
+            LOGGER.info("{} phase=[DUMMY_CREATED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName());
 
             if (isIncremental(command) && command.getParentCheckpointPath() != null && !command.getParentCheckpointPath().isEmpty()) {
                 redefineCheckpointIfNeeded(dummyVmName, mountPoint.resolve(command.getParentCheckpointPath()));
@@ -280,13 +284,21 @@ class LibvirtAblestackNasBackupHelper {
                 String failureDetails = formatScriptStyleLog(String.format(
                         "Failed to start stopped VM NAS backup for dummy domain [%s]: %s",
                         dummyVmName, sanitizeCommandOutput(backupBeginResult.second())));
+                LOGGER.error("{} phase=[BACKUP_BEGIN_FAILED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], reason=[{}]",
+                        BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(), failureDetails);
                 LOGGER.error(failureDetails);
                 return new Pair<>(backupBeginResult.first(), failureDetails);
             }
+            LOGGER.info("{} phase=[BACKUP_JOB_STARTED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
+                    System.currentTimeMillis() - startedAt);
 
             try {
                 final long effectiveTimeoutMillis = command.getWait() > 0 ? TimeUnit.SECONDS.toMillis(command.getWait()) : resource.getCmdsTimeout();
-                waitForBackup(dummyVmName, effectiveTimeoutMillis);
+                waitForBackup(command, dummyVmName, effectiveTimeoutMillis, startedAt);
+                LOGGER.info("{} phase=[BACKUP_JOB_COMPLETED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}]",
+                        BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
+                        System.currentTimeMillis() - startedAt);
             } catch (IOException e) {
                 cancelBackupJob(dummyVmName);
                 throw e;
@@ -297,17 +309,22 @@ class LibvirtAblestackNasBackupHelper {
             }
 
             dumpCheckpointXml(dummyVmName, command.getCheckpointName(), dest);
+            LOGGER.info("{} phase=[CHECKPOINT_DUMPED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName());
 
             Files.deleteIfExists(backupXml);
             Files.deleteIfExists(checkpointXml);
             runCommand(String.format("sync"));
             markBackupComplete(dest, command);
             String output = listTopLevelFileSizes(dest);
-            LOGGER.info("Completed stopped VM NAS backup for vm=[{}], dummyVm=[{}]", command.getVmName(), dummyVmName);
+            LOGGER.info("{} phase=[STOPPED_BACKUP_DONE], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
+                    System.currentTimeMillis() - startedAt);
             return new Pair<>(0, output);
         } catch (Exception e) {
-            LOGGER.error("Stopped VM NAS backup failed for vm=[{}], dummyVm=[{}] due to: {}",
-                    command.getVmName(), dummyVmName, e.getMessage(), e);
+            LOGGER.error("{} phase=[STOPPED_BACKUP_FAILED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}], reason=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
+                    System.currentTimeMillis() - startedAt, e.getMessage(), e);
             if (!cleanupStoppedBackup(command, dest, mountPoint)) {
                 mountPoint = null;
                 return new Pair<>(EXIT_CLEANUP_FAILED, String.format("Backup cleanup failed after stopped VM NAS backup failure: %s", e.getMessage()));
@@ -316,6 +333,9 @@ class LibvirtAblestackNasBackupHelper {
             return new Pair<>(1, e.getMessage());
         } finally {
             cleanupDummyVm(dummyVmName);
+            LOGGER.info("{} phase=[DUMMY_CLEANED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
+                    System.currentTimeMillis() - startedAt);
             unmountRepository(command, mountPoint);
         }
     }
@@ -567,7 +587,7 @@ class LibvirtAblestackNasBackupHelper {
         return checkpointXml;
     }
 
-    private void waitForBackup(String vmName, long timeoutMillis) throws IOException {
+    private void waitForBackup(AblestackNasTakeBackupCommand command, String vmName, long timeoutMillis, long startedAt) throws IOException {
         long remainingMillis = timeoutMillis;
         while (remainingMillis > 0) {
             String result = checkBackupJob(vmName);
@@ -575,7 +595,7 @@ class LibvirtAblestackNasBackupHelper {
                 return;
             }
             if (result != null && result.contains("Failed")) {
-                throw new IOException("Virsh backup job failed for dummy VM " + vmName);
+                throw new IOException("Virsh backup job failed for dummy VM " + vmName + ": " + sanitizeCommandOutput(result));
             }
             long sleepMillis = Math.min(BACKUP_JOB_POLL_INTERVAL_MS, remainingMillis);
             try {

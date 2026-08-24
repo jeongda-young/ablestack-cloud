@@ -67,6 +67,7 @@ class LibvirtAblestackNetBackupHelper {
     private static final DateTimeFormatter SCRIPT_LOG_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH-mm-ss>");
     private static final String STAGING_IN_PROGRESS_MARKER = ".staging.inprogress";
     private static final String STAGING_COMPLETE_MARKER = ".staging.complete";
+    private static final String BACKUP_TRACE = "[ABLESTACK_NETBACKUP_BACKUP_TRACE]";
 
     enum BackupExecutionMode {
         RUNNING("backup-running"),
@@ -220,9 +221,10 @@ class LibvirtAblestackNetBackupHelper {
         Path dest = Path.of(command.getBackupPath());
         Path parentCheckpointWorkspace = null;
         Connect conn = null;
+        long startedAt = System.currentTimeMillis();
         try {
-            LOGGER.info("Starting stopped VM NetBackup backup for vm=[{}], dummyVm=[{}], backupType=[{}]",
-                    command.getVmName(), dummyVmName, command.getBackupType());
+            LOGGER.info("{} phase=[STOPPED_BACKUP_START], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName());
             validateStoppedBackupDiskPaths(diskPaths);
             if (isIncremental(command)) {
                 resource.validateLibvirtAndQemuVersionForIncrementalSnapshots();
@@ -233,6 +235,8 @@ class LibvirtAblestackNetBackupHelper {
             conn = LibvirtConnection.getConnection();
             String dummyVmXml = buildDummyVmXml(dummyVmName, diskPaths);
             resource.startVM(conn, dummyVmName, dummyVmXml, Domain.CreateFlags.PAUSED);
+            LOGGER.info("{} phase=[DUMMY_CREATED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName());
 
             parentCheckpointWorkspace = ensureParentCheckpointMaterialized(command);
             if (isIncremental(command) && command.getParentCheckpointPath() != null && !command.getParentCheckpointPath().isEmpty()) {
@@ -251,32 +255,48 @@ class LibvirtAblestackNetBackupHelper {
                 String failureDetails = formatScriptStyleLog(String.format(
                         "Failed to start stopped VM NetBackup backup for dummy domain [%s]: %s",
                         dummyVmName, sanitizeCommandOutput(backupBeginResult.second())));
+                LOGGER.error("{} phase=[BACKUP_BEGIN_FAILED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], reason=[{}]",
+                        BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(), failureDetails);
                 LOGGER.error(failureDetails);
                 return new Pair<>(backupBeginResult.first(), failureDetails);
             }
+            LOGGER.info("{} phase=[BACKUP_JOB_STARTED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
+                    System.currentTimeMillis() - startedAt);
 
             try {
                 final long effectiveTimeoutMillis = command.getWait() > 0 ? TimeUnit.SECONDS.toMillis(command.getWait()) : resource.getCmdsTimeout();
                 waitForBackup(dummyVmName, effectiveTimeoutMillis);
+                LOGGER.info("{} phase=[BACKUP_JOB_COMPLETED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}]",
+                        BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
+                        System.currentTimeMillis() - startedAt);
             } catch (IOException e) {
                 cancelBackupJob(dummyVmName);
                 throw e;
             }
 
             dumpCheckpointXml(dummyVmName, command.getCheckpointName(), dest);
+            LOGGER.info("{} phase=[CHECKPOINT_DUMPED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName());
             Files.deleteIfExists(backupXml);
             Files.deleteIfExists(checkpointXml);
             Script.runSimpleBashScriptForExitValue("sync", resource.getCmdsTimeout(), false);
             markStagingComplete(dest, command);
-            LOGGER.info("Completed stopped VM NetBackup backup for vm=[{}], dummyVm=[{}]", command.getVmName(), dummyVmName);
+            LOGGER.info("{} phase=[STOPPED_BACKUP_DONE], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
+                    System.currentTimeMillis() - startedAt);
             return new Pair<>(0, "success");
         } catch (Exception e) {
-            LOGGER.error("Stopped VM NetBackup backup failed for vm=[{}], dummyVm=[{}] due to: {}",
-                    command.getVmName(), dummyVmName, e.getMessage(), e);
+            LOGGER.error("{} phase=[STOPPED_BACKUP_FAILED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}], reason=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
+                    System.currentTimeMillis() - startedAt, e.getMessage(), e);
             return new Pair<>(1, e.getMessage());
         } finally {
             cleanupParentCheckpointWorkspace(parentCheckpointWorkspace);
             cleanupDummyVm(dummyVmName);
+            LOGGER.info("{} phase=[DUMMY_CLEANED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}]",
+                    BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
+                    System.currentTimeMillis() - startedAt);
         }
     }
 

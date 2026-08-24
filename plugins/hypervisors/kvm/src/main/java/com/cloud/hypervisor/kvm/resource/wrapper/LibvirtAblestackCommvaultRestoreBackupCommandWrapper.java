@@ -53,6 +53,7 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
@@ -67,7 +68,10 @@ public class LibvirtAblestackCommvaultRestoreBackupCommandWrapper extends Comman
     private static final String CURRRENT_DEVICE = "virsh domblklist --domain %s | tail -n 3 | head -n 1 | awk '{print $1}'";
     private static final String MKDIR_P = "mkdir -p %s";
     private static final String RSYNC_DIR_FROM_REMOTE = "rsync -az -e \"ssh -o StrictHostKeyChecking=no\" %s:%s/ %s/";
+    private static final String QEMU_IMG_HAS_BACKING_COMMAND = "qemu-img info --output=json %s 2>/dev/null | grep -q '\"backing-filename\"'";
     private static final String COMMAND_EXIT_MARKER = "__CS_COMMAND_EXIT__=";
+    private static final String RESTORE_TRACE = "[ABLESTACK_COMMVAULT_RESTORE_TRACE]";
+    private static final long RESTORE_PRIMARY_SPACE_BUFFER_BYTES = 10L * 1024L * 1024L * 1024L;
 
     @Override
     public Answer execute(AblestackCommvaultRestoreBackupCommand command, LibvirtComputingResource serverResource) {
@@ -89,6 +93,8 @@ public class LibvirtAblestackCommvaultRestoreBackupCommandWrapper extends Comman
         BackupRestorePlan restorePlan = command.getRestorePlan();
         KVMStoragePoolManager storagePoolMgr = serverResource.getStoragePoolMgr();
 
+        logger.info("{} phase=[ENTER], vm=[{}], backupPath=[{}], vmExists=[{}], restorePlan=[{}], restoreVolumePaths=[{}], backupFiles=[{}], backupFileChains=[{}]",
+                RESTORE_TRACE, vmName, backupPath, vmExists, restorePlan, restoreVolumePaths, backupFiles, backupFileChains);
         String newVolumeId = null;
         try {
             validateChainStatePlan(volumeChainStates, restorePlan);
@@ -123,6 +129,8 @@ public class LibvirtAblestackCommvaultRestoreBackupCommandWrapper extends Comman
             return new BackupAnswer(command, false, errorMessage);
         }
 
+        logger.info("{} phase=[DONE], vm=[{}], backupPath=[{}], vmExists=[{}], newVolumeId=[{}]",
+                RESTORE_TRACE, vmName, backupPath, vmExists, newVolumeId);
         return new BackupAnswer(command, true, newVolumeId);
     }
 
@@ -131,11 +139,14 @@ public class LibvirtAblestackCommvaultRestoreBackupCommandWrapper extends Comman
                                             List<BackupVolumeChainState> volumeChainStates, int timeout, BackupRestorePlan restorePlan) {
         String diskType = "root";
         try {
+            List<List<String>> localBackupPathsByVolume = getLocalBackupPathsForVolumes(backupPath, backupFiles, backupFileChains, volumeChainStates,
+                    restoreVolumePaths, backedVolumesUUIDs);
+            validatePrimaryStorageSpaceForFileRestorePlan(restoreVolumePaths, localBackupPathsByVolume, restoreVolumePools);
             for (int idx = 0; idx < restoreVolumePaths.size(); idx++) {
                 PrimaryDataStoreTO restoreVolumePool = restoreVolumePools.get(idx);
                 String restoreVolumePath = restoreVolumePaths.get(idx);
                 String backupVolumeUuid = backedVolumesUUIDs.get(idx);
-                List<String> localBackupPaths = getLocalBackupPaths(backupPath, backupFiles, backupFileChains, volumeChainStates, idx, getLegacyBackupFileName(diskType, backupVolumeUuid));
+                List<String> localBackupPaths = localBackupPathsByVolume.get(idx);
                 validateResolvedChainPaths(localBackupPaths, restoreVolumePath);
                 diskType = "datadisk";
                 if (!replaceVolumeWithBackup(storagePoolMgr, restoreVolumePool, restoreVolumePath, localBackupPaths, timeout, backupPath, idx)) {
@@ -152,11 +163,14 @@ public class LibvirtAblestackCommvaultRestoreBackupCommandWrapper extends Comman
                                               List<BackupVolumeChainState> volumeChainStates, int timeout, BackupRestorePlan restorePlan) {
         String diskType = "root";
         try {
+            List<List<String>> localBackupPathsByVolume = getLocalBackupPathsForVolumes(backupPath, backupFiles, backupFileChains, volumeChainStates,
+                    volumePaths, null);
+            validatePrimaryStorageSpaceForFileRestorePlan(volumePaths, localBackupPathsByVolume, volumePools);
             for (int i = 0; i < volumePaths.size(); i++) {
                 PrimaryDataStoreTO volumePool = volumePools.get(i);
                 String volumePath = volumePaths.get(i);
                 String volumeUuid = volumePath.substring(volumePath.lastIndexOf(File.separator) + 1);
-                List<String> localBackupPaths = getLocalBackupPaths(backupPath, backupFiles, backupFileChains, volumeChainStates, i, getLegacyBackupFileName(diskType, volumeUuid));
+                List<String> localBackupPaths = localBackupPathsByVolume.get(i);
                 validateResolvedChainPaths(localBackupPaths, volumePath);
                 diskType = "datadisk";
                 if (!replaceVolumeWithBackup(storagePoolMgr, volumePool, volumePath, localBackupPaths, timeout, backupPath, i)) {
@@ -174,6 +188,7 @@ public class LibvirtAblestackCommvaultRestoreBackupCommandWrapper extends Comman
         try {
             List<String> localBackupPaths = getLocalBackupPaths(backupPath, backupFiles, backupFileChains, volumeChainStates, 0, getLegacyBackupFileName(diskType, volumeUUID));
             validateResolvedChainPaths(localBackupPaths, volumePath);
+            validatePrimaryStorageSpaceForFileRestorePlan(List.of(volumePath), List.of(localBackupPaths), List.of(volumePool));
             if (!replaceVolumeWithBackup(storagePoolMgr, volumePool, volumePath, localBackupPaths, timeout, backupPath, 0, true)) {
                 throw new CloudRuntimeException(String.format("Unable to restore contents from the backup volume [%s].", volumeUUID));
             }
@@ -186,6 +201,21 @@ public class LibvirtAblestackCommvaultRestoreBackupCommandWrapper extends Comman
         } finally {
             cleanupBackupDirectory(backupPath, restorePlan);
         }
+    }
+
+    private List<List<String>> getLocalBackupPathsForVolumes(String backupPath, List<String> backupFiles, List<String> backupFileChains,
+                                                            List<BackupVolumeChainState> volumeChainStates, List<String> volumePaths,
+                                                            List<String> backedVolumeUUIDs) {
+        List<List<String>> localBackupPathsByVolume = new ArrayList<>();
+        String diskType = "root";
+        for (int idx = 0; idx < volumePaths.size(); idx++) {
+            String volumeUuid = backedVolumeUUIDs != null ? backedVolumeUUIDs.get(idx)
+                    : volumePaths.get(idx).substring(volumePaths.get(idx).lastIndexOf(File.separator) + 1);
+            localBackupPathsByVolume.add(getLocalBackupPaths(backupPath, backupFiles, backupFileChains, volumeChainStates, idx,
+                    getLegacyBackupFileName(diskType, volumeUuid)));
+            diskType = "datadisk";
+        }
+        return localBackupPathsByVolume;
     }
 
     private void validateChainStatePlan(List<BackupVolumeChainState> volumeChainStates, BackupRestorePlan restorePlan) {
@@ -273,6 +303,8 @@ public class LibvirtAblestackCommvaultRestoreBackupCommandWrapper extends Comman
         if (backupPaths == null || backupPaths.isEmpty()) {
             return false;
         }
+        logger.info("{} phase=[RESTORE_VOLUME_BEGIN], poolType=[{}], targetVolume=[{}], backupPaths=[{}], backupIndex=[{}], createTargetVolume=[{}]",
+                RESTORE_TRACE, volumePool.getPoolType(), volumePath, backupPaths, backupIndex, createTargetVolume);
         if (volumePool.getPoolType() != Storage.StoragePoolType.RBD) {
             if (backupPaths.stream().anyMatch(path -> path.endsWith(".rbdiff"))) {
                 return restoreIncrementalRbdBackupChainToFileVolume(volumePath, backupPaths, timeout, backupRootPath, backupIndex);
@@ -299,16 +331,7 @@ public class LibvirtAblestackCommvaultRestoreBackupCommandWrapper extends Comman
         }
     }
 
-    private String getFirstExistingBackupPath(List<String> backupPaths) {
-        for (String backupPath : backupPaths) {
-            if (StringUtils.isNotBlank(backupPath) && Files.exists(Paths.get(backupPath))) {
-                return backupPath;
-            }
-        }
-        return backupPaths.get(0);
-    }
-
-    private String getLastExistingBackupPath(List<String> backupPaths) {
+    private String getRestorableFileBackupPath(List<String> backupPaths) {
         for (int i = backupPaths.size() - 1; i >= 0; i--) {
             String backupPath = backupPaths.get(i);
             if (StringUtils.isNotBlank(backupPath) && Files.exists(Paths.get(backupPath))) {
@@ -320,18 +343,214 @@ public class LibvirtAblestackCommvaultRestoreBackupCommandWrapper extends Comman
 
     private boolean replaceFileVolumeWithBackup(String volumePath, String backupPath, int timeout) {
         QemuImgFile srcBackupFile = null;
-        QemuImgFile destVolumeFile = null;
+        Path temporaryVolumePath = null;
+        Path movedAsideTarget = null;
         try {
-            QemuImg qemu = new QemuImg(timeout * 1000, true, false);
             srcBackupFile = new QemuImgFile(backupPath, getBackupFileFormat(backupPath));
-            destVolumeFile = new QemuImgFile(volumePath, getFileVolumeFormat(volumePath));
-            qemu.convert(srcBackupFile, destVolumeFile);
+            QemuImg.PhysicalDiskFormat targetFormat = getFileVolumeFormat(volumePath);
+            validatePrimaryStorageSpaceForFileRestore(backupPath, volumePath);
+            movedAsideTarget = moveExistingFileVolumeAside(volumePath);
+            temporaryVolumePath = createTemporaryVolumePath(volumePath, "cs-commvault-restore-volume-", targetFormat);
+            Files.deleteIfExists(temporaryVolumePath);
+            logger.info("{} phase=[TEMP_TARGET_CREATED], source=[{}], target=[{}], temporaryTarget=[{}], sourceFormat=[{}], targetFormat=[{}]",
+                    RESTORE_TRACE, srcBackupFile.getFileName(), volumePath, temporaryVolumePath, srcBackupFile.getFormat(), targetFormat);
+            restoreFileVolumeData(backupPath, temporaryVolumePath.toString(), srcBackupFile.getFormat(), targetFormat, timeout);
+            Files.move(temporaryVolumePath, Paths.get(volumePath), StandardCopyOption.REPLACE_EXISTING);
+            logger.info("{} phase=[TEMP_TARGET_PROMOTED], target=[{}], temporaryTarget=[{}]",
+                    RESTORE_TRACE, volumePath, temporaryVolumePath);
+            deleteMovedAsideFileVolume(movedAsideTarget);
             return true;
-        } catch (QemuImgException | LibvirtException e) {
+        } catch (QemuImgException | LibvirtException | IOException e) {
             String srcFilename = srcBackupFile != null ? srcBackupFile.getFileName() : null;
-            String destFilename = destVolumeFile != null ? destVolumeFile.getFileName() : null;
-            logger.error("Failed to convert backup {} to volume {}, the error was: {}", srcFilename, destFilename, e.getMessage());
+            logger.error("{} phase=[FILE_RESTORE_FAILED], source=[{}], target=[{}], error=[{}]",
+                    RESTORE_TRACE, srcFilename, volumePath, e.getMessage());
+            restoreMovedAsideFileVolume(volumePath, movedAsideTarget);
             return false;
+        } finally {
+            if (temporaryVolumePath != null) {
+                try {
+                    Files.deleteIfExists(temporaryVolumePath);
+                } catch (IOException e) {
+                    logger.warn("{} phase=[TEMP_TARGET_DELETE_FAILED], temporaryTarget=[{}], error=[{}]",
+                            RESTORE_TRACE, temporaryVolumePath, e.getMessage());
+                }
+            }
+        }
+    }
+
+    private Path createTemporaryVolumePath(String volumePath, String prefix, QemuImg.PhysicalDiskFormat targetFormat) throws IOException {
+        Path targetPath = Paths.get(volumePath).toAbsolutePath();
+        Path targetDirectory = targetPath.getParent();
+        String suffix = "." + targetFormat.toString().toLowerCase(Locale.ROOT);
+        return targetDirectory != null ? Files.createTempFile(targetDirectory, prefix, suffix) : Files.createTempFile(prefix, suffix);
+    }
+
+    private void validatePrimaryStorageSpaceForFileRestorePlan(List<String> volumePaths, List<List<String>> backupPathsByVolume,
+                                                               List<PrimaryDataStoreTO> restoreVolumePools) {
+        Map<Path, Long> persistentGrowthBytesByDirectory = new HashMap<>();
+        Map<Path, Long> transientBytesByDirectory = new HashMap<>();
+        for (int idx = 0; idx < volumePaths.size(); idx++) {
+            PrimaryDataStoreTO restoreVolumePool = restoreVolumePools.get(idx);
+            if (restoreVolumePool.getPoolType() == Storage.StoragePoolType.RBD) {
+                continue;
+            }
+            String volumePath = volumePaths.get(idx);
+            List<String> backupPaths = backupPathsByVolume.get(idx);
+            validateResolvedChainPaths(backupPaths, volumePath);
+            Path targetDirectory = getTargetDirectory(volumePath);
+            try {
+                long backupRequiredBytes = estimateRequiredBytesForFileRestore(getRestorableFileBackupPath(backupPaths));
+                Path targetPath = Paths.get(volumePath);
+                if (Files.exists(targetPath)) {
+                    long existingBytes = estimateRequiredBytesForFileRestore(volumePath);
+                    persistentGrowthBytesByDirectory.merge(targetDirectory, Math.max(backupRequiredBytes - existingBytes, 0L), Long::sum);
+                    transientBytesByDirectory.merge(targetDirectory, backupRequiredBytes, Long::max);
+                } else {
+                    persistentGrowthBytesByDirectory.merge(targetDirectory, backupRequiredBytes, Long::sum);
+                }
+            } catch (QemuImgException | LibvirtException e) {
+                throw new CloudRuntimeException(String.format("Failed to estimate primary storage requirement for target [%s]: %s",
+                        volumePath, e.getMessage()), e);
+            }
+        }
+
+        for (Map.Entry<Path, Long> entry : persistentGrowthBytesByDirectory.entrySet()) {
+            Path targetDirectory = entry.getKey();
+            long persistentGrowthBytes = entry.getValue();
+            long transientBytes = transientBytesByDirectory.getOrDefault(targetDirectory, 0L);
+            long requiredBytes = persistentGrowthBytes + transientBytes;
+            long bufferBytes = Math.max(RESTORE_PRIMARY_SPACE_BUFFER_BYTES, requiredBytes / 5L);
+            long minimumAvailableBytes = requiredBytes + bufferBytes;
+            long availableBytes;
+            try {
+                availableBytes = Files.getFileStore(targetDirectory).getUsableSpace();
+            } catch (IOException e) {
+                throw new CloudRuntimeException(String.format("Failed to query primary storage space under [%s]: %s", targetDirectory, e.getMessage()), e);
+            }
+            logger.info("{} phase=[PRIMARY_SPACE_PLAN_CHECK], targetDirectory=[{}], persistentGrowthBytes=[{}], transientBytes=[{}], requiredBytes=[{}], bufferBytes=[{}], minimumAvailableBytes=[{}], availableBytes=[{}], volumeCount=[{}]",
+                    RESTORE_TRACE, targetDirectory, persistentGrowthBytes, transientBytes, requiredBytes, bufferBytes, minimumAvailableBytes, availableBytes, volumePaths.size());
+            if (availableBytes < minimumAvailableBytes) {
+                throw new CloudRuntimeException(String.format(
+                        "Insufficient primary storage space for Commvault restore under [%s]. Required at least [%d] bytes including buffer for the restore plan, but only [%d] bytes are available.",
+                        targetDirectory, minimumAvailableBytes, availableBytes));
+            }
+        }
+        for (Map.Entry<Path, Long> entry : transientBytesByDirectory.entrySet()) {
+            Path targetDirectory = entry.getKey();
+            if (persistentGrowthBytesByDirectory.containsKey(targetDirectory)) {
+                continue;
+            }
+            long transientBytes = entry.getValue();
+            long bufferBytes = Math.max(RESTORE_PRIMARY_SPACE_BUFFER_BYTES, transientBytes / 5L);
+            long minimumAvailableBytes = transientBytes + bufferBytes;
+            long availableBytes;
+            try {
+                availableBytes = Files.getFileStore(targetDirectory).getUsableSpace();
+            } catch (IOException e) {
+                throw new CloudRuntimeException(String.format("Failed to query primary storage space under [%s]: %s", targetDirectory, e.getMessage()), e);
+            }
+            logger.info("{} phase=[PRIMARY_SPACE_PLAN_CHECK], targetDirectory=[{}], persistentGrowthBytes=[0], transientBytes=[{}], requiredBytes=[{}], bufferBytes=[{}], minimumAvailableBytes=[{}], availableBytes=[{}], volumeCount=[{}]",
+                    RESTORE_TRACE, targetDirectory, transientBytes, transientBytes, bufferBytes, minimumAvailableBytes, availableBytes, volumePaths.size());
+            if (availableBytes < minimumAvailableBytes) {
+                throw new CloudRuntimeException(String.format(
+                        "Insufficient primary storage space for Commvault restore under [%s]. Required at least [%d] bytes including buffer for the restore plan, but only [%d] bytes are available.",
+                        targetDirectory, minimumAvailableBytes, availableBytes));
+            }
+        }
+    }
+
+    private void validatePrimaryStorageSpaceForFileRestore(String backupPath, String volumePath) throws IOException, QemuImgException, LibvirtException {
+        Path targetDirectory = getTargetDirectory(volumePath);
+        long requiredBytes = estimateRequiredBytesForFileRestore(backupPath);
+        long bufferBytes = Math.max(RESTORE_PRIMARY_SPACE_BUFFER_BYTES, requiredBytes / 5L);
+        long minimumAvailableBytes = requiredBytes + bufferBytes;
+        long availableBytes = Files.getFileStore(targetDirectory).getUsableSpace();
+        logger.info("{} phase=[PRIMARY_SPACE_CHECK], source=[{}], target=[{}], targetDirectory=[{}], requiredBytes=[{}], bufferBytes=[{}], minimumAvailableBytes=[{}], availableBytes=[{}]",
+                RESTORE_TRACE, backupPath, volumePath, targetDirectory, requiredBytes, bufferBytes, minimumAvailableBytes, availableBytes);
+        if (availableBytes < minimumAvailableBytes) {
+            throw new CloudRuntimeException(String.format(
+                    "Insufficient primary storage space for Commvault restore target [%s]. Required at least [%d] bytes including buffer, but only [%d] bytes are available under [%s].",
+                    volumePath, minimumAvailableBytes, availableBytes, targetDirectory));
+        }
+    }
+
+    private Path getTargetDirectory(String volumePath) {
+        Path targetPath = Paths.get(volumePath).toAbsolutePath();
+        Path targetDirectory = targetPath.getParent();
+        return targetDirectory != null ? targetDirectory : Paths.get(".").toAbsolutePath();
+    }
+
+    private long estimateRequiredBytesForVolumeRestore(String volumePath, List<String> backupPaths) {
+        try {
+            if (Files.exists(Paths.get(volumePath))) {
+                return estimateRequiredBytesForFileRestore(volumePath);
+            }
+            return estimateRequiredBytesForFileRestore(getRestorableFileBackupPath(backupPaths));
+        } catch (QemuImgException | LibvirtException e) {
+            throw new CloudRuntimeException(String.format("Failed to estimate primary storage requirement for target [%s]: %s",
+                    volumePath, e.getMessage()), e);
+        }
+    }
+
+    private long estimateRequiredBytesForFileRestore(String backupPath) throws QemuImgException, LibvirtException {
+        try {
+            QemuImg qemu = new QemuImg(0);
+            Map<String, String> info = qemu.info(new QemuImgFile(backupPath, getBackupFileFormat(backupPath)));
+            String virtualSize = info.get(QemuImg.VIRTUAL_SIZE);
+            if (StringUtils.isNotBlank(virtualSize)) {
+                return Long.parseLong(virtualSize);
+            }
+        } catch (NumberFormatException e) {
+            logger.warn("Failed to parse virtual size for backup [{}]. Falling back to file size.", backupPath, e);
+        }
+        try {
+            return Files.size(Paths.get(backupPath));
+        } catch (IOException e) {
+            throw new QemuImgException(String.format("Failed to estimate restore size for backup [%s]: %s", backupPath, e.getMessage()));
+        }
+    }
+
+    private Path moveExistingFileVolumeAside(String volumePath) throws IOException {
+        Path targetPath = Paths.get(volumePath);
+        if (!Files.exists(targetPath)) {
+            return null;
+        }
+
+        Path movedAsidePath = targetPath.resolveSibling(targetPath.getFileName() + ".csrestore." + System.currentTimeMillis() + ".bak");
+        Files.move(targetPath, movedAsidePath);
+        logger.info("{} phase=[TARGET_MOVED_ASIDE], target=[{}], movedAside=[{}]",
+                RESTORE_TRACE, volumePath, movedAsidePath);
+        return movedAsidePath;
+    }
+
+    private void deleteMovedAsideFileVolume(Path movedAsideTarget) {
+        if (movedAsideTarget == null) {
+            return;
+        }
+        try {
+            Files.deleteIfExists(movedAsideTarget);
+            logger.info("{} phase=[TARGET_MOVED_ASIDE_DELETED], movedAside=[{}]",
+                    RESTORE_TRACE, movedAsideTarget);
+        } catch (IOException e) {
+            logger.warn("{} phase=[TARGET_MOVED_ASIDE_DELETE_FAILED], movedAside=[{}], error=[{}]",
+                    RESTORE_TRACE, movedAsideTarget, e.getMessage());
+        }
+    }
+
+    private void restoreMovedAsideFileVolume(String volumePath, Path movedAsideTarget) {
+        if (movedAsideTarget == null || !Files.exists(movedAsideTarget)) {
+            return;
+        }
+
+        Path targetPath = Paths.get(volumePath);
+        try {
+            Files.deleteIfExists(targetPath);
+            Files.move(movedAsideTarget, targetPath);
+            logger.info("{} phase=[TARGET_MOVED_ASIDE_RESTORED], target=[{}], movedAside=[{}]",
+                    RESTORE_TRACE, volumePath, movedAsideTarget);
+        } catch (IOException e) {
+            logger.error("{} phase=[TARGET_MOVED_ASIDE_RESTORE_FAILED], target=[{}], movedAside=[{}], error=[{}]",
+                    RESTORE_TRACE, volumePath, movedAsideTarget, e.getMessage());
         }
     }
 
@@ -340,7 +559,7 @@ public class LibvirtAblestackCommvaultRestoreBackupCommandWrapper extends Comman
             return false;
         }
         if (backupPaths.size() == 1) {
-            return replaceFileVolumeWithBackup(volumePath, getLastExistingBackupPath(backupPaths), timeout);
+            return replaceFileVolumeWithBackup(volumePath, getRestorableFileBackupPath(backupPaths), timeout);
         }
 
         Path tempDir = null;
@@ -381,6 +600,39 @@ public class LibvirtAblestackCommvaultRestoreBackupCommandWrapper extends Comman
                 }
             }
         }
+    }
+
+    private void restoreFileVolumeData(String backupPath, String volumePath, QemuImg.PhysicalDiskFormat backupFormat,
+                                       QemuImg.PhysicalDiskFormat volumeFormat, int timeout) throws QemuImgException, LibvirtException {
+        if (backupFormat == QemuImg.PhysicalDiskFormat.QCOW2 && volumeFormat == QemuImg.PhysicalDiskFormat.QCOW2 && !hasBackingChain(backupPath)) {
+            rsyncQcow2BackupFile(backupPath, volumePath, timeout);
+            return;
+        }
+        convertFileVolumeWithQemuImg(backupPath, volumePath, backupFormat, volumeFormat, timeout);
+    }
+
+    private boolean hasBackingChain(String qcow2Path) {
+        return Script.runSimpleBashScriptForExitValue(String.format(QEMU_IMG_HAS_BACKING_COMMAND, quote(qcow2Path)), 0, false) == 0;
+    }
+
+    private void rsyncQcow2BackupFile(String backupPath, String volumePath, int timeout) throws QemuImgException {
+        String rsyncCommand = String.format("rsync -az %s %s", quote(backupPath), quote(volumePath));
+        CommandExecutionResult result = executeBashCommandWithResult(rsyncCommand, timeout, "Rsync standalone QCOW2 backup to file volume");
+        if (result.exitCode != 0) {
+            logger.warn("{} phase=[RSYNC], source=[{}], target=[{}], command=[rsync-qcow2], exitCode=[{}], output=[{}]",
+                    RESTORE_TRACE, backupPath, volumePath, result.exitCode, result.output);
+            throw new QemuImgException(String.format("rsync qcow2 backup failed with exitCode [%s], output [%s]", result.exitCode, result.output));
+        }
+        logger.info("{} phase=[RSYNC], source=[{}], target=[{}], command=[rsync-qcow2]",
+                RESTORE_TRACE, backupPath, volumePath);
+    }
+
+    private void convertFileVolumeWithQemuImg(String backupPath, String volumePath, QemuImg.PhysicalDiskFormat backupFormat,
+                                              QemuImg.PhysicalDiskFormat volumeFormat, int timeout) throws QemuImgException, LibvirtException {
+        QemuImg qemu = new QemuImg(timeout * 1000, true, false);
+        qemu.convert(new QemuImgFile(backupPath, backupFormat), new QemuImgFile(volumePath, volumeFormat));
+        logger.info("{} phase=[CONVERT], source=[{}], target=[{}], command=[qemu-img-convert]",
+                RESTORE_TRACE, backupPath, volumePath);
     }
 
     private void rebaseBackupChainFile(Path child, Path parent, int timeout) throws IOException {
@@ -437,7 +689,7 @@ public class LibvirtAblestackCommvaultRestoreBackupCommandWrapper extends Comman
             return restoreIncrementalRbdBackupChain(storagePoolMgr, volumePool, volumePath, backupPaths, timeout, createTargetVolume);
         }
 
-        String backupPath = getFirstExistingBackupPath(backupPaths);
+        String backupPath = getRestorableFileBackupPath(backupPaths);
         KVMStoragePool volumeStoragePool = storagePoolMgr.getStoragePool(volumePool.getPoolType(), volumePool.getUuid());
         String normalizedVolumePath = normalizeRbdVolumePath(volumePath, volumeStoragePool);
         if (getBackupFileFormat(backupPath) == QemuImg.PhysicalDiskFormat.RAW) {

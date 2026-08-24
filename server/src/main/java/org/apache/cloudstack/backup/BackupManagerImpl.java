@@ -1725,6 +1725,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         final String name = cmd.getName();
         final Long zoneId = cmd.getZoneId();
         final Long backupOfferingId = cmd.getBackupOfferingId();
+        final String backupOfferingName = cmd.getBackupOfferingName();
         final Account caller = CallContext.current().getCallingAccount();
         final String keyword = cmd.getKeyword();
         List<Long> permittedAccounts = new ArrayList<Long>();
@@ -1753,6 +1754,12 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         sb.and("name", sb.entity().getName(), SearchCriteria.Op.EQ);
         sb.and("zoneId", sb.entity().getZoneId(), SearchCriteria.Op.EQ);
         sb.and("backupOfferingId", sb.entity().getBackupOfferingId(), SearchCriteria.Op.EQ);
+
+        if (StringUtils.isNotBlank(backupOfferingName)) {
+            SearchBuilder<BackupOfferingVO> backupOfferingSearch = backupOfferingDao.createSearchBuilder();
+            sb.join("backupOfferingSearch", backupOfferingSearch, sb.entity().getBackupOfferingId(), backupOfferingSearch.entity().getId(), JoinBuilder.JoinType.INNER);
+            sb.and("backupOfferingSearch", "backupOfferingName", backupOfferingSearch.entity().getName(), SearchCriteria.Op.LIKE);
+        }
 
         if (keyword != null) {
             sb.and().op("keywordName", sb.entity().getName(), SearchCriteria.Op.LIKE);
@@ -1783,6 +1790,10 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
 
         if (backupOfferingId != null) {
             sc.setParameters("backupOfferingId", backupOfferingId);
+        }
+
+        if (StringUtils.isNotBlank(backupOfferingName)) {
+            sc.setParameters("backupOfferingName", "%" + backupOfferingName + "%");
         }
 
         if (keyword != null) {
@@ -3625,10 +3636,10 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                         logger.debug(String.format("Update backup [%s] from [size: %s, protected size: %s] to [size: %s, protected size: %s].",
                                 backupInDb, backupInDb.getSize(), backupInDb.getProtectedSize(), restorePoint.getBackupSize(), restorePoint.getDataSize()));
 
-                        resourceLimitMgr.decrementResourceCount(backupInDb.getAccountId(), Resource.ResourceType.backup_storage, backupInDb.getSize());
+                        resourceLimitMgr.decrementResourceCount(backupInDb.getAccountId(), Resource.ResourceType.backup_storage, getBackupSizeForResourceCount(backupInDb));
                         ((BackupVO) backupInDb).setSize(restorePoint.getBackupSize());
                         ((BackupVO) backupInDb).setProtectedSize(restorePoint.getDataSize());
-                        resourceLimitMgr.incrementResourceCount(backupInDb.getAccountId(), Resource.ResourceType.backup_storage, backupInDb.getSize());
+                        resourceLimitMgr.incrementResourceCount(backupInDb.getAccountId(), Resource.ResourceType.backup_storage, getBackupSizeForResourceCount(backupInDb));
 
                         backupDao.update(backupInDb.getId(), ((BackupVO) backupInDb));
                     }
@@ -3656,7 +3667,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 }
                 logger.warn(String.format("Removing backup with ID: [%s].", backupIdToRemove));
                 resourceLimitMgr.decrementResourceCount(backup.getAccountId(), Resource.ResourceType.backup);
-                resourceLimitMgr.decrementResourceCount(backup.getAccountId(), Resource.ResourceType.backup_storage, backup.getSize());
+                resourceLimitMgr.decrementResourceCount(backup.getAccountId(), Resource.ResourceType.backup_storage, getBackupSizeForResourceCount(backup));
                 boolean result = backupDao.remove(backupIdToRemove);
                 if (result) {
                     checkAndGenerateUsageForLastBackupDeletedAfterOfferingRemove(vm, backup);
@@ -3690,7 +3701,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                         if (backup != null) {
                             logger.warn("Added backup found in provider [" + backup + "]");
                             resourceLimitMgr.incrementResourceCount(vm.getAccountId(), Resource.ResourceType.backup);
-                            resourceLimitMgr.incrementResourceCount(vm.getAccountId(), Resource.ResourceType.backup_storage, backup.getSize());
+                            resourceLimitMgr.incrementResourceCount(vm.getAccountId(), Resource.ResourceType.backup_storage, getBackupSizeForResourceCount(backup));
 
                             logger.debug(String.format("Creating a new entry in backups: [id: %s, uuid: %s, vm_id: %s, external_id: %s, type: %s, date: %s, backup_offering_id: %s, account_id: %s, "
                                             + "domain_id: %s, zone_id: %s].", backup.getId(), backup.getUuid(), backup.getVmId(), backup.getExternalId(), backup.getType(), backup.getDate(),
@@ -3704,6 +3715,10 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                     processRemoveList(removeList, vm);
                 }
             });
+        }
+
+        private long getBackupSizeForResourceCount(final Backup backup) {
+            return backup != null && backup.getSize() != null ? backup.getSize() : 0L;
         }
 
         @Override

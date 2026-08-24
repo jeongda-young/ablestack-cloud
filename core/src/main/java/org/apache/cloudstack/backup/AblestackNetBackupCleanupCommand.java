@@ -23,6 +23,7 @@ import java.util.List;
 
 public class AblestackNetBackupCleanupCommand extends Command {
     private List<String> backupPaths;
+    private String backupRootPath;
 
     protected AblestackNetBackupCleanupCommand() {
         super();
@@ -32,8 +33,17 @@ public class AblestackNetBackupCleanupCommand extends Command {
         this.backupPaths = backupPaths;
     }
 
+    public AblestackNetBackupCleanupCommand(final List<String> backupPaths, final String backupRootPath) {
+        this.backupPaths = backupPaths;
+        this.backupRootPath = backupRootPath;
+    }
+
     public List<String> getBackupPaths() {
         return backupPaths;
+    }
+
+    public String getBackupRootPath() {
+        return backupRootPath;
     }
 
     @Override

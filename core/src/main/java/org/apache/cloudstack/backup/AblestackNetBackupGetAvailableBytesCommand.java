@@ -19,31 +19,19 @@ package org.apache.cloudstack.backup;
 
 import com.cloud.agent.api.Command;
 
-import java.util.List;
+public class AblestackNetBackupGetAvailableBytesCommand extends Command {
+    private String path;
 
-public class AblestackCommvaultCleanupCommand extends Command {
-    private List<String> backupPaths;
-    private String backupRootPath;
-
-    protected AblestackCommvaultCleanupCommand() {
+    protected AblestackNetBackupGetAvailableBytesCommand() {
         super();
     }
 
-    public AblestackCommvaultCleanupCommand(final List<String> backupPaths) {
-        this.backupPaths = backupPaths;
+    public AblestackNetBackupGetAvailableBytesCommand(final String path) {
+        this.path = path;
     }
 
-    public AblestackCommvaultCleanupCommand(final List<String> backupPaths, final String backupRootPath) {
-        this.backupPaths = backupPaths;
-        this.backupRootPath = backupRootPath;
-    }
-
-    public List<String> getBackupPaths() {
-        return backupPaths;
-    }
-
-    public String getBackupRootPath() {
-        return backupRootPath;
+    public String getPath() {
+        return path;
     }
 
     @Override

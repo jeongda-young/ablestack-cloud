@@ -30,9 +30,12 @@ import org.apache.commons.lang3.StringUtils;
 
 @ResourceWrapper(handles = AblestackNetBackupTakeBackupCommand.class)
 public class LibvirtAblestackNetBackupTakeBackupCommandWrapper extends CommandWrapper<AblestackNetBackupTakeBackupCommand, Answer, LibvirtComputingResource> {
+    private static final String BACKUP_TRACE = "[ABLESTACK_NETBACKUP_BACKUP_TRACE]";
 
     @Override
     public Answer execute(final AblestackNetBackupTakeBackupCommand command, final LibvirtComputingResource libvirtComputingResource) {
+        logger.info("{} phase=[AGENT_ENTER], vm=[{}], backupPath=[{}], backupType=[{}]",
+                BACKUP_TRACE, command.getVmName(), command.getBackupPath(), command.getBackupType());
         final AblestackNetBackupTakeBackupCommand delegate = new AblestackNetBackupTakeBackupCommand(command.getVmName(), command.getBackupPath());
         delegate.setWait(command.getWait());
         delegate.setQuiesce(command.getQuiesce());
@@ -52,6 +55,8 @@ public class LibvirtAblestackNetBackupTakeBackupCommandWrapper extends CommandWr
         if (result.first() != 0) {
             final String failureDetails = StringUtils.defaultIfBlank(result.second(),
                     "NetBackup backup helper returned failure without details");
+            logger.warn("{} phase=[AGENT_FAILED], vm=[{}], backupPath=[{}], backupType=[{}], resultCode=[{}], reason=[{}]",
+                    BACKUP_TRACE, command.getVmName(), command.getBackupPath(), command.getBackupType(), result.first(), failureDetails);
             logger.warn("Failed to take NetBackup VM backup for [{}]: {}", command.getVmName(), failureDetails);
             final BackupAnswer answer = new BackupAnswer(command, false, failureDetails);
             if (result.first() == LibvirtAblestackNetBackupHelper.EXIT_CLEANUP_FAILED) {
@@ -60,6 +65,8 @@ public class LibvirtAblestackNetBackupTakeBackupCommandWrapper extends CommandWr
             return answer;
         }
 
+        logger.info("{} phase=[AGENT_DONE], vm=[{}], backupPath=[{}], backupType=[{}]",
+                BACKUP_TRACE, command.getVmName(), command.getBackupPath(), command.getBackupType());
         final BackupAnswer answer = new BackupAnswer(command, true, "success");
         try {
             answer.setSize(backupHelper.calculateBackupSize(delegate));

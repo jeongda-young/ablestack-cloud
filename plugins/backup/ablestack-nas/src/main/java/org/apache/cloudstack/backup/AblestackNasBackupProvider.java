@@ -116,6 +116,8 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
     public static final String DETAIL_VEEAM_IMPORTED = "nas.veeam.imported";
     private static final String MISSING_PARENT_RBD_SNAPSHOT_ERROR = "Parent RBD snapshot";
     private static final String MISSING_PARENT_QCOW2_BITMAP_ERROR = "Parent qcow2 bitmap";
+    private static final String BACKUP_TRACE = "[ABLESTACK_NAS_BACKUP_TRACE]";
+    private static final long BACKUP_REPOSITORY_SPACE_BUFFER_BYTES = 10L * 1024L * 1024L * 1024L;
     private static final long STALE_BACKUP_THRESHOLD_MS = TimeUnit.DAYS.toMillis(1);
 
     ConfigKey<Integer> NASBackupRestoreMountTimeout = new ConfigKey<>("Advanced", Integer.class,
@@ -285,6 +287,8 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
                 incrementalBackup && vmVolumes.size() > 1);
         if (!result.success && incrementalBackup && shouldRetryAsFullAfterIncrementalFailure(result, vmVolumes)) {
             cleanupFailedBackupForFullRetry(result.backup);
+            LOG.warn("{} phase=[INCREMENTAL_FALLBACK_TO_FULL], vmId=[{}], vmName=[{}], failedBackupUuid=[{}], reason=[{}]",
+                    BACKUP_TRACE, vm.getId(), vm.getInstanceName(), result.backup != null ? result.backup.getUuid() : null, result.details);
             LOG.warn("Incremental backup failed for VM [{}] due to [{}]. Retrying as full backup.", vm, result.details);
             result = executeBackup(vm, quiesceVM, host, backupRepository, vmVolumes, volumePoolsAndPaths, null, false, false);
         }
@@ -375,6 +379,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         final List<String> backupFiles = buildBackupFileNames(vmVolumes, backupEngine, incrementalBackup);
         final String requestedBackupType = incrementalBackup ? BACKUP_TYPE_INCREMENTAL : BACKUP_TYPE_FULL;
 
+        validateBackupRepositoryCapacity(host, backupRepository, vmVolumes, vm.getInstanceName(), requestedBackupType, backupEngine);
         BackupVO backupVO = createBackupObject(vm, backupPath, requestedBackupType,
                 checkpointName, backupEngine, incrementalBackup ? parentBackup : null, volumePoolsAndPaths.second());
         AblestackNasTakeBackupCommand command = new AblestackNasTakeBackupCommand(vm.getInstanceName(), backupPath);
@@ -399,6 +404,10 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
 
         BackupAnswer answer;
         final long backupStartTime = System.currentTimeMillis();
+        LOG.info("{} phase=[START], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], parentBackupUuid=[{}], hostId=[{}], hostName=[{}], backupPath=[{}], timeoutSeconds=[{}]",
+                BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
+                parentBackup != null ? parentBackup.getUuid() : null, host.getId(), host.getName(), backupPath,
+                commandTimeout > 0 ? commandTimeout : command.getWait());
         LOG.info("Starting ABLESTACK NAS backup [backupId: {}, backupUuid: {}, vmId: {}, vmName: {}, backupType: {}, backupEngine: {}, parentBackupUuid: {}, hostId: {}, hostName: {}, repositoryId: {}, repositoryName: {}, repositoryType: {}, repositoryAddress: {}, backupPath: {}, timeoutSeconds: {}]",
                 backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
                 parentBackup != null ? parentBackup.getUuid() : null, host.getId(), host.getName(), backupRepository.getId(), backupRepository.getName(),
@@ -406,6 +415,9 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         try {
             answer = (BackupAnswer) agentManager.send(host.getId(), command);
         } catch (AgentUnavailableException e) {
+            logger.error("{} phase=[FAILED], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], backupPath=[{}], elapsedMs=[{}], reason=[{}]",
+                    BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
+                    backupPath, System.currentTimeMillis() - backupStartTime, "Unable to contact backend control plane to initiate backup");
             logger.error("Unable to contact backend control plane to initiate ABLESTACK NAS backup [backupId: {}, backupUuid: {}, vmId: {}, vmName: {}, backupType: {}, backupEngine: {}, hostId: {}, repositoryId: {}, repositoryAddress: {}]",
                     backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
                     host.getId(), backupRepository.getId(), backupRepository.getAddress(), e);
@@ -414,6 +426,9 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
             removeBackupWithDetails(backupVO.getId());
             throw new CloudRuntimeException("Unable to contact backend control plane to initiate backup");
         } catch (OperationTimedoutException e) {
+            logger.error("{} phase=[FAILED], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], backupPath=[{}], elapsedMs=[{}], reason=[{}]",
+                    BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
+                    backupPath, System.currentTimeMillis() - backupStartTime, "Operation to initiate backup timed out");
             logger.error("Operation to initiate ABLESTACK NAS backup timed out [backupId: {}, backupUuid: {}, vmId: {}, vmName: {}, backupType: {}, backupEngine: {}, hostId: {}, repositoryId: {}, repositoryAddress: {}, elapsedMs: {}, timeoutSeconds: {}]",
                     backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
                     host.getId(), backupRepository.getId(), backupRepository.getAddress(), System.currentTimeMillis() - backupStartTime,
@@ -425,6 +440,9 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         }
 
         if (answer != null && answer.getResult()) {
+            LOG.info("{} phase=[DONE], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], backupPath=[{}], size=[{}], elapsedMs=[{}]",
+                    BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
+                    backupPath, answer.getSize(), System.currentTimeMillis() - backupStartTime);
             LOG.info("Completed ABLESTACK NAS backup [backupId: {}, backupUuid: {}, vmId: {}, vmName: {}, backupType: {}, backupEngine: {}, repositoryId: {}, backupPath: {}, size: {}, elapsedMs: {}]",
                     backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
                     backupRepository.getId(), backupPath, answer.getSize(), System.currentTimeMillis() - backupStartTime);
@@ -447,6 +465,9 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         }
 
         final String details = answer != null ? answer.getDetails() : "No answer received";
+        logger.error("{} phase=[FAILED], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], backupPath=[{}], elapsedMs=[{}], reason=[{}]",
+                BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
+                backupPath, System.currentTimeMillis() - backupStartTime, details);
         logger.error("Failed to take ABLESTACK NAS backup [backupId: {}, backupUuid: {}, vmId: {}, vmName: {}, backupType: {}, backupEngine: {}, repositoryId: {}, backupPath: {}, elapsedMs: {}]: {}",
                 backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
                 backupRepository.getId(), backupPath, System.currentTimeMillis() - backupStartTime, details);
@@ -466,6 +487,8 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
     }
 
     private BackupExecutionResult failCompletedNasBackupMetadata(BackupVO backupVO, String details) {
+        LOG.error("{} phase=[FAILED], backupId=[{}], backupUuid=[{}], vmId=[{}], backupType=[{}], backupPath=[{}], reason=[{}]",
+                BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), backupVO.getVmId(), backupVO.getType(), backupVO.getExternalId(), details);
         markBackupFailure(backupVO, "metadata-finalize", details);
         backupVO.setStatus(Backup.Status.Error);
         backupDao.update(backupVO.getId(), backupVO);
@@ -1427,6 +1450,62 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
             }
         }
         return new Pair<>(usedSize, totalSize);
+    }
+
+    private void validateBackupRepositoryCapacity(final Host host, final BackupRepository repository, final List<VolumeVO> vmVolumes,
+            final String vmName, final String backupType, final String backupEngine) {
+        final long requiredBytes = estimateRequiredRepositoryBytesForBackup(vmVolumes);
+        final long bufferBytes = Math.max(BACKUP_REPOSITORY_SPACE_BUFFER_BYTES, requiredBytes / 5L);
+        final long minimumAvailableBytes = requiredBytes + bufferBytes;
+        final BackupStorageStatsAnswer stats = getBackupRepositoryStats(host, repository);
+        final long totalBytes = stats.getTotalSize() != null ? stats.getTotalSize() : 0L;
+        final long usedBytes = stats.getUsedSize() != null ? stats.getUsedSize() : 0L;
+        final long availableBytes = Math.max(totalBytes - usedBytes, 0L);
+        LOG.info("{} phase=[REPOSITORY_SPACE_CHECK], vm=[{}], host=[{}], backupType=[{}], backupEngine=[{}], repositoryId=[{}], repositoryName=[{}], repositoryType=[{}], repositoryAddress=[{}], requiredBytes=[{}], bufferBytes=[{}], minimumAvailableBytes=[{}], totalBytes=[{}], usedBytes=[{}], availableBytes=[{}]",
+                BACKUP_TRACE, vmName, host != null ? host.getName() : null, backupType, backupEngine,
+                repository != null ? repository.getId() : null, repository != null ? repository.getName() : null,
+                repository != null ? repository.getType() : null, repository != null ? repository.getAddress() : null,
+                requiredBytes, bufferBytes, minimumAvailableBytes, totalBytes, usedBytes, availableBytes);
+        if (availableBytes < minimumAvailableBytes) {
+            throw new CloudRuntimeException(String.format(
+                    "Insufficient NAS backup repository space for VM [%s]. Required at least [%d] bytes including buffer, but only [%d] bytes are available on repository [%s].",
+                    vmName, minimumAvailableBytes, availableBytes, repository != null ? repository.getName() : null));
+        }
+    }
+
+    private BackupStorageStatsAnswer getBackupRepositoryStats(final Host host, final BackupRepository repository) {
+        if (host == null || repository == null) {
+            throw new CloudRuntimeException("Host and backup repository are required to query NAS backup repository capacity");
+        }
+        final GetBackupStorageStatsCommand command = new GetBackupStorageStatsCommand(repository.getType(), repository.getAddress(), repository.getMountOptions());
+        try {
+            final BackupStorageStatsAnswer answer = (BackupStorageStatsAnswer) agentManager.send(host.getId(), command);
+            if (answer == null || !answer.getResult()) {
+                throw new CloudRuntimeException(String.format("Failed to query NAS backup repository [%s] capacity due to: %s",
+                        repository.getName(), answer != null ? answer.getDetails() : "no answer received"));
+            }
+            backupRepositoryDao.updateCapacity(repository, answer.getTotalSize(), answer.getUsedSize());
+            return answer;
+        } catch (AgentUnavailableException e) {
+            throw new CloudRuntimeException(String.format("Unable to contact host [%s] to query NAS backup repository [%s] capacity",
+                    host.getName(), repository.getName()), e);
+        } catch (OperationTimedoutException e) {
+            throw new CloudRuntimeException(String.format("Timed out querying NAS backup repository [%s] capacity on host [%s]",
+                    repository.getName(), host.getName()), e);
+        } catch (RuntimeException e) {
+            throw new CloudRuntimeException(String.format("Failed to query NAS backup repository [%s] capacity on host [%s] due to: %s",
+                    repository.getName(), host.getName(), e.getMessage()), e);
+        }
+    }
+
+    private long estimateRequiredRepositoryBytesForBackup(final List<VolumeVO> vmVolumes) {
+        if (CollectionUtils.isEmpty(vmVolumes)) {
+            return 0L;
+        }
+        return vmVolumes.stream()
+                .filter(volume -> Volume.State.Ready.equals(volume.getState()))
+                .mapToLong(VolumeVO::getSize)
+                .sum();
     }
 
     @Override
