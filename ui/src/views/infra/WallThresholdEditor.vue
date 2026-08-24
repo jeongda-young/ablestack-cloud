@@ -429,16 +429,8 @@ export default {
       if (isRange) {
         payload.threshold = lower
         payload.threshold2 = upper
-        payload.lower = lower
-        payload.upper = upper
-        payload.thresholdUpper = upper
       } else {
         payload.threshold = lower
-        payload.lower = lower
-        // 상한 키들을 명시적으로 비워서 “되돌림” 방지
-        payload.threshold2 = null
-        payload.upper = null
-        payload.thresholdUpper = null
       }
 
       return payload

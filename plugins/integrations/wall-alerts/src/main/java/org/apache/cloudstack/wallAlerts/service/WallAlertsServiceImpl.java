@@ -644,6 +644,13 @@ public class WallAlertsServiceImpl extends ManagerBase implements WallAlertsServ
             ok = wallApiClient.updateRuleThreshold(m.namespace, m.group, m.title, op, newThreshold, null);
         }
 
+        if (!ok) {
+            throw new ServerApiException(ApiErrorCode.INTERNAL_ERROR,
+                    "임계값 업데이트에 실패했습니다. Wall Ruler API 응답 로그를 확인해 주세요.");
+        }
+
+        invalidateRulesCache();
+
         final WallAlertRuleResponse resp = new WallAlertRuleResponse();
         resp.setObjectName("wallalertrule");
         resp.setId(id != null && !id.isBlank() ? id : (m.group + ":" + m.title));
