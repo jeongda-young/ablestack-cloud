@@ -36,7 +36,7 @@ import com.cloud.utils.db.GenericDao;
 
 @Entity
 @Table(name = "storage_service_runtime_upgrade")
-public class StorageServiceRuntimeUpgradeVO {
+public class StorageServiceRuntimeUpgradeVO implements StorageServiceRuntimeUpgrade {
     public enum State { RUNNING, PREFLIGHT_READY, COMPLETE, ROLLED_BACK, FAILED, MANUAL_RECOVERY }
 
     @Id

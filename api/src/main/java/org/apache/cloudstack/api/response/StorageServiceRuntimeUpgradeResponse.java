@@ -15,10 +15,13 @@ import java.util.Date;
 
 import org.apache.cloudstack.api.ApiConstants;
 import org.apache.cloudstack.api.BaseResponse;
+import org.apache.cloudstack.api.EntityReference;
+import org.apache.cloudstack.storage.dataservice.StorageServiceRuntimeUpgrade;
 
 import com.cloud.serializer.Param;
 import com.google.gson.annotations.SerializedName;
 
+@EntityReference(value = StorageServiceRuntimeUpgrade.class)
 public class StorageServiceRuntimeUpgradeResponse extends BaseResponse {
     @SerializedName(ApiConstants.ID) @Param(description = "runtime upgrade ID") private String id;
     @SerializedName("instanceid") @Param(description = "Storage Service instance ID") private String instanceId;

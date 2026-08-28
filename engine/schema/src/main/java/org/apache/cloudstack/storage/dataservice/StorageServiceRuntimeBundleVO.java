@@ -35,7 +35,7 @@ import com.cloud.utils.db.GenericDao;
 
 @Entity
 @Table(name = "storage_service_runtime_bundle")
-public class StorageServiceRuntimeBundleVO {
+public class StorageServiceRuntimeBundleVO implements StorageServiceRuntimeBundle {
     public enum State { AVAILABLE, DISABLED }
     public enum ServiceImpact { NONE, PROTOCOL_RESTART, VM_REBOOT }
 
