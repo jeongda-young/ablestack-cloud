@@ -897,12 +897,6 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
             return volumeInfo != null ? List.of(getLegacyBackupFileName(volumeInfo)) : List.of();
         }
 
-        String backupEngine = getBackupDetail(backup, DETAIL_BACKUP_ENGINE);
-        if (!BACKUP_ENGINE_RBD_DIFF.equals(backupEngine)) {
-            Backup.VolumeInfo volumeInfo = getBackedUpVolumeInfo(backup.getBackedUpVolumes(), volumeUuid);
-            return volumeInfo != null ? List.of(volumeInfo.getPath()) : List.of();
-        }
-
         List<Backup> chain = getBackupChain(backup);
         List<String> files = new ArrayList<>();
         for (Backup chainBackup : chain) {

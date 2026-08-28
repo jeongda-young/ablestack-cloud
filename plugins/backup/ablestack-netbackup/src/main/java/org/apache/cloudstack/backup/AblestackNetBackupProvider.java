@@ -1058,7 +1058,37 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
 
     @Override
     public boolean deleteBackup(final Backup backup, final boolean forced) {
+        if (backup == null) {
+            return true;
+        }
+        if (Backup.Status.Error.equals(backup.getStatus()) && !forced) {
+            throw new CloudRuntimeException("NetBackup backup in Error state requires forced deletion after manual cleanup verification.");
+        }
+        if (Backup.Status.Failed.equals(backup.getStatus()) || Backup.Status.Error.equals(backup.getStatus())) {
+            cleanupFailedOrErrorBackupArtifacts(backup, forced);
+            return true;
+        }
         throw new CloudRuntimeException("NetBackup backups are managed by backup ID groups and cannot be deleted individually from Mold.");
+    }
+
+    private void cleanupFailedOrErrorBackupArtifacts(final Backup backup, final boolean forced) {
+        Host cleanupHost = null;
+        try {
+            cleanupHost = resolveBackupCleanupHost(backup);
+        } catch (final RuntimeException e) {
+            LOG.warn("Unable to resolve cleanup host for NetBackup backup [{}] in [{}] state before explicit delete: {}",
+                    backup.getUuid(), backup.getStatus(), e.getMessage(), e);
+        }
+        if (cleanupHost == null) {
+            LOG.warn("Skipping artifact cleanup for NetBackup backup [{}] in [{}] state before explicit delete because cleanup host could not be resolved. forced=[{}]",
+                    backup.getUuid(), backup.getStatus(), forced);
+            return;
+        }
+        final boolean cleanupSuccessful = cleanupFailedBackupArtifacts(cleanupHost, backup);
+        if (!cleanupSuccessful) {
+            LOG.warn("Artifact cleanup failed for NetBackup backup [{}] in [{}] state before explicit delete. Metadata deletion will continue. forced=[{}]",
+                    backup.getUuid(), backup.getStatus(), forced);
+        }
     }
 
     @Override
@@ -2121,6 +2151,17 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
     }
 
     private Host resolveBackupCleanupHost(final Backup backup) {
+        loadBackupDetailsIfNeeded(backup);
+        final String sourceHostName = getBackupDetail(backup, DETAIL_POLICY_NAME);
+        if (StringUtils.isNotBlank(sourceHostName)) {
+            Host host = hostDao.findByName(sourceHostName);
+            if (host == null) {
+                host = hostDao.findByIp(sourceHostName);
+            }
+            if (host != null && Status.Up.equals(host.getStatus()) && Hypervisor.HypervisorType.KVM.equals(host.getHypervisorType())) {
+                return host;
+            }
+        }
         final VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(backup.getVmId());
         if (vm != null) {
             final Long hostId = vm.getHostId() != null ? vm.getHostId() : vm.getLastHostId();

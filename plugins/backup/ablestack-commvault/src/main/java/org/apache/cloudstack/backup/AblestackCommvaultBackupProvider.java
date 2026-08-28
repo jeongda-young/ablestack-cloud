@@ -21,7 +21,6 @@ import com.cloud.agent.api.Answer;
 import com.cloud.exception.AgentUnavailableException;
 import com.cloud.exception.OperationTimedoutException;
 import com.cloud.dc.dao.ClusterDao;
-import com.cloud.domain.Domain;
 import com.cloud.host.Host;
 import com.cloud.host.HostVO;
 import com.cloud.host.Status;
@@ -51,6 +50,7 @@ import com.cloud.utils.component.AdapterBase;
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.event.ActionEventUtils;
 import com.cloud.event.EventTypes;
+import com.cloud.event.EventVO;
 import com.cloud.event.dao.EventDao;
 import com.cloud.vm.VMInstanceVO;
 import com.cloud.vm.VirtualMachine;
@@ -2487,8 +2487,8 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         if (hasBackupAgentInstallFailureEvent(host.getId())) {
             return;
         }
-        ActionEventUtils.onActionEvent(User.UID_SYSTEM, Account.ACCOUNT_ID_SYSTEM, Domain.ROOT_DOMAIN, EventTypes.EVENT_BACKUP_AGENT_INSTALL,
-                "Failed to install the Commvault backup agent on host: " + host.getPrivateIpAddress(), host.getId(), ApiCommandResourceType.Host.toString());
+        ActionEventUtils.onCompletedActionEvent(User.UID_SYSTEM, Account.ACCOUNT_ID_SYSTEM, EventVO.LEVEL_ERROR, EventTypes.EVENT_BACKUP_AGENT_INSTALL,
+                "Failed to install the Commvault backup agent on host: " + host.getPrivateIpAddress(), host.getId(), ApiCommandResourceType.Host.toString(), 0);
     }
 
     private boolean hasBackupAgentInstallFailureEvent(long hostId) {
