@@ -3689,12 +3689,18 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                     logger.warn("Skipping removal of backup [ID: {}] during sync because it was not found.", backupIdToRemove);
                     continue;
                 }
-                if (backup != null && Backup.Status.BackingUp.equals(backup.getStatus())) {
-                    final BackupOffering offering = backupOfferingDao.findById(backup.getBackupOfferingId());
-                    if (offering != null && (BackupProviderNameUtils.isNetBackupFamily(offering.getProvider())
-                            || BackupProviderNameUtils.isVeeamFamily(offering.getProvider()))) {
+                final BackupOffering offering = backupOfferingDao.findById(backup.getBackupOfferingId());
+                if (offering != null) {
+                    final boolean netBackupFamily = BackupProviderNameUtils.isNetBackupFamily(offering.getProvider());
+                    final boolean veeamFamily = BackupProviderNameUtils.isVeeamFamily(offering.getProvider());
+                    if ((netBackupFamily || veeamFamily) && Backup.Status.BackingUp.equals(backup.getStatus())) {
                         logger.debug("Skipping removal of backup [{}] for VM [{}] because it is still BackingUp.",
                                 backup.getId(), vm.getInstanceName());
+                        continue;
+                    }
+                    if (netBackupFamily && (Backup.Status.Error.equals(backup.getStatus()) || Backup.Status.Failed.equals(backup.getStatus()))) {
+                        logger.warn("Skipping removal of NetBackup backup [{}] for VM [{}] because it is in [{}] state and requires explicit delete.",
+                                backup.getId(), vm.getInstanceName(), backup.getStatus());
                         continue;
                     }
                 }

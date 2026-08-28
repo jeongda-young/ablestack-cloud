@@ -314,7 +314,7 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
             if (backupPaths.stream().anyMatch(path -> path.endsWith(".rbdiff"))) {
                 return restoreIncrementalRbdBackupChainToFileVolume(volumePath, backupPaths, timeout, backupRootPath, backupIndex);
             }
-            return replaceFileVolumeWithBackup(volumePath, getRestorableFileBackupPath(backupPaths), timeout);
+            return replaceFileVolumeWithBackup(volumePath, backupPaths, timeout);
         }
 
         return replaceRbdVolumeWithBackup(storagePoolMgr, volumePool, volumePath, backupPaths, timeout, createTargetVolume);
@@ -344,6 +344,20 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
             }
         }
         return backupPaths.get(backupPaths.size() - 1);
+    }
+
+    private boolean replaceFileVolumeWithBackup(String volumePath, List<String> backupPaths, int timeout) {
+        if (backupPaths == null || backupPaths.isEmpty()) {
+            return false;
+        }
+        if (backupPaths.size() == 1) {
+            return replaceFileVolumeWithBackup(volumePath, getRestorableFileBackupPath(backupPaths), timeout);
+        }
+
+        String leafBackupPath = getRestorableFileBackupPath(backupPaths);
+        logger.info("{} phase=[QCOW2_CHAIN_LEAF_SELECTED], target=[{}], leaf=[{}], chainFiles=[{}]",
+                RESTORE_TRACE, volumePath, leafBackupPath, backupPaths);
+        return replaceFileVolumeWithBackup(volumePath, leafBackupPath, timeout);
     }
 
     private boolean replaceFileVolumeWithBackup(String volumePath, String backupPath, int timeout) {
@@ -396,7 +410,8 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
     private void validatePrimaryStorageSpaceForFileRestorePlan(List<String> volumePaths, List<List<String>> backupPathsByVolume,
                                                                List<PrimaryDataStoreTO> restoreVolumePools) {
         Map<Path, Long> persistentGrowthBytesByDirectory = new HashMap<>();
-        Map<Path, Long> transientBytesByDirectory = new HashMap<>();
+        Map<Path, Long> peakRestoreBytesByDirectory = new HashMap<>();
+        Map<Path, Integer> volumeCountByDirectory = new HashMap<>();
         for (int idx = 0; idx < volumePaths.size(); idx++) {
             PrimaryDataStoreTO restoreVolumePool = restoreVolumePools.get(idx);
             if (restoreVolumePool.getPoolType() == Storage.StoragePoolType.RBD) {
@@ -409,10 +424,12 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
             try {
                 long backupRequiredBytes = estimateRequiredBytesForFileRestore(getRestorableFileBackupPath(backupPaths));
                 Path targetPath = Paths.get(volumePath);
+                long persistentGrowthBeforeVolume = persistentGrowthBytesByDirectory.getOrDefault(targetDirectory, 0L);
+                peakRestoreBytesByDirectory.merge(targetDirectory, persistentGrowthBeforeVolume + backupRequiredBytes, Math::max);
+                volumeCountByDirectory.merge(targetDirectory, 1, Integer::sum);
                 if (Files.exists(targetPath)) {
                     long existingBytes = estimateRequiredBytesForFileRestore(volumePath);
                     persistentGrowthBytesByDirectory.merge(targetDirectory, Math.max(backupRequiredBytes - existingBytes, 0L), Long::sum);
-                    transientBytesByDirectory.merge(targetDirectory, backupRequiredBytes, Long::max);
                 } else {
                     persistentGrowthBytesByDirectory.merge(targetDirectory, backupRequiredBytes, Long::sum);
                 }
@@ -425,8 +442,8 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
         for (Map.Entry<Path, Long> entry : persistentGrowthBytesByDirectory.entrySet()) {
             Path targetDirectory = entry.getKey();
             long persistentGrowthBytes = entry.getValue();
-            long transientBytes = transientBytesByDirectory.getOrDefault(targetDirectory, 0L);
-            long requiredBytes = persistentGrowthBytes + transientBytes;
+            long peakRestoreBytes = peakRestoreBytesByDirectory.getOrDefault(targetDirectory, 0L);
+            long requiredBytes = Math.max(persistentGrowthBytes, peakRestoreBytes);
             long bufferBytes = Math.max(RESTORE_PRIMARY_SPACE_BUFFER_BYTES, requiredBytes / 5L);
             long minimumAvailableBytes = requiredBytes + bufferBytes;
             long availableBytes;
@@ -436,29 +453,8 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
                 throw new CloudRuntimeException(String.format("Failed to query primary storage space under [%s]: %s", targetDirectory, e.getMessage()), e);
             }
             logger.info("{} phase=[PRIMARY_SPACE_PLAN_CHECK], targetDirectory=[{}], persistentGrowthBytes=[{}], transientBytes=[{}], requiredBytes=[{}], bufferBytes=[{}], minimumAvailableBytes=[{}], availableBytes=[{}], volumeCount=[{}]",
-                    RESTORE_TRACE, targetDirectory, persistentGrowthBytes, transientBytes, requiredBytes, bufferBytes, minimumAvailableBytes, availableBytes, volumePaths.size());
-            if (availableBytes < minimumAvailableBytes) {
-                throw new CloudRuntimeException(String.format(
-                        "Insufficient primary storage space for NAS restore under [%s]. Required at least [%d] bytes including buffer for the restore plan, but only [%d] bytes are available.",
-                        targetDirectory, minimumAvailableBytes, availableBytes));
-            }
-        }
-        for (Map.Entry<Path, Long> entry : transientBytesByDirectory.entrySet()) {
-            Path targetDirectory = entry.getKey();
-            if (persistentGrowthBytesByDirectory.containsKey(targetDirectory)) {
-                continue;
-            }
-            long transientBytes = entry.getValue();
-            long bufferBytes = Math.max(RESTORE_PRIMARY_SPACE_BUFFER_BYTES, transientBytes / 5L);
-            long minimumAvailableBytes = transientBytes + bufferBytes;
-            long availableBytes;
-            try {
-                availableBytes = Files.getFileStore(targetDirectory).getUsableSpace();
-            } catch (IOException e) {
-                throw new CloudRuntimeException(String.format("Failed to query primary storage space under [%s]: %s", targetDirectory, e.getMessage()), e);
-            }
-            logger.info("{} phase=[PRIMARY_SPACE_PLAN_CHECK], targetDirectory=[{}], persistentGrowthBytes=[0], transientBytes=[{}], requiredBytes=[{}], bufferBytes=[{}], minimumAvailableBytes=[{}], availableBytes=[{}], volumeCount=[{}]",
-                    RESTORE_TRACE, targetDirectory, transientBytes, transientBytes, bufferBytes, minimumAvailableBytes, availableBytes, volumePaths.size());
+                    RESTORE_TRACE, targetDirectory, persistentGrowthBytes, peakRestoreBytes, requiredBytes, bufferBytes, minimumAvailableBytes, availableBytes,
+                    volumeCountByDirectory.getOrDefault(targetDirectory, 0));
             if (availableBytes < minimumAvailableBytes) {
                 throw new CloudRuntimeException(String.format(
                         "Insufficient primary storage space for NAS restore under [%s]. Required at least [%d] bytes including buffer for the restore plan, but only [%d] bytes are available.",
@@ -678,17 +674,17 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
 
     private void convertFileVolumeWithQemuImg(String backupPath, String volumePath, QemuImg.PhysicalDiskFormat backupFormat,
                                               QemuImg.PhysicalDiskFormat volumeFormat, int timeout) throws QemuImgException {
-        String convertCommand = String.format("qemu-img convert -p -f %s -O %s %s %s",
+        String convertCommand = String.format("qemu-img convert -p -S 0 -f %s -O %s %s %s",
                 backupFormat.toString().toLowerCase(Locale.ROOT), volumeFormat.toString().toLowerCase(Locale.ROOT),
                 quote(backupPath), quote(volumePath));
         Pair<Integer, String> result = runCommandWithOutput(convertCommand, timeout * 1000);
         String output = formatTraceOutput(result.second());
         if (result.first() == 0) {
-            logger.info("{} phase=[CONVERT], source=[{}], target=[{}], command=[qemu-img-convert]",
+            logger.info("{} phase=[CONVERT], source=[{}], target=[{}], command=[qemu-img-convert-nosparse]",
                     RESTORE_TRACE, backupPath, volumePath);
             return;
         }
-        logger.warn("{} phase=[CONVERT], source=[{}], target=[{}], command=[qemu-img-convert], exitCode=[{}], output=[{}]",
+        logger.warn("{} phase=[CONVERT], source=[{}], target=[{}], command=[qemu-img-convert-nosparse], exitCode=[{}], output=[{}]",
                 RESTORE_TRACE, backupPath, volumePath, result.first(), output);
         throw new QemuImgException(String.format("qemu-img convert failed with exitCode [%s], output [%s]", result.first(), output));
     }
