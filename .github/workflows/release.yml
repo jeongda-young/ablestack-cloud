@@ -305,6 +305,7 @@ jobs:
       - prepare-source-release
       - validate-build
     uses: ./.github/workflows/systemvm-kvm.yml
+    secrets: inherit
     with:
       ref: ${{ needs.prepare-source-release.outputs.source_commit_sha }}
       version: ${{ needs.metadata.outputs.package_version }}
