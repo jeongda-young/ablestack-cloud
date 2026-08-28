@@ -227,9 +227,21 @@ jobs:
             exit 1
           fi
           openssl pkey -pubin -in "${public_keys[0]}" -noout
-          install -m 0644 "${public_keys[0]}" \
-            "systemvm/debian/etc/ablestack-storage/runtime-trusted-keys/${BUILD_STORAGE_RUNTIME_SIGNING_KEY_ID}.pem"
-          sha256sum "systemvm/debian/etc/ablestack-storage/runtime-trusted-keys/${BUILD_STORAGE_RUNTIME_SIGNING_KEY_ID}.pem"
+          public_key_path="systemvm/debian/etc/ablestack-storage/runtime-trusted-keys/${BUILD_STORAGE_RUNTIME_SIGNING_KEY_ID}.pem"
+          install -m 0644 "${public_keys[0]}" "$public_key_path"
+          if git ls-files --error-unmatch "$public_key_path" >/dev/null 2>&1; then
+            git update-index --assume-unchanged "$public_key_path"
+          else
+            exclude_file=$(git rev-parse --git-path info/exclude)
+            mkdir -p "$(dirname "$exclude_file")"
+            printf '/%s\n' "$public_key_path" >> "$exclude_file"
+          fi
+          sha256sum "$public_key_path"
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            echo "::error::Storage Service runtime public key injection left unrelated worktree changes"
+            git status --short
+            exit 1
+          fi
 
       - name: Install host prerequisites
         run: |
