@@ -57,6 +57,7 @@ import org.apache.cloudstack.api.command.admin.vm.CreateVMFromBackupCmdByAdmin;
 import org.apache.cloudstack.api.command.user.backup.AssignVirtualMachineToBackupOfferingCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateAblestackVeeamBackupCmd;
 import org.apache.cloudstack.api.command.user.backup.UpdateAblestackVeeamBackupCmd;
+import org.apache.cloudstack.api.command.user.backup.SyncAblestackVeeamBackupsCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateBackupCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateNetBackupCmd;
 import org.apache.cloudstack.api.command.user.backup.ImportAblestackVeeamBackupSeedCmd;
@@ -1229,6 +1230,30 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         return true;
     }
 
+    @Override
+    public boolean syncAblestackVeeamBackups(final SyncAblestackVeeamBackupsCmd cmd) {
+        final Account caller = CallContext.current().getCallingAccount();
+        final VMInstanceVO vm = vmInstanceDao.findById(cmd.getVmId());
+        if (vm == null) {
+            throw new CloudRuntimeException(String.format("VM [%s] was not found", cmd.getVmId()));
+        }
+        accountManager.checkAccess(caller, null, true, vm);
+        validateBackupForZone(vm.getDataCenterId());
+        if (vm.getBackupOfferingId() == null) {
+            throw new CloudRuntimeException(String.format("VM [%s] is not assigned to a backup offering", vm.getUuid()));
+        }
+        final BackupOfferingVO offering = backupOfferingDao.findById(vm.getBackupOfferingId());
+        if (offering == null || !BackupProviderNameUtils.isVeeamFamily(offering.getProvider())) {
+            throw new CloudRuntimeException(String.format("VM [%s] is not assigned to an Ablestack Veeam backup offering",
+                    vm.getUuid()));
+        }
+        final BackupProvider backupProvider = getBackupProvider(offering.getProvider());
+        logger.info("Syncing Ablestack Veeam backups for VM [{}] via provider [{}]",
+                vm.getInstanceName(), offering.getProvider());
+        backupProvider.syncBackups(vm);
+        return true;
+    }
+
     private static final String ABLESTACK_VEEAM_INTERVAL_TYPE_DETAIL = "ablestack.veeam.interval.type";
 
     private void createCheckedBackupVeeam(final VMInstanceVO vm, final Long vmId, final BackupProvider backupProvider,
@@ -1257,8 +1282,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 }
                 backupDao.update(vmBackup.getId(), vmBackup);
                 // Veeam-server-triggered backups (no Mold schedule) always show EXTERNAL in UI.
+                // Ignore host-script DAILY/HOURLY leftovers — those are Veeam Job schedules, not Mold schedules.
                 final String normalizedInterval = backupScheduleId == null
-                        ? StringUtils.defaultIfBlank(normalizeVeeamBackupIntervalType(intervalType), "EXTERNAL")
+                        ? "EXTERNAL"
                         : normalizeVeeamBackupIntervalType(intervalType);
                 if (StringUtils.isNotBlank(normalizedInterval) && backupScheduleId == null) {
                     backupDetailsDao.removeDetail(vmBackup.getId(), ABLESTACK_VEEAM_INTERVAL_TYPE_DETAIL);
@@ -1296,8 +1322,14 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     @Override
     @ActionEvent(eventType = EventTypes.EVENT_VM_BACKUP_RESTORE, eventDescription = "restoring VM from Ablestack Veeam backup", async = true)
     public boolean restoreAblestackVeeamBackup(final Long backupId) {
-        final BackupVO backup = backupDao.findById(backupId);
+        BackupVO backup = backupDao.findById(backupId);
         if (backup == null) {
+            backup = backupDao.findByIdIncludingRemoved(backupId);
+            if (backup != null && backup.getRemoved() != null) {
+                throw new CloudRuntimeException(String.format(
+                        "Backup %s (%s) was removed and cannot be restored. Use an active backup for this VM.",
+                        backup.getUuid(), backupId));
+            }
             throw new CloudRuntimeException("Backup " + backupId + " does not exist");
         }
         final BackupOffering backupOffering = backupOfferingDao.findByIdIncludingRemoved(backup.getBackupOfferingId());
@@ -3090,6 +3122,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         cmdList.add(ListVeeamRestorePointsCmd.class);
         cmdList.add(CreateAblestackVeeamBackupCmd.class);
         cmdList.add(UpdateAblestackVeeamBackupCmd.class);
+        cmdList.add(SyncAblestackVeeamBackupsCmd.class);
         cmdList.add(RestoreAblestackVeeamBackupCmd.class);
         cmdList.add(ListAblestackVeeamBackupsCmd.class);
         cmdList.add(ListBackupsCmd.class);

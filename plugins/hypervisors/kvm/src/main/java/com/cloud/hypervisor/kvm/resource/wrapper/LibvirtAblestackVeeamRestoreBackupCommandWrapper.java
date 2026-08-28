@@ -40,6 +40,7 @@ import org.apache.cloudstack.storage.to.PrimaryDataStoreTO;
 import org.apache.cloudstack.utils.qemu.QemuImg;
 import org.apache.cloudstack.utils.qemu.QemuImgException;
 import org.apache.cloudstack.utils.qemu.QemuImgFile;
+import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.io.FileUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.libvirt.LibvirtException;
@@ -98,10 +99,10 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
                         backupFiles, backupFileChains, volumeChainStates, command.getVmName(), command.getVmState(), timeout, cacheMode, restorePlan);
             } else if (Boolean.TRUE.equals(vmExists)) {
                 restoreVolumesOfExistingVM(storagePoolMgr, restoreVolumePools, restoreVolumePaths, backedVolumeUUIDs,
-                        backupPath, backupFiles, backupFileChains, volumeChainStates, timeout, restorePlan);
+                        backupPath, backupFiles, backupFileChains, volumeChainStates, timeout, restorePlan, command.getCheckpointName());
             } else {
                 restoreVolumesOfDestroyedVMs(storagePoolMgr, restoreVolumePools, restoreVolumePaths, backedVolumeUUIDs,
-                        backupPath, backupFiles, backupFileChains, volumeChainStates, timeout, restorePlan);
+                        backupPath, backupFiles, backupFileChains, volumeChainStates, timeout, restorePlan, command.getCheckpointName());
             }
         } catch (final CloudRuntimeException e) {
             final String errorMessage = e.getMessage() != null ? e.getMessage() : "";
@@ -114,9 +115,12 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
     private void restoreVolumesOfExistingVM(final KVMStoragePoolManager storagePoolMgr, final List<PrimaryDataStoreTO> restoreVolumePools,
             final List<String> restoreVolumePaths, final List<String> backedVolumesUUIDs, final String backupPath, final List<String> backupFiles,
             final List<String> backupFileChains, final List<BackupVolumeChainState> volumeChainStates, final int timeout,
-            final BackupRestorePlan restorePlan) {
+            final BackupRestorePlan restorePlan, final String checkpointName) {
         try {
             validateChainStatePlan(volumeChainStates, restorePlan);
+            if (tryRestoreVolumesWithRbdSnapRollback(storagePoolMgr, restoreVolumePools, restoreVolumePaths, checkpointName, timeout)) {
+                return;
+            }
             final List<List<String>> localBackupPathsByVolume = getLocalBackupPathsForVolumes(backupPath, backupFiles, backupFileChains, volumeChainStates,
                     restoreVolumePaths, backedVolumesUUIDs);
             validatePrimaryStorageSpaceForFileRestorePlan(restoreVolumePaths, localBackupPathsByVolume, restoreVolumePools);
@@ -140,10 +144,10 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
     private void restoreVolumesOfDestroyedVMs(final KVMStoragePoolManager storagePoolMgr, final List<PrimaryDataStoreTO> restoreVolumePools,
             final List<String> restoreVolumePaths, final List<String> backedVolumesUUIDs, final String backupPath, final List<String> backupFiles,
             final List<String> backupFileChains, final List<BackupVolumeChainState> volumeChainStates, final int timeout,
-            final BackupRestorePlan restorePlan) {
+            final BackupRestorePlan restorePlan, final String checkpointName) {
         // Same disk rewrite as existing-VM restore; createVMFromBackup / destroyed-VM restore land here when vmExists=false.
         restoreVolumesOfExistingVM(storagePoolMgr, restoreVolumePools, restoreVolumePaths, backedVolumesUUIDs,
-                backupPath, backupFiles, backupFileChains, volumeChainStates, timeout, restorePlan);
+                backupPath, backupFiles, backupFileChains, volumeChainStates, timeout, restorePlan, checkpointName);
     }
 
     private void validateChainStatePlan(final List<BackupVolumeChainState> volumeChainStates, final BackupRestorePlan restorePlan) {
@@ -199,6 +203,56 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
         } finally {
             cleanupBackupDirectory(backupPath, restorePlan);
         }
+    }
+
+    private boolean tryRestoreVolumesWithRbdSnapRollback(final KVMStoragePoolManager storagePoolMgr,
+            final List<PrimaryDataStoreTO> restoreVolumePools, final List<String> restoreVolumePaths, final String checkpointName,
+            final int timeout) {
+        if (StringUtils.isBlank(checkpointName) || CollectionUtils.isEmpty(restoreVolumePools) || CollectionUtils.isEmpty(restoreVolumePaths)
+                || restoreVolumePools.size() != restoreVolumePaths.size()) {
+            return false;
+        }
+        for (final PrimaryDataStoreTO pool : restoreVolumePools) {
+            if (pool == null || pool.getPoolType() != Storage.StoragePoolType.RBD) {
+                return false;
+            }
+        }
+        for (int idx = 0; idx < restoreVolumePaths.size(); idx++) {
+            final PrimaryDataStoreTO volumePool = restoreVolumePools.get(idx);
+            final KVMStoragePool volumeStoragePool = storagePoolMgr.getStoragePool(volumePool.getPoolType(), volumePool.getUuid());
+            final String normalizedVolumePath = normalizeRbdVolumePath(restoreVolumePaths.get(idx), volumeStoragePool);
+            if (!rbdSnapshotExists(volumeStoragePool, normalizedVolumePath, checkpointName, timeout)) {
+                logger.info("{} phase=[RBD_SNAP_ROLLBACK_SKIP], reason=[checkpoint_missing], volume=[{}], checkpoint=[{}]",
+                        RESTORE_TRACE, normalizedVolumePath, checkpointName);
+                return false;
+            }
+        }
+        for (int idx = 0; idx < restoreVolumePaths.size(); idx++) {
+            final PrimaryDataStoreTO volumePool = restoreVolumePools.get(idx);
+            final KVMStoragePool volumeStoragePool = storagePoolMgr.getStoragePool(volumePool.getPoolType(), volumePool.getUuid());
+            final String normalizedVolumePath = normalizeRbdVolumePath(restoreVolumePaths.get(idx), volumeStoragePool);
+            if (!rollbackRbdVolumeToCheckpoint(volumeStoragePool, normalizedVolumePath, checkpointName, timeout)) {
+                throw new CloudRuntimeException(String.format(
+                        "Failed to rollback RBD volume [%s] to checkpoint snapshot [%s]", normalizedVolumePath, checkpointName));
+            }
+        }
+        logger.info("{} phase=[RBD_SNAP_ROLLBACK_DONE], checkpoint=[{}], volumeCount=[{}]",
+                RESTORE_TRACE, checkpointName, restoreVolumePaths.size());
+        return true;
+    }
+
+    private boolean rollbackRbdVolumeToCheckpoint(final KVMStoragePool volumeStoragePool, final String volumePath,
+            final String checkpointName, final int timeout) {
+        logger.info("{} phase=[RBD_SNAP_ROLLBACK_BEGIN], volume=[{}], checkpoint=[{}]",
+                RESTORE_TRACE, volumePath, checkpointName);
+        final String rollbackCommand = buildRbdSnapshotCommand(volumeStoragePool, "snap rollback", volumePath + "@" + checkpointName);
+        final CommandExecutionResult rollbackResult = executeBashCommandWithResult(rollbackCommand, timeout, "Rollback RBD volume to checkpoint");
+        if (rollbackResult.exitCode != 0) {
+            logger.error("{} phase=[RBD_SNAP_ROLLBACK_FAILED], volume=[{}], checkpoint=[{}], exit=[{}], output=[{}]",
+                    RESTORE_TRACE, volumePath, checkpointName, rollbackResult.exitCode, rollbackResult.output);
+            return false;
+        }
+        return true;
     }
 
     private void deleteBackupDirectory(final String backupDirectory) {

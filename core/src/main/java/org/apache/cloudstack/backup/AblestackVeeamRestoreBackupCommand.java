@@ -41,6 +41,7 @@ public class AblestackVeeamRestoreBackupCommand extends Command {
     private VirtualMachine.State vmState;
     private Integer timeout;
     private String cacheMode;
+    private String checkpointName;
 
     public AblestackVeeamRestoreBackupCommand() {
         super();
@@ -165,6 +166,14 @@ public class AblestackVeeamRestoreBackupCommand extends Command {
 
     public void setCacheMode(final String cacheMode) {
         this.cacheMode = cacheMode;
+    }
+
+    public String getCheckpointName() {
+        return checkpointName;
+    }
+
+    public void setCheckpointName(final String checkpointName) {
+        this.checkpointName = checkpointName;
     }
 
     @Override

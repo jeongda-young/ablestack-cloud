@@ -28,6 +28,7 @@ import org.apache.cloudstack.api.command.admin.backup.UpdateNetBackupCmd;
 import org.apache.cloudstack.api.command.admin.backup.UpdateBackupOfferingCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateAblestackVeeamBackupCmd;
 import org.apache.cloudstack.api.command.user.backup.UpdateAblestackVeeamBackupCmd;
+import org.apache.cloudstack.api.command.user.backup.SyncAblestackVeeamBackupsCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateBackupCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateNetBackupCmd;
 import org.apache.cloudstack.api.command.user.backup.ImportAblestackVeeamBackupSeedCmd;
@@ -273,6 +274,12 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
      * so out-of-band catalog sync can remove Mold history when Veeam deletes the restore point.
      */
     boolean updateAblestackVeeamBackup(UpdateAblestackVeeamBackupCmd cmd);
+
+    /**
+     * Sync Mold Ablestack Veeam backup rows with the Veeam catalog for one VM
+     * (catalog-driven delete, same model as NetBackup / BackupSyncTask).
+     */
+    boolean syncAblestackVeeamBackups(SyncAblestackVeeamBackupsCmd cmd);
 
     boolean restoreAblestackVeeamBackup(Long backupId);
 
