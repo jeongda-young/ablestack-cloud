@@ -46,6 +46,8 @@ import com.cloud.agent.api.StorageServiceRuntimeHostCommand;
 import com.cloud.agent.api.StorageServiceRuntimeOperation;
 import com.cloud.utils.component.ManagerBase;
 import com.cloud.utils.exception.CloudRuntimeException;
+import com.cloud.vm.VMInstanceVO;
+import com.cloud.vm.dao.VMInstanceDao;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
 
@@ -62,6 +64,7 @@ public class StorageServiceRuntimeUpgradeManagerImpl extends ManagerBase impleme
     @Inject private SharedFSDao sharedFSDao;
     @Inject private StorageServiceRuntimeHostDispatcher runtimeDispatcher;
     @Inject private StorageServiceGuestCommandDispatcher guestCommandDispatcher;
+    @Inject private VMInstanceDao vmInstanceDao;
 
     @Override
     public StorageServiceRuntimeBundleResponse register(final RegisterStorageServiceRuntimeBundleCmd cmd) {
@@ -394,7 +397,11 @@ public class StorageServiceRuntimeUpgradeManagerImpl extends ManagerBase impleme
     }
 
     private String vmName(final StorageServiceInstanceVO instance) {
-        return "i-2-" + instance.getVmId() + "-VM";
+        final VMInstanceVO vm = vmInstanceDao.findById(instance.getVmId());
+        if (vm == null || vm.getInstanceName() == null) {
+            throw new CloudRuntimeException("Storage Service System VM is unavailable: " + instance.getVmId());
+        }
+        return vm.getInstanceName();
     }
 
     private int timeout() { return StorageServiceInstance.StorageServiceCommandTimeout.value(); }
