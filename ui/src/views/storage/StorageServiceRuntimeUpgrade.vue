@@ -293,6 +293,7 @@ export default {
 :global(body.dark-mode .runtime-upgrade-section .ant-descriptions-bordered .ant-descriptions-view),
 :global(body.dark-mode .runtime-upgrade-section .ant-descriptions-bordered .ant-descriptions-row > th),
 :global(body.dark-mode .runtime-upgrade-section .ant-descriptions-bordered .ant-descriptions-row > td) { border-color: #3b4650 !important; }
+:global(body.dark-mode .runtime-upgrade-section .ant-descriptions-bordered .ant-descriptions-row) { border-bottom-color: #3b4650 !important; }
 :global(body.dark-mode .runtime-upgrade-section .ant-table),
 :global(body.dark-mode .runtime-upgrade-section .ant-table-thead > tr > th),
 :global(body.dark-mode .runtime-upgrade-section .ant-table-tbody > tr > td) { background: #242b33; color: rgba(255, 255, 255, 0.86); border-color: #3b4650; }
