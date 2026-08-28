@@ -16,99 +16,101 @@
 // under the License.
 <template>
   <div class="runtime-upgrade-layout">
-    <a-alert
-      class="runtime-upgrade-alert"
-      type="warning"
-      show-icon
-      :message="$t('message.storage.service.runtime.upgrade.impact')" />
-
-    <section class="runtime-upgrade-section">
-      <div class="runtime-upgrade-section__title">{{ $t('label.storage.service.runtime.current') }}</div>
-      <a-descriptions bordered size="small" :column="1">
-        <a-descriptions-item :label="$t('label.storage.service.runtime.available')">
-          <a-tag :color="capability.available ? 'green' : 'red'">
-            {{ capability.available ? $t('label.yes') : $t('label.no') }}
-          </a-tag>
-        </a-descriptions-item>
-        <a-descriptions-item :label="$t('label.storage.service.runtime.current.version')">
-          <span class="runtime-upgrade-value">{{ capability.currentversion || '-' }}</span>
-        </a-descriptions-item>
-        <a-descriptions-item :label="$t('label.storage.service.runtime.previous.version')">
-          <span class="runtime-upgrade-value">{{ capability.previousversion || '-' }}</span>
-        </a-descriptions-item>
-        <a-descriptions-item :label="$t('label.storage.service.runtime.abi')">
-          <span class="runtime-upgrade-value">{{ capability.runtimeabiversion || '-' }}</span>
-        </a-descriptions-item>
-      </a-descriptions>
+    <div class="runtime-upgrade-content">
       <a-alert
-        v-if="capability.details && !capability.available"
-        class="runtime-upgrade-inline-alert"
-        type="error"
+        class="runtime-upgrade-alert"
+        type="warning"
         show-icon
-        :message="capability.details" />
-    </section>
+        :message="$t('message.storage.service.runtime.upgrade.impact')" />
 
-    <section class="runtime-upgrade-section">
-      <div class="runtime-upgrade-section__title">{{ $t('label.storage.service.runtime.target') }}</div>
-      <a-form layout="vertical">
-        <a-form-item required>
-          <template #label>
-            <tooltip-label
-              :title="$t('label.storage.service.runtime.bundle')"
-              :tooltip="$t('message.storage.service.runtime.bundle.help')" />
-          </template>
-          <a-select
-            v-model:value="selectedBundleId"
-            :disabled="submitting || bundles.length === 0"
-            :placeholder="$t('message.storage.service.runtime.bundle.select')">
-            <a-select-option v-for="bundle in bundles" :key="bundle.id" :value="bundle.id">
-              {{ bundle.version }} · {{ bundle.serviceimpact }} · ABI {{ bundle.runtimeabiversion }}
-            </a-select-option>
-          </a-select>
-        </a-form-item>
-      </a-form>
-      <a-empty
-        v-if="!loading && bundles.length === 0"
-        :description="$t('message.storage.service.runtime.bundle.empty')" />
-    </section>
+      <section class="runtime-upgrade-section">
+        <div class="runtime-upgrade-section__title">{{ $t('label.storage.service.runtime.current') }}</div>
+        <a-descriptions bordered size="small" :column="1">
+          <a-descriptions-item :label="$t('label.storage.service.runtime.available')">
+            <a-tag :color="capability.available ? 'green' : 'red'">
+              {{ capability.available ? $t('label.yes') : $t('label.no') }}
+            </a-tag>
+          </a-descriptions-item>
+          <a-descriptions-item :label="$t('label.storage.service.runtime.current.version')">
+            <span class="runtime-upgrade-value">{{ capability.currentversion || '-' }}</span>
+          </a-descriptions-item>
+          <a-descriptions-item :label="$t('label.storage.service.runtime.previous.version')">
+            <span class="runtime-upgrade-value">{{ capability.previousversion || '-' }}</span>
+          </a-descriptions-item>
+          <a-descriptions-item :label="$t('label.storage.service.runtime.abi')">
+            <span class="runtime-upgrade-value">{{ capability.runtimeabiversion || '-' }}</span>
+          </a-descriptions-item>
+        </a-descriptions>
+        <a-alert
+          v-if="capability.details && !capability.available"
+          class="runtime-upgrade-inline-alert"
+          type="error"
+          show-icon
+          :message="capability.details" />
+      </section>
 
-    <section v-if="latestUpgrade" class="runtime-upgrade-section">
-      <div class="runtime-upgrade-section__title">{{ $t('label.storage.service.runtime.operation') }}</div>
-      <div class="runtime-upgrade-progress">
-        <div>
-          <a-tag :color="stateColor(latestUpgrade.state)">{{ latestUpgrade.state }}</a-tag>
-          <span class="runtime-upgrade-phase">{{ latestUpgrade.phase }}</span>
+      <section class="runtime-upgrade-section">
+        <div class="runtime-upgrade-section__title">{{ $t('label.storage.service.runtime.target') }}</div>
+        <a-form layout="vertical">
+          <a-form-item required>
+            <template #label>
+              <tooltip-label
+                :title="$t('label.storage.service.runtime.bundle')"
+                :tooltip="$t('message.storage.service.runtime.bundle.help')" />
+            </template>
+            <a-select
+              v-model:value="selectedBundleId"
+              :disabled="submitting || bundles.length === 0"
+              :placeholder="$t('message.storage.service.runtime.bundle.select')">
+              <a-select-option v-for="bundle in bundles" :key="bundle.id" :value="bundle.id">
+                {{ bundle.version }} · {{ bundle.serviceimpact }} · ABI {{ bundle.runtimeabiversion }}
+              </a-select-option>
+            </a-select>
+          </a-form-item>
+        </a-form>
+        <a-empty
+          v-if="!loading && bundles.length === 0"
+          :description="$t('message.storage.service.runtime.bundle.empty')" />
+      </section>
+
+      <section v-if="latestUpgrade" class="runtime-upgrade-section">
+        <div class="runtime-upgrade-section__title">{{ $t('label.storage.service.runtime.operation') }}</div>
+        <div class="runtime-upgrade-progress">
+          <div>
+            <a-tag :color="stateColor(latestUpgrade.state)">{{ latestUpgrade.state }}</a-tag>
+            <span class="runtime-upgrade-phase">{{ latestUpgrade.phase }}</span>
+          </div>
+          <a-progress :percent="latestUpgrade.progress || 0" :status="progressStatus(latestUpgrade.state)" />
         </div>
-        <a-progress :percent="latestUpgrade.progress || 0" :status="progressStatus(latestUpgrade.state)" />
-      </div>
-      <a-alert
-        v-if="latestUpgrade.errormessage"
-        class="runtime-upgrade-inline-alert"
-        type="error"
-        show-icon
-        :message="latestUpgrade.errorcode || $t('label.error')"
-        :description="latestUpgrade.errormessage" />
-    </section>
+        <a-alert
+          v-if="latestUpgrade.errormessage"
+          class="runtime-upgrade-inline-alert"
+          type="error"
+          show-icon
+          :message="latestUpgrade.errorcode || $t('label.error')"
+          :description="latestUpgrade.errormessage" />
+      </section>
 
-    <section v-if="upgrades.length > 0" class="runtime-upgrade-section">
-      <div class="runtime-upgrade-section__title">{{ $t('label.storage.service.runtime.history') }}</div>
-      <a-table
-        size="small"
-        :columns="historyColumns"
-        :dataSource="upgrades"
-        :pagination="false"
-        :scroll="{ x: 620, y: 180 }"
-        rowKey="id">
-        <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'state'">
-            <a-tag :color="stateColor(record.state)">{{ record.state }}</a-tag>
+      <section v-if="upgrades.length > 0" class="runtime-upgrade-section">
+        <div class="runtime-upgrade-section__title">{{ $t('label.storage.service.runtime.history') }}</div>
+        <a-table
+          size="small"
+          :columns="historyColumns"
+          :dataSource="upgrades"
+          :pagination="false"
+          :scroll="{ x: 620 }"
+          rowKey="id">
+          <template #bodyCell="{ column, record }">
+            <template v-if="column.key === 'state'">
+              <a-tag :color="stateColor(record.state)">{{ record.state }}</a-tag>
+            </template>
+            <template v-else-if="column.key === 'progress'">
+              {{ record.progress || 0 }}%
+            </template>
           </template>
-          <template v-else-if="column.key === 'progress'">
-            {{ record.progress || 0 }}%
-          </template>
-        </template>
-      </a-table>
-    </section>
+        </a-table>
+      </section>
+    </div>
 
     <div class="runtime-upgrade-actions">
       <a-button @click="closeModal">{{ $t('label.cancel') }}</a-button>
@@ -266,11 +268,28 @@ export default {
 <style lang="scss" scoped>
 .runtime-upgrade-layout {
   width: min(760px, 82vw);
-  max-height: calc(100vh - 180px);
+  height: min(700px, calc(100vh - 160px));
+  max-height: calc(100vh - 160px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.runtime-upgrade-content {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  padding: 2px 6px 16px 2px;
+  padding: 2px 6px 14px 2px;
+  scrollbar-width: thin;
+  scrollbar-color: #637b94 transparent;
 }
+.runtime-upgrade-content::-webkit-scrollbar,
+.runtime-upgrade-layout :deep(.ant-table-body::-webkit-scrollbar) { width: 6px; height: 6px; }
+.runtime-upgrade-content::-webkit-scrollbar-track,
+.runtime-upgrade-layout :deep(.ant-table-body::-webkit-scrollbar-track) { background: transparent; }
+.runtime-upgrade-content::-webkit-scrollbar-thumb,
+.runtime-upgrade-layout :deep(.ant-table-body::-webkit-scrollbar-thumb) { background: #637b94; border-radius: 3px; }
+.runtime-upgrade-layout :deep(.ant-table-body) { scrollbar-width: thin; scrollbar-color: #637b94 transparent; }
 .runtime-upgrade-alert,
 .runtime-upgrade-section { margin-bottom: 14px; }
 .runtime-upgrade-section {
@@ -284,7 +303,7 @@ export default {
 .runtime-upgrade-inline-alert { margin-top: 12px; }
 .runtime-upgrade-phase { margin-left: 8px; color: rgba(0, 0, 0, 0.65); }
 .runtime-upgrade-progress :deep(.ant-progress) { margin-top: 10px; }
-.runtime-upgrade-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; padding-top: 2px; }
+.runtime-upgrade-actions { flex: 0 0 auto; display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; padding: 12px 6px 0 2px; border-top: 1px solid #d9d9d9; background: #fff; }
 :global(body.dark-mode .runtime-upgrade-section) { background: #242b33; border-color: #46515c; color: rgba(255, 255, 255, 0.88); }
 :global(body.dark-mode .runtime-upgrade-section__title) { color: rgba(255, 255, 255, 0.92); }
 :global(body.dark-mode .runtime-upgrade-phase) { color: rgba(255, 255, 255, 0.72); }
@@ -297,5 +316,7 @@ export default {
 :global(body.dark-mode .runtime-upgrade-section .ant-table),
 :global(body.dark-mode .runtime-upgrade-section .ant-table-thead > tr > th),
 :global(body.dark-mode .runtime-upgrade-section .ant-table-tbody > tr > td) { background: #242b33; color: rgba(255, 255, 255, 0.86); border-color: #3b4650; }
-@media (max-width: 768px) { .runtime-upgrade-layout { width: 84vw; } }
+:global(body.dark-mode .runtime-upgrade-section .ant-table-cell-scrollbar) { box-shadow: 0 1px 0 1px #242b33; }
+:global(body.dark-mode .runtime-upgrade-actions) { background: #20262d; border-top-color: #3b4650; }
+@media (max-width: 768px) { .runtime-upgrade-layout { width: 84vw; height: calc(100vh - 140px); max-height: calc(100vh - 140px); } }
 </style>
