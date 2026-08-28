@@ -36,7 +36,9 @@ public class StorageServiceRuntimeHostDispatcherImpl implements StorageServiceRu
             throw new CloudRuntimeException("Unable to find Storage Service System VM with id " + vmId);
         }
         if (vm.getHostId() == null) {
-            throw new CloudRuntimeException("Storage Service System VM is not running on a host: " + vm.getInstanceName());
+            final String vmName = vm.getHostName() == null || vm.getHostName().trim().isEmpty()
+                    ? vm.getInstanceName() : vm.getHostName();
+            throw new CloudRuntimeException("Storage Service System VM is not running on a host: " + vmName);
         }
         final Answer answer = agentManager.easySend(vm.getHostId(), command);
         if (!(answer instanceof StorageServiceRuntimeHostAnswer)) {

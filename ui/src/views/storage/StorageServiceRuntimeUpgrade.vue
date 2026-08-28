@@ -164,7 +164,7 @@ export default {
       return this.upgrades.length > 0 ? this.upgrades[0] : null
     },
     canPreflight () {
-      return !this.loading && !this.submitting && this.capability.available && !!this.selectedBundleId &&
+      return !this.loading && !this.submitting && !!this.selectedBundleId &&
         (!this.latestUpgrade || !['RUNNING', 'PREFLIGHT_READY'].includes(this.latestUpgrade.state))
     },
     canUpgrade () {
@@ -290,8 +290,11 @@ export default {
 :global(body.dark-mode .runtime-upgrade-phase) { color: rgba(255, 255, 255, 0.72); }
 :global(body.dark-mode .runtime-upgrade-section .ant-descriptions-item-label) { background: #1f252c; color: rgba(255, 255, 255, 0.72); }
 :global(body.dark-mode .runtime-upgrade-section .ant-descriptions-item-content) { background: #242b33; color: rgba(255, 255, 255, 0.88); }
+:global(body.dark-mode .runtime-upgrade-section .ant-descriptions-bordered .ant-descriptions-view),
+:global(body.dark-mode .runtime-upgrade-section .ant-descriptions-bordered .ant-descriptions-row > th),
+:global(body.dark-mode .runtime-upgrade-section .ant-descriptions-bordered .ant-descriptions-row > td) { border-color: #3b4650 !important; }
 :global(body.dark-mode .runtime-upgrade-section .ant-table),
 :global(body.dark-mode .runtime-upgrade-section .ant-table-thead > tr > th),
-:global(body.dark-mode .runtime-upgrade-section .ant-table-tbody > tr > td) { background: #242b33; color: rgba(255, 255, 255, 0.86); border-color: #46515c; }
+:global(body.dark-mode .runtime-upgrade-section .ant-table-tbody > tr > td) { background: #242b33; color: rgba(255, 255, 255, 0.86); border-color: #3b4650; }
 @media (max-width: 768px) { .runtime-upgrade-layout { width: 84vw; } }
 </style>
