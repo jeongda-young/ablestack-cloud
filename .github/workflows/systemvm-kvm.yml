@@ -280,6 +280,21 @@ jobs:
           openssl pkeyutl -verify -pubin \
             -inkey "systemvm/debian/etc/ablestack-storage/runtime-trusted-keys/${STORAGE_RUNTIME_SIGNING_KEY_ID}.pem" \
             -sigfile "$runtime_dir/manifest.sig" -rawin -in "$runtime_dir/manifest.json"
+          runtime_prefix="ablestack-storage-runtime-${runtime_version}"
+          mv "$runtime_dir/manifest.json" "$runtime_dir/${runtime_prefix}.manifest.json"
+          mv "$runtime_dir/manifest.sig" "$runtime_dir/${runtime_prefix}.manifest.sig"
+          cp "systemvm/debian/etc/ablestack-storage/runtime-trusted-keys/${STORAGE_RUNTIME_SIGNING_KEY_ID}.pem" \
+            "$runtime_dir/${STORAGE_RUNTIME_SIGNING_KEY_ID}.pem"
+          (
+            cd "$runtime_dir"
+            rm -f SHA256SUMS
+            sha256sum \
+              "${runtime_prefix}.tar.gz" \
+              "${runtime_prefix}.manifest.json" \
+              "${runtime_prefix}.manifest.sig" \
+              "${STORAGE_RUNTIME_SIGNING_KEY_ID}.pem" \
+              > "${runtime_prefix}.SHA256SUMS"
+          )
           {
             echo "- Runtime bundle: \`ablestack-storage-runtime-${runtime_version}.tar.gz\`"
             echo "- Runtime signing key: \`${STORAGE_RUNTIME_SIGNING_KEY_ID}\`"
