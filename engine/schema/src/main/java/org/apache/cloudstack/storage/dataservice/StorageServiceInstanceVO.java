@@ -72,6 +72,19 @@ public class StorageServiceInstanceVO implements StorageServiceInstance {
     @Enumerated(value = EnumType.STRING)
     private State state = State.Allocated;
 
+    @Column(name = "current_runtime_bundle_id")
+    private Long currentRuntimeBundleId;
+
+    @Column(name = "previous_runtime_bundle_id")
+    private Long previousRuntimeBundleId;
+
+    @Column(name = "runtime_state")
+    private String runtimeState;
+
+    @Column(name = "runtime_verified_at")
+    @Temporal(value = TemporalType.TIMESTAMP)
+    private Date runtimeVerifiedAt;
+
     @Column(name = GenericDao.CREATED_COLUMN)
     @Temporal(value = TemporalType.TIMESTAMP)
     private Date created = new Date();
@@ -173,6 +186,38 @@ public class StorageServiceInstanceVO implements StorageServiceInstance {
 
     public void setState(State state) {
         this.state = state;
+    }
+
+    public Long getCurrentRuntimeBundleId() {
+        return currentRuntimeBundleId;
+    }
+
+    public void setCurrentRuntimeBundleId(final Long value) {
+        currentRuntimeBundleId = value;
+    }
+
+    public Long getPreviousRuntimeBundleId() {
+        return previousRuntimeBundleId;
+    }
+
+    public void setPreviousRuntimeBundleId(final Long value) {
+        previousRuntimeBundleId = value;
+    }
+
+    public String getRuntimeState() {
+        return runtimeState;
+    }
+
+    public void setRuntimeState(final String value) {
+        runtimeState = value;
+    }
+
+    public Date getRuntimeVerifiedAt() {
+        return runtimeVerifiedAt;
+    }
+
+    public void setRuntimeVerifiedAt(final Date value) {
+        runtimeVerifiedAt = value;
     }
 
     @Override

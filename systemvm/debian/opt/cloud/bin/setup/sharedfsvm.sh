@@ -64,6 +64,12 @@ setup_sharedfsvm() {
       exit 1
     fi
     chmod +x /usr/local/bin/ablestack-storagectl
+    if [ ! -x /usr/local/bin/ablestack-storage-runtime-updater ] || [ ! -s /usr/local/lib/ablestack-storage/runtime_updater.py ]; then
+      log_it "Missing Storage Service runtime updater"
+      exit 1
+    fi
+    chmod 0755 /usr/local/bin/ablestack-storage-runtime-updater
+    chmod 0644 /usr/local/lib/ablestack-storage/runtime_updater.py
     if command -v systemctl >/dev/null 2>&1; then
       systemctl disable --now nfs-ganesha.service >/dev/null 2>&1 || true
       systemctl mask nfs-ganesha.service >/dev/null 2>&1 || true
@@ -74,6 +80,11 @@ setup_sharedfsvm() {
       chmod 0644 /etc/systemd/system/ablestack-storage-monitor.service
       systemctl unmask ablestack-storage-monitor.service >/dev/null 2>&1 || true
       systemctl enable --now ablestack-storage-monitor.service >/dev/null 2>&1 || true
+    fi
+    if [ -f /etc/systemd/system/ablestack-storage-runtime-bootstrap.service ]; then
+      chmod 0644 /etc/systemd/system/ablestack-storage-runtime-bootstrap.service
+      systemctl unmask ablestack-storage-runtime-bootstrap.service >/dev/null 2>&1 || true
+      systemctl enable --now ablestack-storage-runtime-bootstrap.service >/dev/null 2>&1 || exit 1
     fi
     systemctl enable --now qemu-guest-agent >/dev/null 2>&1 || true
 

@@ -148,6 +148,14 @@ on:
         required: false
         default: ''
         type: string
+      storage_runtime_public_key_artifact:
+        required: false
+        default: ''
+        type: string
+      storage_runtime_signing_key_id:
+        required: false
+        default: ''
+        type: string
   pull_request:
     paths:
       - '.github/workflows/rocky97-rpm.yml'
@@ -186,12 +194,54 @@ jobs:
       BUILD_TEMPLATES: ${{ inputs.templates || github.event.inputs.templates || '' }}
       BUILD_NODE_VERSION: ${{ inputs.node_version || github.event.inputs.node_version || '14.21.3' }}
       BUILD_ARTIFACT_NAME: ${{ inputs.artifact_name || format('rocky97-rpm-{0}', github.run_id) }}
+      BUILD_STORAGE_RUNTIME_PUBLIC_KEY_ARTIFACT: ${{ inputs.storage_runtime_public_key_artifact || '' }}
+      BUILD_STORAGE_RUNTIME_SIGNING_KEY_ID: ${{ inputs.storage_runtime_signing_key_id || '' }}
 
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ env.BUILD_REF }}
           fetch-depth: 0
+
+      - name: Download Storage Service runtime public key
+        if: ${{ env.BUILD_STORAGE_RUNTIME_PUBLIC_KEY_ARTIFACT != '' }}
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ env.BUILD_STORAGE_RUNTIME_PUBLIC_KEY_ARTIFACT }}
+          path: ${{ runner.temp }}/storage-runtime-public-key
+
+      - name: Inject Storage Service runtime public key
+        if: ${{ env.BUILD_STORAGE_RUNTIME_PUBLIC_KEY_ARTIFACT != '' }}
+        run: |
+          if [ -z "$BUILD_STORAGE_RUNTIME_SIGNING_KEY_ID" ]; then
+            echo "::error::Storage Service runtime signing key ID is required"
+            exit 1
+          fi
+          mapfile -t public_keys < <(
+            find "$RUNNER_TEMP/storage-runtime-public-key" -type f \
+              -name "${BUILD_STORAGE_RUNTIME_SIGNING_KEY_ID}.pem" -print
+          )
+          if [ "${#public_keys[@]}" -ne 1 ]; then
+            echo "::error::Expected exactly one Storage Service runtime public key, found ${#public_keys[@]}"
+            printf '%s\n' "${public_keys[@]}"
+            exit 1
+          fi
+          openssl pkey -pubin -in "${public_keys[0]}" -noout
+          public_key_path="systemvm/debian/etc/ablestack-storage/runtime-trusted-keys/${BUILD_STORAGE_RUNTIME_SIGNING_KEY_ID}.pem"
+          install -m 0644 "${public_keys[0]}" "$public_key_path"
+          if git ls-files --error-unmatch "$public_key_path" >/dev/null 2>&1; then
+            git update-index --assume-unchanged "$public_key_path"
+          else
+            exclude_file=$(git rev-parse --git-path info/exclude)
+            mkdir -p "$(dirname "$exclude_file")"
+            printf '/%s\n' "$public_key_path" >> "$exclude_file"
+          fi
+          sha256sum "$public_key_path"
+          if [ -n "$(git status --porcelain --untracked-files=all)" ]; then
+            echo "::error::Storage Service runtime public key injection left unrelated worktree changes"
+            git status --short
+            exit 1
+          fi
 
       - name: Install host prerequisites
         run: |

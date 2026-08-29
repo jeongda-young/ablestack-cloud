@@ -1,0 +1,14 @@
+[Unit]
+Description=ABLESTACK Storage Service runtime bootstrap
+After=local-fs.target
+Before=ablestack-storage-reconcile.service ablestack-storage-monitor.service
+ConditionPathExists=/usr/local/bin/ablestack-storage-runtime-updater
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ablestack-storage-runtime-updater bootstrap
+RemainAfterExit=yes
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
