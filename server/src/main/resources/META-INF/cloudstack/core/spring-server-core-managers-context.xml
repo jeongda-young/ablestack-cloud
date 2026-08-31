@@ -413,5 +413,7 @@
     <bean id="GpuServiceImpl" class="org.apache.cloudstack.gpu.GpuServiceImpl" />
 
     <bean id="storageServiceGuestCommandDispatcher" class="org.apache.cloudstack.storage.dataservice.StorageServiceGuestCommandDispatcherImpl" />
+    <bean id="storageServiceRuntimeHostDispatcher" class="org.apache.cloudstack.storage.dataservice.StorageServiceRuntimeHostDispatcherImpl" />
+    <bean id="storageServiceRuntimeUpgradeManager" class="org.apache.cloudstack.storage.dataservice.StorageServiceRuntimeUpgradeManagerImpl" />
     <bean id="storageServiceManagerImpl" class="org.apache.cloudstack.storage.dataservice.StorageServiceManagerImpl" />
 </beans>

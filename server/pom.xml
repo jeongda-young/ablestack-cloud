@@ -269,6 +269,17 @@
                                         <exclude name="*.in" />
                                     </fileset>
                                 </copy>
+                                <mkdir dir="${project.build.outputDirectory}/storage-runtime/bootstrap" />
+                                <mkdir dir="${project.build.outputDirectory}/storage-runtime/trusted-keys" />
+                                <copy file="${project.basedir}/../systemvm/debian/usr/local/bin/ablestack-storage-runtime-updater"
+                                      tofile="${project.build.outputDirectory}/storage-runtime/bootstrap/ablestack-storage-runtime-updater" />
+                                <copy file="${project.basedir}/../systemvm/debian/usr/local/lib/ablestack-storage/runtime_updater.py"
+                                      tofile="${project.build.outputDirectory}/storage-runtime/bootstrap/runtime_updater.py" />
+                                <copy todir="${project.build.outputDirectory}/storage-runtime/trusted-keys">
+                                    <fileset dir="${project.basedir}/../systemvm/debian/etc/ablestack-storage/runtime-trusted-keys">
+                                        <include name="*.pem" />
+                                    </fileset>
+                                </copy>
                             </target>
                         </configuration>
                     </execution>

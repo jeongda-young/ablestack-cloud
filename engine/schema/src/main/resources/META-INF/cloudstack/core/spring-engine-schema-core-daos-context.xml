@@ -323,4 +323,6 @@
   <bean id="StorageBlockTargetDaoImpl" class="org.apache.cloudstack.storage.dataservice.dao.StorageBlockTargetDaoImpl" />
   <bean id="StorageAccessRuleDaoImpl" class="org.apache.cloudstack.storage.dataservice.dao.StorageAccessRuleDaoImpl" />
   <bean id="StorageIdentityDomainDaoImpl" class="org.apache.cloudstack.storage.dataservice.dao.StorageIdentityDomainDaoImpl" />
+  <bean id="StorageServiceRuntimeBundleDaoImpl" class="org.apache.cloudstack.storage.dataservice.dao.StorageServiceRuntimeBundleDaoImpl" />
+  <bean id="StorageServiceRuntimeUpgradeDaoImpl" class="org.apache.cloudstack.storage.dataservice.dao.StorageServiceRuntimeUpgradeDaoImpl" />
 </beans>
