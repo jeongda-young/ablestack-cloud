@@ -556,7 +556,7 @@ class LibvirtAblestackCommvaultBackupHelper {
             return;
         }
         String state = Script.runSimpleBashScriptWithFullResult(
-                String.format("virsh -c qemu:///system domstate %s 2>/dev/null", shellQuote(vmName)), TimeUnit.SECONDS.toMillis(10));
+                String.format("virsh -c qemu:///system domstate %s 2>/dev/null", shellQuote(vmName)), 10000);
         if (state != null && "paused".equalsIgnoreCase(state.trim())) {
             LOGGER.warn("{} phase=[RESUME_PAUSED_VM], vm=[{}]", BACKUP_TRACE, vmName);
             Script.runSimpleBashScriptForExitValue(String.format(

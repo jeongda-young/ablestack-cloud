@@ -316,8 +316,8 @@ class LibvirtAblestackNasBackupHelper {
 
     private Path mountRepository(AblestackNasTakeBackupCommand command) throws IOException {
         Path mountPoint = Files.createTempDirectory("csbackup.");
-        final long mountTimeoutMillis = command.getMountTimeout() > 0
-                ? TimeUnit.SECONDS.toMillis(command.getMountTimeout())
+        final int mountTimeoutMillis = command.getMountTimeout() > 0
+                ? Math.toIntExact(TimeUnit.SECONDS.toMillis(command.getMountTimeout()))
                 : resource.getCmdsTimeout();
         StringBuilder mount = new StringBuilder()
                 .append("mount -t ").append(shellQuote(command.getBackupRepoType()))
@@ -655,7 +655,7 @@ class LibvirtAblestackNasBackupHelper {
             return;
         }
         String state = Script.runSimpleBashScriptWithFullResult(
-                String.format("virsh -c qemu:///system domstate %s 2>/dev/null", shellQuote(vmName)), TimeUnit.SECONDS.toMillis(10));
+                String.format("virsh -c qemu:///system domstate %s 2>/dev/null", shellQuote(vmName)), 10000);
         if (state != null && "paused".equalsIgnoreCase(state.trim())) {
             LOGGER.warn("{} phase=[RESUME_PAUSED_VM], vm=[{}]", BACKUP_TRACE, vmName);
             Script.runSimpleBashScriptForExitValue(String.format(
