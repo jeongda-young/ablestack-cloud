@@ -117,7 +117,11 @@ class LibvirtAblestackNasBackupHelper {
                 resourceTimeoutMillis,
                 effectiveTimeoutMillis
         );
-        return Script.executePipedCommands(commands, effectiveTimeoutMillis);
+        Pair<Integer, String> result = Script.executePipedCommands(commands, effectiveTimeoutMillis);
+        if (result.first() != 0 && BackupExecutionMode.RUNNING.equals(executionMode)) {
+            resumeVmIfPaused(command.getVmName());
+        }
+        return result;
     }
 
     List<String> resolveDiskPaths(List<PrimaryDataStoreTO> volumePools, List<String> volumePaths) {
@@ -177,6 +181,7 @@ class LibvirtAblestackNasBackupHelper {
                 "-t", command.getBackupRepoType(),
                 "-s", command.getBackupRepoAddress(),
                 "-m", Objects.nonNull(command.getMountOptions()) ? command.getMountOptions() : "",
+                "-w", String.valueOf(command.getMountTimeout()),
                 "-p", command.getBackupPath(),
                 "-b", Objects.nonNull(command.getBackupType()) ? command.getBackupType() : "",
                 "-c", Objects.nonNull(command.getCheckpointName()) ? command.getCheckpointName() : "",
@@ -256,7 +261,7 @@ class LibvirtAblestackNasBackupHelper {
                 LOGGER.error("{} phase=[BACKUP_BEGIN_FAILED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], reason=[{}]",
                         BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(), failureDetails);
                 LOGGER.error(failureDetails);
-                return new Pair<>(backupBeginResult.first(), failureDetails);
+                throw new IOException(failureDetails);
             }
             LOGGER.info("{} phase=[BACKUP_JOB_STARTED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}]",
                     BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
@@ -311,6 +316,9 @@ class LibvirtAblestackNasBackupHelper {
 
     private Path mountRepository(AblestackNasTakeBackupCommand command) throws IOException {
         Path mountPoint = Files.createTempDirectory("csbackup.");
+        final long mountTimeoutMillis = command.getMountTimeout() > 0
+                ? TimeUnit.SECONDS.toMillis(command.getMountTimeout())
+                : resource.getCmdsTimeout();
         StringBuilder mount = new StringBuilder()
                 .append("mount -t ").append(shellQuote(command.getBackupRepoType()))
                 .append(" ").append(shellQuote(command.getBackupRepoAddress()))
@@ -318,9 +326,20 @@ class LibvirtAblestackNasBackupHelper {
         if (command.getMountOptions() != null && !command.getMountOptions().isEmpty()) {
             mount.append(" -o ").append(shellQuote(command.getMountOptions()));
         }
-        if (Script.runSimpleBashScriptForExitValue(mount.toString(), resource.getCmdsTimeout(), false) != 0) {
-            throw new IOException("Failed to mount backup repository");
+        LOGGER.info("{} phase=[MOUNT_START], vm=[{}], repository=[{}], mountPoint=[{}], mountTimeoutSeconds=[{}]",
+                BACKUP_TRACE, command.getVmName(), command.getBackupRepoAddress(), mountPoint, command.getMountTimeout());
+        if (Script.runSimpleBashScriptForExitValue(mount.toString(), mountTimeoutMillis, false) != 0) {
+            try {
+                Files.deleteIfExists(mountPoint);
+            } catch (IOException e) {
+                LOGGER.warn("{} phase=[MOUNT_DIR_CLEANUP_FAILED], mountPoint=[{}], reason=[{}]",
+                        BACKUP_TRACE, mountPoint, e.getMessage(), e);
+            }
+            throw new IOException(String.format("Failed to mount backup repository [%s] at [%s]",
+                    command.getBackupRepoAddress(), mountPoint));
         }
+        LOGGER.info("{} phase=[MOUNT_DONE], vm=[{}], repository=[{}], mountPoint=[{}]",
+                BACKUP_TRACE, command.getVmName(), command.getBackupRepoAddress(), mountPoint);
         return mountPoint;
     }
 
@@ -629,6 +648,19 @@ class LibvirtAblestackNasBackupHelper {
 
     private void runCommand(String command) {
         Script.runSimpleBashScriptForExitValue(command, resource.getCmdsTimeout(), false);
+    }
+
+    private void resumeVmIfPaused(String vmName) {
+        if (vmName == null || vmName.isBlank()) {
+            return;
+        }
+        String state = Script.runSimpleBashScriptWithFullResult(
+                String.format("virsh -c qemu:///system domstate %s 2>/dev/null", shellQuote(vmName)), TimeUnit.SECONDS.toMillis(10));
+        if (state != null && "paused".equalsIgnoreCase(state.trim())) {
+            LOGGER.warn("{} phase=[RESUME_PAUSED_VM], vm=[{}]", BACKUP_TRACE, vmName);
+            Script.runSimpleBashScriptForExitValue(String.format(
+                    "virsh -c qemu:///system resume %s > /dev/null 2>&1", shellQuote(vmName)));
+        }
     }
 
     private boolean isIncremental(AblestackNasTakeBackupCommand command) {

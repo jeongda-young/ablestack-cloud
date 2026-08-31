@@ -120,7 +120,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
     ConfigKey<Integer> NASBackupRestoreMountTimeout = new ConfigKey<>("Advanced", Integer.class,
             "nas.backup.restore.mount.timeout",
             "60",
-            "Timeout in seconds after which backup repository mount for restore fails.",
+            "Timeout in seconds after which backup repository mount fails.",
             true,
             BackupFrameworkEnabled.key());
 
@@ -322,6 +322,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         command.setBackupRepoType(backupRepository.getType());
         command.setBackupRepoAddress(backupRepository.getAddress());
         command.setMountOptions(backupRepository.getMountOptions());
+        command.setMountTimeout(NASBackupRestoreMountTimeout.value());
         command.setQuiesce(quiesceVM);
 
         BackupAnswer answer;
@@ -1196,6 +1197,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
 
         AblestackDeleteBackupCommand command = new AblestackDeleteBackupCommand(backup.getExternalId(), backupRepository.getType(),
                 backupRepository.getAddress(), backupRepository.getMountOptions(), forced);
+        command.setMountTimeout(NASBackupRestoreMountTimeout.value());
         command.setBackupProvider("ablestack-nas");
         command.setVmName(vm != null ? vm.getInstanceName() : null);
         command.setCheckpointName(getBackupDetail(backup, DETAIL_CHECKPOINT_NAME));
@@ -1361,6 +1363,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
             throw new CloudRuntimeException("Host and backup repository are required to query NAS backup repository capacity");
         }
         final GetBackupStorageStatsCommand command = new GetBackupStorageStatsCommand(repository.getType(), repository.getAddress(), repository.getMountOptions());
+        command.setMountTimeout(NASBackupRestoreMountTimeout.value());
         try {
             final BackupStorageStatsAnswer answer = (BackupStorageStatsAnswer) agentManager.send(host.getId(), command);
             if (answer == null || !answer.getResult()) {
@@ -1402,6 +1405,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         }
         for (final BackupRepository repository : repositories) {
             GetBackupStorageStatsCommand command = new GetBackupStorageStatsCommand(repository.getType(), repository.getAddress(), repository.getMountOptions());
+            command.setMountTimeout(NASBackupRestoreMountTimeout.value());
             BackupStorageStatsAnswer answer;
             try {
                 answer = (BackupStorageStatsAnswer) agentManager.send(host.getId(), command);

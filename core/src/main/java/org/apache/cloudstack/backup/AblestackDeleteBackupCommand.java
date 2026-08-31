@@ -34,6 +34,7 @@ public class AblestackDeleteBackupCommand extends Command {
     private boolean forced;
     @LogLevel(LogLevel.Log4jLevel.Off)
     private String mountOptions;
+    private Integer mountTimeout;
 
     public AblestackDeleteBackupCommand(String backupPath, String backupRepoType, String backupRepoAddress, String mountOptions, boolean forced) {
         super();
@@ -114,6 +115,14 @@ public class AblestackDeleteBackupCommand extends Command {
 
     public void setMountOptions(String mountOptions) {
         this.mountOptions = mountOptions;
+    }
+
+    public Integer getMountTimeout() {
+        return this.mountTimeout == null ? 0 : this.mountTimeout;
+    }
+
+    public void setMountTimeout(Integer mountTimeout) {
+        this.mountTimeout = mountTimeout;
     }
 
     public boolean isForced() {
