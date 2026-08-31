@@ -136,6 +136,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
     private static final String BACKUP_TRACE = "[ABLESTACK_NETBACKUP_BACKUP_TRACE]";
     private static final String RESTORE_TRACE = "[ABLESTACK_NETBACKUP_RESTORE_TRACE]";
     private static final long STAGE_SPACE_BUFFER_BYTES = 10L * 1024L * 1024L * 1024L;
+    private static final int INCREMENTAL_BACKUP_CAPACITY_ESTIMATE_PERCENT = 10;
     private static final long STALE_BACKUP_THRESHOLD_MS = 24L * 60L * 60L * 1000L;
     private static final long NETBACKUP_SYNC_DELETE_GRACE_MS = 10L * 60L * 1000L;
     private static final String NETBACKUP_OFFERING_NAME = "netbackup";
@@ -667,7 +668,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
 
     private void validateBackupStageCapacity(final Host stageHost, final String stageRootPath, final List<VolumeVO> vmVolumes,
             final String vmName, final String backupType, final String backupEngine) {
-        final long requiredBytes = estimateRequiredStageBytesForBackup(vmVolumes);
+        final long requiredBytes = estimateRequiredStageBytesForBackup(vmVolumes, backupType);
         final long bufferBytes = Math.max(STAGE_SPACE_BUFFER_BYTES, requiredBytes / 5L);
         final long minimumAvailableBytes = requiredBytes + bufferBytes;
         final long availableBytes = getAvailableBytesOnHostPath(stageHost, stageRootPath);
@@ -682,6 +683,21 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
     }
 
     private long estimateRequiredStageBytesForBackup(final List<VolumeVO> vmVolumes) {
+        if (CollectionUtils.isEmpty(vmVolumes)) {
+            return 0L;
+        }
+        return estimateReadyVolumeBytes(vmVolumes);
+    }
+
+    private long estimateRequiredStageBytesForBackup(final List<VolumeVO> vmVolumes, final String backupType) {
+        final long readyVolumeBytes = estimateRequiredStageBytesForBackup(vmVolumes);
+        if (BACKUP_TYPE_INCREMENTAL.equalsIgnoreCase(backupType)) {
+            return Math.max(1L, readyVolumeBytes * INCREMENTAL_BACKUP_CAPACITY_ESTIMATE_PERCENT / 100L);
+        }
+        return readyVolumeBytes;
+    }
+
+    private long estimateReadyVolumeBytes(final List<VolumeVO> vmVolumes) {
         if (CollectionUtils.isEmpty(vmVolumes)) {
             return 0L;
         }
