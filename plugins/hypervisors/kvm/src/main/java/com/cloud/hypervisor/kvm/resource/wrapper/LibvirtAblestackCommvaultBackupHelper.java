@@ -116,7 +116,11 @@ class LibvirtAblestackCommvaultBackupHelper {
                 resourceTimeoutMillis,
                 effectiveTimeoutMillis
         );
-        return Script.executePipedCommands(commands, effectiveTimeoutMillis);
+        Pair<Integer, String> result = Script.executePipedCommands(commands, effectiveTimeoutMillis);
+        if (result.first() != 0 && BackupExecutionMode.RUNNING.equals(executionMode)) {
+            resumeVmIfPaused(command.getVmName());
+        }
+        return result;
     }
 
     List<String> resolveDiskPaths(List<PrimaryDataStoreTO> volumePools, List<String> volumePaths) {
@@ -215,7 +219,7 @@ class LibvirtAblestackCommvaultBackupHelper {
                 LOGGER.error("{} phase=[BACKUP_BEGIN_FAILED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], reason=[{}]",
                         BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(), failureDetails);
                 LOGGER.error(failureDetails);
-                return new Pair<>(backupBeginResult.first(), failureDetails);
+                throw new IOException(failureDetails);
             }
             LOGGER.info("{} phase=[BACKUP_JOB_STARTED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}]",
                     BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
@@ -545,6 +549,19 @@ class LibvirtAblestackCommvaultBackupHelper {
         Script.runSimpleBashScriptForExitValue(String.format(
                 "virsh -c qemu:///system undefine %s --nvram > /dev/null 2>&1 || virsh -c qemu:///system undefine %s > /dev/null 2>&1 || true",
                 shellQuote(dummyVmName), shellQuote(dummyVmName)));
+    }
+
+    private void resumeVmIfPaused(String vmName) {
+        if (vmName == null || vmName.isBlank()) {
+            return;
+        }
+        String state = Script.runSimpleBashScriptWithFullResult(
+                String.format("virsh -c qemu:///system domstate %s 2>/dev/null", shellQuote(vmName)), 10000);
+        if (state != null && "paused".equalsIgnoreCase(state.trim())) {
+            LOGGER.warn("{} phase=[RESUME_PAUSED_VM], vm=[{}]", BACKUP_TRACE, vmName);
+            Script.runSimpleBashScriptForExitValue(String.format(
+                    "virsh -c qemu:///system resume %s > /dev/null 2>&1", shellQuote(vmName)));
+        }
     }
 
     private boolean isIncremental(AblestackCommvaultTakeBackupCommand command) {
