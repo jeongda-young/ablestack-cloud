@@ -631,6 +631,7 @@ public class NASBackupProvider extends AdapterBase implements BackupProvider, Co
         }
         for (final BackupRepository repository : repositories) {
             GetBackupStorageStatsCommand command = new GetBackupStorageStatsCommand(repository.getType(), repository.getAddress(), repository.getMountOptions());
+            command.setMountTimeout(NASBackupRestoreMountTimeout.value());
             BackupStorageStatsAnswer answer;
             try {
                 answer = (BackupStorageStatsAnswer) agentManager.send(host.getId(), command);

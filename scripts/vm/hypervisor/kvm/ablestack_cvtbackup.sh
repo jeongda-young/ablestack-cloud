@@ -96,6 +96,17 @@ sanity_checks() {
   fi
 }
 
+resume_vm_if_paused() {
+  [[ -z "$VM" ]] && return 0
+
+  local vm_state
+  vm_state=$(virsh -c qemu:///system domstate "$VM" 2>/dev/null || true)
+  if [[ "$vm_state" == "paused" ]]; then
+    log -ne "VM [$VM] is paused after backup failure; trying to resume"
+    virsh -c qemu:///system resume "$VM" >> "$logFile" 2>&1 || log -ne "WARNING: failed to resume paused VM [$VM]"
+  fi
+}
+
 cleanup() {
   local status=0
   rm -rf "$dest" || { echo "Failed to delete $dest"; status=1; }
@@ -264,11 +275,13 @@ parse_rbd_uri() {
   else
     echo "Invalid RBD disk path: $uri"
     cleanup
+    exit 1
   fi
 
   if [[ -z "$RBD_IMAGE" ]]; then
     echo "Failed to parse RBD image from uri: $uri"
     cleanup
+    exit 1
   fi
 
   log -ne "Parsed RBD uri -> IMAGE=[$RBD_IMAGE], MON=[$RBD_MON_HOST], USER=[$RBD_USER]"
@@ -449,6 +462,7 @@ backup_running_vm() {
   if [[ $backup_begin -ne 1 ]]; then
     log -ne "FAILED libvirt backup-begin vm=[$VM] checkpoint=[$CHECKPOINT_NAME] output=[${backup_begin_output:-Unknown error}]"
     echo "Failed to start libvirt backup for VM [$VM]: ${backup_begin_output:-Unknown error}"
+    resume_vm_if_paused
     cleanup
     exit 1
   fi
@@ -462,7 +476,7 @@ backup_running_vm() {
       Completed) break ;;
       Failed)
         log -ne "FAILED libvirt backup job vm=[$VM] checkpoint=[$CHECKPOINT_NAME]"
-        echo "Virsh backup job failed"; cleanup; exit 1 ;;
+        echo "Virsh backup job failed"; resume_vm_if_paused; cleanup; exit 1 ;;
     esac
     wait_count=$((wait_count + 1))
     if (( wait_count % 12 == 0 )); then
@@ -500,6 +514,7 @@ backup_rbd_volumes() {
     echo "Failed to access RBD image $RBD_IMAGE"
     cleanup_created_rbd_snapshots
     cleanup
+    exit 1
   fi
 
   if [[ "$BACKUP_TYPE" == "INCREMENTAL" && -n "$PARENT_CHECKPOINT_NAME" ]]; then
@@ -508,6 +523,7 @@ backup_rbd_volumes() {
       echo "Parent RBD snapshot ${RBD_IMAGE}@${PARENT_CHECKPOINT_NAME} not found for incremental backup"
       cleanup_created_rbd_snapshots
       cleanup
+      exit 1
     fi
   fi
 
@@ -516,6 +532,7 @@ backup_rbd_volumes() {
     echo "Failed to create RBD snapshot ${RBD_IMAGE}@${CHECKPOINT_NAME}"
     cleanup_created_rbd_snapshots
     cleanup
+    exit 1
   fi
     record_created_rbd_snapshot "$disk_path" "$CHECKPOINT_NAME"
 
@@ -527,6 +544,7 @@ backup_rbd_volumes() {
         echo "Failed to export incremental RBD diff for ${RBD_IMAGE}@${CHECKPOINT_NAME}"
         cleanup_created_rbd_snapshots
         cleanup
+        exit 1
       fi
     else
       local export_start
@@ -536,6 +554,7 @@ backup_rbd_volumes() {
         echo "Failed to export full RBD snapshot ${RBD_IMAGE}@${CHECKPOINT_NAME}"
         cleanup_created_rbd_snapshots
         cleanup
+        exit 1
       fi
     fi
 

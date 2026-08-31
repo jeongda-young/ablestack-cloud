@@ -111,6 +111,8 @@ public class LibvirtAblestackDeleteBackupCommandWrapper extends CommandWrapper<A
             deleteCommand.add(backupRepoAddress);
             deleteCommand.add("-m");
             deleteCommand.add(mountOptions);
+            deleteCommand.add("-w");
+            deleteCommand.add(String.valueOf(command.getMountTimeout()));
             deleteCommand.add("-p");
             deleteCommand.add(backupPath);
             if (StringUtils.isNotBlank(vmName)) {

@@ -30,6 +30,7 @@ VM=""
 NAS_TYPE=""
 NAS_ADDRESS=""
 MOUNT_OPTS=""
+MOUNT_TIMEOUT=0
 BACKUP_DIR=""
 BACKUP_TYPE=""
 CHECKPOINT_NAME=""
@@ -103,6 +104,17 @@ sanity_checks() {
   fi
 }
 
+resume_vm_if_paused() {
+  [[ -z "$VM" ]] && return 0
+
+  local vm_state
+  vm_state=$(virsh -c qemu:///system domstate "$VM" 2>/dev/null || true)
+  if [[ "$vm_state" == "paused" ]]; then
+    log -ne "VM [$VM] is paused after backup failure; trying to resume"
+    virsh -c qemu:///system resume "$VM" >> "$logFile" 2>&1 || log -ne "WARNING: failed to resume paused VM [$VM]"
+  fi
+}
+
 ### Operation methods ###
 
 backup_running_vm() {
@@ -164,6 +176,7 @@ backup_running_vm() {
 
   if [[ $backup_begin -ne 1 ]]; then
     log -ne "FAILED libvirt backup-begin vm=[$VM] checkpoint=[$CHECKPOINT_NAME] output=[${backup_begin_output:-Unknown error}]"
+    resume_vm_if_paused
     cleanup
     exit 1
   fi
@@ -179,6 +192,7 @@ backup_running_vm() {
       Failed)
         log -ne "FAILED libvirt backup job vm=[$VM] checkpoint=[$CHECKPOINT_NAME]"
         echo "Virsh backup job failed"
+        resume_vm_if_paused
         cleanup
         exit 1 ;;
     esac
@@ -201,6 +215,7 @@ backup_running_vm() {
         log -ne "FAILED qemu-img rebase output=[$output] parent=[$parent]"
         echo "qemu-img rebase failed for $output with parent $parent"
         cleanup
+        exit 1
       fi
       index=$((index + 1))
     done < <(virsh -c qemu:///system domblklist "$VM" --details 2>/dev/null | awk '/disk/ {print $3 "|" $4}')
@@ -242,6 +257,7 @@ backup_rbd_volumes() {
     if [[ -z "$RBD_IMAGE" ]]; then
       echo "Unable to parse RBD disk path: $disk"
       cleanup
+      exit 1
     fi
 
     build_rbd_cmd
@@ -260,6 +276,7 @@ backup_rbd_volumes() {
       echo "Failed to access RBD image $RBD_IMAGE"
       cleanup_created_rbd_snapshots
       cleanup
+      exit 1
     fi
 
     if [[ "$BACKUP_TYPE" == "INCREMENTAL" && -n "$PARENT_CHECKPOINT_NAME" ]]; then
@@ -268,6 +285,7 @@ backup_rbd_volumes() {
         echo "Parent RBD snapshot ${RBD_IMAGE}@${PARENT_CHECKPOINT_NAME} not found for incremental backup"
         cleanup_created_rbd_snapshots
         cleanup
+        exit 1
       fi
     fi
 
@@ -276,6 +294,7 @@ backup_rbd_volumes() {
       echo "Failed to create RBD snapshot ${RBD_IMAGE}@${current_snapshot}"
       cleanup_created_rbd_snapshots
       cleanup
+      exit 1
     fi
     record_created_rbd_snapshot "$disk" "$current_snapshot"
 
@@ -287,6 +306,7 @@ backup_rbd_volumes() {
         echo "Failed to export incremental RBD diff for ${RBD_IMAGE}@${current_snapshot}"
         cleanup_created_rbd_snapshots
         cleanup
+        exit 1
       fi
     else
       local export_start
@@ -296,6 +316,7 @@ backup_rbd_volumes() {
         echo "Failed to export full RBD snapshot ${RBD_IMAGE}@${current_snapshot}"
         cleanup_created_rbd_snapshots
         cleanup
+        exit 1
       fi
     fi
 
@@ -570,13 +591,22 @@ mount_operation() {
   if [ ${NAS_TYPE} == "cifs" ]; then
     MOUNT_OPTS="${MOUNT_OPTS},nobrl"
   fi
-  mount -t ${NAS_TYPE} ${NAS_ADDRESS} ${mount_point} $([[ ! -z "${MOUNT_OPTS}" ]] && echo -o ${MOUNT_OPTS}) 2>&1 | tee -a "$logFile"
-  if [ $? -eq 0 ]; then
-      log -ne "Successfully mounted ${NAS_TYPE} store"
+  log -ne "Mounting ${NAS_TYPE} store [${NAS_ADDRESS}] at [${mount_point}] with timeout [${MOUNT_TIMEOUT}]"
+  set +e
+  if [[ "$MOUNT_TIMEOUT" -gt 0 ]]; then
+    timeout -k 5s "${MOUNT_TIMEOUT}s" mount -t ${NAS_TYPE} ${NAS_ADDRESS} ${mount_point} $([[ ! -z "${MOUNT_OPTS}" ]] && echo -o ${MOUNT_OPTS}) 2>&1 | tee -a "$logFile"
   else
-      log -ne "FAILED NAS mount type=[$NAS_TYPE] address=[$NAS_ADDRESS] mountPoint=[$mount_point]"
-      echo "Failed to mount ${NAS_TYPE} store"
-      exit 1
+    mount -t ${NAS_TYPE} ${NAS_ADDRESS} ${mount_point} $([[ ! -z "${MOUNT_OPTS}" ]] && echo -o ${MOUNT_OPTS}) 2>&1 | tee -a "$logFile"
+  fi
+  mount_status=${PIPESTATUS[0]}
+  set -e
+  if [ $mount_status -eq 0 ]; then
+      log -ne "Successfully mounted ${NAS_TYPE} store [${NAS_ADDRESS}] at [${mount_point}]"
+  else
+      log -ne "FAILED NAS mount type=[$NAS_TYPE] address=[$NAS_ADDRESS] mountPoint=[$mount_point] timeout=[$MOUNT_TIMEOUT] exitCode=[$mount_status]"
+      echo "Failed to mount ${NAS_TYPE} store at ${mount_point}"
+      rmdir "$mount_point" 2>>"$logFile" || { log "WARNING: rmdir of $mount_point failed after mount failure"; true; }
+      exit $mount_status
   fi
 }
 
@@ -602,8 +632,8 @@ cleanup() {
     echo "Backup directory still exists after cleanup: $dest"
     status=1
   fi
-  umount "$mount_point" || { echo "Failed to unmount $mount_point"; status=1; }
-  rmdir "$mount_point" || { echo "Failed to remove mount point $mount_point"; status=1; }
+  timeout "$UNMOUNT_TIMEOUT" umount "$mount_point" 2>>"$logFile" || { log "WARNING: umount of $mount_point failed or timed out"; status=1; }
+  rmdir "$mount_point" 2>>"$logFile" || { log "WARNING: rmdir of $mount_point failed"; status=1; }
 
   if [[ $status -ne 0 ]]; then
     log -ne "FAILED cleanup dest=[$dest] mountPoint=[$mount_point] status=[$status]"
@@ -852,7 +882,7 @@ EOF
 
 function usage {
   echo ""
-  echo "Usage: $0 -o <operation> -v|--vm <domain name> -t <storage type> -s <storage address> -m <mount options> -p <backup path> -b <FULL|INCREMENTAL> -c <checkpoint name> -r <parent backup path> -i <parent checkpoint name> -j <parent checkpoint path> -f <backup files> -d <disks path> -q|--quiesce <true|false> -x|--forced <true|false>"
+  echo "Usage: $0 -o <operation> -v|--vm <domain name> -t <storage type> -s <storage address> -m <mount options> -w <mount timeout seconds> -p <backup path> -b <FULL|INCREMENTAL> -c <checkpoint name> -r <parent backup path> -i <parent checkpoint name> -j <parent checkpoint path> -f <backup files> -d <disks path> -q|--quiesce <true|false> -x|--forced <true|false>"
   echo ""
   exit 1
 }
@@ -881,6 +911,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     -m|--mount)
       MOUNT_OPTS="$2"
+      shift
+      shift
+      ;;
+    -w|--mount-timeout)
+      MOUNT_TIMEOUT="$2"
       shift
       shift
       ;;
@@ -953,7 +988,7 @@ done
 # Perform Initial sanity checks
 sanity_checks
 
-log -ne "nasbackup.sh start op=[$OP] vm=[$VM] backupDir=[$BACKUP_DIR] backupType=[$BACKUP_TYPE] checkpoint=[$CHECKPOINT_NAME] parentBackup=[$PARENT_BACKUP_DIR] parentCheckpoint=[$PARENT_CHECKPOINT_NAME] diskPaths=[$DISK_PATHS] backupFiles=[$BACKUP_FILES]"
+log -ne "nasbackup.sh start op=[$OP] vm=[$VM] backupDir=[$BACKUP_DIR] nasType=[$NAS_TYPE] nasAddress=[$NAS_ADDRESS] mountTimeout=[$MOUNT_TIMEOUT] backupType=[$BACKUP_TYPE] checkpoint=[$CHECKPOINT_NAME] parentBackup=[$PARENT_BACKUP_DIR] parentCheckpoint=[$PARENT_CHECKPOINT_NAME] diskPaths=[$DISK_PATHS] backupFiles=[$BACKUP_FILES]"
 
 if [ "$OP" = "backup-running" ]; then
   backup_running_vm
