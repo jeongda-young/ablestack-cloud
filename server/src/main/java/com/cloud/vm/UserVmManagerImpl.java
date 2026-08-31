@@ -11371,7 +11371,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         if (FAST_CLONE_FLATTEN_RUNNING.equalsIgnoreCase(detail.getValue())) {
             throw new CloudRuntimeException(String.format("Unable to %s VM while SharedMountPoint clone flatten is running.", operation));
         }
-        if (FAST_CLONE_FLATTEN_PENDING.equalsIgnoreCase(detail.getValue()) && !"start".equals(operation)) {
+        if (FAST_CLONE_FLATTEN_PENDING.equalsIgnoreCase(detail.getValue()) && !"start".equals(operation) && !"destroy".equals(operation)) {
             throw new CloudRuntimeException(String.format("Unable to %s VM while SharedMountPoint clone flatten is pending.", operation));
         }
     }
