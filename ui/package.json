@@ -24,7 +24,7 @@
     "url": "https://github.com/apache/cloudstack/issues"
   },
   "scripts": {
-    "prebuild": "node ./build.js && ./prebuild.sh",
+    "prebuild": "./prebuild.sh",
     "start": "vue-cli-service lint --no-fix && vue-cli-service serve",
     "serve": "vue-cli-service lint --no-fix && vue-cli-service serve",
     "build": "vue-cli-service build",
