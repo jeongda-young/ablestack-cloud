@@ -11434,10 +11434,6 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
                 volumeDetailsDao.removeDetail(volumeId, FAST_CLONE_FLATTEN_STATUS);
                 return true;
             }
-            if (vm.getState() != State.Running) {
-                logger.debug("Skipping SharedMountPoint clone volume [{}] flatten because VM [{}] is [{}].", volume, vm, vm.getState());
-                continue;
-            }
 
             VolumeDetailVO operationDetail = volumeDetailsDao.findDetail(volumeId, FAST_CLONE_OPERATION_ID);
             String operationId = operationDetail != null ? operationDetail.getValue() : null;
@@ -11514,13 +11510,6 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
             String operationId = operationDetail != null ? operationDetail.getValue() : null;
             if (vm == null || vm.getRemoved() != null) {
                 volumeDetailsDao.removeDetail(volumeId, FAST_CLONE_FLATTEN_STATUS);
-                return true;
-            }
-            if (vm.getState() != State.Running) {
-                logger.debug("Resetting SharedMountPoint clone volume [{}] flatten to pending because VM [{}] is [{}].", volume, vm, vm.getState());
-                setFastCloneVolumeDetail(volumeId, FAST_CLONE_FLATTEN_STATUS, FAST_CLONE_FLATTEN_PENDING);
-                setFastCloneVolumeDetail(volumeId, FAST_CLONE_FLATTEN_PROGRESS, "0.00");
-                markFastCloneVmStatus(vm.getId(), FAST_CLONE_FLATTEN_PENDING, operationId);
                 return true;
             }
 
@@ -11603,10 +11592,25 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         Long vmId = volume.getInstanceId();
         UserVmVO vm = vmId != null ? _vmDao.findById(vmId) : null;
         Long hostId = vm != null ? getFastCloneHostId(vm) : null;
-        if (hostId == null) {
+        Host host = hostId != null ? _hostDao.findById(hostId) : null;
+
+        if (host == null || host.getStatus() != Status.Up) {
             VolumeDetailVO hostDetail = volumeDetailsDao.findDetail(volume.getId(), FAST_CLONE_HOST_ID);
             hostId = hostDetail != null ? Long.valueOf(hostDetail.getValue()) : null;
+            host = hostId != null ? _hostDao.findById(hostId) : null;
         }
+
+        if (host == null || host.getStatus() != Status.Up) {
+            List<Long> upHosts = storageManager.getUpHostsInPool(volume.getPoolId());
+            if (!upHosts.isEmpty()) {
+                Collections.shuffle(upHosts);
+                hostId = upHosts.get(0);
+                volumeDetailsDao.addDetail(volume.getId(), FAST_CLONE_HOST_ID, String.valueOf(hostId), false);
+            } else {
+                hostId = null;
+            }
+        }
+
         if (vm != null && vm.getState() == State.Running) {
             options.put("vmName", vm.getInstanceName());
         }
