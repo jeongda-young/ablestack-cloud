@@ -76,6 +76,10 @@ const getFastCloneOperationTooltip = (record, store, selectedItems, fallbackLabe
   return disableDuringFastCloneFlatten(record, store, selectedItems) ? fastCloneOperationBlockedLabel : fallbackLabel
 }
 
+const getFastCloneOperationRunningTooltip = (record, store, selectedItems, fallbackLabel) => {
+  return disableDuringFastCloneFlattenRunning(record, store, selectedItems) ? fastCloneOperationBlockedLabel : fallbackLabel
+}
+
 const getBackupOperationTooltip = (record, store, selectedItems, fallbackLabel) => {
   return disableDuringBackup(record, store, selectedItems) ? backupOperationBlockedLabel : fallbackLabel
 }
@@ -622,8 +626,8 @@ export default {
           },
           popup: true,
           groupMap: (selection, values) => { return selection.map(x => { return { id: x, expunge: values.expunge } }) },
-          disabled: disableDuringFastCloneFlatten,
-          tooltip: (record, store, selectedItems) => getFastCloneOperationTooltip(record, store, selectedItems, 'label.action.destroy.instance'),
+          disabled: disableDuringFastCloneFlattenRunning,
+          tooltip: (record, store, selectedItems) => getFastCloneOperationRunningTooltip(record, store, selectedItems, 'label.action.destroy.instance'),
           show: (record) => {
             var controlVm = []
             var genieVm = []
