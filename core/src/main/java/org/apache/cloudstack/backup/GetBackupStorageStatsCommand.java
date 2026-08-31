@@ -27,6 +27,7 @@ public class GetBackupStorageStatsCommand extends Command {
     private String backupRepoAddress;
     @LogLevel(LogLevel.Log4jLevel.Off)
     private String mountOptions;
+    private Integer mountTimeout;
 
     public GetBackupStorageStatsCommand(String backupRepoType, String backupRepoAddress, String mountOptions) {
         super();
@@ -57,6 +58,14 @@ public class GetBackupStorageStatsCommand extends Command {
 
     public void setMountOptions(String mountOptions) {
         this.mountOptions = mountOptions;
+    }
+
+    public Integer getMountTimeout() {
+        return this.mountTimeout == null ? 0 : this.mountTimeout;
+    }
+
+    public void setMountTimeout(Integer mountTimeout) {
+        this.mountTimeout = mountTimeout;
     }
 
     @Override
