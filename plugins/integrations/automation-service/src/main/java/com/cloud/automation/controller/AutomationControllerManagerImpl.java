@@ -38,14 +38,12 @@ import com.cloud.automation.resource.dao.AutomationDeployedResourceDao;
 import com.cloud.automation.version.AutomationControllerVersion;
 import com.cloud.automation.version.AutomationControllerVersionVO;
 import com.cloud.automation.version.dao.AutomationControllerVersionDao;
-import com.cloud.dc.DataCenter;
 import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.network.Network;
 import com.cloud.network.dao.IPAddressDao;
 import com.cloud.network.dao.IPAddressVO;
 import com.cloud.network.dao.NetworkDao;
 import com.cloud.network.dao.NetworkVO;
-import com.cloud.offering.ServiceOffering;
 import com.cloud.projects.Project;
 import com.cloud.service.ServiceOfferingVO;
 import com.cloud.service.dao.ServiceOfferingDao;
@@ -175,7 +173,9 @@ public class AutomationControllerManagerImpl extends ManagerBase implements Auto
         }
 
         NetworkVO ntwk = networkDao.findByIdIncludingRemoved(automationController.getNetworkId());
-        response.setNetworkId(ntwk.getUuid());
+        if (ntwk != null) {
+            response.setNetworkId(ntwk.getUuid());
+        }
         response.setAutomationControllerIp(automationController.getAutomationControllerIp());
         response.setRemoved(automationController.getRemoved());
         DataCenterVO zone = dataCenterDao.findById(automationController.getZoneId());
@@ -184,24 +184,29 @@ public class AutomationControllerManagerImpl extends ManagerBase implements Auto
             response.setZoneName(zone.getName());
         }
 
-        if (ntwk.getGuestType() == Network.GuestType.Isolated) {
+        if (ntwk != null && ntwk.getGuestType() == Network.GuestType.Isolated) {
             List<IPAddressVO> ipAddresses = ipAddressDao.listByAssociatedNetwork(ntwk.getId(), true);
-            if (ipAddresses != null && ipAddresses.size() == 1) {
-                response.setIpAddress(ipAddresses.get(0).getAddress().addr());
-                response.setIpAddressId(ipAddresses.get(0).getUuid());
+            IPAddressVO sourceNatIp = findSourceNatIp(ipAddresses);
+            if (sourceNatIp != null) {
+                response.setIpAddress(sourceNatIp.getAddress().addr());
+                response.setIpAddressId(sourceNatIp.getUuid());
             }
         }
 
         ServiceOfferingVO offering = serviceOfferingDao.findById(automationController.getServiceOfferingId());
-        response.setServiceOfferingId(offering.getUuid());
-        response.setServiceOfferingName(offering.getName());
+        if (offering != null) {
+            response.setServiceOfferingId(offering.getUuid());
+            response.setServiceOfferingName(offering.getName());
+        }
 
         Account account = ApiDBUtils.findAccountById(automationController.getAccountId());
-        if (account.getType() == Account.Type.PROJECT) {
+        if (account != null && account.getType() == Account.Type.PROJECT) {
             Project project = ApiDBUtils.findProjectByProjectAccountId(account.getId());
-            response.setProjectId(project.getUuid());
-            response.setProjectName(project.getName());
-        } else {
+            if (project != null) {
+                response.setProjectId(project.getUuid());
+                response.setProjectName(project.getName());
+            }
+        } else if (account != null) {
             response.setAccountName(account.getAccountName());
         }
 
@@ -222,18 +227,15 @@ public class AutomationControllerManagerImpl extends ManagerBase implements Auto
                     UserVmResponse cvmResponse = ApiDBUtils.newUserVmResponse(respView, responseName, userVM, EnumSet.of(ApiConstants.VMDetails.nics), caller);
                     automationControllerVmResponses.add(cvmResponse);
                     response.setAutomationControllerIp(userVM.getIpAddress());
-                    automationController.setAutomationControllerIp(userVM.getIpAddress());
-                }
-                try {
                     GuestOS guestOS = ApiDBUtils.findGuestOSById(userVM.getGuestOsId());
                     if (guestOS != null) {
                         response.setOsDisplayName(guestOS.getDisplayName());
                     }
-                } catch (NullPointerException e) {
-                    deleteAutomationController(automationController.getId());
-                    logger.warn(String.format("Failed to run Automation controller Alert state scanner on Automation controller : %s status scanner", automationController.getName()), e);
+                    response.setHostName(userVM.getHostName());
+                } else {
+                    logger.warn(String.format("VM %d mapped to automation controller %s no longer exists",
+                            vmMapVO.getVmId(), automationController.getName()));
                 }
-                response.setHostName(userVM.getHostName());
             }
         }
 
@@ -262,7 +264,12 @@ public class AutomationControllerManagerImpl extends ManagerBase implements Auto
 
         final String address = getAutomationControllerPublicIpAddress(automationController);
         if (address != null && isAutomationControllerHttpReady(address, AUTOMATION_CONTROLLER_HTTP_PORT)) {
-            return AutomationController.State.Running.toString();
+            if (stateTransitTo(automationController.getId(), AutomationController.Event.RecoveryRequested)
+                    && stateTransitTo(automationController.getId(), AutomationController.Event.OperationSucceeded)) {
+                logger.info(String.format("Recovered automation controller %s from Alert after its HTTP endpoint became ready",
+                        automationController.getName()));
+                return AutomationController.State.Running.toString();
+            }
         }
 
         return automationController.getState().toString();
@@ -274,12 +281,20 @@ public class AutomationControllerManagerImpl extends ManagerBase implements Auto
             return null;
         }
 
-        List<IPAddressVO> ipAddresses = ipAddressDao.listByAssociatedNetwork(ntwk.getId(), true);
-        if (ipAddresses == null || ipAddresses.size() != 1) {
+        IPAddressVO sourceNatIp = findSourceNatIp(ipAddressDao.listByAssociatedNetwork(ntwk.getId(), true));
+        return sourceNatIp == null ? null : sourceNatIp.getAddress().addr();
+    }
+
+    private IPAddressVO findSourceNatIp(List<IPAddressVO> ipAddresses) {
+        if (ipAddresses == null) {
             return null;
         }
-
-        return ipAddresses.get(0).getAddress().addr();
+        for (IPAddressVO ipAddress : ipAddresses) {
+            if (ipAddress != null && ipAddress.isSourceNat()) {
+                return ipAddress;
+            }
+        }
+        return null;
     }
 
     private boolean isAutomationControllerHttpReady(String address, int port) {
@@ -307,7 +322,6 @@ public class AutomationControllerManagerImpl extends ManagerBase implements Auto
         if (!AutomationServiceEnabled.value()) {
             throw new CloudRuntimeException("Automation Service plugin is disabled");
         }
-        final Long versionId = cmd.getId();
         final Long zoneId = cmd.getZoneId();
         final CallContext ctx = CallContext.current();
         final Account caller = ctx.getCallingAccount();
@@ -343,9 +357,6 @@ public class AutomationControllerManagerImpl extends ManagerBase implements Auto
         if (name != null) {
             sc.setParameters("name", name);
         }
-        if (versionId != null) {
-            sc.setParameters("id", versionId);
-        }
         if (zoneId != null) {
             SearchCriteria<AutomationControllerVO> scc = automationControllerDao.createSearchCriteria();
             scc.addOr("zoneId", SearchCriteria.Op.EQ, zoneId);
@@ -369,6 +380,11 @@ public class AutomationControllerManagerImpl extends ManagerBase implements Auto
 
     protected boolean stateTransitTo(long automationControllerId, AutomationController.Event e) {
         AutomationControllerVO automationController = automationControllerDao.findById(automationControllerId);
+        if (automationController == null) {
+            logger.warn(String.format("Failed to transition missing automation controller %d on event %s",
+                    automationControllerId, e));
+            return false;
+        }
         try {
             return _stateMachine.transitTo(automationController, e, null, automationControllerDao);
         } catch (NoTransitionException nte) {
@@ -385,16 +401,18 @@ public class AutomationControllerManagerImpl extends ManagerBase implements Auto
         }
         validateAutomationControllerCreateParameters(cmd);
 
-        final String L2Type = "internal";
-        final ServiceOffering serviceOffering = serviceOfferingDao.findById(cmd.getServiceOfferingId());
         final Account owner = accountService.getActiveAccountById(cmd.getEntityOwnerId());
         final AutomationControllerVersion automationControllerVersion = automationControllerVersionDao.findById(cmd.getAutomationTemplateId());
-        AutomationControllerResponse response = new AutomationControllerResponse();
-        Long instanceId = Long.valueOf(3);
+        if (owner == null) {
+            throw new InvalidParameterValueException("Unable to find the owner account for the Automation controller");
+        }
+        if (automationControllerVersion == null) {
+            throw new InvalidParameterValueException("Unable to find the requested Automation controller template version");
+        }
         final AutomationControllerVO controller = Transaction.execute(new TransactionCallback<AutomationControllerVO>() {
             @Override
             public AutomationControllerVO doInTransaction(TransactionStatus status) {
-                AutomationControllerVO newController = new AutomationControllerVO(automationControllerVersion.getId(), cmd.getName(), cmd.getDescription(), cmd.getAutomationTemplateId(), cmd.getZoneId(),
+                AutomationControllerVO newController = new AutomationControllerVO(cmd.getName(), cmd.getDescription(), automationControllerVersion.getId(), cmd.getZoneId(),
                         cmd.getServiceOfferingId(), cmd.getNetworkId(), cmd.getNetworkName(), owner.getAccountId(), cmd.getDomainId(), AutomationController.State.Created, cmd.getAutomationControllerIp());
                 automationControllerDao.persist(newController);
                 return newController;
@@ -410,10 +428,8 @@ public class AutomationControllerManagerImpl extends ManagerBase implements Auto
     private void validateAutomationControllerCreateParameters(final AddAutomationControllerCmd cmd) throws CloudRuntimeException {
         final String name = cmd.getName();
         final String description = cmd.getDescription();
-        final Long accountId = cmd.getAccountId();
         final Long networkId = cmd.getNetworkId();
         final String networkName = cmd.getNetworkName();
-        final String ipAddress = cmd.getAutomationControllerIp();
 
         if (name == null || name.isEmpty()) {
             throw new InvalidParameterValueException("Invalid name for the Automation controller name:" + name);
@@ -421,6 +437,33 @@ public class AutomationControllerManagerImpl extends ManagerBase implements Auto
         if (!NetUtils.verifyDomainNameLabel(name, true)) {
             throw new InvalidParameterValueException("Invalid name. Automation controller name can contain ASCII letters 'a' through 'z', the digits '0' through '9', "
                     + "and the hyphen ('-'), and can't start or end with \"-\" and can't start with digit");
+        }
+        if (networkId == null) {
+            throw new InvalidParameterValueException("Automation controller network ID is required");
+        }
+        NetworkVO network = networkDao.findById(networkId);
+        if (network == null) {
+            throw new InvalidParameterValueException("Unable to find the requested Automation controller network");
+        }
+        if (!Network.GuestType.Isolated.equals(network.getGuestType())) {
+            throw new InvalidParameterValueException("Automation controllers require an isolated network with a source NAT IP");
+        }
+        if (cmd.getZoneId() == null || dataCenterDao.findById(cmd.getZoneId()) == null) {
+            throw new InvalidParameterValueException("Unable to find the requested Automation controller zone");
+        }
+        if (network.getDataCenterId() != cmd.getZoneId()) {
+            throw new InvalidParameterValueException("Automation controller network and zone do not match");
+        }
+        if (cmd.getServiceOfferingId() == null || serviceOfferingDao.findById(cmd.getServiceOfferingId()) == null) {
+            throw new InvalidParameterValueException("Unable to find the requested Automation controller service offering");
+        }
+        AutomationControllerVersion version = cmd.getAutomationTemplateId() == null ? null
+                : automationControllerVersionDao.findById(cmd.getAutomationTemplateId());
+        if (version == null) {
+            throw new InvalidParameterValueException("Unable to find the requested Automation controller template version");
+        }
+        if (version.getZoneId() == null || !version.getZoneId().equals(cmd.getZoneId())) {
+            throw new InvalidParameterValueException("Automation controller template version and zone do not match");
         }
         final List<AutomationControllerVO> controllers = automationControllerDao.listAll();
         for (final AutomationControllerVO controller : controllers) {
@@ -433,7 +476,7 @@ public class AutomationControllerManagerImpl extends ManagerBase implements Auto
             if (otherNetwork.equals(networkId)){
                 throw new InvalidParameterValueException("Automation controller network id '" + networkId + "' already deployed.");
             }
-            if (otherNetworkName.equals(networkName)){
+            if (otherNetworkName != null && otherNetworkName.equals(networkName)){
                 throw new InvalidParameterValueException("Automation controller network name '" + networkName + "' already deployed.");
             }
         }
@@ -445,7 +488,7 @@ public class AutomationControllerManagerImpl extends ManagerBase implements Auto
     @Override
     public boolean startAutomationController(long automationControllerId, boolean onCreate) throws CloudRuntimeException {
         if (!AutomationServiceEnabled.value()) {
-//            logAndThrow(Level.ERROR, "Automation Service plugin is disabled");
+            throw new CloudRuntimeException("Automation Service plugin is disabled");
         }
         final AutomationControllerVO automationController = automationControllerDao.findById(automationControllerId);
         if (automationController == null) {
@@ -467,10 +510,14 @@ public class AutomationControllerManagerImpl extends ManagerBase implements Auto
             }
             return true;
         }
-        final AutomationControllerVersion AutomationControllerVersion = automationControllerVersionDao.findById(automationController.getAutomationTemplateId());
-        final DataCenter zone = dataCenterDao.findById(AutomationControllerVersion.getZoneId());
-        if (zone == null) {
-//            logAndThrow(Level.WARN, String.format("Unable to find zone for Automation Controller : %s", automationController.getName()));
+        if (onCreate && !AutomationController.State.Created.equals(automationController.getState())) {
+            throw new InvalidParameterValueException(String.format("Automation Controller %s cannot be created from state %s",
+                    automationController.getName(), automationController.getState()));
+        }
+        if (!onCreate && !(AutomationController.State.Stopped.equals(automationController.getState())
+                || AutomationController.State.Alert.equals(automationController.getState()))) {
+            throw new InvalidParameterValueException(String.format("Automation Controller %s cannot be started from state %s",
+                    automationController.getName(), automationController.getState()));
         }
         AutomationControllerStartWorker startWorker =
                 new AutomationControllerStartWorker(automationController, this);
@@ -487,7 +534,7 @@ public class AutomationControllerManagerImpl extends ManagerBase implements Auto
     @Override
     public boolean deleteAutomationController(Long automationControllerId) throws CloudRuntimeException {
         if (!AutomationServiceEnabled.value()) {
-//            logAndThrow(Level.ERROR, "Automation Service plugin is disabled");
+            throw new CloudRuntimeException("Automation Service plugin is disabled");
         }
         AutomationControllerVO cluster = automationControllerDao.findById(automationControllerId);
         if (cluster == null) {
@@ -523,6 +570,11 @@ public class AutomationControllerManagerImpl extends ManagerBase implements Auto
                 logger.debug(String.format("Automation Controller : %s is getting stopped", automationController.getName()));
             }
             return true;
+        }
+        if (!(AutomationController.State.Running.equals(automationController.getState())
+                || AutomationController.State.Alert.equals(automationController.getState()))) {
+            throw new InvalidParameterValueException(String.format("Automation Controller %s cannot be stopped from state %s",
+                    automationController.getName(), automationController.getState()));
         }
         AutomationControllerStopWorker stopWorker = new AutomationControllerStopWorker(automationController, this);
         stopWorker = ComponentContext.inject(stopWorker);
