@@ -20,9 +20,16 @@ import store from '@/store'
 import { isZoneCreated } from '@/utils/zone'
 
 const activeFastCloneFlattenStatuses = ['pending', 'running']
+const runningFastCloneFlattenStatuses = ['running']
 
 const isFastCloneFlattenActive = (record) => {
   return activeFastCloneFlattenStatuses.includes(
+    String(record?.clonefastflattenstatus || record?.details?.['clone.fast.flatten.status'] || '').toLowerCase()
+  )
+}
+
+const isFastCloneFlattenRunning = (record) => {
+  return runningFastCloneFlattenStatuses.includes(
     String(record?.clonefastflattenstatus || record?.details?.['clone.fast.flatten.status'] || '').toLowerCase()
   )
 }
@@ -196,9 +203,11 @@ export default {
           show: (record, store) => {
             return record.state === 'Ready' &&
               (record.hypervisor !== 'KVM' ||
-               ['Stopped', 'Destroyed'].includes(record.vmstate) ||
-               store.features.kvmsnapshotenabled)
+                ['Stopped', 'Destroyed'].includes(record.vmstate) ||
+                store.features.kvmsnapshotenabled)
           },
+          disabled: isFastCloneFlattenActive,
+          tooltip: (record) => isFastCloneFlattenActive(record) ? 'message.sharedmountpoint.clone.flatten.in.progress' : 'label.action.take.snapshot',
           popup: true,
           component: shallowRef(defineAsyncComponent(() => import('@/views/storage/TakeSnapshot.vue')))
         },
@@ -211,8 +220,8 @@ export default {
           show: (record, store) => {
             return record.state === 'Ready' &&
               (record.hypervisor !== 'KVM' ||
-               (['Stopped', 'Destroyed'].includes(record.vmstate)) ||
-               (store.features.kvmsnapshotenabled))
+                (['Stopped', 'Destroyed'].includes(record.vmstate)) ||
+                (store.features.kvmsnapshotenabled))
           },
           popup: true,
           component: shallowRef(defineAsyncComponent(() => import('@/views/storage/RecurringSnapshotVolume.vue'))),
@@ -233,6 +242,8 @@ export default {
           dataView: true,
           popup: true,
           show: (record) => { return ['Allocated', 'Ready'].includes(record.state) },
+          disabled: isFastCloneFlattenActive,
+          tooltip: (record) => isFastCloneFlattenActive(record) ? 'message.sharedmountpoint.clone.flatten.in.progress' : 'label.action.resize.volume',
           component: shallowRef(defineAsyncComponent(() => import('@/views/storage/ResizeVolume.vue')))
         },
         {
@@ -244,6 +255,8 @@ export default {
           args: ['volumeid', 'storageid', 'livemigrate'],
           dataView: true,
           show: (record, store) => { return record.state === 'Ready' && !record.kvdoenable },
+          disabled: isFastCloneFlattenActive,
+          tooltip: (record) => isFastCloneFlattenActive(record) ? 'message.sharedmountpoint.clone.flatten.in.progress' : 'label.migrate.volume',
           popup: true,
           component: shallowRef(defineAsyncComponent(() => import('@/views/storage/MigrateVolume.vue')))
         },
@@ -255,6 +268,8 @@ export default {
           args: ['id', 'diskofferingid', 'size', 'miniops', 'maxiops', 'automigrate'],
           dataView: true,
           show: (record, store) => { return ['Allocated', 'Ready'].includes(record.state) },
+          disabled: isFastCloneFlattenActive,
+          tooltip: (record) => isFastCloneFlattenActive(record) ? 'message.sharedmountpoint.clone.flatten.in.progress' : 'label.change.offering.for.volume',
           popup: true,
           component: shallowRef(defineAsyncComponent(() => import('@/views/storage/ChangeOfferingForVolume.vue')))
         },
@@ -265,6 +280,8 @@ export default {
           message: 'message.download.volume.confirm',
           dataView: true,
           show: (record) => { return record.state === 'Ready' && (record.vmstate === 'Stopped' || !record.virtualmachineid) },
+          disabled: isFastCloneFlattenActive,
+          tooltip: (record) => isFastCloneFlattenActive(record) ? 'message.sharedmountpoint.clone.flatten.in.progress' : 'label.action.download.volume',
           args: ['zoneid', 'mode'],
           mapping: {
             zoneid: {
@@ -284,6 +301,8 @@ export default {
           show: (record) => {
             return record.state === 'Ready' && (record.vmstate === 'Stopped' || !record.virtualmachineid)
           },
+          disabled: isFastCloneFlattenActive,
+          tooltip: (record) => isFastCloneFlattenActive(record) ? 'message.sharedmountpoint.clone.flatten.in.progress' : 'label.action.create.template.from.volume',
           popup: true,
           component: shallowRef(defineAsyncComponent(() => import('@/views/storage/CreateTemplate.vue')))
         },
@@ -310,7 +329,9 @@ export default {
           show: (record, store) => {
             return !['Destroy', 'Destroyed', 'Expunging', 'Expunged', 'Migrating', 'Uploading', 'UploadError', 'Creating', 'Allocated', 'Uploaded'].includes(record.state) &&
               record.type !== 'ROOT' && !record.virtualmachineid
-          }
+          },
+          disabled: isFastCloneFlattenRunning,
+          tooltip: (record) => isFastCloneFlattenRunning(record) ? 'message.sharedmountpoint.clone.flatten.in.progress' : 'label.action.destroy.volume'
         },
         {
           api: 'deleteVolume',
@@ -322,13 +343,15 @@ export default {
             const isDetached = !record.virtualmachineid
             const isDetachedAllocatedRoot = record.state === 'Allocated' && record.type === 'ROOT' && isDetached
             return ['Expunging', 'Expunged', 'UploadError'].includes(record.state) ||
-                ['Allocated', 'Uploaded'].includes(record.state) && record.type !== 'ROOT' && isDetached ||
-                (record.state === 'Ready' && record.type !== 'ROOT' && isDetached) ||
-                isDetachedAllocatedRoot ||
-                ((['Admin', 'DomainAdmin'].includes(store.userInfo.roletype) || store.features.allowuserexpungerecovervolume) && record.state === 'Destroy')
+              ['Allocated', 'Uploaded'].includes(record.state) && record.type !== 'ROOT' && isDetached ||
+              (record.state === 'Ready' && record.type !== 'ROOT' && isDetached) ||
+              isDetachedAllocatedRoot ||
+              ((['Admin', 'DomainAdmin'].includes(store.userInfo.roletype) || store.features.allowuserexpungerecovervolume) && record.state === 'Destroy')
           },
           groupAction: true,
           popup: true,
+          disabled: isFastCloneFlattenRunning,
+          tooltip: (record) => isFastCloneFlattenRunning(record) ? 'message.sharedmountpoint.clone.flatten.in.progress' : 'label.action.delete.volume',
           groupMap: (selection) => { return selection.map(x => { return { id: x } }) }
         }
       ]
@@ -427,9 +450,9 @@ export default {
           dataView: true,
           show: (record, store) => {
             return (['Admin'].includes(store.userInfo.roletype) || // If admin or owner or belongs to current project
-                ((record.domainid === store.userInfo.domainid && record.account === store.userInfo.account) ||
-                  (record.domainid === store.userInfo.domainid && record.projectid && store.project && store.project.id && record.projectid === store.project.id))) &&
-                    record.state === 'BackedUp'
+              ((record.domainid === store.userInfo.domainid && record.account === store.userInfo.account) ||
+                (record.domainid === store.userInfo.domainid && record.projectid && store.project && store.project.id && record.projectid === store.project.id))) &&
+              record.state === 'BackedUp'
           },
           args: ['zoneid'],
           mapping: {
