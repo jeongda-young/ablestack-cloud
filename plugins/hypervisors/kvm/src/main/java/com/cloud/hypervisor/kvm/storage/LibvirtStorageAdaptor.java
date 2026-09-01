@@ -696,7 +696,7 @@ public class LibvirtStorageAdaptor implements StorageAdaptor {
 
             long cap, used, avail;
             if (type == StoragePoolType.RBD) {
-                final String cephPoolName = spd.getSourceDir();
+                final String cephPoolName = resolveRbdDataPoolName(spd.getSourceDir()); // Erasure Coding(EC) Pool 확인
                 if (cephPoolName == null || cephPoolName.isEmpty()) {
                     throw new CloudRuntimeException("Missing RBD pool name (source dir) for " + uuid);
                 }
@@ -722,6 +722,20 @@ public class LibvirtStorageAdaptor implements StorageAdaptor {
             logger.debug("Could not find storage pool " + uuid + " in libvirt");
             throw new CloudRuntimeException(e.toString(), e);
         }
+    }
+
+    private String resolveRbdDataPoolName(String fallbackPoolName) {
+        String configuredPoolName = Script.runSimpleBashScript("rbd config pool get " + fallbackPoolName + " rbd_default_data_pool 2>/dev/null");
+        if (StringUtils.isBlank(configuredPoolName)) {
+            return fallbackPoolName;
+        }
+
+        String poolName = configuredPoolName.trim();
+        if (poolName.contains("is not set")) {
+            return fallbackPoolName;
+        }
+
+        return poolName;
     }
 
     /**

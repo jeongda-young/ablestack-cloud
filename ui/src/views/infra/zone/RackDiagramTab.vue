@@ -16,7 +16,7 @@
 // under the License.
 
 <template>
-  <div class="p-2 rack-diagram-root" :class="{ 'is-dark': isDarkMode }">
+  <div ref="rackDiagramRootRef" class="p-2 rack-diagram-root" :class="{ 'is-dark': isDarkMode }">
     <div class="toolbar-container" :class="{ 'toolbar-detail': !showRackList }">
 
       <div class="toolbar-view-controls">
@@ -588,14 +588,10 @@
           v-if="selectedDevice"
           ref="rackSidePaneSlotRef"
           class="rack-side-pane-slot"
+          :style="sidePaneSlotStyle"
         >
           <div
-            ref="rackSidePaneRef"
             class="rack-side-pane"
-            :class="{
-              'is-fixed': sidePaneMode === 'fixed'
-            }"
-            :style="sidePaneInlineStyle"
           >
           <a-card size="small" class="rack-side-pane-card">
             <template #title>{{ t('rackDiagram.deviceInfo') }}</template>
@@ -1339,7 +1335,7 @@
             <a-tooltip :title="vm.displayname || vm.name || vm.id">
               <div class="host-vm-name">{{ vm.displayname || vm.name || vm.id }}</div>
             </a-tooltip>
-            <div class="host-vm-meta">{{ vm.state || '-' }} / {{ vm.ostypename || vm.hypervisor || '-' }}</div>
+            <div class="host-vm-meta">{{ vm.state || '-' }} / {{ vm.hypervisor || '-' }}</div>
             <a-tooltip :title="getVmPrimaryIpText(vm)">
               <div class="host-vm-ip">{{ getVmPrimaryIpText(vm) }}</div>
             </a-tooltip>
@@ -1356,7 +1352,7 @@
 import { ref, reactive, onMounted, computed, watch, onBeforeUnmount, nextTick, getCurrentInstance } from 'vue'
 import { message } from 'ant-design-vue'
 import html2canvas from 'html2canvas'
-import { api } from '@/api'
+import { getAPI } from '@/api'
 import { useRouter } from 'vue-router'
 import { useStore } from 'vuex'
 import RackListCardIcon from './components/RackListCardIcon.vue'
@@ -1401,17 +1397,17 @@ const INSPECTOR_FIT_GUTTER = 8
 const isAutoZoomEnabled = ref(true)
 const rackMainPaneRef = ref(null)
 const rackDetailLayoutRef = ref(null)
+const rackDiagramRootRef = ref(null)
 const rackSidePaneSlotRef = ref(null)
-const rackSidePaneRef = ref(null)
-const sidePaneMode = ref('static') // static | fixed
-const sidePaneLeft = ref(0)
-const sidePaneWidth = ref(0)
-const SIDE_PANE_TOP = 64
+const sidePaneAvailableHeight = ref(0)
 let resizeDebounceTimer = null
 let zoomRafId = 0
 let zoomApplyRafId = 0
 let zoomTransitionRafId = 0
+let sidePaneHeightRafId = 0
 let rackMainPaneResizeObserver = null
+let sidePaneViewportResizeObserver = null
+let rackScrollContainer = null
 let expandedLayoutZoomTimer = null
 const router = useRouter()
 const store = useStore()
@@ -1453,7 +1449,6 @@ const toggleExpandedView = () => {
       if (showRackList.value) return
       isAutoZoomEnabled.value = true
       applyResponsiveZoom(true, true)
-      updateSidePanePosition()
     }, 320)
   })
 }
@@ -1545,15 +1540,10 @@ const zoomWrapperStyle = computed(() => {
   }
 })
 
-const sidePaneInlineStyle = computed(() => {
-  if (sidePaneMode.value === 'fixed') {
-    return {
-      left: `${Math.round(sidePaneLeft.value)}px`,
-      top: `${SIDE_PANE_TOP}px`,
-      width: `${Math.round(sidePaneWidth.value)}px`
-    }
-  }
-  return {}
+const sidePaneSlotStyle = computed(() => {
+  if (!sidePaneAvailableHeight.value) return {}
+  const height = `${sidePaneAvailableHeight.value}px`
+  return { height, maxHeight: height }
 })
 
 // 데이터 모델
@@ -2154,27 +2144,31 @@ const openQuickLink = (link) => {
   if (link?.url) window.open(link.url, '_blank')
 }
 
-const updateSidePanePosition = () => {
-  const layout = rackDetailLayoutRef.value
+const updateSidePaneAvailableHeight = () => {
   const slot = rackSidePaneSlotRef.value
-  const pane = rackSidePaneRef.value
-  if (!layout || !slot || !pane || showRackList.value || !selectedDevice.value) {
-    sidePaneMode.value = 'static'
-    return
+  if (!slot || showRackList.value || !selectedDevice.value) return
+
+  if (!rackScrollContainer) {
+    rackScrollContainer = rackDiagramRootRef.value?.closest('.layout-content') || null
   }
 
-  const layoutRect = layout.getBoundingClientRect()
   const slotRect = slot.getBoundingClientRect()
+  const scrollRect = rackScrollContainer?.getBoundingClientRect()
+  const viewportBottom = Math.min(window.innerHeight, scrollRect?.bottom || window.innerHeight)
+  const availableHeight = Math.floor(viewportBottom - slotRect.top - 16)
+  const nextHeight = Math.max(240, availableHeight)
 
-  sidePaneWidth.value = slotRect.width
-
-  if (layoutRect.top > SIDE_PANE_TOP) {
-    sidePaneMode.value = 'static'
-    return
+  if (Math.abs(nextHeight - sidePaneAvailableHeight.value) > 1) {
+    sidePaneAvailableHeight.value = nextHeight
   }
+}
 
-  sidePaneLeft.value = slotRect.left
-  sidePaneMode.value = 'fixed'
+const scheduleSidePaneHeightUpdate = () => {
+  if (sidePaneHeightRafId) cancelAnimationFrame(sidePaneHeightRafId)
+  sidePaneHeightRafId = requestAnimationFrame(() => {
+    sidePaneHeightRafId = 0
+    updateSidePaneAvailableHeight()
+  })
 }
 
 const handleSidePaneBeforeEnter = (element) => {
@@ -2192,11 +2186,12 @@ const handleSidePaneBeforeEnter = (element) => {
 const handleSidePaneAfterEnter = () => {
   nextTick(() => {
     applyResponsiveZoom(false, true)
-    updateSidePanePosition()
+    scheduleSidePaneHeightUpdate()
   })
 }
 
 const handleSidePaneAfterLeave = () => {
+  sidePaneAvailableHeight.value = 0
   nextTick(() => applyResponsiveZoom(false, true))
 }
 // 데이터 변경 여부 추적
@@ -2212,7 +2207,7 @@ watch(zoomPercent, (val) => {
 })
 
 watch(selectedDevice, async (device) => {
-  nextTick(() => updateSidePanePosition())
+  nextTick(() => scheduleSidePaneHeightUpdate())
   selectedDeviceHost.value = null
   deviceInfoActiveTab.value = 'summary'
   if (!device) {
@@ -2235,8 +2230,8 @@ watch(selectedDevice, async (device) => {
 
 watch(showRackList, () => {
   nextTick(() => {
-    updateSidePanePosition()
     syncRackMainPaneResizeObserver()
+    scheduleSidePaneHeightUpdate()
   })
 })
 
@@ -2254,7 +2249,7 @@ const zoneLoading = ref(false)
 const fetchZonesAndRackData = () => {
   zoneLoading.value = true // 필요시 템플릿에 스피너(Loading) 연동 가능
 
-  api('listZones', {}).then(json => {
+  getAPI('listZones', {}).then(json => {
     const listZones = json.listzonesresponse.zone
     if (listZones && listZones.length > 0) {
       // 'Edge' 타입을 제외한 Zone 목록 필터링
@@ -2286,7 +2281,7 @@ const fetchRackData = () => {
 
   loading.value = true
 
-  api('listRackLayouts', {
+  getAPI('listRackLayouts', {
     zoneid: currentZoneId.value,
     name: 'default'
   }).then(json => {
@@ -2295,7 +2290,6 @@ const fetchRackData = () => {
     // DB에 저장된 데이터가 있고, 내용(content)이 존재하는 경우
     if (layouts && layouts.length > 0 && layouts[0].content) {
       parsedRacks.value = normalizeLoadedRackLayouts(JSON.parse(layouts[0].content))
-      message.success(t('rackDiagram.msg.rackLoaded'))
     } else {
       // 최초 배포/접속 시에는 임의 랙을 만들지 않는다.
       // 사용자가 명시적으로 "새 랙 추가"를 눌렀을 때만 생성일/위치가 있는 랙을 만든다.
@@ -2339,7 +2333,7 @@ const saveRackData = () => {
   saving.value = true
   const jsonContent = JSON.stringify(parsedRacks.value)
 
-  return api('updateRackLayout', {}, 'POST', {
+  return getAPI('updateRackLayout', {}, 'POST', {
     zoneid: currentZoneId.value,
     name: 'default',
     content: jsonContent
@@ -2707,7 +2701,7 @@ const handleResponsiveResize = () => {
     if (zoomRafId) cancelAnimationFrame(zoomRafId)
     zoomRafId = requestAnimationFrame(() => {
       applyResponsiveZoom(false, !!selectedDevice.value)
-      updateSidePanePosition()
+      scheduleSidePaneHeightUpdate()
     })
   }, 120)
 }
@@ -2920,6 +2914,7 @@ const hostVmModalTitle = ref(t('rackDiagram.hostVmList'))
 const hostVmLoading = ref(false)
 const hostVmList = ref([])
 const hostVmFallbackList = ref([])
+const vmOsTypeCache = new Map()
 const dragSource = ref({ rIndex: -1, iIndex: -1 })
 const quickLinksError = ref('')
 const quickLinkRows = ref([])
@@ -2969,22 +2964,41 @@ const HOST_ACTIVE_VM_STATES = new Set(['running', 'starting', 'stopping', 'migra
 
 const buildVmMockList = (hostId, hostName = 'sample') => {
   const osPool = [
-    'CentOS Linux (Sample)',
-    'Rocky Linux (Sample)',
-    'Ubuntu Linux (Sample)',
-    'Windows Server (Sample)',
-    'Windows 11 Pro (Sample)'
+    { id: '8b8c0681-8ed7-11f1-b7da-00248162d5a3', name: 'Windows Server 2022 (64-bit)' },
+    { id: '7cca2285-8ed7-11f1-b7da-00248162d5a3', name: 'Rocky Linux 9' },
+    { id: '1f54dd03-800f-4403-b003-810b16debd42', name: 'Ubuntu 22.04 LTS' },
+    { id: '7cc9bfb8-8ed7-11f1-b7da-00248162d5a3', name: 'CentOS 9' },
+    { id: '0fc630a1-9bb6-4eb0-b91b-5e929d73f3c7', name: 'Debian GNU/Linux 12 (64-bit)' },
+    { id: '5725f729-8ed7-11f1-b7da-00248162d5a3', name: 'SUSE Linux Enterprise Server 15 (64-bit)' },
+    { id: '9a61346d-39f6-4e64-b142-1e9b5de9a276', name: 'Red Hat Enterprise Linux 9.0' },
+    { id: 'e1cb87b9-94f3-4d2c-a0da-85ceb188373a', name: 'Fedora Linux (64 bit)' },
+    { id: '7cc997b3-8ed7-11f1-b7da-00248162d5a3', name: 'AlmaLinux 9' },
+    { id: 'df5c8d1d-8ed6-11f1-b7da-00248162d5a3', name: 'Other Linux (64-bit)' }
   ]
+  const statePool = ['Running', 'Starting', 'Migrating', 'Stopping']
   const list = []
   for (let i = 1; i <= 20; i++) {
     const idx = i - 1
     const no = String(i).padStart(2, '0')
+    const os = osPool[idx % osPool.length]
     list.push({
       id: `sample-${hostId}-${no}`,
       name: `${hostName}-vm-${no}`,
       displayname: `${hostName}-vm-${no}`,
-      state: 'Running',
-      ostypename: osPool[idx % osPool.length]
+      state: statePool[idx % statePool.length],
+      hostid: hostId,
+      hostname: hostName,
+      hypervisor: 'KVM',
+      guestosid: os.id,
+      ostypeid: os.id,
+      osdisplayname: os.name,
+      ipaddress: `10.10.254.${100 + i}`,
+      nic: [{
+        id: `sample-nic-${hostId}-${no}`,
+        ipaddress: `10.10.254.${100 + i}`,
+        isdefault: true,
+        traffictype: 'Guest'
+      }]
     })
   }
   return list
@@ -3001,7 +3015,7 @@ const buildInventoryOptions = async () => {
   const options = []
 
   try {
-    const hostJson = await api('listHosts', { zoneid: currentZoneId.value, listall: true })
+    const hostJson = await getAPI('listHosts', { zoneid: currentZoneId.value, listall: true })
     const hosts = hostJson?.listhostsresponse?.host || []
     hosts.forEach(h => {
       const name = h.name || h.hostname || h.id
@@ -3232,7 +3246,6 @@ const applyInlineDeviceChangesToRack = () => {
     selectedDeviceItemIndex.value = newIndex
   }
   syncSelectedDeviceDraft(rack.items[selectedDeviceItemIndex.value], false)
-  nextTick(() => updateSidePanePosition())
 }
 
 const onDropRackFrame = (targetRIndex, event) => {
@@ -3276,7 +3289,7 @@ const onDropRackFrame = (targetRIndex, event) => {
 const fetchHostById = async (hostId) => {
   if (!hostId) return null
   if (hostCache.value[hostId]) return hostCache.value[hostId]
-  const json = await api('listHosts', { id: hostId })
+  const json = await getAPI('listHosts', { id: hostId })
   const host = json?.listhostsresponse?.host?.[0] || null
   if (host) hostCache.value[hostId] = host
   return host
@@ -3355,12 +3368,12 @@ const openLinkedHostVmModal = async (item) => {
     }
 
     // 호스트 상세 메뉴의 VM 목록 호출과 동일한 파라미터를 사용한다.
-    const directJson = await api('listVirtualMachines', hostVmListParams)
+    const directJson = await getAPI('listVirtualMachines', hostVmListParams)
     let vms = readVmList(directJson).filter(isActiveHostVm)
 
     // 2) hostid 조회가 비면 전체에서 host 매핑 기준으로 재탐색
     if (!vms.length) {
-      const allJson = await api('listVirtualMachines', {
+      const allJson = await getAPI('listVirtualMachines', {
         listall: true,
         details: hostVmListParams.details,
         isvnf: false,
@@ -3371,7 +3384,7 @@ const openLinkedHostVmModal = async (item) => {
       vms = allVms.filter(isVmAssignedToHost)
     }
 
-    hostVmList.value = vms
+    hostVmList.value = await resolveVmOsTypeNames(vms)
 
     // 개발환경 fallback: host 매핑 샘플 제공
     if (ENABLE_VM_FALLBACK_MOCK && !hostVmList.value.length) {
@@ -3389,17 +3402,73 @@ const openLinkedHostVmModal = async (item) => {
   }
 }
 
+const getVmOsTypeId = (vm) => String(vm?.ostypeid || vm?.guestosid || '')
+
+const getVmOsTypeInfo = (vm) => {
+  const cached = vmOsTypeCache.get(getVmOsTypeId(vm)) || {}
+  const displayName = String(
+    vm?.ostypename ||
+    vm?.osdisplayname ||
+    vm?.guestosname ||
+    cached.description ||
+    cached.name ||
+    ''
+  ).trim()
+  const categoryName = String(vm?.oscategoryname || cached.categoryName || '').trim()
+
+  return {
+    displayName,
+    searchText: [displayName, cached.name, cached.description, categoryName]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase()
+  }
+}
+
+const resolveVmOsTypeNames = async (vms) => {
+  const unresolvedIds = [...new Set(vms
+    .filter(vm => !getVmOsTypeInfo(vm).displayName)
+    .map(getVmOsTypeId)
+    .filter(id => id && !vmOsTypeCache.has(id)))]
+
+  if (unresolvedIds.length) {
+    try {
+      const json = await getAPI('listOsTypes', { listall: true })
+      const osTypes = json?.listostypesresponse?.ostype || []
+      osTypes.forEach(osType => {
+        if (osType?.id) {
+          vmOsTypeCache.set(String(osType.id), {
+            name: String(osType.name || ''),
+            description: String(osType.description || ''),
+            categoryName: String(osType.oscategoryname || '')
+          })
+        }
+      })
+    } catch (e) {
+      console.warn('listOsTypes failed:', e)
+    }
+  }
+
+  return vms
+}
+
 const getVmOsLogo = (vm) => {
-  const osname = String(vm?.ostypename || vm?.name || '').toLowerCase()
+  const osname = getVmOsTypeInfo(vm).searchText
+  // Font Awesome에는 Rocky/Alma/Amazon/Oracle Linux 전용 브랜드가 없어 Linux로 통일한다.
+  if (
+    osname.includes('rocky') ||
+    osname.includes('alma') ||
+    osname.includes('amazon linux') ||
+    osname.includes('oracle linux')
+  ) return 'linux'
   if (osname.includes('centos')) return 'centos'
   if (osname.includes('debian')) return 'debian'
   if (osname.includes('ubuntu')) return 'ubuntu'
-  if (osname.includes('suse')) return 'suse'
-  if (osname.includes('redhat')) return 'redhat'
+  if (osname.includes('suse') || osname.includes('opensuse')) return 'suse'
+  if (osname.includes('redhat') || osname.includes('red hat') || osname.includes('rhel')) return 'redhat'
   if (osname.includes('fedora')) return 'fedora'
-  if (osname.includes('windows') || osname.includes('dos')) return 'windows'
-  // Rocky는 전용 브랜드 아이콘이 없어서 Linux 계열로 표현
-  if (osname.includes('rocky') || osname.includes('linux')) return 'linux'
+  if (osname.includes('windows') || osname.includes('microsoft') || osname.includes('dos')) return 'windows'
+  if (osname.includes('linux')) return 'linux'
   if (osname.includes('bsd')) return 'freebsd'
   if (osname.includes('apple') || osname.includes('mac')) return 'apple'
   return 'linux'
@@ -4206,24 +4275,35 @@ onMounted(() => {
 
   // 2. 창 닫기/새로고침 방지 이벤트 리스너 등록
   window.addEventListener('beforeunload', handleBeforeUnload)
-  window.addEventListener('scroll', updateSidePanePosition, { passive: true })
   window.addEventListener('resize', handleResponsiveResize)
   nextTick(() => {
+    rackScrollContainer = rackDiagramRootRef.value?.closest('.layout-content') || null
+    if (rackScrollContainer) {
+      rackScrollContainer.addEventListener('scroll', scheduleSidePaneHeightUpdate, { passive: true })
+    }
+    if (rackScrollContainer && typeof ResizeObserver !== 'undefined') {
+      sidePaneViewportResizeObserver = new ResizeObserver(() => scheduleSidePaneHeightUpdate())
+      sidePaneViewportResizeObserver.observe(rackScrollContainer)
+    }
     applyResponsiveZoom(true)
-    updateSidePanePosition()
+    scheduleSidePaneHeightUpdate()
     syncRackMainPaneResizeObserver()
   })
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('beforeunload', handleBeforeUnload)
-  window.removeEventListener('scroll', updateSidePanePosition)
   window.removeEventListener('resize', handleResponsiveResize)
+  if (rackScrollContainer) {
+    rackScrollContainer.removeEventListener('scroll', scheduleSidePaneHeightUpdate)
+  }
   if (resizeDebounceTimer) clearTimeout(resizeDebounceTimer)
   if (zoomRafId) cancelAnimationFrame(zoomRafId)
   if (zoomApplyRafId) cancelAnimationFrame(zoomApplyRafId)
   if (zoomTransitionRafId) cancelAnimationFrame(zoomTransitionRafId)
+  if (sidePaneHeightRafId) cancelAnimationFrame(sidePaneHeightRafId)
   if (rackMainPaneResizeObserver) rackMainPaneResizeObserver.disconnect()
+  if (sidePaneViewportResizeObserver) sidePaneViewportResizeObserver.disconnect()
   if (expandedLayoutZoomTimer) clearTimeout(expandedLayoutZoomTimer)
 })
 
@@ -5170,7 +5250,7 @@ onBeforeUnmount(() => {
   min-width: 0;
   overflow-x: auto;
   overflow-y: visible;
-  padding-bottom: 8px;
+  padding-bottom: 0;
 }
 
 .rack-main-pane .rack-zoom-wrapper {
@@ -5183,8 +5263,14 @@ onBeforeUnmount(() => {
   width: clamp(320px, 42%, 460px);
   flex: 0 0 clamp(320px, 42%, 460px);
   margin-left: 12px;
-  position: relative;
+  position: sticky;
+  top: 64px;
   align-self: flex-start;
+  height: calc(100vh - 80px);
+  max-height: calc(100vh - 80px);
+  min-height: 0;
+  overflow: hidden;
+  z-index: 20;
 }
 
 .rack-inspector-enter-active,
@@ -5225,22 +5311,15 @@ onBeforeUnmount(() => {
   --device-scrollbar-thumb: var(--ui-scroll-thumb);
   --device-scrollbar-thumb-hover: var(--ui-scroll-thumb-hover);
   width: 100%;
-  position: -webkit-sticky;
-  position: sticky;
-  top: 64px;
+  position: relative;
   align-self: flex-start;
   display: flex;
   flex-direction: column;
-  height: calc(100vh - 80px);
-  max-height: calc(100vh - 80px);
-  overflow: visible;
+  height: 100%;
+  max-height: 100%;
+  min-height: 0;
+  overflow: hidden;
   max-width: 100%;
-  z-index: 20;
-}
-
-.rack-side-pane.is-fixed {
-  position: fixed !important;
-  z-index: 40;
 }
 
 .rack-side-pane-card {
@@ -5250,8 +5329,9 @@ onBeforeUnmount(() => {
   overflow: hidden;
   display: flex;
   flex-direction: column;
+  box-sizing: border-box;
   height: 100%;
-  max-height: inherit;
+  max-height: 100%;
   min-height: 0;
 }
 
@@ -5264,11 +5344,15 @@ onBeforeUnmount(() => {
 }
 
 .rack-side-pane-card :deep(.ant-card-body) {
+  position: relative;
   display: flex;
   flex-direction: column;
-  flex: 1 1 auto;
-  max-height: none;
+  flex: 1 1 0;
+  box-sizing: border-box;
+  height: 0;
+  max-height: 100%;
   min-height: 0;
+  padding-bottom: 64px !important;
   overflow: hidden;
 }
 
@@ -5372,7 +5456,8 @@ onBeforeUnmount(() => {
 }
 
 .device-info-tabs {
-  flex: 1 1 auto;
+  flex: 1 1 0;
+  height: 0;
   min-height: 0;
   display: flex;
   flex-direction: column;
@@ -5757,9 +5842,13 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 8px;
   flex: 0 0 auto;
-  position: relative;
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
   z-index: 3;
-  margin: 12px -12px -12px;
+  min-height: 52px;
+  margin: 0;
   padding: 12px;
   border: 1px solid rgba(0,0,0,0.06);
   border-left: 0;
@@ -5976,7 +6065,7 @@ onBeforeUnmount(() => {
   gap: 30px;
   align-items: flex-start;
   width: max-content;
-  padding-bottom: 20px; /* 가로 스크롤바와 랙 사이 여백 */
+  padding-bottom: 0;
 }
 
 .rack-zoom-wrapper {
@@ -6536,34 +6625,30 @@ onBeforeUnmount(() => {
 
 /* 액션 버튼 (호버 시에만 표시) */
 .device-actions {
-  /* 버튼을 장비 둥둥 띄우는 핵심 코드 (이게 빠져서 안 보였던 겁니다!) */
   position: absolute !important;
   top: 50%;
   bottom: auto;
   left: 50%;
   transform: translate(-50%, -50%);
-  z-index: 5; /* 장비나 텍스트 위로 확실히 올림 */
+  z-index: 5;
 
-  /* 디자인 요소 (아까 적용한 예쁜 간격과 배경) */
   display: flex !important;
   justify-content: center;
   align-items: center;
   gap: 4px !important;
-  background: rgba(0, 0, 0, 0.85) !important;
+  box-sizing: border-box;
+  height: 38px;
+  padding: 3px 5px;
+  background: rgba(255, 255, 255, 0.96) !important;
+  border: 1px solid rgba(0, 0, 0, 0.12);
   border-radius: 8px;
-  padding: 6px 10px;
-  height: 36px;
-  box-shadow: 0 3px 10px rgba(0, 0, 0, 0.42);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.16);
 
-  /* 기본적으로는 숨겨둠 (투명도 0, 클릭 방지) */
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s ease;
 }
 
-/* 🟢 복구됨: 장비(부모 요소)에 마우스를 올리면 버튼 그룹이 나타남 */
-/* (참고: 장비를 감싸는 클래스가 .rack-item이거나 .rack-slot일 수 있습니다.
-   만약 호버가 안 먹히면 부모 클래스 이름에 맞게 수정해 주세요) */
 .rack-item:hover .device-actions,
 .rack-slot:hover .device-actions,
 .device-container:hover .device-actions {
@@ -6571,40 +6656,88 @@ onBeforeUnmount(() => {
   pointer-events: auto !important;
 }
 
-/* 버튼 내부 스타일 및 아이콘 크기 (아까와 동일) */
-.device-actions .ant-btn {
-  padding: 0 6px !important;
-  height: 30px;
+.device-actions :deep(.ant-btn.ant-btn-text) {
+  width: 30px !important;
+  min-width: 30px !important;
+  height: 30px !important;
+  padding: 0 !important;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  color: #595959 !important;
+  background: transparent !important;
+  border: 1px solid transparent !important;
+  border-radius: 6px !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.device-actions :deep(.ant-btn.ant-btn-text:hover),
+.device-actions :deep(.ant-btn.ant-btn-text:focus),
+.device-actions :deep(.ant-btn.ant-btn-text:focus-visible) {
+  color: #1677ff !important;
+  background: rgba(22, 119, 255, 0.08) !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+
+.device-actions :deep(.ant-btn.ant-btn-text:active) {
+  background: rgba(22, 119, 255, 0.14) !important;
 }
 
 .device-actions .ant-btn :deep(.anticon) {
   font-size: 18px !important;
-  color: #ffffff !important;
-  text-shadow: 0 0 1px rgba(255, 255, 255, 0.6);
+  color: #595959 !important;
+  text-shadow: none;
   transition: all 0.2s ease;
 }
 
 .device-actions .ant-btn:hover :deep(.anticon) {
-  color: #40a9ff !important;
+  color: #1677ff !important;
 }
 
 .device-actions .ant-btn:disabled :deep(.anticon) {
-  color: rgba(255, 255, 255, 0.25) !important;
+  color: rgba(0, 0, 0, 0.25) !important;
   text-shadow: none;
 }
 
-.device-actions .ant-btn {
-  color: white;
-}
-
-.device-more-btn {
+.device-actions :deep(.ant-btn.ant-btn-text.device-more-btn) {
   width: 30px !important;
   height: 30px !important;
   border-radius: 8px !important;
-  background: rgba(64, 169, 255, 0.2) !important;
+  background: #e6f4ff !important;
+}
+
+.device-actions :deep(.ant-btn.ant-btn-dangerous),
+.device-actions :deep(.ant-btn.ant-btn-dangerous .anticon) {
+  color: #ff4d4f !important;
+}
+
+.rack-diagram-root.is-dark .device-actions {
+  background: rgba(31, 41, 55, 0.96) !important;
+  border-color: rgba(255, 255, 255, 0.14);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.36);
+}
+
+.rack-diagram-root.is-dark .device-actions :deep(.ant-btn.ant-btn-text),
+.rack-diagram-root.is-dark .device-actions :deep(.ant-btn.ant-btn-text .anticon) {
+  color: rgba(255, 255, 255, 0.82) !important;
+}
+
+.rack-diagram-root.is-dark .device-actions :deep(.ant-btn.ant-btn-text:hover),
+.rack-diagram-root.is-dark .device-actions :deep(.ant-btn.ant-btn-text:focus),
+.rack-diagram-root.is-dark .device-actions :deep(.ant-btn.ant-btn-text:focus-visible) {
+  color: #69b1ff !important;
+  background: rgba(105, 177, 255, 0.14) !important;
+}
+
+.rack-diagram-root.is-dark .device-actions :deep(.ant-btn.ant-btn-text.device-more-btn) {
+  background: rgba(64, 150, 255, 0.2) !important;
+}
+
+.rack-diagram-root.is-dark .device-actions :deep(.ant-btn.ant-btn-dangerous),
+.rack-diagram-root.is-dark .device-actions :deep(.ant-btn.ant-btn-dangerous .anticon) {
+  color: #ff7875 !important;
 }
 
 .device-more-btn :deep(.anticon) {
@@ -7556,5 +7689,27 @@ onBeforeUnmount(() => {
   color: #ffffff !important;
   fill: currentColor !important;
   -webkit-text-fill-color: #ffffff !important;
+}
+
+/* Keep disabled primary actions visibly inactive in the dark theme. */
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary[disabled]),
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary.ant-btn-disabled),
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary[disabled]:hover),
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary.ant-btn-disabled:hover) {
+  background: #2a3038 !important;
+  border-color: #434a54 !important;
+  color: rgba(255, 255, 255, 0.35) !important;
+  box-shadow: none !important;
+}
+
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary[disabled] > span),
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary[disabled] .anticon),
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary[disabled] .anticon svg),
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary.ant-btn-disabled > span),
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary.ant-btn-disabled .anticon),
+.rack-diagram-root.is-dark .toolbar-container :deep(.ant-space-item .ant-btn-primary.ant-btn-disabled .anticon svg) {
+  color: rgba(255, 255, 255, 0.35) !important;
+  fill: currentColor !important;
+  -webkit-text-fill-color: rgba(255, 255, 255, 0.35) !important;
 }
 </style>

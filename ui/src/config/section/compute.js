@@ -76,6 +76,10 @@ const getFastCloneOperationTooltip = (record, store, selectedItems, fallbackLabe
   return disableDuringFastCloneFlatten(record, store, selectedItems) ? fastCloneOperationBlockedLabel : fallbackLabel
 }
 
+const getFastCloneOperationRunningTooltip = (record, store, selectedItems, fallbackLabel) => {
+  return disableDuringFastCloneFlattenRunning(record, store, selectedItems) ? fastCloneOperationBlockedLabel : fallbackLabel
+}
+
 const getBackupOperationTooltip = (record, store, selectedItems, fallbackLabel) => {
   return disableDuringBackup(record, store, selectedItems) ? backupOperationBlockedLabel : fallbackLabel
 }
@@ -198,6 +202,8 @@ export default {
           dataView: true,
           popup: true,
           show: (record) => { return record.vmtype !== 'sharedfsvm' },
+          disabled: disableDuringFastCloneFlatten,
+          tooltip: (record, store, selectedItems) => getFastCloneOperationTooltip(record, store, selectedItems, 'label.action.edit.instance'),
           component: shallowRef(defineAsyncComponent(() => import('@/views/compute/EditVM.vue')))
         },
         {
@@ -309,7 +315,8 @@ export default {
               (['Stopped'].includes(record.state) && (!['KVM', 'LXC'].includes(record.hypervisor) ||
               (record.hypervisor === 'KVM' && ['PowerFlex', 'Filesystem', 'NetworkFilesystem', 'SharedMountPoint'].includes(record.pooltype))))) && record.vmtype !== 'sharedfsvm')
           },
-          disabled: (record) => { return record.hostcontrolstate === 'Offline' && record.hypervisor === 'KVM' },
+          disabled: (record, store, selectedItems) => { return (record.hostcontrolstate === 'Offline' && record.hypervisor === 'KVM') || disableDuringFastCloneFlatten(record, store, selectedItems) },
+          tooltip: (record, store, selectedItems) => getFastCloneOperationTooltip(record, store, selectedItems, 'label.action.vmsnapshot.create'),
           mapping: {
             virtualmachineid: {
               value: (record, params) => { return record.id }
@@ -328,7 +335,8 @@ export default {
               ['Stopped', 'Destroyed'].includes(record.state) ||
               store.features.kvmsnapshotenabled)
           },
-          disabled: (record) => { return record.hostcontrolstate === 'Offline' && record.hypervisor === 'KVM' },
+          disabled: (record, store, selectedItems) => { return (record.hostcontrolstate === 'Offline' && record.hypervisor === 'KVM') || disableDuringFastCloneFlatten(record, store, selectedItems) },
+          tooltip: (record, store, selectedItems) => getFastCloneOperationTooltip(record, store, selectedItems, 'label.action.vmstoragesnapshot.create'),
           component: shallowRef(defineAsyncComponent(() => import('@/views/compute/CreateSnapshotWizard.vue')))
         },
         {
@@ -438,6 +446,8 @@ export default {
           dataView: true,
           args: ['affinitygroupids'],
           show: (record) => { return record.hypervisor !== 'External' && ['Stopped'].includes(record.state) && record.vmtype !== 'sharedfsvm' && record.vmtype !== 'cksnode' },
+          disabled: disableDuringFastCloneFlatten,
+          tooltip: (record, store, selectedItems) => getFastCloneOperationTooltip(record, store, selectedItems, 'label.change.affinity'),
           component: shallowRef(defineAsyncComponent(() => import('@/views/compute/ChangeAffinity'))),
           popup: true
         },
@@ -448,7 +458,8 @@ export default {
           docHelp: 'adminguide/virtual_machines.html#how-to-dynamically-scale-cpu-and-ram',
           dataView: true,
           show: (record) => { return record.hypervisor !== 'External' && (['Stopped'].includes(record.state) || (['Running'].includes(record.state) && record.hypervisor !== 'LXC')) && record.vmtype !== 'sharedfsvm' },
-          disabled: (record) => { return record.state === 'Running' && !record.isdynamicallyscalable },
+          disabled: (record, store, selectedItems) => { return (record.state === 'Running' && !record.isdynamicallyscalable) || disableDuringFastCloneFlatten(record, store, selectedItems) },
+          tooltip: (record, store, selectedItems) => getFastCloneOperationTooltip(record, store, selectedItems, 'label.scale.vm'),
           popup: true,
           component: shallowRef(defineAsyncComponent(() => import('@/views/compute/ScaleVM.vue')))
         },
@@ -461,10 +472,13 @@ export default {
           show: (record, store) => {
             return record.hypervisor !== 'External' && ['Running'].includes(record.state) && ['Admin'].includes(store.userInfo.roletype) && !record.kvdoinuse
           },
-          // disabled: (record) => {
-          //   return record.details && 'extraconfig-1' in record.details
-          // },
-          tooltip: (record) => {
+          disabled: (record, store, selectedItems) => {
+            return (record.details && 'extraconfig-1' in record.details) || disableDuringFastCloneFlatten(record, store, selectedItems)
+          },
+          tooltip: (record, store, selectedItems) => {
+            if (disableDuringFastCloneFlatten(record, store, selectedItems)) {
+              return fastCloneOperationBlockedLabel
+            }
             if (record.details && 'extraconfig-1' in record.details) {
               return 'label.enable.host'
             } else {
@@ -484,10 +498,13 @@ export default {
           show: (record, store) => {
             return record.hypervisor !== 'External' && ['Stopped'].includes(record.state) && ['Admin'].includes(store.userInfo.roletype) && !record.kvdoinuse
           },
-          disabled: (record) => {
-            return record.hostcontrolstate === 'Offline' || (record.details && 'extraconfig-1' in record.details)
+          disabled: (record, store, selectedItems) => {
+            return record.hostcontrolstate === 'Offline' || (record.details && 'extraconfig-1' in record.details) || disableDuringFastCloneFlatten(record, store, selectedItems)
           },
-          tooltip: (record) => {
+          tooltip: (record, store, selectedItems) => {
+            if (disableDuringFastCloneFlatten(record, store, selectedItems)) {
+              return fastCloneOperationBlockedLabel
+            }
             if (record.hostcontrolstate === 'Offline' || (record.details && 'extraconfig-1' in record.details)) {
               return 'label.enable.host'
             } else {
@@ -622,8 +639,8 @@ export default {
           },
           popup: true,
           groupMap: (selection, values) => { return selection.map(x => { return { id: x, expunge: values.expunge } }) },
-          disabled: disableDuringFastCloneFlatten,
-          tooltip: (record, store, selectedItems) => getFastCloneOperationTooltip(record, store, selectedItems, 'label.action.destroy.instance'),
+          disabled: disableDuringFastCloneFlattenRunning,
+          tooltip: (record, store, selectedItems) => getFastCloneOperationRunningTooltip(record, store, selectedItems, 'label.action.destroy.instance'),
           show: (record) => {
             var controlVm = []
             var genieVm = []
