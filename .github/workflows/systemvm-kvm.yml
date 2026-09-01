@@ -41,6 +41,10 @@ on:
         required: false
         default: ''
         type: string
+    secrets:
+      storage_runtime_signing_private_key:
+        description: Optional Ed25519 private key for release runtime bundles
+        required: false
 
 permissions:
   contents: read
@@ -60,12 +64,31 @@ jobs:
       SYSTEMVM_ARTIFACT_NAME: ${{ inputs.artifact_name }}
       SYSTEMVM_RELEASE_DISPLAY_VERSION: ${{ inputs.release_display_version }}
       SYSTEMVM_ISO_CACHE: ${{ github.workspace }}/.cache/systemvm
+      STORAGE_RUNTIME_SIGNING_KEY_ID: ablestack-runtime-release
 
     steps:
       - uses: actions/checkout@v6
         with:
           ref: ${{ env.SYSTEMVM_REF }}
           fetch-depth: 0
+
+      - name: Prepare Storage Service runtime signing key
+        env:
+          STORAGE_RUNTIME_SIGNING_PRIVATE_KEY: ${{ secrets.storage_runtime_signing_private_key }}
+        run: |
+          key_dir="$RUNNER_TEMP/storage-runtime-signing"
+          mkdir -p "$key_dir" systemvm/debian/etc/ablestack-storage/runtime-trusted-keys
+          private_key="$key_dir/private.pem"
+          if [ -n "$STORAGE_RUNTIME_SIGNING_PRIVATE_KEY" ]; then
+            printf '%s' "$STORAGE_RUNTIME_SIGNING_PRIVATE_KEY" > "$private_key"
+          else
+            openssl genpkey -algorithm ED25519 -out "$private_key"
+            echo "::warning::Using an ephemeral CI key; configure storage_runtime_signing_private_key for release publication"
+          fi
+          chmod 600 "$private_key"
+          openssl pkey -in "$private_key" -pubout \
+            -out "systemvm/debian/etc/ablestack-storage/runtime-trusted-keys/${STORAGE_RUNTIME_SIGNING_KEY_ID}.pem"
+          echo "STORAGE_RUNTIME_SIGNING_PRIVATE_KEY_FILE=$private_key" >> "$GITHUB_ENV"
 
       - name: Restore Debian installer ISO cache
         uses: actions/cache@v4
@@ -239,6 +262,42 @@ jobs:
             echo "- Architecture: \`x86_64\`"
             echo "- Format: \`qcow2.bz2\`"
             echo "- Image: \`$image\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Build signed Storage Service runtime bundle
+        env:
+          ABLESTACK_STORAGE_RUNTIME_BUILD_COMMIT: ${{ github.sha }}
+          ABLESTACK_STORAGE_RUNTIME_BUILD_TIME: ${{ inputs.release_display_version }}
+        run: |
+          runtime_version="${SYSTEMVM_VERSION}-${SYSTEMVM_BUILD_NUMBER}"
+          runtime_dir="dist/systemvm-kvm/release/storage-runtime"
+          tools/build/build-storage-runtime-bundle.sh \
+            --version "$runtime_version" \
+            --private-key "$STORAGE_RUNTIME_SIGNING_PRIVATE_KEY_FILE" \
+            --key-id "$STORAGE_RUNTIME_SIGNING_KEY_ID" \
+            --output-dir "$runtime_dir"
+          (cd "$runtime_dir" && sha256sum -c SHA256SUMS)
+          openssl pkeyutl -verify -pubin \
+            -inkey "systemvm/debian/etc/ablestack-storage/runtime-trusted-keys/${STORAGE_RUNTIME_SIGNING_KEY_ID}.pem" \
+            -sigfile "$runtime_dir/manifest.sig" -rawin -in "$runtime_dir/manifest.json"
+          runtime_prefix="ablestack-storage-runtime-${runtime_version}"
+          mv "$runtime_dir/manifest.json" "$runtime_dir/${runtime_prefix}.manifest.json"
+          mv "$runtime_dir/manifest.sig" "$runtime_dir/${runtime_prefix}.manifest.sig"
+          cp "systemvm/debian/etc/ablestack-storage/runtime-trusted-keys/${STORAGE_RUNTIME_SIGNING_KEY_ID}.pem" \
+            "$runtime_dir/${STORAGE_RUNTIME_SIGNING_KEY_ID}.pem"
+          (
+            cd "$runtime_dir"
+            rm -f SHA256SUMS
+            sha256sum \
+              "${runtime_prefix}.tar.gz" \
+              "${runtime_prefix}.manifest.json" \
+              "${runtime_prefix}.manifest.sig" \
+              "${STORAGE_RUNTIME_SIGNING_KEY_ID}.pem" \
+              > "${runtime_prefix}.SHA256SUMS"
+          )
+          {
+            echo "- Runtime bundle: \`ablestack-storage-runtime-${runtime_version}.tar.gz\`"
+            echo "- Runtime signing key: \`${STORAGE_RUNTIME_SIGNING_KEY_ID}\`"
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload KVM System VM build outputs

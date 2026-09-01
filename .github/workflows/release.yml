@@ -283,6 +283,7 @@ jobs:
       - prepare-source-release
       - validate-build
       - validate-ui
+      - build-systemvm-kvm
     uses: ./.github/workflows/rocky97-rpm.yml
     with:
       ref: ${{ needs.prepare-source-release.outputs.source_commit_sha }}
@@ -298,6 +299,8 @@ jobs:
       templates: kvm
       node_version: ${{ inputs.node_version }}
       artifact_name: ${{ needs.metadata.outputs.rpm_artifact_name }}
+      storage_runtime_public_key_artifact: ${{ needs.metadata.outputs.systemvm_artifact_name }}
+      storage_runtime_signing_key_id: ablestack-runtime-release
 
   build-systemvm-kvm:
     needs:
@@ -305,6 +308,7 @@ jobs:
       - prepare-source-release
       - validate-build
     uses: ./.github/workflows/systemvm-kvm.yml
+    secrets: inherit
     with:
       ref: ${{ needs.prepare-source-release.outputs.source_commit_sha }}
       version: ${{ needs.metadata.outputs.package_version }}
@@ -351,7 +355,8 @@ jobs:
           find download/metadata -type f -exec cp {} release-assets/ \;
           find download/rpm -type f -exec cp {} release-assets/ \;
           find download/systemvm -type f \
-            \( -name '*.qcow2.bz2' -o -name 'SYSTEMVM-*' \) \
+            \( -name '*.qcow2.bz2' -o -name 'SYSTEMVM-*' \
+               -o -name 'ablestack-storage-runtime-*' -o -name 'ablestack-runtime-*.pem' \) \
             -exec cp {} release-assets/ \;
           (
             cd release-assets

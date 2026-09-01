@@ -17,6 +17,13 @@
 
 package org.apache.cloudstack.storage.dataservice;
 
+import org.apache.cloudstack.api.command.admin.storage.dataservice.GetStorageServiceRuntimeUpgradeCapabilitiesCmd;
+import org.apache.cloudstack.api.command.admin.storage.dataservice.ListStorageServiceRuntimeBundlesCmd;
+import org.apache.cloudstack.api.command.admin.storage.dataservice.ListStorageServiceRuntimeUpgradesCmd;
+import org.apache.cloudstack.api.command.admin.storage.dataservice.PreflightStorageServiceRuntimeUpgradeCmd;
+import org.apache.cloudstack.api.command.admin.storage.dataservice.RegisterStorageServiceRuntimeBundleCmd;
+import org.apache.cloudstack.api.command.admin.storage.dataservice.RollbackStorageServiceRuntimeUpgradeCmd;
+import org.apache.cloudstack.api.command.admin.storage.dataservice.UpgradeStorageServiceRuntimeCmd;
 import org.apache.cloudstack.api.command.user.storage.dataservice.AttachStorageVolumeToFileShareCmd;
 import org.apache.cloudstack.api.command.user.storage.dataservice.CreateStorageNfsAclCmd;
 import org.apache.cloudstack.api.command.user.storage.dataservice.CreateStorageNfsExportCmd;
@@ -80,6 +87,9 @@ import org.apache.cloudstack.api.response.StorageFileShareResponse;
 import org.apache.cloudstack.api.response.StorageServiceInstanceResponse;
 import org.apache.cloudstack.api.response.StorageServiceProtocolResponse;
 import org.apache.cloudstack.api.response.StorageServiceRuntimeResponse;
+import org.apache.cloudstack.api.response.StorageServiceRuntimeBundleResponse;
+import org.apache.cloudstack.api.response.StorageServiceRuntimeCapabilityResponse;
+import org.apache.cloudstack.api.response.StorageServiceRuntimeUpgradeResponse;
 import org.apache.cloudstack.api.response.StorageSmbShareResponse;
 
 public interface StorageService {
@@ -190,4 +200,18 @@ public interface StorageService {
     boolean deleteStorageNvmeOfHostAcl(DeleteStorageNvmeOfHostAclCmd cmd);
 
     ListResponse<StorageAccessRuleResponse> listStorageNvmeOfHostAcls(ListStorageNvmeOfHostAclsCmd cmd);
+
+    StorageServiceRuntimeBundleResponse registerStorageServiceRuntimeBundle(RegisterStorageServiceRuntimeBundleCmd cmd);
+
+    ListResponse<StorageServiceRuntimeBundleResponse> listStorageServiceRuntimeBundles(ListStorageServiceRuntimeBundlesCmd cmd);
+
+    StorageServiceRuntimeCapabilityResponse getStorageServiceRuntimeUpgradeCapabilities(GetStorageServiceRuntimeUpgradeCapabilitiesCmd cmd);
+
+    StorageServiceRuntimeUpgradeResponse preflightStorageServiceRuntimeUpgrade(PreflightStorageServiceRuntimeUpgradeCmd cmd);
+
+    StorageServiceRuntimeUpgradeResponse upgradeStorageServiceRuntime(UpgradeStorageServiceRuntimeCmd cmd);
+
+    ListResponse<StorageServiceRuntimeUpgradeResponse> listStorageServiceRuntimeUpgrades(ListStorageServiceRuntimeUpgradesCmd cmd);
+
+    StorageServiceRuntimeUpgradeResponse rollbackStorageServiceRuntimeUpgrade(RollbackStorageServiceRuntimeUpgradeCmd cmd);
 }

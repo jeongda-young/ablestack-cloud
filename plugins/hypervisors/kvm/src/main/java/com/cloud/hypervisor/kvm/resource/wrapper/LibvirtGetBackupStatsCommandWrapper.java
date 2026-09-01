@@ -46,7 +46,8 @@ public class LibvirtGetBackupStatsCommandWrapper extends CommandWrapper<GetBacku
                 "-o", "stats",
                 "-t", backupRepoType,
                 "-s", backupRepoAddress,
-                "-m", mountOptions
+                "-m", mountOptions,
+                "-w", String.valueOf(command.getMountTimeout())
         });
 
         Pair<Integer, String> result = Script.executePipedCommands(commands, libvirtComputingResource.getCmdsTimeout());

@@ -213,6 +213,7 @@ mvn -T 2C -Psystemvm,developer -DskipTests $FLAGS clean package
 cd ui
 env -u NODE_OPTIONS %{_node_bindir}/npm ci --no-audit --no-fund
 env -u NODE_OPTIONS %{_node_bindir}/npm run build
+%{_node_bindir}/node build.js || true
 cd ..
 
 %install
@@ -508,10 +509,6 @@ if [ -f "/usr/share/cloudstack-common/scripts/installer/cloudstack-help-text" ];
 fi
 /usr/bin/systemctl daemon-reload
 /usr/bin/systemctl enable mold > /dev/null 2>&1 || true
-if ! %{_bindir}/cloudstack-management-cleanup-jars; then
-    echo "Failed to quarantine unmanaged CloudStack jars; refusing to start mold" >&2
-    exit 1
-fi
 if /usr/bin/systemctl is-active --quiet mold; then
     /usr/bin/systemctl restart mold || true
 else

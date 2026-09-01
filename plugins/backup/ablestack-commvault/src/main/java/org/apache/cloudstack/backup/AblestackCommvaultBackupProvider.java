@@ -149,6 +149,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
     private static final int BASE_MT = 89;
     private static final Pattern VERSION_PATTERN = Pattern.compile("^(\\d+)\\s*SP\\s*(\\d+)(?:\\.(\\d+))?$", Pattern.CASE_INSENSITIVE);
     private static final long STAGE_SPACE_BUFFER_BYTES = 10L * 1024L * 1024L * 1024L;
+    private static final int INCREMENTAL_BACKUP_CAPACITY_ESTIMATE_PERCENT = 10;
     private static final long BACKING_UP_SYNC_GRACE_PERIOD_MS = 24L * 60L * 60L * 1000L;
 
     public ConfigKey<String> CommvaultUrl = new ConfigKey<>("Advanced", String.class,
@@ -1745,7 +1746,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
     }
 
     private void validateBackupStageCapacity(HostVO stageHost, String stageRootPath, List<VolumeVO> vmVolumes, String vmName, String backupType, String backupEngine) {
-        long requiredBytes = estimateRequiredStageBytesForBackup(vmVolumes);
+        long requiredBytes = estimateRequiredStageBytesForBackup(vmVolumes, backupType);
         long bufferBytes = Math.max(STAGE_SPACE_BUFFER_BYTES, requiredBytes / 5L);
         long minimumAvailableBytes = requiredBytes + bufferBytes;
         long availableBytes = getAvailableBytesOnHostPath(stageHost, stageRootPath);
@@ -1760,6 +1761,21 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
     }
 
     private long estimateRequiredStageBytesForBackup(List<VolumeVO> vmVolumes) {
+        if (CollectionUtils.isEmpty(vmVolumes)) {
+            return 0L;
+        }
+        return estimateReadyVolumeBytes(vmVolumes);
+    }
+
+    private long estimateRequiredStageBytesForBackup(List<VolumeVO> vmVolumes, String backupType) {
+        long readyVolumeBytes = estimateRequiredStageBytesForBackup(vmVolumes);
+        if (BACKUP_TYPE_INCREMENTAL.equalsIgnoreCase(backupType)) {
+            return Math.max(1L, readyVolumeBytes * INCREMENTAL_BACKUP_CAPACITY_ESTIMATE_PERCENT / 100L);
+        }
+        return readyVolumeBytes;
+    }
+
+    private long estimateReadyVolumeBytes(List<VolumeVO> vmVolumes) {
         if (CollectionUtils.isEmpty(vmVolumes)) {
             return 0L;
         }

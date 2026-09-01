@@ -41,6 +41,7 @@ public class AblestackNasTakeBackupCommand extends Command {
     private Boolean quiesce;
     @LogLevel(LogLevel.Log4jLevel.Off)
     private String mountOptions;
+    private Integer mountTimeout;
 
     public AblestackNasTakeBackupCommand(String vmName, String backupPath) {
         super();
@@ -126,6 +127,14 @@ public class AblestackNasTakeBackupCommand extends Command {
 
     public void setMountOptions(String mountOptions) {
         this.mountOptions = mountOptions;
+    }
+
+    public Integer getMountTimeout() {
+        return this.mountTimeout == null ? 0 : this.mountTimeout;
+    }
+
+    public void setMountTimeout(Integer mountTimeout) {
+        this.mountTimeout = mountTimeout;
     }
 
     public List<PrimaryDataStoreTO> getVolumePools() {

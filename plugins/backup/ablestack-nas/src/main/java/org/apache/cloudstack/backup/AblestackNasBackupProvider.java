@@ -118,12 +118,13 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
     private static final String MISSING_PARENT_QCOW2_BITMAP_ERROR = "Parent qcow2 bitmap";
     private static final String BACKUP_TRACE = "[ABLESTACK_NAS_BACKUP_TRACE]";
     private static final long BACKUP_REPOSITORY_SPACE_BUFFER_BYTES = 10L * 1024L * 1024L * 1024L;
+    private static final int INCREMENTAL_BACKUP_CAPACITY_ESTIMATE_PERCENT = 10;
     private static final long STALE_BACKUP_THRESHOLD_MS = TimeUnit.DAYS.toMillis(1);
 
     ConfigKey<Integer> NASBackupRestoreMountTimeout = new ConfigKey<>("Advanced", Integer.class,
             "nas.backup.restore.mount.timeout",
             "60",
-            "Timeout in seconds after which backup repository mount for restore fails.",
+            "Timeout in seconds after which backup repository mount fails.",
             true,
             BackupFrameworkEnabled.key());
 
@@ -400,6 +401,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         command.setBackupRepoType(backupRepository.getType());
         command.setBackupRepoAddress(backupRepository.getAddress());
         command.setMountOptions(backupRepository.getMountOptions());
+        command.setMountTimeout(NASBackupRestoreMountTimeout.value());
         command.setQuiesce(quiesceVM);
 
         BackupAnswer answer;
@@ -1307,6 +1309,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
 
         AblestackDeleteBackupCommand command = new AblestackDeleteBackupCommand(backup.getExternalId(), backupRepository.getType(),
                 backupRepository.getAddress(), backupRepository.getMountOptions(), forced);
+        command.setMountTimeout(NASBackupRestoreMountTimeout.value());
         command.setBackupProvider("ablestack-nas");
         command.setVmName(vm != null ? vm.getInstanceName() : null);
         command.setCheckpointName(getBackupDetail(backup, DETAIL_CHECKPOINT_NAME));
@@ -1448,7 +1451,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
 
     private void validateBackupRepositoryCapacity(final Host host, final BackupRepository repository, final List<VolumeVO> vmVolumes,
             final String vmName, final String backupType, final String backupEngine) {
-        final long requiredBytes = estimateRequiredRepositoryBytesForBackup(vmVolumes);
+        final long requiredBytes = estimateRequiredRepositoryBytesForBackup(vmVolumes, backupType);
         final long bufferBytes = Math.max(BACKUP_REPOSITORY_SPACE_BUFFER_BYTES, requiredBytes / 5L);
         final long minimumAvailableBytes = requiredBytes + bufferBytes;
         final BackupStorageStatsAnswer stats = getBackupRepositoryStats(host, repository);
@@ -1472,6 +1475,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
             throw new CloudRuntimeException("Host and backup repository are required to query NAS backup repository capacity");
         }
         final GetBackupStorageStatsCommand command = new GetBackupStorageStatsCommand(repository.getType(), repository.getAddress(), repository.getMountOptions());
+        command.setMountTimeout(NASBackupRestoreMountTimeout.value());
         try {
             final BackupStorageStatsAnswer answer = (BackupStorageStatsAnswer) agentManager.send(host.getId(), command);
             if (answer == null || !answer.getResult()) {
@@ -1496,6 +1500,21 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         if (CollectionUtils.isEmpty(vmVolumes)) {
             return 0L;
         }
+        return estimateReadyVolumeBytes(vmVolumes);
+    }
+
+    private long estimateRequiredRepositoryBytesForBackup(final List<VolumeVO> vmVolumes, final String backupType) {
+        final long readyVolumeBytes = estimateRequiredRepositoryBytesForBackup(vmVolumes);
+        if (BACKUP_TYPE_INCREMENTAL.equalsIgnoreCase(backupType)) {
+            return Math.max(1L, readyVolumeBytes * INCREMENTAL_BACKUP_CAPACITY_ESTIMATE_PERCENT / 100L);
+        }
+        return readyVolumeBytes;
+    }
+
+    private long estimateReadyVolumeBytes(final List<VolumeVO> vmVolumes) {
+        if (CollectionUtils.isEmpty(vmVolumes)) {
+            return 0L;
+        }
         return vmVolumes.stream()
                 .filter(volume -> Volume.State.Ready.equals(volume.getState()))
                 .mapToLong(VolumeVO::getSize)
@@ -1513,6 +1532,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         }
         for (final BackupRepository repository : repositories) {
             GetBackupStorageStatsCommand command = new GetBackupStorageStatsCommand(repository.getType(), repository.getAddress(), repository.getMountOptions());
+            command.setMountTimeout(NASBackupRestoreMountTimeout.value());
             BackupStorageStatsAnswer answer;
             try {
                 answer = (BackupStorageStatsAnswer) agentManager.send(host.getId(), command);

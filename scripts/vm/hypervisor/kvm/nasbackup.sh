@@ -30,6 +30,7 @@ VM=""
 NAS_TYPE=""
 NAS_ADDRESS=""
 MOUNT_OPTS=""
+MOUNT_TIMEOUT=0
 BACKUP_DIR=""
 DISK_PATHS=""
 VOLUME_UUIDS=""
@@ -271,12 +272,22 @@ mount_operation() {
   if [ ${NAS_TYPE} == "cifs" ]; then
     MOUNT_OPTS="${MOUNT_OPTS},nobrl"
   fi
-  mount -t ${NAS_TYPE} ${NAS_ADDRESS} ${mount_point} $([[ ! -z "${MOUNT_OPTS}" ]] && echo -o ${MOUNT_OPTS}) 2>&1 | tee -a "$logFile"
-  if [ $? -eq 0 ]; then
-      log -ne "Successfully mounted ${NAS_TYPE} store"
+  log -ne "Mounting ${NAS_TYPE} store [${NAS_ADDRESS}] at [${mount_point}] with timeout [${MOUNT_TIMEOUT}]"
+  set +e
+  if [[ "$MOUNT_TIMEOUT" -gt 0 ]]; then
+    timeout -k 5s "${MOUNT_TIMEOUT}s" mount -t ${NAS_TYPE} ${NAS_ADDRESS} ${mount_point} $([[ ! -z "${MOUNT_OPTS}" ]] && echo -o ${MOUNT_OPTS}) 2>&1 | tee -a "$logFile"
   else
-      echo "Failed to mount ${NAS_TYPE} store"
-      exit 1
+    mount -t ${NAS_TYPE} ${NAS_ADDRESS} ${mount_point} $([[ ! -z "${MOUNT_OPTS}" ]] && echo -o ${MOUNT_OPTS}) 2>&1 | tee -a "$logFile"
+  fi
+  mount_status=${PIPESTATUS[0]}
+  set -e
+  if [ $mount_status -eq 0 ]; then
+      log -ne "Successfully mounted ${NAS_TYPE} store [${NAS_ADDRESS}] at [${mount_point}]"
+  else
+      log -ne "FAILED NAS mount type=[$NAS_TYPE] address=[$NAS_ADDRESS] mountPoint=[$mount_point] timeout=[$MOUNT_TIMEOUT] exitCode=[$mount_status]"
+      echo "Failed to mount ${NAS_TYPE} store at ${mount_point}"
+      rmdir "$mount_point" 2>>"$logFile" || { log "WARNING: rmdir of $mount_point failed after mount failure"; true; }
+      exit $mount_status
   fi
 }
 
@@ -295,7 +306,7 @@ cleanup() {
 
 function usage {
   echo ""
-  echo "Usage: $0 -o <operation> -v|--vm <domain name> -t <storage type> -s <storage address> -m <mount options> -p <backup path> -d <disks path> -q|--quiesce <true|false>"
+  echo "Usage: $0 -o <operation> -v|--vm <domain name> -t <storage type> -s <storage address> -m <mount options> -w <mount timeout seconds> -p <backup path> -d <disks path> -q|--quiesce <true|false>"
   echo ""
   exit 1
 }
@@ -324,6 +335,11 @@ while [[ $# -gt 0 ]]; do
       ;;
     -m|--mount)
       MOUNT_OPTS="$2"
+      shift
+      shift
+      ;;
+    -w|--mount-timeout)
+      MOUNT_TIMEOUT="$2"
       shift
       shift
       ;;

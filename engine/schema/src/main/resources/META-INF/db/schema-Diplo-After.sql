@@ -201,3 +201,60 @@ CREATE TABLE IF NOT EXISTS `cloud`.`storage_identity_domain` (
   KEY `idx_storage_identity_domain__instance_id` (`instance_id`),
   KEY `idx_storage_identity_domain__domain_name` (`domain_name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb3;
+
+-- BEGIN Storage Service runtime in-place upgrade (#911)
+CREATE TABLE IF NOT EXISTS `cloud`.`storage_service_runtime_bundle` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `uuid` varchar(40) NOT NULL,
+  `version` varchar(128) NOT NULL,
+  `runtime_abi_version` varchar(32) NOT NULL,
+  `desired_state_schema_version` varchar(32) NOT NULL,
+  `service_impact` varchar(32) NOT NULL,
+  `artifact_url` varchar(2048) NOT NULL,
+  `manifest_url` varchar(2048) NOT NULL,
+  `signature_url` varchar(2048) NOT NULL,
+  `artifact_size` bigint unsigned DEFAULT NULL,
+  `sha256` char(64) NOT NULL,
+  `manifest_sha256` char(64) NOT NULL,
+  `signing_key_id` varchar(128) NOT NULL,
+  `state` varchar(32) NOT NULL,
+  `created` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `removed` datetime DEFAULT NULL,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_storage_service_runtime_bundle__uuid` (`uuid`),
+  UNIQUE KEY `uk_storage_service_runtime_bundle__version` (`version`),
+  KEY `idx_storage_service_runtime_bundle__state` (`state`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS `cloud`.`storage_service_runtime_upgrade` (
+  `id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `uuid` varchar(40) NOT NULL,
+  `instance_id` bigint unsigned NOT NULL,
+  `bundle_id` bigint unsigned NOT NULL,
+  `previous_bundle_id` bigint unsigned DEFAULT NULL,
+  `state` varchar(32) NOT NULL,
+  `phase` varchar(64) NOT NULL,
+  `progress` int unsigned NOT NULL DEFAULT 0,
+  `transaction_id` varchar(128) NOT NULL,
+  `started` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `heartbeat` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  `completed` datetime DEFAULT NULL,
+  `preflight_json` mediumtext DEFAULT NULL,
+  `verification_json` mediumtext DEFAULT NULL,
+  `rollback_result_json` mediumtext DEFAULT NULL,
+  `error_code` varchar(128) DEFAULT NULL,
+  `error_message` varchar(1024) DEFAULT NULL,
+  `created_by` bigint unsigned DEFAULT NULL,
+  `created` datetime NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (`id`),
+  UNIQUE KEY `uk_storage_service_runtime_upgrade__uuid` (`uuid`),
+  UNIQUE KEY `uk_storage_service_runtime_upgrade__transaction_id` (`transaction_id`),
+  KEY `idx_storage_service_runtime_upgrade__instance_state` (`instance_id`, `state`),
+  KEY `idx_storage_service_runtime_upgrade__bundle_id` (`bundle_id`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CALL `cloud`.`IDEMPOTENT_ADD_COLUMN`('cloud.storage_service_instance', 'current_runtime_bundle_id', 'bigint unsigned DEFAULT NULL COMMENT "Current verified Storage Service runtime bundle"');
+CALL `cloud`.`IDEMPOTENT_ADD_COLUMN`('cloud.storage_service_instance', 'previous_runtime_bundle_id', 'bigint unsigned DEFAULT NULL COMMENT "Previous verified Storage Service runtime bundle"');
+CALL `cloud`.`IDEMPOTENT_ADD_COLUMN`('cloud.storage_service_instance', 'runtime_state', 'varchar(32) DEFAULT NULL COMMENT "Current Storage Service runtime state"');
+CALL `cloud`.`IDEMPOTENT_ADD_COLUMN`('cloud.storage_service_instance', 'runtime_verified_at', 'datetime DEFAULT NULL COMMENT "Last verified Storage Service runtime time"');
+-- END Storage Service runtime in-place upgrade (#911)

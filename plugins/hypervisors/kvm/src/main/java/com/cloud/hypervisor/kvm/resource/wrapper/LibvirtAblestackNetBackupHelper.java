@@ -118,7 +118,11 @@ class LibvirtAblestackNetBackupHelper {
                     resourceTimeoutMillis,
                     effectiveTimeoutMillis
             );
-            return Script.executePipedCommands(commands, effectiveTimeoutMillis);
+            Pair<Integer, String> result = Script.executePipedCommands(commands, effectiveTimeoutMillis);
+            if (result.first() != 0 && BackupExecutionMode.RUNNING.equals(executionMode)) {
+                resumeVmIfPaused(command.getVmName());
+            }
+            return result;
         } finally {
             cleanupParentCheckpointWorkspace(parentCheckpointWorkspace);
         }
@@ -258,7 +262,7 @@ class LibvirtAblestackNetBackupHelper {
                 LOGGER.error("{} phase=[BACKUP_BEGIN_FAILED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], reason=[{}]",
                         BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(), failureDetails);
                 LOGGER.error(failureDetails);
-                return new Pair<>(backupBeginResult.first(), failureDetails);
+                throw new IOException(failureDetails);
             }
             LOGGER.info("{} phase=[BACKUP_JOB_STARTED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}]",
                     BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
@@ -290,6 +294,9 @@ class LibvirtAblestackNetBackupHelper {
             LOGGER.error("{} phase=[STOPPED_BACKUP_FAILED], vm=[{}], dummyVm=[{}], backupType=[{}], checkpoint=[{}], elapsedMs=[{}], reason=[{}]",
                     BACKUP_TRACE, command.getVmName(), dummyVmName, command.getBackupType(), command.getCheckpointName(),
                     System.currentTimeMillis() - startedAt, e.getMessage(), e);
+            if (!cleanupStoppedBackupPath(dest)) {
+                return new Pair<>(EXIT_CLEANUP_FAILED, String.format("Backup cleanup failed after stopped VM NetBackup backup failure: %s", e.getMessage()));
+            }
             return new Pair<>(1, e.getMessage());
         } finally {
             cleanupParentCheckpointWorkspace(parentCheckpointWorkspace);
@@ -315,6 +322,22 @@ class LibvirtAblestackNetBackupHelper {
                 StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
         Files.move(tmpMarker, completeMarker, java.nio.file.StandardCopyOption.REPLACE_EXISTING);
         Files.deleteIfExists(dest.resolve(STAGING_IN_PROGRESS_MARKER));
+    }
+
+    private boolean cleanupStoppedBackupPath(Path dest) {
+        if (dest == null || !Files.exists(dest)) {
+            return true;
+        }
+        try (var stream = Files.walk(dest)) {
+            List<Path> paths = stream.sorted(Comparator.reverseOrder()).collect(Collectors.toList());
+            for (Path path : paths) {
+                Files.deleteIfExists(path);
+            }
+            return true;
+        } catch (IOException e) {
+            LOGGER.warn("Failed to cleanup stopped VM NetBackup backup path [{}]: {}", dest, e.getMessage(), e);
+            return false;
+        }
     }
 
     private Path ensureParentCheckpointMaterialized(AblestackNetBackupTakeBackupCommand command) {
@@ -593,6 +616,19 @@ class LibvirtAblestackNetBackupHelper {
         Script.runSimpleBashScriptForExitValue(String.format(
                 "virsh -c qemu:///system undefine %s --nvram > /dev/null 2>&1 || virsh -c qemu:///system undefine %s > /dev/null 2>&1 || true",
                 shellQuote(dummyVmName), shellQuote(dummyVmName)));
+    }
+
+    private void resumeVmIfPaused(String vmName) {
+        if (vmName == null || vmName.isBlank()) {
+            return;
+        }
+        String state = Script.runSimpleBashScriptWithFullResult(
+                String.format("virsh -c qemu:///system domstate %s 2>/dev/null", shellQuote(vmName)), 10000);
+        if (state != null && "paused".equalsIgnoreCase(state.trim())) {
+            LOGGER.warn("{} phase=[RESUME_PAUSED_VM], vm=[{}]", BACKUP_TRACE, vmName);
+            Script.runSimpleBashScriptForExitValue(String.format(
+                    "virsh -c qemu:///system resume %s > /dev/null 2>&1", shellQuote(vmName)));
+        }
     }
 
     private boolean isIncremental(AblestackNetBackupTakeBackupCommand command) {
