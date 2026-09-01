@@ -1352,7 +1352,7 @@
 import { ref, reactive, onMounted, computed, watch, onBeforeUnmount, nextTick, getCurrentInstance } from 'vue'
 import { message } from 'ant-design-vue'
 import html2canvas from 'html2canvas'
-import { api } from '@/api'
+import { getAPI } from '@/api'
 import { useRouter } from 'vue-router'
 import { useStore } from 'vuex'
 import RackListCardIcon from './components/RackListCardIcon.vue'
@@ -2249,7 +2249,7 @@ const zoneLoading = ref(false)
 const fetchZonesAndRackData = () => {
   zoneLoading.value = true // 필요시 템플릿에 스피너(Loading) 연동 가능
 
-  api('listZones', {}).then(json => {
+  getAPI('listZones', {}).then(json => {
     const listZones = json.listzonesresponse.zone
     if (listZones && listZones.length > 0) {
       // 'Edge' 타입을 제외한 Zone 목록 필터링
@@ -2281,7 +2281,7 @@ const fetchRackData = () => {
 
   loading.value = true
 
-  api('listRackLayouts', {
+  getAPI('listRackLayouts', {
     zoneid: currentZoneId.value,
     name: 'default'
   }).then(json => {
@@ -2333,7 +2333,7 @@ const saveRackData = () => {
   saving.value = true
   const jsonContent = JSON.stringify(parsedRacks.value)
 
-  return api('updateRackLayout', {}, 'POST', {
+  return getAPI('updateRackLayout', {}, 'POST', {
     zoneid: currentZoneId.value,
     name: 'default',
     content: jsonContent
@@ -3015,7 +3015,7 @@ const buildInventoryOptions = async () => {
   const options = []
 
   try {
-    const hostJson = await api('listHosts', { zoneid: currentZoneId.value, listall: true })
+    const hostJson = await getAPI('listHosts', { zoneid: currentZoneId.value, listall: true })
     const hosts = hostJson?.listhostsresponse?.host || []
     hosts.forEach(h => {
       const name = h.name || h.hostname || h.id
@@ -3289,7 +3289,7 @@ const onDropRackFrame = (targetRIndex, event) => {
 const fetchHostById = async (hostId) => {
   if (!hostId) return null
   if (hostCache.value[hostId]) return hostCache.value[hostId]
-  const json = await api('listHosts', { id: hostId })
+  const json = await getAPI('listHosts', { id: hostId })
   const host = json?.listhostsresponse?.host?.[0] || null
   if (host) hostCache.value[hostId] = host
   return host
@@ -3368,12 +3368,12 @@ const openLinkedHostVmModal = async (item) => {
     }
 
     // 호스트 상세 메뉴의 VM 목록 호출과 동일한 파라미터를 사용한다.
-    const directJson = await api('listVirtualMachines', hostVmListParams)
+    const directJson = await getAPI('listVirtualMachines', hostVmListParams)
     let vms = readVmList(directJson).filter(isActiveHostVm)
 
     // 2) hostid 조회가 비면 전체에서 host 매핑 기준으로 재탐색
     if (!vms.length) {
-      const allJson = await api('listVirtualMachines', {
+      const allJson = await getAPI('listVirtualMachines', {
         listall: true,
         details: hostVmListParams.details,
         isvnf: false,
@@ -3433,7 +3433,7 @@ const resolveVmOsTypeNames = async (vms) => {
 
   if (unresolvedIds.length) {
     try {
-      const json = await api('listOsTypes', { listall: true })
+      const json = await getAPI('listOsTypes', { listall: true })
       const osTypes = json?.listostypesresponse?.ostype || []
       osTypes.forEach(osType => {
         if (osType?.id) {
