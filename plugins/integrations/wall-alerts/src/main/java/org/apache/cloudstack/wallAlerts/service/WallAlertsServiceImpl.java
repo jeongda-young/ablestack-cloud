@@ -44,6 +44,7 @@ import org.apache.cloudstack.wallAlerts.client.WallApiClient;
 import org.apache.cloudstack.wallAlerts.client.WallApiClient.GrafanaRulesResponse;
 import org.apache.cloudstack.wallAlerts.client.WallApiClient.RulerRulesResponse;
 import org.apache.cloudstack.wallAlerts.config.WallConfigKeys;
+import org.apache.cloudstack.wallAlerts.exception.WallApiException;
 import org.apache.cloudstack.wallAlerts.model.SilenceDto;
 import org.apache.cloudstack.wallAlerts.model.SilenceMatcherDto;
 import org.apache.cloudstack.wallAlerts.mapper.WallMappers;
@@ -195,6 +196,9 @@ public class WallAlertsServiceImpl extends ManagerBase implements WallAlertsServ
             } else {
                 // ===== 새로 빌드(정렬 없음, 기존 흐름 유지) =====
                 final GrafanaRulesResponse rulesNow = wallApiClient.fetchRules();
+                if (rulesNow == null || rulesNow.data == null || rulesNow.data.groups == null) {
+                    throw new WallApiException("Wall Rules API response is missing data.groups");
+                }
                 final RulerRulesResponse rulerAll = wallApiClient.fetchRulerRules();
                 final ThresholdIndex tIndex = buildThresholdIndexSafe();
 
@@ -643,6 +647,13 @@ public class WallAlertsServiceImpl extends ManagerBase implements WallAlertsServ
         } else {
             ok = wallApiClient.updateRuleThreshold(m.namespace, m.group, m.title, op, newThreshold, null);
         }
+
+        if (!ok) {
+            throw new ServerApiException(ApiErrorCode.INTERNAL_ERROR,
+                    "임계값 업데이트에 실패했습니다. Wall Ruler API 응답 로그를 확인해 주세요.");
+        }
+
+        invalidateRulesCache();
 
         final WallAlertRuleResponse resp = new WallAlertRuleResponse();
         resp.setObjectName("wallalertrule");
