@@ -70,7 +70,7 @@ final class LibvirtAblestackRbdRestoreHelper {
         } finally {
             if (temporaryImageCreated && rbdImageExists(storagePool, temporaryVolumePath, timeoutSeconds)) {
                 LOGGER.warn("{} phase=[RBD_TEMP_CLEANUP], temporaryVolume=[{}]", tracePrefix, temporaryVolumePath);
-                deleteRbdImageIfPresent(storagePool, temporaryVolumePath, timeoutSeconds);
+                deleteRbdImageIfPresent(tracePrefix, storagePool, temporaryVolumePath, timeoutSeconds);
             }
         }
     }
@@ -214,7 +214,7 @@ final class LibvirtAblestackRbdRestoreHelper {
                 return false;
             }
 
-            if (originalMovedAside && !deleteRbdImageIfPresent(storagePool, originalVolumePath, timeoutSeconds)) {
+            if (originalMovedAside && !deleteRbdImageIfPresent(tracePrefix, storagePool, originalVolumePath, timeoutSeconds)) {
                 LOGGER.warn("{} phase=[RBD_ORIGINAL_CLEANUP_FAILED], originalVolume=[{}]", tracePrefix, originalVolumePath);
             }
             LOGGER.info("{} phase=[RBD_TEMP_PROMOTED], targetVolume=[{}], temporaryVolume=[{}], originalVolume=[{}]",
@@ -236,7 +236,7 @@ final class LibvirtAblestackRbdRestoreHelper {
             return;
         }
         if (rbdImageExists(storagePool, targetVolumePath, timeoutSeconds)) {
-            deleteRbdImageIfPresent(storagePool, targetVolumePath, timeoutSeconds);
+            deleteRbdImageIfPresent(tracePrefix, storagePool, targetVolumePath, timeoutSeconds);
         }
         if (!renameRbdImage(storagePool, originalVolumePath, targetVolumePath, timeoutSeconds)) {
             LOGGER.error("{} phase=[RBD_ORIGINAL_ROLLBACK_FAILED], targetVolume=[{}], originalVolume=[{}]",
@@ -385,10 +385,55 @@ final class LibvirtAblestackRbdRestoreHelper {
     }
 
     private static boolean deleteRbdImageIfPresent(final KVMStoragePool storagePool, final String volumePath, final int timeoutSeconds) {
+        return deleteRbdImageIfPresent(null, storagePool, volumePath, timeoutSeconds);
+    }
+
+    private static boolean deleteRbdImageIfPresent(final String tracePrefix, final KVMStoragePool storagePool, final String volumePath, final int timeoutSeconds) {
         if (!rbdImageExists(storagePool, volumePath, timeoutSeconds)) {
             return true;
         }
-        return executeBashCommandWithResult(buildRbdCommand(storagePool, "rm", volumePath), timeoutSeconds, "Remove RBD image").exitCode == 0;
+        if (rbdImageHasSnapshots(storagePool, volumePath, timeoutSeconds) && !purgeRbdImageSnapshots(tracePrefix, storagePool, volumePath, timeoutSeconds)) {
+            return false;
+        }
+        CommandExecutionResult result = executeBashCommandWithResult(buildRbdCommand(storagePool, "rm", volumePath), timeoutSeconds, "Remove RBD image");
+        if (result.exitCode == 0) {
+            return true;
+        }
+        if (StringUtils.isNotBlank(tracePrefix)) {
+            LOGGER.warn("{} phase=[RBD_IMAGE_DELETE_RETRY_WITH_SNAPSHOT_PURGE], image=[{}], exitCode=[{}], output=[{}]",
+                    tracePrefix, volumePath, result.exitCode, result.output);
+        }
+        if (!purgeRbdImageSnapshots(tracePrefix, storagePool, volumePath, timeoutSeconds)) {
+            return false;
+        }
+        result = executeBashCommandWithResult(buildRbdCommand(storagePool, "rm", volumePath), timeoutSeconds, "Remove RBD image after snapshot purge");
+        if (result.exitCode != 0 && StringUtils.isNotBlank(tracePrefix)) {
+            LOGGER.warn("{} phase=[RBD_IMAGE_DELETE_AFTER_PURGE_FAILED], image=[{}], exitCode=[{}], output=[{}]",
+                    tracePrefix, volumePath, result.exitCode, result.output);
+        }
+        return result.exitCode == 0;
+    }
+
+    private static boolean rbdImageHasSnapshots(final KVMStoragePool storagePool, final String volumePath, final int timeoutSeconds) {
+        final String command = buildRbdCommand(storagePool, "snap", "ls", volumePath) + " | awk 'NR>1 {found=1} END {exit found ? 0 : 1}'";
+        return Script.runSimpleBashScriptForExitValue(command, timeoutSeconds * 1000, false) == 0;
+    }
+
+    private static boolean purgeRbdImageSnapshots(final String tracePrefix, final KVMStoragePool storagePool, final String volumePath,
+            final int timeoutSeconds) {
+        if (StringUtils.isNotBlank(tracePrefix)) {
+            LOGGER.info("{} phase=[RBD_IMAGE_SNAPSHOT_PURGE], image=[{}]", tracePrefix, volumePath);
+        }
+        final CommandExecutionResult purgeResult = executeBashCommandWithResult(buildRbdCommand(storagePool, "snap", "purge", volumePath),
+                timeoutSeconds, "Purge RBD image snapshots before remove");
+        if (purgeResult.exitCode != 0) {
+            if (StringUtils.isNotBlank(tracePrefix)) {
+                LOGGER.warn("{} phase=[RBD_IMAGE_SNAPSHOT_PURGE_FAILED], image=[{}], exitCode=[{}], output=[{}]",
+                        tracePrefix, volumePath, purgeResult.exitCode, purgeResult.output);
+            }
+            return false;
+        }
+        return true;
     }
 
     private static String buildTemporaryRbdImageName(final String volumePath) {
