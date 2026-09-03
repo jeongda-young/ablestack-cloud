@@ -217,8 +217,9 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
 
     public ConfigKey<Boolean> AblestackVeeamSyncDeleteRbdDiff = new ConfigKey<>("Advanced", Boolean.class,
             "backup.plugin.ablestack-veeam.sync.delete.rbd.diff", "true",
-            "Deprecated (always on, NetBackup parity): BackupSync removes Mold RBD_DIFF backups when the "
-                    + "matching Veeam restore point is deleted (Remove from Disk). Mold UI cannot delete Veeam backups.",
+            "When true (default): BackupSync removes Mold RBD_DIFF rows when the matching Veeam restore "
+                    + "point is gone or the Agent Disk catalog is trusted-empty (Remove from Disk). "
+                    + "Unstamped RBD rows are only removed on trusted-empty catalog, not on partial time-match misses.",
             true, ConfigKey.Scope.Zone, BackupFrameworkEnabled.key());
 
     @Inject
@@ -2010,7 +2011,9 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     private void syncMoldBackupsWithVeeamCatalog(final VirtualMachine vm) {
         final List<Backup> moldBackups = backupDao.listByVmId(vm.getDataCenterId(), vm.getId()).stream()
                 .filter(this::isVeeamBackup)
-                .filter(backup -> Backup.Status.BackedUp.equals(backup.getStatus()))
+                .filter(backup -> Backup.Status.BackedUp.equals(backup.getStatus())
+                        || Backup.Status.Failed.equals(backup.getStatus())
+                        || Backup.Status.Error.equals(backup.getStatus()))
                 .collect(Collectors.toList());
         if (moldBackups.isEmpty()) {
             return;
@@ -2033,8 +2036,10 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         final Map<String, Backup.RestorePoint> byId = new LinkedHashMap<>();
         boolean anySuccess = false;
         boolean hostQuerySucceeded = false;
+        boolean jobOrHostQuerySucceeded = false;
         Exception lastError = null;
         final Set<String> hostNames = getVeeamCatalogHostNames(vm);
+        final Set<String> jobNames = new LinkedHashSet<>();
         final Set<String> queryNames = new LinkedHashSet<>();
         addIfNotBlank(queryNames, getVeeamSourceVmName(vm));
         addIfNotBlank(queryNames, vm.getInstanceName());
@@ -2042,7 +2047,9 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         // Agent file-level jobs are keyed by Job name (e.g. ablecube3), not guest VM name.
         for (final Backup backup : moldBackups) {
             loadBackupDetailsIfNeeded(backup);
-            addIfNotBlank(queryNames, getBackupDetail(backup, DETAIL_VEEAM_JOB_NAME));
+            final String jobName = getBackupDetail(backup, DETAIL_VEEAM_JOB_NAME);
+            addIfNotBlank(queryNames, jobName);
+            addIfNotBlank(jobNames, jobName);
             addIfNotBlank(queryNames, getBackupDetail(backup, DETAIL_POLICY_NAME));
         }
 
@@ -2058,10 +2065,14 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                         syncedRepository = true;
                     }
                 }
-                final List<Backup.RestorePoint> points = listVeeamRestorePointsForObjectName(vm.getDataCenterId(), name);
+                final List<Backup.RestorePoint> points = listVeeamRestorePointsForObjectName(vm.getDataCenterId(), name, true);
                 anySuccess = true;
                 if (hostNames.contains(name)) {
                     hostQuerySucceeded = true;
+                    jobOrHostQuerySucceeded = true;
+                }
+                if (jobNames.stream().anyMatch(job -> normalizeVeeamJobName(job).equals(normalizeVeeamJobName(name)))) {
+                    jobOrHostQuerySucceeded = true;
                 }
                 for (final Backup.RestorePoint restorePoint : points) {
                     if (restorePoint == null || StringUtils.isBlank(restorePoint.getId())) {
@@ -2077,19 +2088,24 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         if (!anySuccess) {
             throw new CloudRuntimeException(String.format("Unable to query Veeam restore points for VM [%s]", vm.getInstanceName()), lastError);
         }
-        return new VeeamCatalogQueryResult(new ArrayList<>(byId.values()), hostQuerySucceeded);
+        return new VeeamCatalogQueryResult(new ArrayList<>(byId.values()), hostQuerySucceeded, jobOrHostQuerySucceeded);
     }
 
     private List<Backup.RestorePoint> listVeeamRestorePointsForObjectName(final Long zoneId, final String objectName) {
+        return listVeeamRestorePointsForObjectName(zoneId, objectName, false);
+    }
+
+    private List<Backup.RestorePoint> listVeeamRestorePointsForObjectName(final Long zoneId, final String objectName,
+            final boolean acceptEmptyRest) {
         if (StringUtils.isBlank(objectName)) {
             return Collections.emptyList();
         }
         if (Boolean.TRUE.equals(AblestackVeeamUseRestApi.valueIn(zoneId))) {
             try {
                 final List<Backup.RestorePoint> restPoints = getRestClient(zoneId).listRestorePointsForVm(objectName);
-                // Agent file-level RPs often missing from objectRestorePoints — empty is not success.
-                if (CollectionUtils.isNotEmpty(restPoints)) {
-                    return restPoints;
+                // Catalog-delete path: successful empty REST means Remove-from-Disk (avoid slow SSH hang).
+                if (CollectionUtils.isNotEmpty(restPoints) || acceptEmptyRest) {
+                    return restPoints != null ? restPoints : Collections.emptyList();
                 }
                 LOG.warn("Veeam REST restore-point query for [{}] returned empty; falling back to SSH", objectName);
             } catch (final Exception restError) {
@@ -2233,6 +2249,13 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     }
 
     private void removeMoldBackupsForDeletedVeeamJobs(final VirtualMachine vm) {
+        // SSH Get-VBRJob inventory often hangs; with REST catalog sync, Remove-from-Disk is covered
+        // by restore-point matching. Skip job-name wipe in REST mode.
+        if (Boolean.TRUE.equals(AblestackVeeamUseRestApi.valueIn(vm.getDataCenterId()))) {
+            LOG.debug("Skipping Veeam job-delete sync for VM [{}]: REST mode uses restore-point catalog only",
+                    vm.getInstanceName());
+            return;
+        }
         final Set<String> liveJobs;
         try {
             liveJobs = listVeeamBackupJobNames(vm.getDataCenterId());
@@ -2317,16 +2340,29 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                 .collect(Collectors.toSet());
         final long now = System.currentTimeMillis();
         final Set<Long> toRemove = new LinkedHashSet<>();
+        final boolean syncDeleteRbd = Boolean.TRUE.equals(
+                AblestackVeeamSyncDeleteRbdDiff.valueIn(vm.getDataCenterId()));
 
         for (final Backup backup : moldBackups) {
             if (backup.getDate() != null && backup.getDate().getTime() > now - VEEAM_SYNC_DELETE_GRACE_MS) {
                 continue;
             }
             loadBackupDetailsIfNeeded(backup);
-            // Same as NetBackup catalog-delete: RBD_DIFF rows are removed when the Veeam RP is gone.
+            final boolean rbdDiff = BACKUP_ENGINE_RBD_DIFF.equalsIgnoreCase(
+                    getBackupDetail(backup, DETAIL_BACKUP_ENGINE));
+            // Stamped RP gone (incl. Remove-from-Disk of that point) → delete Mold row.
+            // RBD_DIFF respects backup.plugin.ablestack-veeam.sync.delete.rbd.diff.
             final String restorePointId = normalizeVeeamRestorePointId(getBackupDetail(backup, DETAIL_VEEAM_RESTORE_POINT_ID));
             if (StringUtils.isNotBlank(restorePointId)) {
-                if (!catalogIds.contains(restorePointId)) {
+                if (!catalogIds.contains(restorePointId) && (!rbdDiff || syncDeleteRbd)) {
+                    toRemove.add(backup.getId());
+                }
+                continue;
+            }
+            // RBD_DIFF without stamp: only clear on trusted-empty Disk (full Remove-from-Disk).
+            // Do not drop new Mold RBD rows just because Agent time-match missed a partial catalog.
+            if (rbdDiff) {
+                if (syncDeleteRbd && catalog.trustedEmptyCatalog() && backup.getDate() != null) {
                     toRemove.add(backup.getId());
                 }
                 continue;
@@ -2344,15 +2380,23 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                     matchedLiveRp = catalog.restorePoints.stream()
                             .anyMatch(rp -> restorePointMatchesBackupWindow(rp, backup));
                 }
-                // Empty catalog after a failed REST-only probe must not wipe Mold-native RBD/qcow2 rows.
-                if (!matchedLiveRp && CollectionUtils.isNotEmpty(catalog.restorePoints)) {
+                // Partial catalog: missing time-matched RP → delete file-level rows.
+                // Trusted empty catalog after Remove-from-Disk → delete file-level rows too.
+                if (!matchedLiveRp && (CollectionUtils.isNotEmpty(catalog.restorePoints) || catalog.trustedEmptyCatalog())) {
                     toRemove.add(backup.getId());
                 }
                 continue;
             }
-            if (catalog.hostQuerySucceeded && catalog.restorePoints.isEmpty()
-                    && backup.getDate() != null && backup.getDate().getTime() <= now - VEEAM_UNSTAMPED_DELETE_GRACE_MS) {
-                toRemove.add(backup.getId());
+            if (catalog.trustedEmptyCatalog()
+                    && backup.getDate() != null) {
+                // Failed/Error rows have no live RP to stamp — use short grace after Remove-from-Disk.
+                final long graceMs = (Backup.Status.Failed.equals(backup.getStatus())
+                        || Backup.Status.Error.equals(backup.getStatus()))
+                        ? VEEAM_SYNC_DELETE_GRACE_MS
+                        : VEEAM_UNSTAMPED_DELETE_GRACE_MS;
+                if (backup.getDate().getTime() <= now - graceMs) {
+                    toRemove.add(backup.getId());
+                }
             }
         }
 
@@ -2662,10 +2706,18 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     private static final class VeeamCatalogQueryResult {
         private final List<Backup.RestorePoint> restorePoints;
         private final boolean hostQuerySucceeded;
+        private final boolean jobOrHostQuerySucceeded;
 
-        private VeeamCatalogQueryResult(final List<Backup.RestorePoint> restorePoints, final boolean hostQuerySucceeded) {
+        private VeeamCatalogQueryResult(final List<Backup.RestorePoint> restorePoints, final boolean hostQuerySucceeded,
+                final boolean jobOrHostQuerySucceeded) {
             this.restorePoints = restorePoints != null ? restorePoints : Collections.emptyList();
             this.hostQuerySucceeded = hostQuerySucceeded;
+            this.jobOrHostQuerySucceeded = jobOrHostQuerySucceeded;
+        }
+
+        /** True when a host/job-scoped query succeeded and returned zero restore points (Remove from Disk). */
+        private boolean trustedEmptyCatalog() {
+            return restorePoints.isEmpty() && (hostQuerySucceeded || jobOrHostQuerySucceeded);
         }
     }
 

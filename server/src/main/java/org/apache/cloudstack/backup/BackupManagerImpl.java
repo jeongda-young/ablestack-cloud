@@ -1173,7 +1173,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     }
 
     @Override
-    @ActionEvent(eventType = EventTypes.EVENT_VM_BACKUP_CREATE, eventDescription = "creating Ablestack Veeam NAS backup", async = true)
+    @ActionEvent(eventType = EventTypes.EVENT_VM_BACKUP_CREATE, eventDescription = "creating Ablestack Veeam backup", async = true)
     public boolean createAblestackVeeamBackup(final CreateAblestackVeeamBackupCmd cmd, final Object job)
             throws ResourceAllocationException {
         final Long vmId = cmd.getVmId();

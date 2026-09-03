@@ -141,7 +141,7 @@ public class CreateAblestackVeeamBackupCmd extends BaseAsyncCreateCmd {
 
     @Override
     public String getEventDescription() {
-        return "Creating Ablestack Veeam NAS backup for Instance " + getResourceUuid(ApiConstants.VIRTUAL_MACHINE_ID);
+        return "Creating Ablestack Veeam backup for Instance " + getResourceUuid(ApiConstants.VIRTUAL_MACHINE_ID);
     }
 
     @Override
