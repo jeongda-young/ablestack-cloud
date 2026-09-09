@@ -277,8 +277,7 @@ install -D client/target/utilities/bin/cloud-update-xenserver-licenses ${RPM_BUI
 install -D client/target/utilities/bin/mold ${RPM_BUILD_ROOT}%{_bindir}/mold
 install -D client/target/utilities/bin/mold-update-dbpassword ${RPM_BUILD_ROOT}%{_bindir}/mold-update-dbpassword
 # Bundle cmk in cloudstack-management
-CMK_REL=$(wget -O - "https://api.github.com/repos/apache/cloudstack-cloudmonkey/releases" 2>/dev/null | jq -r '.[0].tag_name')
-wget https://github.com/apache/cloudstack-cloudmonkey/releases/download/$CMK_REL/cmk.linux.x86-64 -O ${RPM_BUILD_ROOT}%{_bindir}/cmk
+wget https://github.com/apache/cloudstack-cloudmonkey/releases/latest/download/cmk.linux.x86-64 -O ${RPM_BUILD_ROOT}%{_bindir}/cmk
 chmod +x ${RPM_BUILD_ROOT}%{_bindir}/cmk
 
 cp -r client/target/utilities/scripts/db/* ${RPM_BUILD_ROOT}%{_datadir}/%{name}-management/setup

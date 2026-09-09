@@ -9,10 +9,73 @@ echo "=== 호스트: $(hostname) | RBD 매핑 정리 ==="
 echo
 
 declare -A unused_count
+FTCTL_KRBD_GUARD_ROOT="${FTCTL_KRBD_GUARD_ROOT:-/run/ablestack-vm-ftctl/krbd-guard}"
 
 # 1) 현재 매핑된 pool/image 목록 수집
 get_mapped_images() {
   rbd showmapped | awk 'NR>1 {print $2 "/" $3}'
+}
+
+is_guard_active() {
+  local guard_dir="$1"
+  local expires now
+
+  [ -f "${guard_dir}/enabled" ] || return 1
+  expires="$(cat "${guard_dir}/expires" 2>/dev/null || true)"
+  [[ "${expires}" =~ ^[0-9]+$ ]] || {
+    echo "[경고] FTCTL KRBD guard expires 값이 올바르지 않아 무시합니다: ${guard_dir}" >&2
+    return 1
+  }
+  now="$(date +%s)"
+  if [ "${expires}" -le "${now}" ]; then
+    echo "[정보] 만료된 FTCTL KRBD guard 무시: ${guard_dir} (expires=${expires}, now=${now})" >&2
+    return 1
+  fi
+  return 0
+}
+
+rbd_image_for_device() {
+  local device="$1"
+  rbd showmapped | awk -v dev="${device}" 'NR>1 && $NF == dev {print $2 "/" $3; exit}'
+}
+
+normalize_guard_path() {
+  local path="$1"
+  local pool image mapped
+
+  [ -n "${path}" ] || return 0
+  case "${path}" in
+    /dev/rbd/*/*)
+      pool="${path#/dev/rbd/}"
+      image="${pool#*/}"
+      pool="${pool%%/*}"
+      [ -n "${pool}" ] && [ -n "${image}" ] && printf '%s/%s\n' "${pool}" "${image}"
+      ;;
+    /dev/rbd[0-9]*)
+      mapped="$(rbd_image_for_device "${path}" || true)"
+      [ -n "${mapped}" ] && printf '%s\n' "${mapped}"
+      ;;
+    */*)
+      printf '%s\n' "${path}"
+      ;;
+    *)
+      printf 'rbd/%s\n' "${path}"
+      ;;
+  esac
+}
+
+get_guarded_images() {
+  local guard_dir path
+
+  [ -d "${FTCTL_KRBD_GUARD_ROOT}" ] || return 0
+  for guard_dir in "${FTCTL_KRBD_GUARD_ROOT}"/*; do
+    [ -d "${guard_dir}" ] || continue
+    is_guard_active "${guard_dir}" || continue
+    [ -f "${guard_dir}/paths" ] || continue
+    while IFS= read -r path; do
+      normalize_guard_path "${path}"
+    done < "${guard_dir}/paths"
+  done | sort -u
 }
 
 # 2) 현재 실행 중인 VM에서 사용하는 RBD 이미지(pool/image) 목록 수집
@@ -33,7 +96,10 @@ get_used_images() {
     fi
   done < <(virsh list --state-running --name || true)
 
-  printf '%s\n' "${result[@]}" | sort -u
+  {
+    printf '%s\n' "${result[@]}"
+    get_guarded_images
+  } | sed '/^$/d' | sort -u
 }
 
 # 3) 3회 체크 (30초 간격)

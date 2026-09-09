@@ -97,7 +97,10 @@ async function applyDynamicCustomization (response) {
 
 async function applyStaticCustomization (favicon, css) {
   if (favicon) {
-    document.getElementById('favicon').href = favicon
+    const faviconElement = document.getElementById('favicon')
+    if (faviconElement) {
+      faviconElement.href = favicon
+    }
   }
 
   let style = document.getElementById('guiThemeCSS')

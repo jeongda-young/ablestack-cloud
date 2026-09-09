@@ -17,8 +17,11 @@
 from subprocess import *
 import sys
 import logging
+import os
+import base64
 
 LOG_FILE='/var/log/cloudstack/agent/rolling-maintenance.log'
+METADATA_DIR='/run/cloudstack/rolling-maintenance'
 AVOID_MAINTENANCE_EXIT_STATUS=70
 
 logging.basicConfig(filename=LOG_FILE,
@@ -33,20 +36,56 @@ def execute_script(stage, script, payload, timeout):
     logger.info("Executing script: %s for stage: %s" % (script, stage))
 
     try:
-        command = "timeout %s %s " % (str(timeout), script)
+        command = ["timeout", str(timeout), script]
         if payload:
             logger.info("Adding payload: %s" % payload)
-            command += " " + payload
-        pout = Popen(command, shell=True, stdout=PIPE, stderr=PIPE)
+            command.append(payload)
+        pout = Popen(command, stdout=PIPE, stderr=PIPE)
         exitStatus = pout.wait()
         stdout, stderr = pout.communicate()
 
         success = True if exitStatus == 0 or exitStatus == AVOID_MAINTENANCE_EXIT_STATUS else False
         avoid_maintenance = True if exitStatus == AVOID_MAINTENANCE_EXIT_STATUS else False
-        return {"success": success, "message": stdout.decode('utf-8').strip(), "avoidmaintenance": avoid_maintenance}
+        message = stdout.decode('utf-8').strip()
+        error = stderr.decode('utf-8').strip()
+        if error:
+            message = (message + "\n" if message else "") + error
+        return {"success": success, "message": message, "avoidmaintenance": avoid_maintenance}
     except Exception as e:
         logger.error("Error in stage %s: %s" % (script, e))
         sys.exit(1)
+
+
+def decode(value):
+    return base64.b64decode(value.encode('utf-8')).decode('utf-8')
+
+
+def read_metadata(instance_name):
+    metadata_path = os.path.join(METADATA_DIR, "%s.metadata" % instance_name)
+    if not os.path.exists(metadata_path) and "/" in instance_name:
+        metadata_path = os.path.join(METADATA_DIR, "%s.metadata" % instance_name.replace("/", "-"))
+    values = {}
+    with open(metadata_path, "r") as metadata_file:
+        for line in metadata_file:
+            line = line.strip()
+            if not line or "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            values[key] = value
+
+    required = ["stage", "script", "timeout", "results", "output"]
+    missing = [key for key in required if key not in values]
+    if missing:
+        raise ValueError("Missing metadata keys: %s" % ",".join(missing))
+
+    return {
+        "stage": decode(values["stage"]),
+        "script": decode(values["script"]),
+        "timeout": values["timeout"],
+        "results": decode(values["results"]),
+        "output": decode(values["output"]),
+        "payload": decode(values["payload"]) if values.get("payload") else None
+    }
 
 
 if __name__ == '__main__':
@@ -58,17 +97,25 @@ if __name__ == '__main__':
 
         args = sys.argv[1]
         params = args.split(',')
-        if len(params) < 5:
+        if len(params) == 1:
+            metadata = read_metadata(params[0])
+            stage = metadata["stage"]
+            script = metadata["script"]
+            timeout = metadata["timeout"]
+            results_file_path = metadata["results"]
+            output_file_path = metadata["output"]
+            payload = metadata["payload"]
+        elif len(params) < 5:
             logger.error("Wrong number of parameters received, STAGE,SCRIPT,TIMEOUT,RESULTS_FILE,OUTPUT_FILE"
                          "[,PAYLOAD] expected")
             sys.exit(0)
-
-        stage = params[0]
-        script = params[1]
-        timeout = params[2]
-        results_file_path = params[3]
-        output_file_path = params[4]
-        payload = params[5] if len(params) > 5 else None
+        else:
+            stage = params[0]
+            script = params[1]
+            timeout = params[2]
+            results_file_path = params[3]
+            output_file_path = params[4]
+            payload = params[5] if len(params) > 5 else None
         logger.info("Received parameters: stage: %s, script: %s, timeout: %s, results_file: %s, output_file: %s "
                     "and payload: %s" % (stage, script, timeout, results_file_path, output_file_path, payload))
 

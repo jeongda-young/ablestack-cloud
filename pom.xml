@@ -1063,6 +1063,7 @@
                             <exclude>debian/dirs</exclude>
                             <exclude>debian/rules</exclude>
                             <exclude>debian/source/format</exclude>
+                            <exclude>developer/history/**</exclude>
                             <exclude>dist/console-proxy/js/jquery.js</exclude>
                             <exclude>engine/schema/dist/**</exclude>
                             <exclude>plugins/integrations/automation-service/src/main/resources/conf/genie</exclude>

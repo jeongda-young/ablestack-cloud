@@ -91,6 +91,8 @@
   <bean id="guestOSCategoryDaoImpl" class="com.cloud.storage.dao.GuestOSCategoryDaoImpl" />
   <bean id="guestOSHypervisorDaoImpl" class="com.cloud.storage.dao.GuestOSHypervisorDaoImpl" />
   <!-- New HA Config -->
+  <bean id="ftctlProtectionDaoImpl" class="com.cloud.ftctl.dao.FtctlProtectionDaoImpl" />
+  <bean id="ftctlProtectionVolumeDaoImpl" class="com.cloud.ftctl.dao.FtctlProtectionVolumeDaoImpl" />
   <bean id="haConfigDaoImpl" class="org.apache.cloudstack.ha.dao.HAConfigDaoImpl" />
   <bean id="highAvailabilityDaoImpl" class="com.cloud.ha.dao.HighAvailabilityDaoImpl" />
   <bean id="engineHostDetailsDaoImpl" class="org.apache.cloudstack.engine.datacenter.entity.api.db.dao.HostDetailsDaoImpl" />

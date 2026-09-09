@@ -73,6 +73,7 @@ import org.apache.cloudstack.storage.to.VolumeObjectTO;
 import org.apache.cloudstack.utils.bytescale.ByteScaleUtils;
 import org.apache.cloudstack.utils.linux.CPUStat;
 import org.apache.cloudstack.utils.linux.MemStat;
+import org.apache.cloudstack.utils.qemu.Qcow2MetadataCache;
 import org.apache.cloudstack.utils.qemu.QemuImg.PhysicalDiskFormat;
 import org.apache.commons.lang.ArrayUtils;
 import org.apache.commons.lang.SystemUtils;
@@ -315,6 +316,57 @@ public class LibvirtComputingResourceTest {
 
     final OneLineParser statsParserMock = Mockito.mock(OneLineParser.class);
 
+    @Test
+    public void setQcow2FullMetadataCacheConfiguresFileBackedQcow2Disk() throws Exception {
+        final LibvirtComputingResource resource = new LibvirtComputingResource();
+        final KVMPhysicalDisk physicalDisk = Mockito.mock(KVMPhysicalDisk.class);
+        final LibvirtVMDef.DiskDef disk = new LibvirtVMDef.DiskDef();
+        disk.defFileBasedDisk("/mnt/glue-gfs/volume.qcow2", "vdb", LibvirtVMDef.DiskDef.DiskBus.SCSI,
+                LibvirtVMDef.DiskDef.DiskFmtType.QCOW2);
+        Mockito.when(physicalDisk.getPath()).thenReturn("/mnt/glue-gfs/volume.qcow2");
+
+        try (MockedStatic<Qcow2MetadataCache> metadataCache = Mockito.mockStatic(Qcow2MetadataCache.class)) {
+            metadataCache.when(() -> Qcow2MetadataCache.calculateFullSize("/mnt/glue-gfs/volume.qcow2", 0)).thenReturn(32768000L);
+
+            resource.setQcow2FullMetadataCache(disk, physicalDisk);
+
+            Assert.assertEquals(Long.valueOf(32768000L), disk.getMetadataCacheMaxSizeBytes());
+        }
+    }
+
+    @Test
+    public void setQcow2FullMetadataCacheSkipsRawDisk() {
+        final LibvirtComputingResource resource = new LibvirtComputingResource();
+        resource.qcow2MetadataCachePolicy = "full";
+        final KVMPhysicalDisk physicalDisk = Mockito.mock(KVMPhysicalDisk.class);
+        final LibvirtVMDef.DiskDef disk = new LibvirtVMDef.DiskDef();
+        disk.defBlockBasedDisk("/dev/mapper/data", 1, LibvirtVMDef.DiskDef.DiskBus.SCSI);
+
+        try (MockedStatic<Qcow2MetadataCache> metadataCache = Mockito.mockStatic(Qcow2MetadataCache.class)) {
+            resource.setQcow2FullMetadataCache(disk, physicalDisk);
+
+            Assert.assertNull(disk.getMetadataCacheMaxSizeBytes());
+            metadataCache.verifyNoInteractions();
+        }
+    }
+
+    @Test
+    public void setQcow2FullMetadataCacheKeepsLibvirtDefaultWhenPolicyIsDefault() {
+        final LibvirtComputingResource resource = new LibvirtComputingResource();
+        resource.qcow2MetadataCachePolicy = "default";
+        final KVMPhysicalDisk physicalDisk = Mockito.mock(KVMPhysicalDisk.class);
+        final LibvirtVMDef.DiskDef disk = new LibvirtVMDef.DiskDef();
+        disk.defFileBasedDisk("/mnt/glue-gfs/volume.qcow2", "vdb", LibvirtVMDef.DiskDef.DiskBus.SCSI,
+                LibvirtVMDef.DiskDef.DiskFmtType.QCOW2);
+
+        try (MockedStatic<Qcow2MetadataCache> metadataCache = Mockito.mockStatic(Qcow2MetadataCache.class)) {
+            resource.setQcow2FullMetadataCache(disk, physicalDisk);
+
+            Assert.assertNull(disk.getMetadataCacheMaxSizeBytes());
+            metadataCache.verifyNoInteractions();
+        }
+    }
+
     @Before
     public void setup() throws Exception {
         libvirtComputingResourceSpy.qemuSocketsPath = new File("/var/run/qemu");
@@ -471,6 +523,22 @@ public class LibvirtComputingResourceTest {
         verifySysInfo(guestDef, "smbios", to.getUuid(), "q35");
         Assert.assertEquals(GuestDef.BootType.UEFI, guestDef.getBootType());
         Assert.assertEquals(GuestDef.BootMode.SECURE, guestDef.getBootMode());
+    }
+
+    @Test
+    public void testCreateGuestFromSpecWithMachineTypeOverrideAndUefi() {
+        VirtualMachineTO to = createDefaultVM(false);
+
+        Map<String, String> extraConfig = new HashMap<>();
+        extraConfig.put(GuestDef.BootType.UEFI.toString(), "legacy");
+        extraConfig.put(VmDetailConstants.KVM_GUEST_OS_MACHINE_TYPE, "pc-i440fx-9.2");
+
+        LibvirtVMDef vm = new LibvirtVMDef();
+
+        GuestDef guestDef = libvirtComputingResourceSpy.createGuestFromSpec(to, vm, to.getUuid(), extraConfig);
+        verifySysInfo(guestDef, "smbios", to.getUuid(), "pc-i440fx-9.2");
+        Assert.assertEquals(GuestDef.BootType.UEFI, guestDef.getBootType());
+        Assert.assertEquals(GuestDef.BootMode.LEGACY, guestDef.getBootMode());
     }
 
     @Test

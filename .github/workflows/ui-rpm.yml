@@ -1,0 +1,184 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+
+name: UI RPM Packaging
+
+on:
+  push:
+    branches:
+      - feature/**
+    paths:
+      - '.github/workflows/ui-rpm.yml'
+      - 'client/src/main/webapp/WEB-INF/**'
+      - 'ui/**'
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to build
+        required: false
+        default: ''
+        type: string
+      brand:
+        description: Package branding used in the RPM release
+        required: false
+        default: Mold.Europa
+        type: string
+      package_version:
+        description: RPM package version
+        required: false
+        default: 4.22.0.0
+        type: string
+      release:
+        description: Optional full RPM release override
+        required: false
+        default: ''
+        type: string
+      node_version:
+        description: Node.js version
+        required: false
+        default: 14.21.3
+        type: string
+      run_checks:
+        description: Run lint and unit tests before packaging
+        required: false
+        default: false
+        type: boolean
+
+concurrency:
+  group: ui-rpm-${{ github.event.inputs.ref || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  ui-rpm:
+    runs-on: ubuntu-22.04
+
+    env:
+      PACKAGE_NAME: cloudstack
+      PACKAGE_VERSION: ${{ github.event.inputs.package_version || '4.22.0.0' }}
+      BUILD_BRAND: ${{ github.event.inputs.brand || 'Mold.Europa' }}
+      BUILD_RELEASE: ${{ github.event.inputs.release || '' }}
+
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.inputs.ref || github.ref }}
+
+      - name: Set up Node
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ github.event.inputs.node_version || '14.21.3' }}
+
+      - name: Install packaging tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y rpm
+
+      - name: Build UI assets
+        run: |
+          cd ui
+          for attempt in 1 2 3; do
+            if npm install --no-audit; then
+              break
+            fi
+            if [ "$attempt" = "3" ]; then
+              exit 1
+            fi
+            npm cache clean --force
+            sleep 10
+          done
+          node build.js
+          npm run build
+          if [ "${{ github.event.inputs.run_checks || 'false' }}" = "true" ]; then
+            npm run lint
+            npm run test:unit
+          fi
+
+      - name: Build cloudstack-ui RPM
+        run: |
+          set -euo pipefail
+          timestamp="$(date -u +%Y%m%d%H%M)"
+          release="${BUILD_RELEASE:-${BUILD_BRAND}.${timestamp}}"
+          topdir="$GITHUB_WORKSPACE/dist/ui-rpmbuild"
+          buildroot="$GITHUB_WORKSPACE/dist/ui-buildroot"
+          rpmroot="$buildroot/rpmroot"
+          mkdir -p "$topdir"/{BUILD,BUILDROOT,RPMS,SOURCES,SPECS,SRPMS} "$rpmroot"
+
+          mkdir -p "$rpmroot/etc/${PACKAGE_NAME}/ui"
+          mkdir -p "$rpmroot/usr/share/${PACKAGE_NAME}-ui"
+          mkdir -p "$rpmroot/usr/share/doc/${PACKAGE_NAME}-ui-${PACKAGE_VERSION}"
+          cp -a ui/dist/. "$rpmroot/usr/share/${PACKAGE_NAME}-ui/"
+          cp -a client/src/main/webapp/WEB-INF "$rpmroot/usr/share/${PACKAGE_NAME}-ui/"
+          cp ui/dist/config.json "$rpmroot/etc/${PACKAGE_NAME}/ui/config.json"
+          rm -f "$rpmroot/usr/share/${PACKAGE_NAME}-ui/config.json"
+          ln -sf "/etc/${PACKAGE_NAME}/ui/config.json" "$rpmroot/usr/share/${PACKAGE_NAME}-ui/config.json"
+          cp LICENSE NOTICE "$rpmroot/usr/share/doc/${PACKAGE_NAME}-ui-${PACKAGE_VERSION}/"
+
+          cat > "$topdir/SPECS/${PACKAGE_NAME}-ui-fast.spec" <<EOF
+          %global debug_package %{nil}
+          Name: ${PACKAGE_NAME}-ui
+          Version: ${PACKAGE_VERSION}
+          Release: ${release}
+          Summary: CloudStack UI
+          License: ASL 2.0
+          Group: System Environment/Libraries
+
+          %description
+          The CloudStack UI
+
+          %install
+          rm -rf %{buildroot}
+          mkdir -p %{buildroot}
+          cp -a ${rpmroot}/. %{buildroot}/
+
+          %files
+          %config(noreplace) %attr(0640,root,cloud) /etc/${PACKAGE_NAME}/ui/config.json
+          /usr/share/${PACKAGE_NAME}-ui/*
+          /usr/share/doc/${PACKAGE_NAME}-ui-${PACKAGE_VERSION}/LICENSE
+          /usr/share/doc/${PACKAGE_NAME}-ui-${PACKAGE_VERSION}/NOTICE
+
+          %post
+          if [ -d /usr/share/${PACKAGE_NAME}-management/webapp ]; then
+            find /usr/share/${PACKAGE_NAME}-management/webapp -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+            cp -a /usr/share/${PACKAGE_NAME}-ui/. /usr/share/${PACKAGE_NAME}-management/webapp/
+          fi
+          EOF
+
+          rpmbuild \
+            --define "_topdir $topdir" \
+            --define "_rpmdir $GITHUB_WORKSPACE/dist/ui-rpm" \
+            -bb "$topdir/SPECS/${PACKAGE_NAME}-ui-fast.spec"
+
+          mkdir -p "$GITHUB_WORKSPACE/dist/ui-rpm-summary"
+          {
+            echo "head_sha=${GITHUB_SHA}"
+            echo "package_version=${PACKAGE_VERSION}"
+            echo "release=${release}"
+            find "$GITHUB_WORKSPACE/dist/ui-rpm" -type f -name '*.rpm' | sort
+          } | tee "$GITHUB_WORKSPACE/dist/ui-rpm-summary/artifacts.txt"
+
+      - name: Upload UI RPM artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ui-rpm-${{ github.run_id }}
+          path: |
+            dist/ui-rpm/**/*.rpm
+            dist/ui-rpm-summary/**
+          if-no-files-found: error

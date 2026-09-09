@@ -199,6 +199,8 @@ export default {
     applyDefaultDeployParams (args) {
       const vmDetails = this.resource.vmdetails || {}
       const offeringDetails = this.serviceOffering?.serviceofferingdetails || {}
+      const volumes = JSON.parse(this.resource.volumes || '[]')
+      const rootDiskDetails = volumes.find(volume => volume.type?.toUpperCase() === 'ROOT')
       if (vmDetails.serviceofferingid) {
         args.serviceofferingid = vmDetails.serviceofferingid
       }
@@ -217,6 +219,19 @@ export default {
         }
         if (memory && (this.serviceOffering.memory == null || this.serviceOffering.memory === undefined)) {
           args['details[0].memory'] = memory
+        }
+      }
+      const rootDiskOfferingId = rootDiskDetails?.diskOfferingId || rootDiskDetails?.diskofferingid
+      if (rootDiskOfferingId && rootDiskDetails?.size) {
+        const rootDiskSize = rootDiskDetails.size / (1024 * 1024 * 1024)
+        if (vmDetails.isiso === 'true') {
+          args.diskofferingid = rootDiskOfferingId
+          args.size = rootDiskSize
+        } else {
+          args.rootdisksize = rootDiskSize
+          if (!this.serviceOffering?.diskofferingstrictness && this.serviceOffering?.diskofferingid !== rootDiskOfferingId) {
+            args.overridediskofferingid = rootDiskOfferingId
+          }
         }
       }
     },
@@ -264,10 +279,10 @@ export default {
           })
         }).catch(error => {
           this.$notifyError(error)
-          this.loading.deploy = false
+          this.loading = false
         }).finally(() => {
           this.form.stayonpage = false
-          this.loading.deploy = false
+          this.loading = false
         })
         this.$emit('close-action')
         return
@@ -314,10 +329,10 @@ export default {
         })
       }).catch(error => {
         this.$notifyError(error)
-        this.loading.deploy = false
+        this.loading = false
       }).finally(() => {
         this.form.stayonpage = false
-        this.loading.deploy = false
+        this.loading = false
       })
       this.$emit('close-action')
     }

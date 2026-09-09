@@ -1309,6 +1309,10 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
 
         AblestackDeleteBackupCommand command = new AblestackDeleteBackupCommand(backup.getExternalId(), backupRepository.getType(),
                 backupRepository.getAddress(), backupRepository.getMountOptions(), forced);
+        final int commandTimeout = BackupCommandTimeout.value();
+        if (commandTimeout > 0) {
+            command.setWait(commandTimeout);
+        }
         command.setMountTimeout(NASBackupRestoreMountTimeout.value());
         command.setBackupProvider("ablestack-nas");
         command.setVmName(vm != null ? vm.getInstanceName() : null);

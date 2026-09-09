@@ -46,6 +46,7 @@ public class LibvirtAblestackDeleteBackupCommandWrapper extends CommandWrapper<A
         final String cleanupCheckpointNames = command.getCleanupCheckpointNames();
         final String diskPaths = command.getDiskPaths();
         final boolean forced = command.isForced();
+        int timeout = command.getWait() > 0 ? command.getWait() * 1000 : libvirtComputingResource.getCmdsTimeout();
 
         List<String[]> commands = new ArrayList<>();
         if ("ablestack-commvault".equalsIgnoreCase(backupProvider)) {
@@ -162,7 +163,9 @@ public class LibvirtAblestackDeleteBackupCommandWrapper extends CommandWrapper<A
             commands.add(deleteCommand.toArray(new String[0]));
         }
 
-        Pair<Integer, String> result = Script.executePipedCommands(commands, libvirtComputingResource.getCmdsTimeout());
+        logger.debug("Starting Ablestack backup delete for provider [{}], path [{}] with timeout [{}] ms",
+                backupProvider, backupPath, timeout);
+        Pair<Integer, String> result = Script.executePipedCommands(commands, timeout);
 
         logger.debug(String.format("Backup delete result: %s , exit code: %s", result.second(), result.first()));
 

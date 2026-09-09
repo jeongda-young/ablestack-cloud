@@ -334,6 +334,15 @@ export default {
         this.deploymentPlannerLoading = false
       })
     },
+    handleComputeOfferingTypeChange (val) { this.offeringType = val },
+    handleStorageTypeChange (val) { this.storageType = val },
+    handleProvisioningTypeChange (val) { this.provisioningType = val },
+    handleCacheModeChange (val) { this.cacheMode = val },
+    handleQosTypeChange (val) { this.qosType = val },
+    handleDeploymentPlannerChange (planner) {
+      this.selectedDeploymentPlanner = planner
+      this.plannerModeVisible = this.selectedDeploymentPlanner === 'ImplicitDedicationPlanner' && isAdmin()
+    },
     handleSubmit (e) {
       if (e && e.preventDefault) {
         e.preventDefault()

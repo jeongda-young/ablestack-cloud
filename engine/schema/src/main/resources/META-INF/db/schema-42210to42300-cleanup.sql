@@ -16,5 +16,9 @@
 -- under the License.
 
 --;
+
+-- Remove legacy API key columns only after the encrypted data migration succeeds.
+CALL `cloud`.`IDEMPOTENT_DROP_COLUMN`('cloud.user', 'api_key');
+CALL `cloud`.`IDEMPOTENT_DROP_COLUMN`('cloud.user', 'secret_key');
 -- Schema upgrade cleanup from 4.22.1.0 to 4.23.0.0
 --;

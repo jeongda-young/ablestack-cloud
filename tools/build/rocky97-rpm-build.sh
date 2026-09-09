@@ -76,6 +76,15 @@ configure_rocky_vault_repositories() {
 # repositories must use the Rocky vault.
 configure_rocky_vault_repositories
 
+if [ "$DISTRO" = "rocky9" ]; then
+    echo "Pinning Rocky 9.7 DNF repositories to vault baseurl"
+    for repo_file in /etc/yum.repos.d/rocky*.repo; do
+        [ -f "$repo_file" ] || continue
+        sed -i -E             -e 's|^mirrorlist=|#mirrorlist=|'             -e 's|^#?baseurl=https?://dl\.rockylinux\.org/\$contentdir/\$releasever/|baseurl=https://dl.rockylinux.org/vault/rocky/\$releasever/|'             -e 's|^#?baseurl=https?://download\.rockylinux\.org/pub/rocky/\$releasever/|baseurl=https://dl.rockylinux.org/vault/rocky/\$releasever/|'             "$repo_file"
+    done
+    dnf --releasever=9.7 clean all || true
+fi
+
 DNF=(dnf --releasever=9.7 -y)
 
 "${DNF[@]}" install dnf-plugins-core

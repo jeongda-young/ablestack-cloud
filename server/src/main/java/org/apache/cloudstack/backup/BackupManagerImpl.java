@@ -288,6 +288,10 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     private static final String FAST_CLONE_FLATTEN_STATUS = "clone.fast.flatten.status";
     private static final String FAST_CLONE_FLATTEN_PENDING = "pending";
     private static final String FAST_CLONE_FLATTEN_RUNNING = "running";
+    private static final String RETENTION_CLEANUP_FAILED = "retention.cleanup.failed";
+    private static final String RETENTION_CLEANUP_FAILED_AT = "retention.cleanup.failed.at";
+    private static final String RETENTION_CLEANUP_SCHEDULE_ID = "retention.cleanup.schedule.id";
+    private static final String RETENTION_CLEANUP_REASON = "retention.cleanup.reason";
 
     private static Map<String, BackupProvider> backupProvidersMap = new HashMap<>();
     private static final String ABLESTACK_NETBACKUP_PROVIDER_NAME = "ablestack-netbackup";
@@ -1077,7 +1081,12 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
         createCheckedBackup(cmd, owner, isScheduledBackup, backupSize, vm, vmId, backupProvider, backupScheduleId);
         if (isScheduledBackup) {
-            deleteOldestBackupFromScheduleIfRequired(vmId, backupScheduleId);
+            try {
+                deleteOldestBackupFromScheduleIfRequired(vmId, backupScheduleId);
+            } catch (RuntimeException e) {
+                logger.warn("Failed to apply backup retention cleanup after creating scheduled backup for VM [ID: {}], schedule [ID: {}]. " +
+                        "The backup creation flow will not be failed by this cleanup error.", vmId, backupScheduleId, e);
+            }
         }
         logger.info("Completed VM backup request [vmId: {}, vmUuid: {}, vmName: {}, provider: {}, offeringId: {}, scheduleId: {}, elapsedMs: {}]",
                 vm.getId(), vm.getUuid(), vm.getInstanceName(), offering.getProvider(), offering.getId(), backupScheduleId, System.currentTimeMillis() - backupStartTime);
@@ -1654,14 +1663,18 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         while (!remainingBackups.isEmpty()) {
             List<BackupVO> leafBackups = getLeafBackups(remainingBackups);
             if (CollectionUtils.isEmpty(leafBackups)) {
-                logger.warn("Could not find a deletable leaf while removing an obsolete backup chain for {}.", cleanupTarget);
+                String reason = "Could not find a deletable leaf while removing an obsolete backup chain";
+                logger.warn("{} for {}.", reason, cleanupTarget);
+                markRetentionCleanupFailure(remainingBackups, backupScheduleId, reason);
                 return false;
             }
 
             for (BackupVO backup : leafBackups) {
                 try {
                     if (!deleteBackup(backup.getId(), false)) {
+                        String reason = "deleteBackup returned false";
                         logger.warn("Failed to delete backup [ID: {}, UUID: {}] while deleting a chain for {}.", backup.getId(), backup.getUuid(), cleanupTarget);
+                        markRetentionCleanupFailure(remainingBackups, backupScheduleId, reason);
                         return false;
                     }
                     String eventDescription = backupScheduleId > 0
@@ -1677,6 +1690,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 } catch (Exception e) {
                     logger.warn("Skipping retention deletion for backup [ID: {}, UUID: {}] on {} because it is not currently safe to remove: {}",
                             backup.getId(), backup.getUuid(), cleanupTarget, e.getMessage());
+                    markRetentionCleanupFailure(remainingBackups, backupScheduleId, e.getMessage());
                     return false;
                 }
             }
@@ -1684,6 +1698,32 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
 
         logger.info("Deleted [{}] backups from an obsolete backup chain for {}.", deletedBackups, cleanupTarget);
         return true;
+    }
+
+    private void markRetentionCleanupFailure(List<BackupVO> backups, long backupScheduleId, String reason) {
+        if (CollectionUtils.isEmpty(backups)) {
+            return;
+        }
+
+        String failedAt = DateUtil.displayDateInTimezone(DateUtil.GMT_TIMEZONE, new Date());
+        String scheduleId = backupScheduleId > 0 ? String.valueOf(backupScheduleId) : "";
+        String cleanupFailureReason = StringUtils.abbreviate(StringUtils.defaultString(reason, "unknown"), 1024);
+
+        for (BackupVO backup : backups) {
+            try {
+                backupDetailsDao.removeDetail(backup.getId(), RETENTION_CLEANUP_FAILED);
+                backupDetailsDao.addDetail(backup.getId(), RETENTION_CLEANUP_FAILED, Boolean.TRUE.toString(), false);
+                backupDetailsDao.removeDetail(backup.getId(), RETENTION_CLEANUP_FAILED_AT);
+                backupDetailsDao.addDetail(backup.getId(), RETENTION_CLEANUP_FAILED_AT, failedAt, false);
+                backupDetailsDao.removeDetail(backup.getId(), RETENTION_CLEANUP_SCHEDULE_ID);
+                backupDetailsDao.addDetail(backup.getId(), RETENTION_CLEANUP_SCHEDULE_ID, scheduleId, false);
+                backupDetailsDao.removeDetail(backup.getId(), RETENTION_CLEANUP_REASON);
+                backupDetailsDao.addDetail(backup.getId(), RETENTION_CLEANUP_REASON, cleanupFailureReason, false);
+            } catch (RuntimeException e) {
+                logger.warn("Failed to mark retention cleanup failure details for backup [ID: {}, UUID: {}].",
+                        backup.getId(), backup.getUuid(), e);
+            }
+        }
     }
 
     private List<List<BackupVO>> getBackupChainsForSchedule(List<BackupVO> backups) {

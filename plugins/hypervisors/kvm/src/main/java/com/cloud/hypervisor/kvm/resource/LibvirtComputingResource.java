@@ -98,6 +98,7 @@ import org.apache.cloudstack.utils.hypervisor.HypervisorUtils;
 import org.apache.cloudstack.utils.linux.CPUStat;
 import org.apache.cloudstack.utils.linux.KVMHostInfo;
 import org.apache.cloudstack.utils.linux.MemStat;
+import org.apache.cloudstack.utils.qemu.Qcow2MetadataCache;
 import org.apache.cloudstack.utils.qemu.QemuCommand;
 import org.apache.cloudstack.utils.qemu.QemuImg;
 import org.apache.cloudstack.utils.qemu.QemuImg.PhysicalDiskFormat;
@@ -344,6 +345,7 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
     private static final String HYPERVCLOCK = "hypervclock";
     private static final String WINDOWS = "Windows";
     private static final String Q35 = "q35";
+    private static final Pattern KVM_MACHINE_TYPE_PATTERN = Pattern.compile("[A-Za-z0-9_.:+-]+");
     private static final String PTY = "pty";
     private static final String VNC = "vnc";
 
@@ -401,8 +403,17 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
     public static final String UBUNTU_WINDOWS_GUEST_CONVERSION_SUPPORTED_CHECK_CMD = "dpkg -l virtio-win";
     public static final String UBUNTU_NBDKIT_PKG_CHECK_CMD = "dpkg -l nbdkit";
     public static final String VDDK_AUTODETECT_PATH_CMD =
-            "find /opt /usr /usr/local -maxdepth 5 -type d -name 'vmware-vix-disklib-distrib' 2>/dev/null | head -n 1";
-    private static final int VDDK_AUTODETECT_TIMEOUT_SECONDS = 15;
+            "for candidate in " +
+            "\"${VDDK_LIBDIR:-}\" " +
+            "\"/opt/vmware-vix-disklib-distrib\" " +
+            "\"/usr/share/ablestack/v2k/compat/vsphere80/vddk\" " +
+            "\"/usr/share/ablestack/v2k/compat/vsphere67/vddk\" " +
+            "\"/usr/share/ablestack/v2k/compat/vsphere60/vddk\"; do " +
+            "[ -n \"$candidate\" ] && [ -d \"$candidate/lib64\" ] && ls \"$candidate\"/lib64/libvixDiskLib.so* >/dev/null 2>&1 && { printf '%s\\n' \"$candidate\"; exit 0; }; " +
+            "done; " +
+            "find /usr/share/ablestack/v2k/compat -maxdepth 3 -type d -name vddk 2>/dev/null | while read -r candidate; do " +
+            "[ -d \"$candidate/lib64\" ] && ls \"$candidate\"/lib64/libvixDiskLib.so* >/dev/null 2>&1 && { printf '%s\\n' \"$candidate\"; break; }; " +
+            "done";
 
     public static final int LIBVIRT_CGROUP_CPU_SHARES_MIN = 2;
     public static final int LIBVIRT_CGROUP_CPU_SHARES_MAX = 262144;
@@ -482,6 +493,7 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
 
     public final static String CONFIG_DIR = "config";
     private boolean enableIoUring;
+    protected String qcow2MetadataCachePolicy = "full";
 
     public static final String BASH_SCRIPT_PATH = "/bin/bash";
 
@@ -1503,7 +1515,7 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
             LOGGER.warn("Could not detect a valid VDDK library dir; VDDK conversion will be unavailable");
         }
 
-        vddkVersion = detectVddkVersion();
+        vddkVersion = detectVddkVersion(vddkLibDir);
         if (StringUtils.isNotBlank(vddkVersion)) {
             LOGGER.info("Detected nbdkit VDDK plugin version: {}", vddkVersion);
         }
@@ -1580,6 +1592,9 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
         stopTimeout = AgentPropertiesFileHandler.getPropertyValue(AgentProperties.STOP_SCRIPT_TIMEOUT) * 1000;
 
         cmdsTimeout = AgentPropertiesFileHandler.getPropertyValue(AgentProperties.CMDS_TIMEOUT) * 1000;
+
+        qcow2MetadataCachePolicy = AgentPropertiesFileHandler.getPropertyValue(AgentProperties.QCOW2_METADATA_CACHE_POLICY);
+        LOGGER.info("QCOW2 metadata cache policy: " + qcow2MetadataCachePolicy);
 
         noMemBalloon = AgentPropertiesFileHandler.getPropertyValue(AgentProperties.VM_MEMBALLOON_DISABLE);
         qcow2DeltaMergeTimeout = AgentPropertiesFileHandler.getPropertyValue(AgentProperties.QCOW2_DELTA_MERGE_TIMEOUT);
@@ -3910,18 +3925,24 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
      */
     protected GuestDef createGuestFromSpec(VirtualMachineTO vmTO, LibvirtVMDef vm, String uuid, Map<String, String> customParams) {
         GuestDef guest = new GuestDef();
+        String machineTypeOverride = resolveGuestMachineTypeOverride(customParams);
 
         configureGuestAndVMHypervisorType(vmTO, vm, guest);
         guest.setManufacturer(vmTO.getMetadataManufacturer());
         guest.setProduct(vmTO.getMetadataProductName());
         guest.setGuestArch(guestCpuArch != null ? guestCpuArch : vmTO.getArch());
         guest.setMachineType((isGuestAarch64() || isGuestS390x()) ? VIRT : PC);
+        if (StringUtils.isNotBlank(machineTypeOverride)) {
+            guest.setMachineType(machineTypeOverride);
+        }
         guest.setBootType(GuestDef.BootType.BIOS);
         if (MapUtils.isNotEmpty(customParams)) {
             if (customParams.containsKey(GuestDef.BootType.UEFI.toString())) {
                 guest.setBootType(GuestDef.BootType.UEFI);
                 guest.setBootMode(GuestDef.BootMode.LEGACY);
-                guest.setMachineType(Q35);
+                if (StringUtils.isBlank(machineTypeOverride)) {
+                    guest.setMachineType(Q35);
+                }
                 if (SECURE.equalsIgnoreCase(customParams.get(GuestDef.BootType.UEFI.toString()))) {
                     guest.setBootMode(GuestDef.BootMode.SECURE);
                 }
@@ -3938,6 +3959,20 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
         }
         guest.setBootOrder(GuestDef.BootOrder.CDROM);
         return guest;
+    }
+
+    protected String resolveGuestMachineTypeOverride(Map<String, String> customParams) {
+        if (MapUtils.isEmpty(customParams)) {
+            return null;
+        }
+        String machineType = StringUtils.trimToNull(customParams.get(VmDetailConstants.KVM_GUEST_OS_MACHINE_TYPE));
+        if (machineType == null) {
+            return null;
+        }
+        if (!KVM_MACHINE_TYPE_PATTERN.matcher(machineType).matches()) {
+            throw new CloudRuntimeException(String.format("Invalid KVM guest OS machine type: %s", machineType));
+        }
+        return machineType;
     }
 
     private void configureBootOrder(GuestDef guest, Map<String, String> customParams) {
@@ -4429,6 +4464,7 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
                     disk.setLibvirtDiskEncryptDetails(encryptDetails);
                 }
             }
+            setQcow2FullMetadataCache(disk, physicalDisk);
             if (vm.getDevices() == null) {
                 LOGGER.error("There is no devices for" + vm);
                 throw new RuntimeException("There is no devices for" + vm);
@@ -4521,6 +4557,22 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
             } else if (enableIoUring) {
                 disk.setIoDriver(IoDriverPolicy.IO_URING);
             }
+        }
+    }
+
+    public void setQcow2FullMetadataCache(final DiskDef disk, final KVMPhysicalDisk physicalDisk) {
+        if (!"full".equalsIgnoreCase(qcow2MetadataCachePolicy) || disk == null || physicalDisk == null || disk.getDiskType() != DiskDef.DiskType.FILE
+                || disk.getDiskFormatType() != DiskDef.DiskFmtType.QCOW2) {
+            return;
+        }
+        try {
+            final long metadataCacheSize = Qcow2MetadataCache.calculateFullSize(physicalDisk.getPath(), cmdsTimeout);
+            disk.setMetadataCacheMaxSizeBytes(metadataCacheSize);
+            LOGGER.debug(String.format("Configured full QCOW2 metadata cache [%s] bytes for disk [%s]",
+                    metadataCacheSize, physicalDisk.getPath()));
+        } catch (LibvirtException | QemuImgException | RuntimeException e) {
+            throw new CloudRuntimeException(String.format("Unable to calculate full QCOW2 metadata cache for disk [%s]: %s",
+                    physicalDisk.getPath(), e.getMessage()), e);
         }
     }
 
@@ -7068,7 +7120,12 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
         if (StringUtils.isBlank(effectiveVddkLibDir)) {
             effectiveVddkLibDir = StringUtils.trimToNull(vddkLibDir);
         }
-        return hostSupportsInstanceConversion() && isVddkLibDirValid(effectiveVddkLibDir) && StringUtils.isNotBlank(vddkVersion);
+        if (StringUtils.isBlank(effectiveVddkLibDir) || !isVddkLibDirValid(effectiveVddkLibDir)) {
+            effectiveVddkLibDir = detectVddkLibDir();
+        }
+        return hostSupportsInstanceConversion()
+                && isVddkLibDirLoadable(effectiveVddkLibDir)
+                && StringUtils.isNotBlank(detectVddkVersion(effectiveVddkLibDir));
     }
 
     protected boolean isVddkLibDirValid(String path) {
@@ -7084,17 +7141,23 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
     }
 
     protected String detectVddkLibDir() {
-        String detectedPath = StringUtils.trimToNull(
-                Script.runSimpleBashScript(VDDK_AUTODETECT_PATH_CMD, VDDK_AUTODETECT_TIMEOUT_SECONDS));
-        if (StringUtils.isNotBlank(detectedPath) && isVddkLibDirValid(detectedPath)) {
+        String detectedPath = StringUtils.trimToNull(Script.runSimpleBashScript(VDDK_AUTODETECT_PATH_CMD));
+        if (StringUtils.isNotBlank(detectedPath) && isVddkLibDirLoadable(detectedPath)) {
             return detectedPath;
         }
         return null;
     }
 
     protected String detectVddkVersion() {
+        return detectVddkVersion(null);
+    }
+
+    protected String detectVddkVersion(String libDir) {
         try {
-            ProcessBuilder pb = new ProcessBuilder("nbdkit", "vddk", "--version");
+            ProcessBuilder pb = StringUtils.isNotBlank(libDir)
+                    ? new ProcessBuilder("nbdkit", "--dump-plugin", "vddk", "libdir=" + libDir)
+                    : new ProcessBuilder("nbdkit", "vddk", "--version");
+            pb.redirectErrorStream(true);
             Process process = pb.start();
 
             String output = new String(process.getInputStream().readAllBytes());
@@ -7106,6 +7169,9 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
 
             for (String line : output.split("\\R")) {
                 String trimmed = StringUtils.trimToEmpty(line);
+                if (trimmed.startsWith("vddk_library_version=")) {
+                    return StringUtils.trimToNull(trimmed.substring("vddk_library_version=".length()));
+                }
                 if (trimmed.startsWith("vddk ")) {
                     return StringUtils.trimToNull(trimmed.substring("vddk ".length()));
                 }
@@ -7115,6 +7181,18 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
             LOGGER.error("Failed to detect vddk version: {}", e.getMessage());
             return null;
         }
+    }
+
+    protected boolean isVddkLibDirLoadable(String path) {
+        if (!isVddkLibDirValid(path)) {
+            return false;
+        }
+        String command = "nbdkit --dump-plugin vddk libdir=" + shellQuote(path) + " >/dev/null 2>&1";
+        return Script.runSimpleBashScriptForExitValue(command) == 0;
+    }
+
+    protected String shellQuote(String value) {
+        return "'" + StringUtils.defaultString(value).replace("'", "'\"'\"'") + "'";
     }
 
     public int runPackageQueryWithFallback(final String packageName, final long timeout) {

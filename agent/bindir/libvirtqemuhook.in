@@ -38,7 +38,8 @@ from xml.dom.minidom import parse
 from cloudutils.configFileOps import configFileOps
 from cloudutils.networkConfig import networkConfig
 
-logging.basicConfig(filename='/var/log/libvirt/qemu-hook.log',
+qemuHookLog = os.environ.get("QEMU_HOOK_LOG", "/var/log/libvirt/qemu-hook.log")
+logging.basicConfig(filename=qemuHookLog,
                     filemode='a',
                     format='%(asctime)s,%(msecs)d %(name)s %(levelname)s %(message)s',
                     datefmt='%H:%M:%S',
@@ -49,6 +50,7 @@ customDir = "/etc/libvirt/hooks/custom"
 customDirPermissions = 0o744
 timeoutSeconds = 10 * 60
 validQemuActions = ['prepare', 'start', 'started', 'stopped', 'release', 'migrate', 'restore', 'reconnect', 'attach']
+FTCTL_GUARD_ROOT = os.environ.get("FTCTL_KRBD_GUARD_ROOT", "/run/ablestack-vm-ftctl/krbd-guard")
 
 
 def isOldStyleBridge(brName):
@@ -200,9 +202,154 @@ def terminateProgram(process, programName):
     process.terminate()
 
 
+def readTextFile(path):
+    try:
+        with open(path, "r") as handle:
+            return handle.read().strip()
+    except Exception:
+        return ""
+
+
+def rbdShowmappedRows():
+    try:
+        output = subprocess.check_output(
+            ["/usr/bin/rbd", "showmapped"],
+            stderr=subprocess.DEVNULL,
+            timeout=10,
+            universal_newlines=True)
+    except Exception:
+        return []
+
+    rows = []
+    lines = [line.strip() for line in output.splitlines() if line.strip()]
+    if len(lines) <= 1:
+        return rows
+
+    headers = re.split(r"\s+", lines[0].lower())
+    for line in lines[1:]:
+        cols = re.split(r"\s+", line)
+        row = {}
+        if len(headers) == len(cols):
+            row = dict(zip(headers, cols))
+        elif len(cols) >= 5:
+            row = {
+                "pool": cols[1],
+                "image": cols[2],
+                "device": cols[-1],
+            }
+        if row:
+            rows.append(row)
+    return rows
+
+
+def rbdKeysFromShowmappedDevice(path):
+    keys = set()
+    for row in rbdShowmappedRows():
+        if row.get("device") != path:
+            continue
+        pool = row.get("pool", "")
+        image = row.get("image", "")
+        if pool and image:
+            keys.add("%s/%s" % (pool, image))
+            keys.add(image)
+    return keys
+
+
+def rbdMatchKeys(path):
+    keys = set()
+    if not path:
+        return keys
+
+    keys.add(path)
+    if path.startswith("/dev/rbd/"):
+        parts = path.split("/")
+        if len(parts) >= 5:
+            pool = parts[3]
+            image = "/".join(parts[4:])
+            if pool and image:
+                keys.add("%s/%s" % (pool, image))
+                keys.add(image)
+        elif re.match(r"^/dev/rbd[0-9]+$", path):
+            keys.update(rbdKeysFromShowmappedDevice(path))
+    elif re.match(r"^/dev/rbd[0-9]+$", path):
+        keys.update(rbdKeysFromShowmappedDevice(path))
+    elif "/" in path:
+        keys.add(path.split("/", 1)[1])
+
+    try:
+        real = os.path.realpath(path)
+        if real and real != path:
+            keys.add(real)
+            keys.update(rbdKeysFromShowmappedDevice(real))
+    except Exception:
+        pass
+    return keys
+
+
+def ftctlGuardPathKeys(guardDir):
+    keys = set()
+    pathsFile = os.path.join(guardDir, "paths")
+    try:
+        with open(pathsFile, "r") as handle:
+            for line in handle:
+                value = line.strip()
+                if value:
+                    keys.update(rbdMatchKeys(value))
+    except Exception:
+        pass
+    return keys
+
+
+def ftctlGuardIsActive(guardDir):
+    enabled = os.path.join(guardDir, "enabled")
+    if not os.path.isfile(enabled):
+        return False
+
+    expiresText = readTextFile(os.path.join(guardDir, "expires"))
+    try:
+        expires = int(expiresText)
+    except Exception:
+        logger.warning("ftctl_krbd_guard_ignore_malformed_expires guard=%s expires=%s" % (guardDir, expiresText))
+        return False
+
+    now = int(time.time())
+    if expires <= now:
+        logger.info("ftctl_krbd_guard_ignore_expired guard=%s expires=%s now=%s" % (guardDir, expires, now))
+        return False
+    return True
+
+
+def isFtctlKrbdGuarded(domainName, path):
+    if not domainName or not path:
+        return False
+
+    guardDirs = [os.path.join(FTCTL_GUARD_ROOT, domainName)]
+    try:
+        if os.path.isdir(FTCTL_GUARD_ROOT):
+            for name in os.listdir(FTCTL_GUARD_ROOT):
+                candidate = os.path.join(FTCTL_GUARD_ROOT, name)
+                if candidate not in guardDirs:
+                    guardDirs.append(candidate)
+    except Exception:
+        pass
+
+    candidateKeys = rbdMatchKeys(path)
+    for guardDir in guardDirs:
+        if not ftctlGuardIsActive(guardDir):
+            continue
+        guardKeys = ftctlGuardPathKeys(guardDir)
+        matched = candidateKeys.intersection(guardKeys)
+        if matched:
+            logger.info("ftctl_krbd_guard_match domain=%s path=%s guard=%s keys=%s" %
+                        (domainName, path, guardDir, sorted(matched)))
+            return True
+    return False
+
+
 def unmapStorage():
     try:
         domain = parse(sys.stdin)
+        domain_name = sys.argv[1] if len(sys.argv) > 1 else ""
 
         for volume in domain.getElementsByTagName("disk"):
             target = volume.getElementsByTagName("target")[0]
@@ -211,6 +358,9 @@ def unmapStorage():
                 if volume.getElementsByTagName("source"):
                     disk = volume.getElementsByTagName("source")[0]
                     img = disk.getAttribute("dev")
+                    if not img:
+                        logger.info('ftctl_krbd_skip_empty_unmap_source domain=%s' % domain_name)
+                        continue
                     #If kvdo, disable operation is required
                     if "vg_" in img and img.endswith("-ablestack_kvdo"):
                         pattern = r'/dev/mapper/vg_([0-9a-f]{32})-ablestack_kvdo'
@@ -241,6 +391,9 @@ def unmapStorage():
                         else:
                             logger.error('rbd kvdo unmap failed: %s is not ablestack kvdo image' % img)
                     else:
+                        if isFtctlKrbdGuarded(domain_name, img):
+                            logger.info('ftctl_krbd_guard_skip_unmap domain=%s path=%s' % (domain_name, img))
+                            continue
                         ret_code = executeProgram("/usr/bin/rbd", ["unmap", img])
                         if ret_code == 22:
                             logger.error('rbd unmap failed: %s is not rbd image' % img)

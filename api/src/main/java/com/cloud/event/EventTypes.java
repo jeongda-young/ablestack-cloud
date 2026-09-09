@@ -846,6 +846,18 @@ public class EventTypes {
     // DISASTER RECOVERY
     public static final String EVENT_DISASTER_RECOVERY_CLUSTER = "DISASTER.RECOVERY.CLUSTER";
 
+    // FTCTL protection
+    public static final String EVENT_FTCTL_PROTECTION_REGISTER = "FTCTL.PROTECTION.REGISTER";
+    public static final String EVENT_FTCTL_PROTECTION_STATE_UPDATE = "FTCTL.PROTECTION.STATE.UPDATE";
+    public static final String EVENT_FTCTL_PROTECTION_PAUSE = "FTCTL.PROTECTION.PAUSE";
+    public static final String EVENT_FTCTL_PROTECTION_RESUME = "FTCTL.PROTECTION.RESUME";
+    public static final String EVENT_FTCTL_PROTECTION_FAILOVER = "FTCTL.PROTECTION.FAILOVER";
+    public static final String EVENT_FTCTL_PROTECTION_FAILBACK = "FTCTL.PROTECTION.FAILBACK";
+    public static final String EVENT_FTCTL_PROTECTION_PROGRESS = "FTCTL.PROTECTION.PROGRESS";
+    public static final String EVENT_FTCTL_PROTECTION_FENCE_CONFIRM = "FTCTL.PROTECTION.FENCE.CONFIRM";
+    public static final String EVENT_FTCTL_PROTECTION_FENCE_CLEAR = "FTCTL.PROTECTION.FENCE.CLEAR";
+    public static final String EVENT_FTCTL_PROTECTION_RELEASE = "FTCTL.PROTECTION.RELEASE";
+
     // Resource Limit
     public static final String EVENT_RESOURCE_LIMIT_UPDATE = "RESOURCE.LIMIT.UPDATE";
 
@@ -1404,6 +1416,18 @@ public class EventTypes {
 
         // Disaster Recovery Cluster
         entityEventDetails.put(EVENT_DISASTER_RECOVERY_CLUSTER, "DisasterRecoveryCluster");
+
+        // FTCTL protection
+        entityEventDetails.put(EVENT_FTCTL_PROTECTION_REGISTER, VirtualMachine.class);
+        entityEventDetails.put(EVENT_FTCTL_PROTECTION_STATE_UPDATE, VirtualMachine.class);
+        entityEventDetails.put(EVENT_FTCTL_PROTECTION_PAUSE, VirtualMachine.class);
+        entityEventDetails.put(EVENT_FTCTL_PROTECTION_RESUME, VirtualMachine.class);
+        entityEventDetails.put(EVENT_FTCTL_PROTECTION_FAILOVER, VirtualMachine.class);
+        entityEventDetails.put(EVENT_FTCTL_PROTECTION_FAILBACK, VirtualMachine.class);
+        entityEventDetails.put(EVENT_FTCTL_PROTECTION_PROGRESS, VirtualMachine.class);
+        entityEventDetails.put(EVENT_FTCTL_PROTECTION_FENCE_CONFIRM, VirtualMachine.class);
+        entityEventDetails.put(EVENT_FTCTL_PROTECTION_FENCE_CLEAR, VirtualMachine.class);
+        entityEventDetails.put(EVENT_FTCTL_PROTECTION_RELEASE, VirtualMachine.class);
 
         // Management Server
         entityEventDetails.put(EVENT_MANAGEMENT_SERVER_REMOVE, "ManagementServer");

@@ -31,6 +31,97 @@
     <bean id="disasterRecoveryClusterDaoImpl" class="com.cloud.dr.cluster.dao.DisasterRecoveryClusterDaoImpl"/>
     <bean id="disasterRecoveryClusterVmMapDaoImpl" class="com.cloud.dr.cluster.dao.DisasterRecoveryClusterVmMapDaoImpl"/>
     <bean id="DisasterRecoveryClusterDetailsDaoImpl" class="com.cloud.dr.cluster.dao.DisasterRecoveryClusterDetailsDaoImpl"/>
+    <bean id="drSiteDaoImpl" class="com.cloud.dr.dao.DrSiteDaoImpl"/>
+    <bean id="drSiteCredentialDaoImpl" class="com.cloud.dr.dao.DrSiteCredentialDaoImpl"/>
+    <bean id="drSiteHealthCheckDaoImpl" class="com.cloud.dr.dao.DrSiteHealthCheckDaoImpl"/>
+    <bean id="drSitePairDaoImpl" class="com.cloud.dr.dao.DrSitePairDaoImpl"/>
+    <bean id="drPlanDaoImpl" class="com.cloud.dr.dao.DrPlanDaoImpl"/>
+    <bean id="drPlanRuntimeDaoImpl" class="com.cloud.dr.dao.DrPlanRuntimeDaoImpl"/>
+    <bean id="drSyncCycleDaoImpl" class="com.cloud.dr.dao.DrSyncCycleDaoImpl"/>
+    <bean id="drResourceLeaseDaoImpl" class="com.cloud.dr.dao.DrResourceLeaseDaoImpl"/>
+    <bean id="drGroupRunDaoImpl" class="com.cloud.dr.dao.DrGroupRunDaoImpl"/>
+    <bean id="drPlanViewCacheDaoImpl" class="com.cloud.dr.dao.DrPlanViewCacheDaoImpl"/>
+    <bean id="drRestorePointDaoImpl" class="com.cloud.dr.dao.DrRestorePointDaoImpl"/>
+    <bean id="drRestorePointArtifactDaoImpl" class="com.cloud.dr.dao.DrRestorePointArtifactDaoImpl"/>
+    <bean id="drReplicaDaoImpl" class="com.cloud.dr.dao.DrReplicaDaoImpl"/>
+    <bean id="drReplicaDiskDaoImpl" class="com.cloud.dr.dao.DrReplicaDiskDaoImpl"/>
+    <bean id="drTargetResourceClaimDaoImpl" class="com.cloud.dr.dao.DrTargetResourceClaimDaoImpl"/>
+    <bean id="drRunDaoImpl" class="com.cloud.dr.dao.DrRunDaoImpl"/>
+    <bean id="drRunStepDaoImpl" class="com.cloud.dr.dao.DrRunStepDaoImpl"/>
+    <bean id="drEventDaoImpl" class="com.cloud.dr.dao.DrEventDaoImpl"/>
+    <bean id="drCutoverSessionDaoImpl" class="com.cloud.dr.dao.DrCutoverSessionDaoImpl"/>
+    <bean id="drFailbackSessionDaoImpl" class="com.cloud.dr.dao.DrFailbackSessionDaoImpl"/>
+    <bean id="drCutoverDiskDaoImpl" class="com.cloud.dr.dao.DrCutoverDiskDaoImpl"/>
+    <bean id="drTestSessionDaoImpl" class="com.cloud.dr.dao.DrTestSessionDaoImpl"/>
+    <bean id="drTestDiskDaoImpl" class="com.cloud.dr.dao.DrTestDiskDaoImpl"/>
+    <bean id="drSiteServiceImpl" class="com.cloud.dr.DrSiteServiceImpl"/>
+    <bean id="drSiteCredentialServiceImpl" class="com.cloud.dr.DrSiteCredentialServiceImpl"/>
+    <bean id="drSiteHealthCheckServiceImpl" class="com.cloud.dr.health.DrSiteHealthCheckServiceImpl"/>
+    <bean id="drSiteHealthCheckHistoryServiceImpl" class="com.cloud.dr.DrSiteHealthCheckHistoryServiceImpl"/>
+    <bean id="drSiteHealthCheckScheduler" class="com.cloud.dr.health.DrSiteHealthCheckScheduler"/>
+    <bean id="drMoldInventoryClient" class="com.cloud.dr.inventory.DrMoldInventoryClient"/>
+    <bean id="drSiteAgentBrokerServiceImpl" class="com.cloud.dr.DrSiteAgentBrokerServiceImpl"/>
+    <bean id="drVmwareInventoryClient" class="com.cloud.dr.inventory.DrVmwareInventoryClient"/>
+    <bean id="drSourceHardwareInventoryServiceImpl" class="com.cloud.dr.inventory.DrSourceHardwareInventoryServiceImpl"/>
+    <bean id="drSiteInventoryServiceImpl" class="com.cloud.dr.inventory.DrSiteInventoryServiceImpl"/>
+    <bean id="drPlanInventoryServiceImpl" class="com.cloud.dr.inventory.DrPlanInventoryServiceImpl"/>
+    <bean id="drPlanTargetPlacementResolver" class="com.cloud.dr.DrPlanTargetPlacementResolverImpl"/>
+    <bean id="drWorkerPlacementServiceImpl" class="com.cloud.dr.DrWorkerPlacementServiceImpl"/>
+    <bean id="drPlanGuidedSpecBuilder" class="com.cloud.dr.DrPlanGuidedSpecBuilder"/>
+    <bean id="drPlanReadinessValidator" class="com.cloud.dr.DrPlanReadinessValidator"/>
+    <bean id="drFtctlActionCapabilityServiceImpl" class="com.cloud.dr.DrFtctlActionCapabilityServiceImpl"/>
+    <bean id="drPlanServiceImpl" class="com.cloud.dr.DrPlanServiceImpl"/>
+    <bean id="drRunServiceImpl" class="com.cloud.dr.DrRunServiceImpl"/>
+    <bean id="drProjectionServiceImpl" class="com.cloud.dr.DrProjectionServiceImpl"/>
+    <bean id="drProtectionViewServiceImpl" class="com.cloud.dr.DrProtectionViewServiceImpl"/>
+    <bean id="drVmProtectionViewServiceImpl" class="com.cloud.dr.DrVmProtectionViewServiceImpl"/>
+    <bean id="drProtectionAuthorityServiceImpl" class="com.cloud.dr.DrProtectionAuthorityServiceImpl"/>
+    <bean id="drCurrentAuthorityResolverImpl" class="com.cloud.dr.DrCurrentAuthorityResolverImpl"/>
+    <bean id="drFailbackPreflightServiceImpl" class="com.cloud.dr.DrFailbackPreflightServiceImpl"/>
+    <bean id="drReprotectPreflightServiceImpl" class="com.cloud.dr.DrReprotectPreflightServiceImpl"/>
+    <bean id="drSourceIsolationPreflightServiceImpl" class="com.cloud.dr.DrSourceIsolationPreflightServiceImpl"/>
+    <bean id="drFailbackDataGateServiceImpl" class="com.cloud.dr.DrFailbackDataGateServiceImpl"/>
+    <bean id="drProjectionScheduler" class="com.cloud.dr.DrProjectionScheduler"/>
+    <bean id="drSchedulerRecoveryScheduler" class="com.cloud.dr.DrSchedulerRecoveryScheduler"/>
+    <bean id="drTargetMaterializationServiceImpl" class="com.cloud.dr.DrTargetMaterializationServiceImpl"/>
+    <bean id="drTargetResourceOwnershipService" class="com.cloud.dr.DrTargetResourceOwnershipService"/>
+    <bean id="drPlanOwnedTransportServiceImpl" class="com.cloud.dr.DrPlanOwnedTransportServiceImpl"/>
+    <bean id="drFailbackLifecycleServiceImpl" class="com.cloud.dr.DrFailbackLifecycleServiceImpl"/>
+    <bean id="drOrchestratorImpl" class="com.cloud.dr.orchestrator.DrOrchestratorImpl"/>
+    <bean id="drProtectionOrchestratorImpl" class="com.cloud.dr.orchestrator.DrProtectionOrchestratorImpl"/>
+    <bean id="drRunExecutorImpl" class="com.cloud.dr.orchestrator.DrRunExecutorImpl"/>
+    <bean id="drAdmissionControllerImpl" class="com.cloud.dr.DrAdmissionControllerImpl"/>
+    <bean id="drProtectionGroupServiceImpl" class="com.cloud.dr.DrProtectionGroupServiceImpl"/>
+    <bean id="ftctlDrActionAdapter" class="com.cloud.dr.adapter.ftctl.FtctlDrActionAdapter"/>
+    <bean id="ftctlDrContractAdapter" class="com.cloud.dr.adapter.ftctl.FtctlDrContractAdapter"/>
+    <bean id="ftctlDrUnifiedActionAdapter" class="com.cloud.dr.adapter.ftctl.FtctlDrUnifiedActionAdapter"/>
+    <bean id="drRemoteAgentClient" class="com.cloud.dr.adapter.ftctl.DrRemoteAgentClient"/>
+    <bean id="ftctlDrProjectionAdapter" class="com.cloud.dr.adapter.ftctl.FtctlDrProjectionAdapter"/>
+    <bean id="ftctlDrRuntimeProjectionAdapter" class="com.cloud.dr.adapter.ftctl.FtctlDrRuntimeProjectionAdapter"/>
+    <bean id="vmwarePhase1TargetAdapter" class="com.cloud.dr.adapter.vmware.VmwarePhase1TargetAdapter"/>
+    <bean id="v2kDrMigrationAdapter" class="com.cloud.dr.adapter.v2k.V2kDrMigrationAdapter"/>
+    <bean id="drAdapterRegistryImpl" class="com.cloud.dr.adapter.DrAdapterRegistryImpl">
+        <property name="replicationEngines">
+            <list>
+                <ref bean="ftctlDrActionAdapter"/>
+                <ref bean="ftctlDrUnifiedActionAdapter"/>
+                <ref bean="vmwarePhase1TargetAdapter"/>
+                <ref bean="v2kDrMigrationAdapter"/>
+            </list>
+        </property>
+        <property name="fencingAdapters">
+            <list>
+                <ref bean="ftctlDrActionAdapter"/>
+            </list>
+        </property>
+        <property name="projectionAdapters">
+            <list>
+                <ref bean="ftctlDrProjectionAdapter"/>
+                <ref bean="ftctlDrRuntimeProjectionAdapter"/>
+            </list>
+        </property>
+    </bean>
+    <bean id="drResponseGenerator" class="com.cloud.dr.response.DrResponseGenerator"/>
 
     <bean id="disasterRecoveryHelper" class="com.cloud.dr.cluster.DisasterRecoveryHelperImpl" >
         <property name="name" value="DisasterRecoveryHelper" />

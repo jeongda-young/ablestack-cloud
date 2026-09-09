@@ -26,7 +26,12 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardOpenOption;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
+import java.util.Base64;
 import java.util.stream.Stream;
 
 public class RollingMaintenanceServiceExecutor extends RollingMaintenanceExecutorBase implements RollingMaintenanceExecutor {
@@ -34,31 +39,64 @@ public class RollingMaintenanceServiceExecutor extends RollingMaintenanceExecuto
     private static final String servicePrefix = "cloudstack-rolling-maintenance";
     private static final String resultsFileSuffix = "rolling-maintenance-results";
     private static final String outputFileSuffix = "rolling-maintenance-output";
+    private static final Path runtimeDirectory = Paths.get("/run/cloudstack/rolling-maintenance");
 
 
     public RollingMaintenanceServiceExecutor(String hooksDir) {
         super(hooksDir);
     }
 
-    /**
-     * Generate and return escaped instance name to use on systemd service invokation
-     */
     private String generateInstanceName(String stage, String file, String payload) {
-        String instanceName = String.format("%s,%s,%s,%s,%s", stage, file, getTimeout(),
-                getResultsFilePath(), getOutputFilePath());
-        if (StringUtils.isNotBlank(payload)) {
-            instanceName += "," + payload;
-        }
-        return Script.runSimpleBashScript(String.format("systemd-escape '%s'", instanceName));
+        String input = String.format("%s\n%s\n%s\n%s\n%s\n%s", stage, file, getTimeout(),
+                getResultsFilePath(), getOutputFilePath(), StringUtils.defaultString(payload));
+        return stage + "-" + sha256(input).substring(0, 16);
     }
 
-    private String invokeService(String action, String stage, String file, String payload) {
-        logger.debug("Invoking rolling maintenance service for stage: " + stage + " and file " + file + " with action: " + action);
+    private String sha256(String input) {
+        try {
+            MessageDigest digest = MessageDigest.getInstance("SHA-256");
+            byte[] hash = digest.digest(input.getBytes(StandardCharsets.UTF_8));
+            StringBuilder result = new StringBuilder();
+            for (byte b : hash) {
+                result.append(String.format("%02x", b));
+            }
+            return result.toString();
+        } catch (NoSuchAlgorithmException e) {
+            throw new CloudRuntimeException("SHA-256 digest is not available", e);
+        }
+    }
+
+    private String base64(String value) {
+        return Base64.getEncoder().encodeToString(StringUtils.defaultString(value).getBytes(StandardCharsets.UTF_8));
+    }
+
+    private Path getMetadataFilePath(String instanceName) {
+        return runtimeDirectory.resolve(instanceName + ".metadata");
+    }
+
+    private void prepareServiceMetadata(String instanceName, String stage, String file, String payload) {
+        try {
+            Files.createDirectories(runtimeDirectory);
+            Files.deleteIfExists(Paths.get(getResultsFilePath()));
+            Files.deleteIfExists(Paths.get(getOutputFilePath()));
+
+            String metadata = String.format("stage=%s%nscript=%s%ntimeout=%s%nresults=%s%noutput=%s%npayload=%s%n",
+                    base64(stage), base64(file), getTimeout(), base64(getResultsFilePath()),
+                    base64(getOutputFilePath()), base64(payload));
+            Files.write(getMetadataFilePath(instanceName), metadata.getBytes(StandardCharsets.UTF_8),
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING, StandardOpenOption.WRITE);
+        } catch (IOException e) {
+            throw new CloudRuntimeException("Unable to prepare rolling maintenance service metadata", e);
+        }
+    }
+
+    private String invokeService(String action, String instanceName) {
+        logger.debug("Invoking rolling maintenance service instance " + instanceName + " with action: " + action);
         final OutputInterpreter.AllLinesParser parser = new OutputInterpreter.AllLinesParser();
-        Script command = new Script("/bin/systemctl", logger);
-        command.add(action);
-        String service = servicePrefix + "@" + generateInstanceName(stage, file, payload);
-        command.add(service);
+        String service = servicePrefix + "@" + instanceName;
+        Script command = new Script("/bin/bash", logger);
+        command.add("-c");
+        command.add(String.format("/bin/systemctl %s %s 2>&1 || true", action, service));
         String result = command.execute(parser);
         int exitValue = command.getExitValue();
         logger.trace("Execution: " + command.toString() + " - exit code: " + exitValue +
@@ -70,7 +108,9 @@ public class RollingMaintenanceServiceExecutor extends RollingMaintenanceExecuto
     public Pair<Boolean, String> startStageExecution(String stage, File scriptFile, int timeout, String payload) {
         checkHooksDirectory();
         setTimeout(timeout);
-        String result = invokeService("start", stage, scriptFile.getAbsolutePath(), payload);
+        String instanceName = generateInstanceName(stage, scriptFile.getAbsolutePath(), payload);
+        prepareServiceMetadata(instanceName, stage, scriptFile.getAbsolutePath(), payload);
+        String result = invokeService("start", instanceName);
         if (StringUtils.isNotBlank(result)) {
             throw new CloudRuntimeException("Error starting stage: " + stage + " execution: " + result);
         }
@@ -105,9 +145,10 @@ public class RollingMaintenanceServiceExecutor extends RollingMaintenanceExecuto
 
     @Override
     public boolean isStageRunning(String stage, File scriptFile, String payload) {
-        String result = invokeService("is-active", stage, scriptFile.getAbsolutePath(), payload);
+        String instanceName = generateInstanceName(stage, scriptFile.getAbsolutePath(), payload);
+        String result = invokeService("is-active", instanceName);
         if (StringUtils.isNotBlank(result) && result.equals("failed")) {
-            String status = invokeService("status", stage, scriptFile.getAbsolutePath(), payload);
+            String status = invokeService("status", instanceName);
             String errorMsg = "Stage " + stage + " execution failed, status: " + status;
             logger.error(errorMsg);
             throw new CloudRuntimeException(errorMsg);
@@ -117,7 +158,7 @@ public class RollingMaintenanceServiceExecutor extends RollingMaintenanceExecuto
 
     @Override
     public boolean getStageExecutionSuccess(String stage, File scriptFile) {
-        String fileContent = readFromFile(getResultsFilePath());
+        String fileContent = readResultFileWithRetry();
         if (StringUtils.isBlank(fileContent)) {
             throw new CloudRuntimeException("Empty content in file " + getResultsFilePath());
         }
@@ -131,5 +172,22 @@ public class RollingMaintenanceServiceExecutor extends RollingMaintenanceExecuto
         }
         setAvoidMaintenance(Boolean.parseBoolean(parts[2]));
         return Boolean.parseBoolean(parts[1]);
+    }
+
+    private String readResultFileWithRetry() {
+        String fileContent = StringUtils.EMPTY;
+        for (int i = 0; i < 10; i++) {
+            fileContent = readFromFile(getResultsFilePath());
+            if (StringUtils.isNotBlank(fileContent)) {
+                return fileContent;
+            }
+            try {
+                Thread.sleep(200);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return fileContent;
+            }
+        }
+        return fileContent;
     }
 }

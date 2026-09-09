@@ -72,33 +72,8 @@
           :columns="['displayname', 'state', 'type', 'created']"
           :routerlinks="(record) => { return { displayname: '/vmsnapshot/' + record.id } }"/>
       </a-tab-pane>
-      <a-tab-pane :tab="$t('label.dr')" key="disasterrecoverycluster" v-if="'createDisasterRecoveryClusterVm' in $store.getters.apis">
-        <a-button
-          type="primary"
-          style="width: 100%; margin-bottom: 10px"
-          @click="showAddMirVMModal"
-          :loading="loadingMirror"
-          :disabled="!('createDisasterRecoveryClusterVm' in $store.getters.apis)">
-          <template #icon><plus-outlined /></template> {{ $t('label.add.dr.mirroring.vm') }}
-        </a-button>
-        <DRTable :resource="vm" :loading="loading">
-          <template #actions="record">
-            <tooltip-button
-              tooltipPlacement="bottom"
-              :tooltip="$t('label.dr.simulation.test')"
-              icon="ExperimentOutlined"
-              :disabled="!('connectivityTestsDisasterRecovery' in $store.getters.apis)"
-              @onClick="DrSimulationTest(record)" />
-            <tooltip-button
-              tooltipPlacement="bottom"
-              :tooltip="$t('label.dr.remove.mirroring')"
-              :disabled="!('deleteDisasterRecoveryClusterVm' in $store.getters.apis)"
-              type="primary"
-              :danger="true"
-              icon="link-outlined"
-              @onClick="removeMirror(record)" />
-          </template>
-        </DRTable>
+      <a-tab-pane :tab="$t('label.dr.plans')" key="drplans" v-if="'getDrVmProtectionView' in $store.getters.apis">
+        <DrPlanVmTab :resource="vm" :loading="loading" />
       </a-tab-pane>
       <a-tab-pane :tab="$t('label.backup')" key="backups" v-if="'listBackups' in $store.getters.apis">
         <ListResourceTable
@@ -108,6 +83,9 @@
           :columns="['name', 'status', 'size', 'virtualsize', 'type', 'intervaltype', 'created']"
           :routerlinks="(record) => { return { name: '/backup/' + record.id } }"
           :showSearch="false"/>
+      </a-tab-pane>
+      <a-tab-pane :tab="$t('label.ftctl.fault.protection')" key="ftctl" v-if="'getFtctlProtection' in $store.getters.apis">
+        <FtctlTab :resource="vm" :loading="loading" @keep-current-tab="keepCurrentTab" />
       </a-tab-pane>
       <a-tab-pane :tab="$t('label.securitygroups')" key="securitygroups" v-if="(dataResource.securitygroup && dataResource.securitygroup.length > 0) || ($store.getters.showSecurityGroups && securityGroupNetworkProviderUseThisVM)">
         <a-button
@@ -247,36 +225,6 @@
       <CreateVolume :resource="resource" @close-action="closeModals" />
     </a-modal>
 
-    <a-modal
-      :visible="showAddMirrorVMModal"
-      :title="$t('label.add.dr.mirroring.vm')"
-      :maskClosable="false"
-      :closable="true"
-      :footer="null"
-      @cancel="closeModals">
-      <DRMirroringVMAdd :resource="resource" @close-action="closeModals" />
-    </a-modal>
-
-    <a-modal
-      :visible="showDrSimulationTestModal"
-      :title="$t('label.dr.simulation.test')"
-      :maskClosable="false"
-      :closable="true"
-      :footer="null"
-      width="850px"
-      @cancel="closeModals">
-      <DRsimulationTestModal :resource="resource" @close-action="closeModals" />
-    </a-modal>
-
-    <a-modal
-      :visible="showRemoveMirrorVMModal"
-      :title="$t('label.dr.remove.mirroring')"
-      :maskClosable="false"
-      :closable="true"
-      :footer="null"
-      @cancel="closeModals">
-      <DRMirroringVMRemove :resource="resource" @close-action="closeModals" />
-    </a-modal>
   </a-spin>
 </template>
 
@@ -295,16 +243,13 @@ import NicsTab from '@/views/network/NicsTab'
 import GuestNetworkTab from '@/views/compute/GuestNetworkTab'
 import InstanceSchedules from '@/views/compute/InstanceSchedules.vue'
 import ListResourceTable from '@/components/view/ListResourceTable'
-import TooltipButton from '@/components/widgets/TooltipButton'
 import ResourceIcon from '@/components/view/ResourceIcon'
 import AnnotationsTab from '@/components/view/AnnotationsTab'
 import VolumesTab from '@/components/view/VolumesTab.vue'
 import SecurityGroupSelection from '@views/compute/wizard/SecurityGroupSelection'
-import DRTable from '@/views/compute/dr/DRTable'
-import DRsimulationTestModal from '@/views/compute/dr/DRsimulationTestModal'
-import DRMirroringVMAdd from '@/views/compute/dr/DRMirroringVMAdd'
-import DRMirroringVMRemove from '@/views/compute/dr/DRMirroringVMRemove'
+import DrPlanVmTab from '@/views/compute/dr/DrPlanVmTab.vue'
 import GPUTab from '@/components/view/GPUTab.vue'
+import FtctlTab from '@/views/compute/FtctlTab.vue'
 
 export default {
   name: 'InstanceTab',
@@ -317,15 +262,12 @@ export default {
     CreateVolume,
     NicsTab,
     GuestNetworkTab,
-    DRTable,
-    DRsimulationTestModal,
-    DRMirroringVMAdd,
-    DRMirroringVMRemove,
+    DrPlanVmTab,
     GPUTab,
+    FtctlTab,
     InstanceSchedules,
     ListResourceTable,
     SecurityGroupSelection,
-    TooltipButton,
     ResourceIcon,
     AnnotationsTab,
     VolumesTab
@@ -346,14 +288,10 @@ export default {
     return {
       vm: {},
       totalStorage: 0,
-      currentTab: 'details',
+      currentTab: this.resolveCurrentTabFromRoute(),
       showUpdateSecurityGroupsModal: false,
       showAddVolumeModal: false,
       diskOfferings: [],
-      showAddMirrorVMModal: false,
-      showDrSimulationTestModal: false,
-      showRemoveMirrorVMModal: false,
-      loadingMirror: false,
       annotations: [],
       dataResource: {},
       editeNic: '',
@@ -540,7 +478,24 @@ export default {
       return this.formatHostDevicesText(withoutDevice)
     },
     setCurrentTab () {
-      this.currentTab = this.$route.query.tab ? this.$route.query.tab : 'details'
+      const routeTab = this.resolveCurrentTabFromRoute()
+      if (this.currentTab !== routeTab) {
+        this.currentTab = routeTab
+      }
+    },
+    resolveCurrentTabFromRoute () {
+      let tab = null
+      if (this.$route?.query?.tab) {
+        tab = this.$route.query.tab
+      }
+      if (!tab && typeof window !== 'undefined' && window.location?.hash) {
+        const queryString = window.location.hash.split('?')[1] || ''
+        tab = new URLSearchParams(queryString).get('tab')
+      }
+      if (tab === 'disasterrecoverycluster') {
+        return 'getDrVmProtectionView' in this.$store.getters.apis ? 'drplans' : 'details'
+      }
+      return tab || 'details'
     },
     async fetchData () {
       this.annotations = []
@@ -601,15 +556,9 @@ export default {
       this.showUpdateSecurityGroupsModal = true
       this.loadingSG = false
     },
-    showAddMirVMModal () {
-      this.showAddMirrorVMModal = true
-    },
     closeModals () {
       this.showAddVolumeModal = false
       this.showUpdateSecurityGroupsModal = false
-      this.showAddMirrorVMModal = false
-      this.showRemoveMirrorVMModal = false
-      this.showDrSimulationTestModal = false
     },
     updateSecurityGroupsSelection (securitygroupids) {
       this.securitygroupids = securitygroupids || []
@@ -622,16 +571,9 @@ export default {
         this.parentFetchData()
       })
     },
-    DrSimulationTest () {
-      this.showDrSimulationTestModal = true
-    },
-    removeMirror () {
-      this.showRemoveMirrorVMModal = true
-    },
     async handleChangeTab (activeKey) {
-      // 디바이스 탭으로 변경될 때 데이터 로드
+      // Load host device data only when the device tab is selected.
       if (activeKey === 'hostdevices') {
-        // VM 상태가 변경되었을 수 있으므로 항상 캐시 초기화 후 데이터 로드
         this.resetDeviceCache()
         await this.fetchData()
       }
@@ -639,7 +581,7 @@ export default {
       if (this.currentTab !== activeKey) {
         this.currentTab = activeKey
 
-        // URL 쿼리 파라미터 업데이트
+        // Keep the tab in the URL without triggering a full route update.
         const query = Object.assign({}, this.$route.query)
         query.tab = activeKey
         const queryString = Object.keys(query).map(key => {
@@ -648,6 +590,17 @@ export default {
 
         history.pushState({}, null, '#' + this.$route.path + '?' + queryString)
       }
+    },
+    keepCurrentTab (activeKey = 'ftctl') {
+      const query = Object.assign({}, this.$route.query)
+      if (query.tab !== activeKey) {
+        query.tab = activeKey
+        const queryString = Object.keys(query).map(key => {
+          return encodeURIComponent(key) + '=' + encodeURIComponent(query[key])
+        }).join('&')
+        history.pushState({}, null, '#' + this.$route.path + '?' + queryString)
+      }
+      this.currentTab = activeKey
     },
     resetDeviceCache () {
       this.devicesLoaded = false

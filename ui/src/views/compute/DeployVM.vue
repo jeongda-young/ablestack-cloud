@@ -604,6 +604,19 @@
                         </a-select>
                       </a-form-item>
                     </div>
+                    <a-form-item v-if="hypervisor === 'KVM'" name="machinecompatibility" ref="machinecompatibility">
+                      <template #label>
+                        <tooltip-label :title="$t('label.ft.machine.compatibility')" :tooltip="$t('message.ft.machine.compatibility.desc')"/>
+                      </template>
+                      <a-select v-model:value="form.machinecompatibility">
+                        <a-select-option value="standard">
+                          {{ $t('label.ft.machine.compatibility.standard') }}
+                        </a-select-option>
+                        <a-select-option value="ft-compatible">
+                          {{ $t('label.ft.machine.compatibility.ft') }}
+                        </a-select-option>
+                      </a-select>
+                    </a-form-item>
                     <a-form-item :label="$t('label.tpm')" name="tpmversion" ref="tpmversion">
                       <a-select
                         v-model:value="form.tpmversion"
@@ -1807,6 +1820,7 @@ export default {
         this.form.startvm = true
       }
       this.form.vmNumber = 1
+      this.form.machinecompatibility = 'standard'
 
       if (this.zone && this.zone.networktype !== 'Basic') {
         if (this.zoneSelected && this.vm.templateid && this.templateNics && this.templateNics.length > 0) {
@@ -1968,6 +1982,7 @@ export default {
         this.form.boottype = this.defaultBootType ? this.defaultBootType : this.options.bootTypes && this.options.bootTypes.length > 0 ? this.options.bootTypes[0].id : undefined
         this.form.bootmode = this.defaultBootMode ? this.defaultBootMode : this.options.bootModes && this.options.bootModes.length > 0 ? this.options.bootModes[0].id : undefined
         this.form.tpmversion = this.defaultTPM ? this.defaultTPM : this.options.tpmversion && this.options.tpmversion.length > 0 ? this.options.tpmversion[0].id : undefined
+        this.form.machinecompatibility = this.form.machinecompatibility || 'standard'
         this.instanceConfig = toRaw(this.form)
       })
     },
@@ -2476,6 +2491,9 @@ export default {
         if (this.isCustomizedIOPS) {
           deployVmData['details[0].minIops'] = this.minIops
           deployVmData['details[0].maxIops'] = this.maxIops
+        }
+        if (values.machinecompatibility === 'ft-compatible') {
+          deployVmData['details[0].kvm.guest.os.machine.type'] = 'pc-i440fx-9.2'
         }
         // step 4: select disk offering
         if (this.template && !this.template.deployasis && this.template.childtemplates && this.template.childtemplates.length > 0) {

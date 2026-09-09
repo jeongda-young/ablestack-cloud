@@ -48,8 +48,18 @@ export default {
   },
   data () {
     return {
-      formRef: null,
-      form: reactive({}),
+      form: reactive({
+        storagetype: 'shared',
+        provisioningtype: 'thin',
+        customdisksize: true,
+        writecachetype: 'none',
+        qostype: '',
+        ispublic: isAdmin(),
+        disksizestrictness: false,
+        encryptdisk: false,
+        kvdoenable: false,
+        shareable: false
+      }),
       loading: false
     }
   },
@@ -70,17 +80,17 @@ export default {
         const params = {
           name: values.name,
           displaytext: values.displaytext,
-          storageType: values.storagetype,
-          cacheMode: values.writecachetype,
-          provisioningType: values.provisioningtype,
+          storagetype: values.storagetype,
+          cachemode: values.writecachetype,
+          provisioningtype: values.provisioningtype,
           customized: values.customdisksize,
           disksizestrictness: values.disksizestrictness,
           encrypt: values.encryptdisk,
-          kvdoEnable: values.kvdoenable,
+          kvdoenable: values.kvdoenable,
           shareable: values.shareable
         }
         if (values.shareable === true) {
-          params.cacheMode = 'none'
+          params.cachemode = 'none'
         }
         if (values.customdisksize !== true) {
           params.disksize = values.disksize
@@ -178,8 +188,8 @@ export default {
   .form-layout {
     width: 80vw;
 
-    @media (min-width: 800px) {
-      width: 480px;
+    @media (min-width: 700px) {
+      width: 550px;
     }
   }
 </style>

@@ -497,6 +497,10 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
                 && StringUtils.isNotBlank(getBackupDetail(backup, DETAIL_CHECKPOINT_NAME))
                 && StringUtils.isNotBlank(getBackupDetail(backup, DETAIL_RBD_DISK_PATHS))) {
             final AblestackDeleteBackupCommand command = new AblestackDeleteBackupCommand(backup.getExternalId(), null, null, null, true);
+            final int commandTimeout = BackupCommandTimeout.value();
+            if (commandTimeout > 0) {
+                command.setWait(commandTimeout);
+            }
             command.setBackupProvider(getName());
             final VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(backup.getVmId());
             command.setVmName(vm != null ? vm.getInstanceName() : null);
@@ -2097,6 +2101,10 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         }
 
         final AblestackDeleteBackupCommand command = new AblestackDeleteBackupCommand(backup.getExternalId(), null, null, null, true);
+        final int commandTimeout = BackupCommandTimeout.value();
+        if (commandTimeout > 0) {
+            command.setWait(commandTimeout);
+        }
         command.setBackupProvider(getName());
         final VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(backup.getVmId());
         command.setVmName(vm != null ? vm.getInstanceName() : null);

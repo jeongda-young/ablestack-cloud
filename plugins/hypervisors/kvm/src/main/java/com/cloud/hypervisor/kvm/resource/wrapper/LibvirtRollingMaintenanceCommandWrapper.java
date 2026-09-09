@@ -73,7 +73,7 @@ public class LibvirtRollingMaintenanceCommandWrapper extends CommandWrapper<Roll
             logger.info("Finished processing stage " + stage);
             return answer;
         } catch (CloudRuntimeException e) {
-            return new RollingMaintenanceAnswer(command, false, e.getMessage(), false);
+            return new RollingMaintenanceAnswer(command, false, e.getMessage(), true);
         }
     }
 }

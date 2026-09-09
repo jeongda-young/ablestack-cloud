@@ -29,7 +29,6 @@ import systemVms from '@/config/section/infra/systemVms'
 import routers from '@/config/section/infra/routers'
 import ilbvms from '@/config/section/infra/ilbvms'
 import managementServers from '@/config/section/infra/managementServers'
-import disasterRecovery from '@/config/section/infra/disasterRecovery'
 import alertRules from '@/config/section/infra/alertRules'
 
 export default {
@@ -59,7 +58,6 @@ export default {
     routers,
     ilbvms,
     managementServers,
-    disasterRecovery,
     {
       name: 'cpusocket',
       title: 'label.cpu.sockets',

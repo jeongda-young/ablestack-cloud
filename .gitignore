@@ -75,6 +75,8 @@ docs/tmp
 engine/storage/integration-test/test-output
 git-remote-https.exe.stackdump
 node_modules
+ui/playwright-report/
+ui/test-results/
 override/
 packaging/centos8
 packaging/suse15
@@ -108,3 +110,4 @@ waf-*
 
 !.gitignore
 .history
+.local-dev/

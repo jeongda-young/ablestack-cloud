@@ -88,11 +88,13 @@ import com.cloud.utils.component.ManagerBase;
 import com.cloud.utils.concurrency.NamedThreadFactory;
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.vm.UserVmManager;
+import com.cloud.vm.VMInstanceDetailVO;
 import com.cloud.vm.VMInstanceVO;
 import com.cloud.vm.VirtualMachine;
 import com.cloud.vm.VirtualMachineManager;
 import com.cloud.vm.VirtualMachineProfile;
 import com.cloud.vm.dao.VMInstanceDao;
+import com.cloud.vm.dao.VMInstanceDetailsDao;
 
 /**
  * HighAvailabilityManagerImpl coordinates the HA process. VMs are registered with the HA Manager for HA. The request is stored
@@ -119,6 +121,7 @@ import com.cloud.vm.dao.VMInstanceDao;
 public class HighAvailabilityManagerImpl extends ManagerBase implements Configurable, HighAvailabilityManager, ClusterManagerListener {
 
     private static final int SECONDS_TO_MILLISECONDS_FACTOR = 1000;
+    private static final String FTCTL_LIFECYCLE_GUARD_DETAIL = "ftctl.lifecycle.guard";
 
     private ConfigKey<Integer> MigrationMaxRetries = new ConfigKey<>("Advanced", Integer.class,
             "vm.ha.migration.max.retries","5",
@@ -145,6 +148,8 @@ public class HighAvailabilityManagerImpl extends ManagerBase implements Configur
     HighAvailabilityDao _haDao;
     @Inject
     VMInstanceDao _instanceDao;
+    @Inject
+    VMInstanceDetailsDao _instanceDetailsDao;
     @Inject
     HostDao _hostDao;
     @Inject
@@ -442,6 +447,11 @@ public class HighAvailabilityManagerImpl extends ManagerBase implements Configur
             return;
         }
 
+        if (isFtctlLifecycleGuarded(vm)) {
+            logger.info(String.format("Skipping Cloud HA restart for VM %s because FTCTL lifecycle guard is active", vm.getInstanceName()));
+            return;
+        }
+
         logger.debug("HA schedule restart");
         Long hostId = vm.getHostId();
         if (hostId == null) {
@@ -537,6 +547,14 @@ public class HighAvailabilityManagerImpl extends ManagerBase implements Configur
     @Override
     public void scheduleRestart(VMInstanceVO vm, boolean investigate) {
         scheduleRestart(vm, investigate, null);
+    }
+
+    private boolean isFtctlLifecycleGuarded(VMInstanceVO vm) {
+        if (vm == null || vm.getType() != VirtualMachine.Type.User) {
+            return false;
+        }
+        VMInstanceDetailVO detail = _instanceDetailsDao.findDetail(vm.getId(), FTCTL_LIFECYCLE_GUARD_DETAIL);
+        return detail != null && detail.getValue() != null && !detail.getValue().isBlank();
     }
 
     private void startVm(VirtualMachine vm, Map<VirtualMachineProfile.Param, Object> params,

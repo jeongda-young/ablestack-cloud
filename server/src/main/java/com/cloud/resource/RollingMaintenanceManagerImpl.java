@@ -31,7 +31,6 @@ import javax.naming.ConfigurationException;
 
 import org.apache.cloudstack.affinity.AffinityGroupProcessor;
 import org.apache.cloudstack.api.ApiCommandResourceType;
-import org.apache.cloudstack.api.command.admin.cluster.UpdateClusterCmd;
 import org.apache.cloudstack.api.command.admin.host.PrepareForHostMaintenanceCmd;
 import org.apache.cloudstack.api.command.admin.resource.StartRollingMaintenanceCmd;
 import org.apache.cloudstack.context.CallContext;
@@ -51,7 +50,6 @@ import com.cloud.deploy.DeployDestination;
 import com.cloud.event.ActionEventUtils;
 import com.cloud.event.EventVO;
 import com.cloud.exception.AgentUnavailableException;
-import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.exception.OperationTimedoutException;
 import com.cloud.host.Host;
 import com.cloud.host.HostTagVO;
@@ -61,7 +59,6 @@ import com.cloud.host.dao.HostDao;
 import com.cloud.host.dao.HostTagsDao;
 import com.cloud.hypervisor.Hypervisor;
 import com.cloud.org.Cluster;
-import com.cloud.org.Grouping;
 import com.cloud.service.ServiceOfferingVO;
 import com.cloud.service.dao.ServiceOfferingDao;
 import com.cloud.utils.Pair;
@@ -124,17 +121,6 @@ public class RollingMaintenanceManagerImpl extends ManagerBase implements Rollin
         return true;
     }
 
-    private void updateCluster(long clusterId, String allocationState) {
-        Cluster cluster = resourceManager.getCluster(clusterId);
-        if (cluster == null) {
-            throw new InvalidParameterValueException("Unable to find the cluster by id=" + clusterId);
-        }
-        UpdateClusterCmd updateClusterCmd = new UpdateClusterCmd();
-        updateClusterCmd.setId(clusterId);
-        updateClusterCmd.setAllocationState(allocationState);
-        resourceManager.updateCluster(updateClusterCmd);
-    }
-
     private void generateReportAndFinishingEvent(StartRollingMaintenanceCmd cmd, boolean success, String details,
                                                  List<HostUpdated> hostsUpdated, List<HostSkipped> hostsSkipped) {
         Pair<ResourceType, List<Long>> pair = getResourceTypeIdPair(cmd);
@@ -169,7 +155,6 @@ public class RollingMaintenanceManagerImpl extends ManagerBase implements Rollin
         String payload = cmd.getPayload();
         Boolean forced = cmd.getForced();
 
-        Set<Long> disabledClusters = new HashSet<>();
         Map<Long, String> hostsToAvoidMaintenance = new HashMap<>();
 
         boolean success = false;
@@ -197,8 +182,6 @@ public class RollingMaintenanceManagerImpl extends ManagerBase implements Rollin
                     details = "VMs in invalid states in cluster: " + cluster.getUuid();
                     return new Ternary<>(success, details, new Pair<>(hostsUpdated, hostsSkipped));
                 }
-                disableClusterIfEnabled(cluster, disabledClusters);
-
                 logger.debug("State checks on the hosts in the cluster");
                 performStateChecks(cluster, hosts, forced, hostsSkipped);
                 logger.debug("Checking hosts capacity before attempting rolling maintenance");
@@ -218,7 +201,6 @@ public class RollingMaintenanceManagerImpl extends ManagerBase implements Rollin
                         return new Ternary<>(success, details, new Pair<>(hostsUpdated, hostsSkipped));
                     }
                 }
-                enableClusterIfDisabled(cluster, disabledClusters);
             }
         } catch (AgentUnavailableException | InterruptedException | CloudRuntimeException e) {
             String err = "Error starting rolling maintenance: " + e.getMessage();
@@ -227,13 +209,6 @@ public class RollingMaintenanceManagerImpl extends ManagerBase implements Rollin
             details = err;
             return new Ternary<>(success, details, new Pair<>(hostsUpdated, hostsSkipped));
         } finally {
-            // Enable back disabled clusters
-            for (Long clusterId : disabledClusters) {
-                Cluster cluster = resourceManager.getCluster(clusterId);
-                if (cluster.getAllocationState() == Grouping.AllocationState.Disabled) {
-                    updateCluster(clusterId, "Enabled");
-                }
-            }
             generateReportAndFinishingEvent(cmd, success, details, hostsUpdated, hostsSkipped);
         }
         success = true;
@@ -412,17 +387,6 @@ public class RollingMaintenanceManagerImpl extends ManagerBase implements Rollin
     }
 
     /**
-     * Enable back disabled cluster
-     * @param cluster cluster to enable if it has been disabled
-     * @param disabledClusters set of disabled clusters
-     */
-    private void enableClusterIfDisabled(Cluster cluster, Set<Long> disabledClusters) {
-        if (cluster.getAllocationState() == Grouping.AllocationState.Disabled && disabledClusters.contains(cluster.getId())) {
-            updateCluster(cluster.getId(), "Enabled");
-        }
-    }
-
-    /**
      * Re-check capacity to ensure the host can transit into maintenance state
      * @return tuple: (FAIL, SKIP, DETAILS), where:
      *                  - FAIL: True if rolling maintenance must fail
@@ -481,18 +445,6 @@ public class RollingMaintenanceManagerImpl extends ManagerBase implements Rollin
             hostsToAvoidMaintenance.put(host.getId(), "Pre-maintenance stage set to avoid maintenance");
         }
         return new Ternary<>(false, false, result.second());
-    }
-
-    /**
-     * Disable cluster (if hasn't been disabled yet)
-     * @param cluster cluster to disable
-     * @param disabledClusters set of disabled cluster ids. cluster is added if it is disabled
-     */
-    private void disableClusterIfEnabled(Cluster cluster, Set<Long> disabledClusters) {
-        if (cluster.getAllocationState() == Grouping.AllocationState.Enabled && !disabledClusters.contains(cluster.getId())) {
-            updateCluster(cluster.getId(), "Disabled");
-            disabledClusters.add(cluster.getId());
-        }
     }
 
     private boolean isMaintenanceScriptDefinedOnHost(Host host, List<HostSkipped> hostsSkipped) {

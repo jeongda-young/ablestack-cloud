@@ -37,6 +37,7 @@ import account from '@/config/section/account'
 import domain from '@/config/section/domain'
 import role from '@/config/section/role'
 import infra from '@/config/section/infra'
+import disasterRecovery from '@/config/section/disasterRecovery'
 import zone from '@/config/section/zone'
 import offering from '@/config/section/offering'
 import config from '@/config/section/config'
@@ -220,6 +221,7 @@ export function asyncRouterMap () {
       generateRouterMap(storage),
       generateRouterMap(network),
       generateRouterMap(image),
+      generateRouterMap(disasterRecovery),
       generateRouterMap(desktop),
       generateRouterMap(automation),
       generateRouterMap(event),

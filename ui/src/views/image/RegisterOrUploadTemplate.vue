@@ -1122,6 +1122,12 @@ export default {
               continue
             }
             params[key] = input.join()
+          } else if (key === 'zoneid') {
+            if (input === this.$t('label.all.zone')) {
+              params.zoneid = '-1'
+              continue
+            }
+            params[key] = input
           } else if (key === 'hypervisor') {
             params[key] = this.hyperVisor.opts[input].name
           } else if (key === 'groupenabled') {

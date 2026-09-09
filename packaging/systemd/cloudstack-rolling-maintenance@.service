@@ -27,5 +27,5 @@ WantedBy=multi-user.target
 [Service]
 Type=simple
 WorkingDirectory=/usr/share/cloudstack-agent/lib/
-ExecStart=/usr/share/cloudstack-agent/lib/rolling-maintenance %I
+ExecStart=/usr/share/cloudstack-agent/lib/rolling-maintenance %i
 Restart=no

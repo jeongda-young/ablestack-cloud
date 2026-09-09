@@ -1,0 +1,59 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements. See the NOTICE file distributed with this work.
+package org.apache.cloudstack.api.command.admin.dr;
+
+import java.util.List;
+
+import javax.inject.Inject;
+
+import org.apache.cloudstack.acl.RoleType;
+import org.apache.cloudstack.api.APICommand;
+import org.apache.cloudstack.api.ApiCommandResourceType;
+import org.apache.cloudstack.api.BaseAsyncCmd;
+import org.apache.cloudstack.api.Parameter;
+import org.apache.cloudstack.api.response.dr.DrGroupRunResponse;
+import org.apache.cloudstack.api.response.dr.DrPlanResponse;
+import org.apache.cloudstack.context.CallContext;
+
+import com.cloud.dr.DrGroupRunVO;
+import com.cloud.dr.DrProtectionGroupService;
+import com.cloud.dr.cluster.DisasterRecoveryClusterEventTypes;
+
+@APICommand(name = StartDrProtectionGroupActionCmd.APINAME, description = "Start an ordered DR protection group action",
+        responseObject = DrGroupRunResponse.class, authorized = {RoleType.Admin})
+public class StartDrProtectionGroupActionCmd extends BaseAsyncCmd {
+    public static final String APINAME = "startDrProtectionGroupAction";
+    @Inject private DrProtectionGroupService groupService;
+
+    @Parameter(name = "planids", type = CommandType.LIST, collectionType = CommandType.UUID,
+            entityType = DrPlanResponse.class, required = true, description = "ordered DR plan IDs")
+    private List<Long> planIds;
+    @Parameter(name = "action", type = CommandType.STRING, required = true, description = "group action")
+    private String action;
+    @Parameter(name = "maxparallel", type = CommandType.INTEGER, description = "maximum concurrent plans")
+    private Integer maxParallel;
+    @Parameter(name = "quiescerequired", type = CommandType.BOOLEAN, description = "require application quiesce policies")
+    private Boolean quiesceRequired;
+
+    @Override public void execute() {
+        DrGroupRunVO run = groupService.startGroupRun(planIds, action, maxParallel, quiesceRequired, false,
+                CallContext.current().getCallingUserId());
+        DrGroupRunResponse response = toResponse(run);
+        response.setResponseName(getCommandName());
+        setResponseObject(response);
+    }
+    private DrGroupRunResponse toResponse(DrGroupRunVO run) {
+        DrGroupRunResponse response = new DrGroupRunResponse();
+        response.setId(run.getUuid()); response.setGroupUuid(run.getGroupUuid()); response.setGroupName(run.getGroupName());
+        response.setAction(run.getAction()); response.setState(run.getState()); response.setMaxParallel(run.getMaxParallel());
+        response.setQuiesceRequired(run.isQuiesceRequired()); response.setTotalCount(run.getTotalCount());
+        response.setSucceededCount(run.getSucceededCount()); response.setFailedCount(run.getFailedCount());
+        response.setProgressJson(run.getProgressJson()); response.setCreated(run.getCreated()); response.setCompleted(run.getCompleted());
+        return response;
+    }
+    @Override public String getCommandName() { return APINAME.toLowerCase() + RESPONSE_SUFFIX; }
+    @Override public long getEntityOwnerId() { return CallContext.current().getCallingAccountId(); }
+    @Override public ApiCommandResourceType getApiResourceType() { return ApiCommandResourceType.DisasterRecoveryCluster; }
+    @Override public String getEventType() { return DisasterRecoveryClusterEventTypes.EVENT_DR_PLAN_SYNC; }
+    @Override public String getEventDescription() { return "Starting DR protection group action " + action; }
+}

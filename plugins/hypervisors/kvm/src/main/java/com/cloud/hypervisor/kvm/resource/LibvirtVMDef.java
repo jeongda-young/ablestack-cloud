@@ -998,6 +998,7 @@ public class LibvirtVMDef {
         private Long _iopsWriteRateMax;
         private Long _iopsWriteRateMaxLength;
         private DiskCacheMode _diskCacheMode;
+        private Long metadataCacheMaxSizeBytes;
         private String _serial;
         private boolean qemuDriver = true;
         private DiscardType _discard = DiscardType.IGNORE;
@@ -1357,6 +1358,17 @@ public class LibvirtVMDef {
             return _diskCacheMode;
         }
 
+        public void setMetadataCacheMaxSizeBytes(final Long metadataCacheMaxSizeBytes) {
+            if (metadataCacheMaxSizeBytes == null || metadataCacheMaxSizeBytes <= 0) {
+                throw new IllegalArgumentException("QCOW2 metadata cache max size must be positive");
+            }
+            this.metadataCacheMaxSizeBytes = metadataCacheMaxSizeBytes;
+        }
+
+        public Long getMetadataCacheMaxSizeBytes() {
+            return metadataCacheMaxSizeBytes;
+        }
+
         public void setQemuDriver(boolean qemuDriver){
             this.qemuDriver = qemuDriver;
         }
@@ -1419,7 +1431,15 @@ public class LibvirtVMDef {
                 if (isIothreadsEnabled && _bus == DiskBus.VIRTIO) {
                     diskBuilder.append(String.format("iothread='%s' ", NUMBER_OF_IOTHREADS));
                 }
-                diskBuilder.append("/>\n");
+                if (_diskFmtType == DiskFmtType.QCOW2 && metadataCacheMaxSizeBytes != null) {
+                    diskBuilder.append(">\n");
+                    diskBuilder.append("<metadata_cache>\n");
+                    diskBuilder.append(String.format("<max_size unit='bytes'>%d</max_size>\n", metadataCacheMaxSizeBytes));
+                    diskBuilder.append("</metadata_cache>\n");
+                    diskBuilder.append("</driver>\n");
+                } else {
+                    diskBuilder.append("/>\n");
+                }
             }
 
             if (_diskType == DiskType.FILE) {
