@@ -21,7 +21,6 @@ package com.cloud.hypervisor.kvm.resource.wrapper;
 
 import com.cloud.agent.api.Answer;
 import com.cloud.hypervisor.kvm.resource.LibvirtComputingResource;
-import com.cloud.hypervisor.kvm.storage.KVMPhysicalDisk;
 import com.cloud.hypervisor.kvm.storage.KVMStoragePool;
 import com.cloud.hypervisor.kvm.storage.KVMStoragePoolManager;
 import com.cloud.resource.CommandWrapper;
@@ -52,7 +51,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -348,28 +346,7 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
 
     private boolean restoreIncrementalRbdBackupChainToFileVolume(final String volumePath, final List<String> backupPaths, final int timeout,
             final String backupRootPath, final int backupIndex) {
-        if (StringUtils.isBlank(backupRootPath)) {
-            throw new CloudRuntimeException("Unable to locate backup root path for incremental RBD restore");
-        }
-        final RbdImageSpec sourceImage = getRbdImageSpecFromMetadata(backupRootPath, backupIndex);
-        final String tempImage = sourceImage.buildTempImageSpec();
-        try {
-            if (!importBackupChainToTemporaryRbd(backupPaths, timeout, sourceImage, tempImage)) {
-                return false;
-            }
-            return convertTemporaryRbdToFileVolume(volumePath, timeout, sourceImage, tempImage);
-        } finally {
-            removeTemporaryRbdImage(sourceImage, tempImage, timeout);
-        }
-    }
-
-    private String getFirstExistingBackupPath(final List<String> backupPaths) {
-        for (final String backupPath : backupPaths) {
-            if (StringUtils.isNotBlank(backupPath) && Files.exists(Paths.get(backupPath))) {
-                return backupPath;
-            }
-        }
-        return backupPaths.get(0);
+        return LibvirtAblestackRbdRestoreHelper.restoreRbdBackupChainToFileVolume(RESTORE_TRACE, volumePath, backupPaths, timeout, backupRootPath, backupIndex);
     }
 
     private String getLastExistingBackupPath(final List<String> backupPaths) {
@@ -673,23 +650,6 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
         }
     }
 
-    private boolean convertTemporaryRbdToFileVolume(final String volumePath, final int timeout, final RbdImageSpec sourceImage, final String tempImage) {
-        QemuImgFile srcBackupFile = null;
-        QemuImgFile destVolumeFile = null;
-        try {
-            final QemuImg qemu = new QemuImg(timeout * 1000, true, false);
-            srcBackupFile = new QemuImgFile(sourceImage.buildQemuUri(tempImage), QemuImg.PhysicalDiskFormat.RAW);
-            destVolumeFile = new QemuImgFile(volumePath, getFileVolumeFormat(volumePath));
-            qemu.convert(srcBackupFile, destVolumeFile);
-            return true;
-        } catch (final QemuImgException | LibvirtException e) {
-            final String srcFilename = srcBackupFile != null ? srcBackupFile.getFileName() : tempImage;
-            final String destFilename = destVolumeFile != null ? destVolumeFile.getFileName() : volumePath;
-            logger.error("Failed to convert temporary RBD {} to volume {}, the error was: {}", srcFilename, destFilename, e.getMessage());
-            return false;
-        }
-    }
-
     private QemuImg.PhysicalDiskFormat getBackupFileFormat(final String backupPath) {
         if (backupPath.endsWith(".raw")) {
             return QemuImg.PhysicalDiskFormat.RAW;
@@ -716,149 +676,10 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
 
     private boolean replaceRbdVolumeWithBackup(final KVMStoragePoolManager storagePoolMgr, final PrimaryDataStoreTO volumePool,
             final String volumePath, final List<String> backupPaths, final int timeout, final boolean createTargetVolume) {
-        if (backupPaths.stream().anyMatch(path -> path.endsWith(".rbdiff"))) {
-            return restoreIncrementalRbdBackupChain(storagePoolMgr, volumePool, volumePath, backupPaths, timeout, createTargetVolume);
-        }
-
-        final String backupPath = getFirstExistingBackupPath(backupPaths);
         final KVMStoragePool volumeStoragePool = storagePoolMgr.getStoragePool(volumePool.getPoolType(), volumePool.getUuid());
         final String normalizedVolumePath = normalizeRbdVolumePath(volumePath, volumeStoragePool);
-        if (getBackupFileFormat(backupPath) == QemuImg.PhysicalDiskFormat.RAW) {
-            return importRawBackupToRbd(volumeStoragePool, normalizedVolumePath, backupPath, timeout, createTargetVolume);
-        }
-
-        QemuImg qemu;
-        QemuImgFile destVolumeFile = null;
-        QemuImgFile srcBackupFile = null;
-        try {
-            qemu = new QemuImg(timeout * 1000, true, false);
-            if (!createTargetVolume) {
-                final KVMPhysicalDisk rdbDisk = volumeStoragePool.getPhysicalDisk(normalizedVolumePath);
-                logger.debug("Restoring RBD volume: {}", rdbDisk.toString());
-                qemu.setSkipTargetVolumeCreation(true);
-            }
-        } catch (final LibvirtException ex) {
-            throw new CloudRuntimeException("Failed to create qemu-img command to restore RBD volume with backup", ex);
-        }
-
-        try {
-            srcBackupFile = new QemuImgFile(backupPath, getBackupFileFormat(backupPath));
-            final String rbdDestVolumeFile = KVMPhysicalDisk.RBDStringBuilder(volumeStoragePool, normalizedVolumePath);
-            destVolumeFile = new QemuImgFile(rbdDestVolumeFile, QemuImg.PhysicalDiskFormat.RAW);
-            qemu.convert(srcBackupFile, destVolumeFile);
-            return true;
-        } catch (final QemuImgException | LibvirtException e) {
-            final String srcFilename = srcBackupFile != null ? srcBackupFile.getFileName() : null;
-            final String destFilename = destVolumeFile != null ? destVolumeFile.getFileName() : null;
-            logger.error("Failed to convert backup {} to volume {}, the error was: {}", srcFilename, destFilename, e.getMessage());
-            return false;
-        }
-    }
-
-    private boolean importRawBackupToRbd(final KVMStoragePool volumeStoragePool, final String volumePath, final String backupPath, final int timeout,
-            final boolean createTargetVolume) {
-        if (StringUtils.isBlank(backupPath) || !Files.isRegularFile(Paths.get(backupPath))) {
-            throw new CloudRuntimeException(String.format(
-                    "Raw backup file [%s] is missing; refusing to delete RBD volume [%s]", backupPath, volumePath));
-        }
-        if (!createTargetVolume && !deleteExistingRbdVolumeIfPresent(volumeStoragePool, volumePath)) {
-            logger.error("Failed to delete existing RBD volume {} before raw import", volumePath);
-            return false;
-        }
-
-        final String importCommand = buildRbdImportCommand(volumeStoragePool, backupPath, volumePath);
-        final CommandExecutionResult importResult = executeBashCommandWithResult(importCommand, timeout, "Import raw backup to RBD");
-        if (importResult.exitCode != 0) {
-            logger.error("Failed to import raw backup {} into volume {}. Exit code: {}, output: {}", backupPath, volumePath, importResult.exitCode, importResult.output);
-            return false;
-        }
-        return true;
-    }
-
-    private boolean deleteExistingRbdVolumeIfPresent(final KVMStoragePool volumeStoragePool, final String volumePath) {
-        try {
-            return volumeStoragePool.deletePhysicalDisk(volumePath, Storage.ImageFormat.RAW);
-        } catch (final CloudRuntimeException e) {
-            if (isMissingRbdImageError(e)) {
-                logger.info("Skipping deletion for missing RBD volume {} before restore", volumePath);
-                return true;
-            }
-            throw e;
-        }
-    }
-
-    private boolean isMissingRbdImageError(final CloudRuntimeException e) {
-        final String message = e.getMessage();
-        return StringUtils.containsIgnoreCase(message, "Failed to open image")
-                && StringUtils.containsIgnoreCase(message, "No such file or directory");
-    }
-
-    private boolean restoreIncrementalRbdBackupChain(final KVMStoragePoolManager storagePoolMgr, final PrimaryDataStoreTO volumePool,
-            final String volumePath, final List<String> backupPaths, final int timeout, final boolean createTargetVolume) {
-        if (backupPaths.isEmpty() || !backupPaths.get(0).endsWith(".raw")) {
-            throw new CloudRuntimeException("Incremental RBD backup chain is missing the base full backup");
-        }
-        if (!Files.isRegularFile(Paths.get(backupPaths.get(0)))) {
-            throw new CloudRuntimeException(String.format(
-                    "Incremental RBD base full backup is missing [%s]. Refusing to restore so the live RBD image is not deleted.",
-                    backupPaths.get(0)));
-        }
-        for (int index = 1; index < backupPaths.size(); index++) {
-            final String incrementalPath = backupPaths.get(index);
-            if (incrementalPath != null && incrementalPath.endsWith(".rbdiff") && !Files.isRegularFile(Paths.get(incrementalPath))) {
-                throw new CloudRuntimeException(String.format(
-                        "Incremental RBD diff is missing [%s]. Refusing to restore so the live RBD image is not deleted.",
-                        incrementalPath));
-            }
-        }
-
-        final String normalizedVolumePath = normalizeRbdVolumePath(volumePath, storagePoolMgr.getStoragePool(volumePool.getPoolType(), volumePool.getUuid()));
-        if (!replaceRbdVolumeWithBackup(storagePoolMgr, volumePool, normalizedVolumePath, List.of(backupPaths.get(0)), timeout, createTargetVolume)) {
-            return false;
-        }
-
-        final KVMStoragePool volumeStoragePool = storagePoolMgr.getStoragePool(volumePool.getPoolType(), volumePool.getUuid());
-        final List<String> restoreSnapshots = new ArrayList<>();
-        try {
-            final Map<String, String> baseMetadata = readRbdBackupMetadata(backupPaths.get(0));
-            final String baseCheckpoint = baseMetadata.get("checkpoint_name");
-            if (StringUtils.isNotBlank(baseCheckpoint)) {
-                if (!ensureRbdSnapshotExists(volumeStoragePool, normalizedVolumePath, baseCheckpoint, timeout)) {
-                    return false;
-                }
-                restoreSnapshots.add(baseCheckpoint);
-            }
-
-            for (int index = 1; index < backupPaths.size(); index++) {
-                final String backupPath = backupPaths.get(index);
-                if (!backupPath.endsWith(".rbdiff")) {
-                    continue;
-                }
-                final Map<String, String> metadata = readRbdBackupMetadata(backupPath);
-                final String parentCheckpoint = metadata.get("parent_checkpoint_name");
-                final String checkpoint = metadata.get("checkpoint_name");
-                if (StringUtils.isBlank(parentCheckpoint) || StringUtils.isBlank(checkpoint)) {
-                    throw new CloudRuntimeException(String.format("RBD incremental backup metadata is incomplete for %s", backupPath));
-                }
-                if (!rbdSnapshotExists(volumeStoragePool, normalizedVolumePath, parentCheckpoint, timeout)) {
-                    throw new CloudRuntimeException(String.format("Required parent snapshot %s is missing on volume %s", parentCheckpoint, normalizedVolumePath));
-                }
-                final String importDiffCommand = buildRbdImportDiffCommand(volumeStoragePool, backupPath, normalizedVolumePath);
-                final CommandExecutionResult importDiffResult = executeBashCommandWithResult(importDiffCommand, timeout, "Import RBD diff to target volume");
-                if (importDiffResult.exitCode != 0) {
-                    logger.error("Failed to import RBD diff {} into volume {}. Exit code: {}, output: {}", backupPath, normalizedVolumePath,
-                            importDiffResult.exitCode, importDiffResult.output);
-                    return false;
-                }
-                if (!ensureRbdSnapshotExists(volumeStoragePool, normalizedVolumePath, checkpoint, timeout)) {
-                    return false;
-                }
-                restoreSnapshots.add(checkpoint);
-            }
-            return true;
-        } finally {
-            cleanupRbdRestoreSnapshots(volumeStoragePool, normalizedVolumePath, restoreSnapshots, timeout);
-        }
+        return LibvirtAblestackRbdRestoreHelper.restoreRbdBackup(RESTORE_TRACE, volumeStoragePool, normalizedVolumePath,
+                backupPaths, timeout, createTargetVolume);
     }
 
     private String normalizeRbdVolumePath(final String volumePath, final KVMStoragePool storagePool) {
@@ -877,146 +698,6 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
             normalized = normalized.substring(normalized.lastIndexOf('/') + 1);
         }
         return normalized;
-    }
-
-    private String buildRbdImportDiffCommand(final KVMStoragePool storagePool, final String backupPath, final String volumePath) {
-        final StringBuilder command = new StringBuilder("rbd");
-        if (StringUtils.isNotBlank(storagePool.getSourceHost())) {
-            command.append(" -m ").append(formatRbdMonHosts(storagePool.getSourceHost(), storagePool.getSourcePort()));
-        }
-        if (StringUtils.isNotBlank(storagePool.getAuthUserName())) {
-            command.append(" --id ").append(storagePool.getAuthUserName());
-        }
-        if (StringUtils.isNotBlank(storagePool.getAuthSecret())) {
-            command.append(" --key ").append(storagePool.getAuthSecret());
-        }
-        command.append(" import-diff ").append(backupPath).append(" ").append(volumePath);
-        return command.toString();
-    }
-
-    private String buildRbdImportCommand(final KVMStoragePool storagePool, final String backupPath, final String volumePath) {
-        final StringBuilder command = new StringBuilder("rbd");
-        if (StringUtils.isNotBlank(storagePool.getSourceHost())) {
-            command.append(" -m ").append(formatRbdMonHosts(storagePool.getSourceHost(), storagePool.getSourcePort()));
-        }
-        if (StringUtils.isNotBlank(storagePool.getAuthUserName())) {
-            command.append(" --id ").append(storagePool.getAuthUserName());
-        }
-        if (StringUtils.isNotBlank(storagePool.getAuthSecret())) {
-            command.append(" --key ").append(storagePool.getAuthSecret());
-        }
-        command.append(" import ").append(backupPath).append(" ").append(volumePath);
-        return command.toString();
-    }
-
-    private String formatRbdMonHosts(final String hosts, final int port) {
-        final String[] hostValues = hosts.split(",");
-        final List<String> formattedHosts = new ArrayList<>();
-        for (final String host : hostValues) {
-            final String normalizedHost = host.replace("[", "").replace("]", "").trim();
-            if (StringUtils.isBlank(normalizedHost)) {
-                continue;
-            }
-            formattedHosts.add(port > 0 ? normalizedHost + ":" + port : normalizedHost);
-        }
-        return String.join(",", formattedHosts);
-    }
-
-    private boolean importBackupChainToTemporaryRbd(final List<String> backupPaths, final int timeout, final RbdImageSpec sourceImage, final String tempImage) {
-        if (backupPaths.isEmpty() || !backupPaths.get(0).endsWith(".raw")) {
-            throw new CloudRuntimeException("Incremental RBD backup chain is missing the base full backup");
-        }
-        final String importCommand = sourceImage.buildRbdCommand("import", quote(backupPaths.get(0)), quote(tempImage));
-        final CommandExecutionResult importResult = executeBashCommandWithResult(importCommand, timeout, "Import raw backup to temporary RBD");
-        if (importResult.exitCode != 0) {
-            logger.error("Failed to import base RBD backup {} into temporary image {}. Exit code: {}, output: {}", backupPaths.get(0), tempImage,
-                    importResult.exitCode, importResult.output);
-            return false;
-        }
-        final List<String> restoreSnapshots = new ArrayList<>();
-        try {
-            final Map<String, String> baseMetadata = readRbdBackupMetadata(backupPaths.get(0));
-            final String baseCheckpoint = baseMetadata.get("checkpoint_name");
-            if (StringUtils.isNotBlank(baseCheckpoint)) {
-                if (!ensureRbdSnapshotExists(sourceImage, tempImage, baseCheckpoint, timeout)) {
-                    return false;
-                }
-                restoreSnapshots.add(baseCheckpoint);
-            }
-            for (int index = 1; index < backupPaths.size(); index++) {
-                final String backupPath = backupPaths.get(index);
-                if (!backupPath.endsWith(".rbdiff")) {
-                    continue;
-                }
-                final Map<String, String> metadata = readRbdBackupMetadata(backupPath);
-                final String parentCheckpoint = metadata.get("parent_checkpoint_name");
-                final String checkpoint = metadata.get("checkpoint_name");
-                if (StringUtils.isBlank(parentCheckpoint) || StringUtils.isBlank(checkpoint)) {
-                    throw new CloudRuntimeException(String.format("RBD incremental backup metadata is incomplete for %s", backupPath));
-                }
-                if (!rbdSnapshotExists(sourceImage, tempImage, parentCheckpoint, timeout)) {
-                    throw new CloudRuntimeException(String.format("Required parent snapshot %s is missing on temporary image %s", parentCheckpoint, tempImage));
-                }
-                final String importDiffCommand = sourceImage.buildRbdCommand("import-diff", quote(backupPath), quote(tempImage));
-                final CommandExecutionResult importDiffResult = executeBashCommandWithResult(importDiffCommand, timeout, "Import RBD diff to temporary image");
-                if (importDiffResult.exitCode != 0) {
-                    logger.error("Failed to import RBD diff {} into temporary image {}. Exit code: {}, output: {}", backupPath, tempImage,
-                            importDiffResult.exitCode, importDiffResult.output);
-                    return false;
-                }
-                if (!ensureRbdSnapshotExists(sourceImage, tempImage, checkpoint, timeout)) {
-                    return false;
-                }
-                restoreSnapshots.add(checkpoint);
-            }
-            return true;
-        } finally {
-            cleanupRbdRestoreSnapshots(sourceImage, tempImage, restoreSnapshots, timeout);
-        }
-    }
-
-    private Map<String, String> readRbdBackupMetadata(final String backupPath) {
-        final Path metadataPath = Paths.get(backupPath).getParent().resolve("rbd-backup.meta");
-        if (!Files.exists(metadataPath)) {
-            throw new CloudRuntimeException(String.format("RBD backup metadata file not found: %s", metadataPath));
-        }
-        try {
-            return Files.readAllLines(metadataPath).stream()
-                    .map(String::trim)
-                    .filter(line -> !line.isEmpty() && line.contains("="))
-                    .map(line -> line.split("=", 2))
-                    .collect(java.util.stream.Collectors.toMap(parts -> parts[0], parts -> parts[1], (left, right) -> right));
-        } catch (final IOException e) {
-            throw new CloudRuntimeException(String.format("Failed to read RBD backup metadata: %s", metadataPath), e);
-        }
-    }
-
-    private boolean ensureRbdSnapshotExists(final KVMStoragePool storagePool, final String volumePath, final String snapshotName, final int timeout) {
-        if (rbdSnapshotExists(storagePool, volumePath, snapshotName, timeout)) {
-            return true;
-        }
-        final String createSnapshotCommand = buildRbdSnapshotCommand(storagePool, "snap create", volumePath + "@" + snapshotName);
-        final CommandExecutionResult createSnapshotResult = executeBashCommandWithResult(createSnapshotCommand, timeout, "Create RBD snapshot on target volume");
-        if (createSnapshotResult.exitCode != 0) {
-            logger.error("Failed to create RBD snapshot {} on volume {}. Exit code: {}, output: {}", snapshotName, volumePath,
-                    createSnapshotResult.exitCode, createSnapshotResult.output);
-            return false;
-        }
-        return true;
-    }
-
-    private boolean ensureRbdSnapshotExists(final RbdImageSpec imageSpec, final String image, final String snapshotName, final int timeout) {
-        if (rbdSnapshotExists(imageSpec, image, snapshotName, timeout)) {
-            return true;
-        }
-        final String createSnapshotCommand = imageSpec.buildRbdCommand("snap", "create", quote(image + "@" + snapshotName));
-        final CommandExecutionResult createSnapshotResult = executeBashCommandWithResult(createSnapshotCommand, timeout, "Create RBD snapshot on temporary image");
-        if (createSnapshotResult.exitCode != 0) {
-            logger.error("Failed to create RBD snapshot {} on image {}. Exit code: {}, output: {}", snapshotName, image,
-                    createSnapshotResult.exitCode, createSnapshotResult.output);
-            return false;
-        }
-        return true;
     }
 
     private CommandExecutionResult executeBashCommandWithResult(final String command, final int timeoutInSeconds, final String description) {
@@ -1063,27 +744,6 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
         return Script.runSimpleBashScriptForExitValue(existsCommand, timeout * 1000, false) == 0;
     }
 
-    private boolean rbdSnapshotExists(final RbdImageSpec imageSpec, final String image, final String snapshotName, final int timeout) {
-        final String existsCommand = imageSpec.buildRbdCommand("snap", "ls", quote(image)) + " | awk 'NR>1 {print $2}' | grep -Fx " + quote(snapshotName);
-        return Script.runSimpleBashScriptForExitValue(existsCommand, timeout * 1000, false) == 0;
-    }
-
-    private void cleanupRbdRestoreSnapshots(final KVMStoragePool storagePool, final String volumePath, final List<String> snapshotNames, final int timeout) {
-        for (int index = snapshotNames.size() - 1; index >= 0; index--) {
-            final String snapshotName = snapshotNames.get(index);
-            final String removeSnapshotCommand = buildRbdSnapshotCommand(storagePool, "snap rm", volumePath + "@" + snapshotName);
-            Script.runSimpleBashScriptForExitValue(removeSnapshotCommand, timeout * 1000, false);
-        }
-    }
-
-    private void cleanupRbdRestoreSnapshots(final RbdImageSpec imageSpec, final String image, final List<String> snapshotNames, final int timeout) {
-        for (int index = snapshotNames.size() - 1; index >= 0; index--) {
-            final String snapshotName = snapshotNames.get(index);
-            final String removeSnapshotCommand = imageSpec.buildRbdCommand("snap", "rm", quote(image + "@" + snapshotName));
-            Script.runSimpleBashScriptForExitValue(removeSnapshotCommand, timeout * 1000, false);
-        }
-    }
-
     private String buildRbdSnapshotCommand(final KVMStoragePool storagePool, final String action, final String target) {
         final StringBuilder command = new StringBuilder("rbd");
         if (StringUtils.isNotBlank(storagePool.getSourceHost())) {
@@ -1099,34 +759,17 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
         return command.toString();
     }
 
-    private void removeTemporaryRbdImage(final RbdImageSpec sourceImage, final String tempImage, final int timeout) {
-        final String removeCommand = sourceImage.buildRbdCommand("rm", quote(tempImage));
-        Script.runSimpleBashScriptForExitValue(removeCommand, timeout * 1000, false);
-    }
-
-    private RbdImageSpec getRbdImageSpecFromMetadata(final String backupRootPath, final int backupIndex) {
-        final Path metadataPath = Paths.get(backupRootPath, "rbd-backup.meta");
-        if (!Files.exists(metadataPath)) {
-            throw new CloudRuntimeException(String.format("RBD backup metadata file not found: %s", metadataPath));
-        }
-        try {
-            final Map<String, String> metadata = Files.readAllLines(metadataPath).stream()
-                    .map(String::trim)
-                    .filter(line -> !line.isEmpty() && line.contains("="))
-                    .map(line -> line.split("=", 2))
-                    .collect(java.util.stream.Collectors.toMap(parts -> parts[0], parts -> parts[1], (left, right) -> right));
-            final String diskPaths = metadata.get("disk_paths");
-            if (StringUtils.isBlank(diskPaths)) {
-                throw new CloudRuntimeException("RBD backup metadata does not contain disk_paths");
+    private String formatRbdMonHosts(final String hosts, final int port) {
+        final String[] hostValues = hosts.split(",");
+        final List<String> formattedHosts = new ArrayList<>();
+        for (final String host : hostValues) {
+            final String normalizedHost = host.replace("[", "").replace("]", "").trim();
+            if (StringUtils.isBlank(normalizedHost)) {
+                continue;
             }
-            final List<String> values = Arrays.asList(diskPaths.split(","));
-            if (backupIndex >= values.size()) {
-                throw new CloudRuntimeException(String.format("RBD backup metadata does not contain disk path for index %d", backupIndex));
-            }
-            return RbdImageSpec.fromUri(values.get(backupIndex));
-        } catch (final IOException e) {
-            throw new CloudRuntimeException(String.format("Failed to read RBD backup metadata: %s", metadataPath), e);
+            formattedHosts.add(port > 0 ? normalizedHost + ":" + port : normalizedHost);
         }
+        return String.join(",", formattedHosts);
     }
 
     private String quote(final String value) {
@@ -1201,73 +844,4 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
         return diskBuilder.toString();
     }
 
-    private static final class RbdImageSpec {
-        private final String monHosts;
-        private final String port;
-        private final String pool;
-        private final String image;
-
-        private RbdImageSpec(final String monHosts, final String port, final String pool, final String image) {
-            this.monHosts = monHosts;
-            this.port = port;
-            this.pool = pool;
-            this.image = image;
-        }
-
-        private static RbdImageSpec fromUri(final String uri) {
-            if (StringUtils.isBlank(uri) || !uri.startsWith("rbd:")) {
-                throw new CloudRuntimeException(String.format("Unsupported RBD URI in metadata: %s", uri));
-            }
-            final String withoutScheme = uri.substring("rbd:".length());
-            final int colonIndex = withoutScheme.indexOf(':');
-            final String poolAndImage = colonIndex >= 0 ? withoutScheme.substring(0, colonIndex) : withoutScheme;
-            final String options = colonIndex >= 0 ? withoutScheme.substring(colonIndex + 1) : "";
-            final int slashIndex = poolAndImage.indexOf('/');
-            if (slashIndex < 0) {
-                throw new CloudRuntimeException(String.format("Malformed RBD URI in metadata: %s", uri));
-            }
-            final String pool = poolAndImage.substring(0, slashIndex);
-            final String image = poolAndImage.substring(slashIndex + 1);
-            String monHosts = "";
-            String port = "";
-            for (final String option : options.split(":")) {
-                if (option.startsWith("mon_host=")) {
-                    monHosts = option.substring("mon_host=".length());
-                } else if (option.startsWith("port=")) {
-                    port = option.substring("port=".length());
-                }
-            }
-            return new RbdImageSpec(monHosts, port, pool, image);
-        }
-
-        private String buildTempImageSpec() {
-            return pool + "/" + image + "-restore-temp";
-        }
-
-        private String buildQemuUri(final String targetImage) {
-            final StringBuilder builder = new StringBuilder("rbd:");
-            builder.append(targetImage);
-            if (StringUtils.isNotBlank(monHosts)) {
-                builder.append(":mon_host=").append(monHosts);
-            }
-            if (StringUtils.isNotBlank(port)) {
-                builder.append(":port=").append(port);
-            }
-            return builder.toString();
-        }
-
-        private String buildRbdCommand(final String... tokens) {
-            final StringBuilder builder = new StringBuilder("rbd");
-            if (StringUtils.isNotBlank(monHosts)) {
-                builder.append(" -m ").append(monHosts);
-                if (StringUtils.isNotBlank(port)) {
-                    builder.append(":").append(port);
-                }
-            }
-            for (final String token : tokens) {
-                builder.append(" ").append(token);
-            }
-            return builder.toString();
-        }
-    }
 }
