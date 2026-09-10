@@ -153,8 +153,8 @@ public class CheckedReservationFailureTest {
     public void cleanupAttemptsEveryRowAndCanRetryAfterDatabaseFailure() throws Exception {
         try (MockedStatic<GlobalLock> ignored = prepare()) {
             CheckedReservation reservation = new CheckedReservation(account, ResourceType.cpu, List.of("tag"), 2L, dao, limits);
-            when(dao.remove(1L)).thenThrow(new CloudRuntimeException("temporary DB failure"))
-                    .thenAnswer(invocation -> rows.remove(1L) != null);
+            doThrow(new CloudRuntimeException("temporary DB failure"))
+                    .doAnswer(invocation -> rows.remove(1L) != null).when(dao).remove(1L);
             try {
                 reservation.close();
                 fail("Expected cleanup failure");
