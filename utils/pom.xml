@@ -321,7 +321,7 @@
                                 </artifactItem>
                                 <artifactItem>
                                     <groupId>org.bouncycastle</groupId>
-                                    <artifactId>bcprov-jdk15on</artifactId>
+                                    <artifactId>bcprov-jdk18on</artifactId>
                                     <overWrite>false</overWrite>
                                     <outputDirectory>${project.build.directory}/lib</outputDirectory>
                                 </artifactItem>
