@@ -676,4 +676,17 @@ public class OAuth2AuthManagerImplTest {
         verify(_oauthProviderDao, Mockito.times(2)).expunge(Mockito.anyLong());
     }
 
+    @Test
+    public void unknownDomainCannotRegisterGlobalProvider() {
+        RegisterOAuthProviderCmd command = Mockito.mock(RegisterOAuthProviderCmd.class);
+        when(command.getDomainPath()).thenReturn("missing-domain");
+        Assert.assertThrows(CloudRuntimeException.class, () -> _authManager.registerOauthProvider(command));
+        Mockito.verifyNoInteractions(_oauthProviderDao);
+    }
+
+    @Test
+    public void missingProviderReturnsEmptyList() {
+        Assert.assertTrue(_authManager.listOauthProviders(null, "missing-id", null).isEmpty());
+        Assert.assertTrue(_authManager.listOauthProviders("missing-provider", null, 2L).isEmpty());
+    }
 }

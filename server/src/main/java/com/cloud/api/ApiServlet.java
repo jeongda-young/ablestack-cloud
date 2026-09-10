@@ -374,7 +374,7 @@ public class ApiServlet extends HttpServlet {
                 final String serializedResponse =
                         apiServer.getSerializedApiError(new ServerApiException(ApiErrorCode.BAD_REQUEST, errorText), params,
                                 responseType);
-                HttpUtils.writeHttpResponse(resp, serializedResponse, HttpServletResponse.SC_BAD_REQUEST, responseType, ApiServer.JSONcontentType.value());
+                HttpUtils.writeHttpResponse(resp, serializedResponse, HttpServletResponse.SC_BAD_REQUEST, responseType, ApiServer.JSONContentType.value());
                 return;
             }
 

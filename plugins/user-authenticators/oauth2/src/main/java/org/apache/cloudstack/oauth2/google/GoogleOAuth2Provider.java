@@ -19,21 +19,18 @@ package org.apache.cloudstack.oauth2.google;
 import java.io.IOException;
 import java.util.Arrays;
 import java.util.List;
-import java.util.concurrent.TimeUnit;
 
 import javax.inject.Inject;
 
 import org.apache.cloudstack.auth.UserOAuth2Authenticator;
+import org.apache.cloudstack.oauth2.OAuth2FlowCache;
 import org.apache.cloudstack.oauth2.dao.OauthProviderDao;
 import org.apache.cloudstack.oauth2.vo.OauthProviderVO;
-import org.apache.commons.codec.digest.DigestUtils;
 import org.apache.commons.lang3.StringUtils;
 
 import com.cloud.exception.CloudAuthenticationException;
 import com.cloud.utils.component.AdapterBase;
 import com.cloud.utils.exception.CloudRuntimeException;
-import com.github.benmanes.caffeine.cache.Cache;
-import com.github.benmanes.caffeine.cache.Caffeine;
 import com.google.api.client.auth.oauth2.BearerToken;
 import com.google.api.client.auth.oauth2.ClientParametersAuthentication;
 import com.google.api.client.auth.oauth2.Credential;
@@ -48,36 +45,10 @@ import com.google.api.services.oauth2.model.Userinfo;
 
 public class GoogleOAuth2Provider extends AdapterBase implements UserOAuth2Authenticator {
 
-    protected String accessToken = null;
-    protected String refreshToken = null;
-
     @Inject
     OauthProviderDao _oauthProviderDao;
 
-    private final Cache<String, String> validatedEmailCache =
-            Caffeine.newBuilder()
-                    .expireAfterWrite(60, TimeUnit.SECONDS)
-                    .maximumSize(1024)
-                    .build();
-
-    private String getCacheKey(final String secretCode) {
-        return DigestUtils.sha256Hex(secretCode);
-    }
-
-    private void addValidatedEmailToCache(final String secretCode, final String email) {
-        validatedEmailCache.put(getCacheKey(secretCode), email);
-    }
-
-    private String consumeValidatedEmailFromCache(final String secretCode) {
-        final String key = getCacheKey(secretCode);
-        final String email = validatedEmailCache.getIfPresent(key);
-
-        if (email != null) {
-            validatedEmailCache.invalidate(key);
-        }
-
-        return email;
-    }
+    private final OAuth2FlowCache flowCache = new OAuth2FlowCache();
 
     @Override
     public String getName() {
@@ -101,12 +72,9 @@ public class GoogleOAuth2Provider extends AdapterBase implements UserOAuth2Authe
 
     @Override
     public String verifySecretCodeAndFetchEmail(String secretCode, Long domainId) {
-        return verifyCodeAndFetchEmailInternal(secretCode, domainId, null);
-    }
-
-    protected void clearAccessAndRefreshTokens() {
-        accessToken = null;
-        refreshToken = null;
+        OauthProviderVO provider = _oauthProviderDao.findByProviderAndDomainWithGlobalFallback(getName(), domainId);
+        return flowCache.discover(provider, domainId, secretCode,
+                () -> verifyCodeAndFetchEmailInternal(secretCode, domainId, provider));
     }
 
     @Override
@@ -125,10 +93,8 @@ public class GoogleOAuth2Provider extends AdapterBase implements UserOAuth2Authe
             throw new CloudAuthenticationException("Google provider is not registered, so user cannot be verified");
         }
 
-        String verifiedEmail = consumeValidatedEmailFromCache(secretCode);
-        if (StringUtils.isEmpty(verifiedEmail)) {
-            verifiedEmail = verifyCodeAndFetchEmailInternal(secretCode, domainId, providerVO);
-        }
+        String verifiedEmail = flowCache.consume(providerVO, domainId, secretCode,
+                () -> verifyCodeAndFetchEmailInternal(secretCode, domainId, providerVO));
         if (verifiedEmail == null || !email.equals(verifiedEmail)) {
             throw new CloudRuntimeException("Unable to verify the email address with the provided secret");
         }
@@ -186,7 +152,9 @@ public class GoogleOAuth2Provider extends AdapterBase implements UserOAuth2Authe
             throw new CloudRuntimeException(String.format("Failed to fetch the email address with the provided secret: %s", e.getMessage()));
         }
         String verifiedEmail = userinfo.getEmail();
-        addValidatedEmailToCache(secretCode, verifiedEmail);
+        if (!Boolean.TRUE.equals(userinfo.getVerifiedEmail())) {
+            throw new CloudAuthenticationException("Google did not verify the email address");
+        }
         return verifiedEmail;
     }
 }

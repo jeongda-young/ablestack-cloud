@@ -145,17 +145,16 @@ public class ListOAuthProvidersCmd extends BaseListCmd implements APIAuthenticat
     public String authenticate(String command, Map<String, Object[]> params, HttpSession session, InetAddress remoteAddress, String responseType, StringBuilder auditTrailSb, HttpServletRequest req, HttpServletResponse resp) throws ServerApiException {
         final String[] idArray = (String[])params.get(ApiConstants.ID);
         final String[] providerArray = (String[])params.get(ApiConstants.PROVIDER);
-        if (ArrayUtils.isNotEmpty(idArray)) {
-            id = idArray[0];
-        }
-        if (ArrayUtils.isNotEmpty(providerArray)) {
-            provider = providerArray[0];
-        }
+        id = ArrayUtils.isNotEmpty(idArray) ? idArray[0] : null;
+        provider = ArrayUtils.isNotEmpty(providerArray) ? providerArray[0] : null;
         boolean secretKeyAllowed = isSecretKeyAllowedForAuthenticatedCaller(params, session, remoteAddress, req);
 
         boolean domainRequested = ArrayUtils.isNotEmpty((String[])params.get(ApiConstants.DOMAIN_ID))
                 || ArrayUtils.isNotEmpty((String[])params.get(ApiConstants.DOMAIN));
         domainId = _oauth2mgr.resolveDomainId(params);
+        if (Long.valueOf(Domain.ROOT_DOMAIN).equals(domainId)) {
+            domainId = -1L;
+        }
 
         if (domainRequested && domainId == null) {
             ListResponse<OauthProviderResponse> response = new ListResponse<>();
@@ -165,10 +164,11 @@ public class ListOAuthProvidersCmd extends BaseListCmd implements APIAuthenticat
             return ApiResponseSerializer.toSerializedString(response, responseType);
         }
 
-        List<OauthProviderVO> resultList = _oauth2mgr.listOauthProviders(provider, id, domainId);
+        List<OauthProviderVO> resultList = new ArrayList<>(_oauth2mgr.listOauthProviders(provider, id, domainId));
+        resultList.removeIf(java.util.Objects::isNull);
         boolean isAuthenticated = session != null && session.getAttribute(ApiConstants.USER_ID) != null;
         if (domainRequested && domainId != null && domainId > 0) {
-            resultList.removeIf(p -> p.getDomainId() == null);
+            resultList.removeIf(p -> !java.util.Objects.equals(p.getDomainId(), domainId));
         } else if (!domainRequested && !isAuthenticated) {
             resultList.removeIf(p -> p.getDomainId() != null);
         }

@@ -220,8 +220,11 @@ public class LibvirtRestoreBackupCommandWrapper extends CommandWrapper<RestoreBa
                 mountCmd.add("-o");
                 mountCmd.add(mountOptions);
             }
-            Script.executeCommand(mountCmd.toArray(new String[0]));
+            if (Script.executeCommandForExitValue(mountTimeout, mountCmd.toArray(new String[0])) != 0) {
+                throw new CloudRuntimeException("Mount command failed");
+            }
         } catch (Exception e) {
+            deleteTemporaryDirectory(mountDirectory);
             logger.error("Failed to mount repository {} of type {} to the directory {}", backupRepoAddress, backupRepoType, mountDirectory, e);
             throw new CloudRuntimeException("Failed to mount the backup repository on the KVM host");
         }
@@ -265,12 +268,12 @@ public class LibvirtRestoreBackupCommandWrapper extends CommandWrapper<RestoreBa
     }
 
     private boolean checkBackupFileImage(String backupPath) {
-        int exitValue = Script.runSimpleBashScriptForExitValue(String.format("qemu-img check %s", backupPath));
+        int exitValue = Script.executeCommandForExitValue(Script.getExecutableAbsolutePath("qemu-img"), "check", backupPath);
         return exitValue == 0;
     }
 
     private boolean checkBackupPathExists(String backupPath) {
-        int exitValue = Script.runSimpleBashScriptForExitValue(String.format("ls %s", backupPath));
+        int exitValue = Script.executeCommandForExitValue(Script.getExecutableAbsolutePath("test"), "-f", backupPath);
         return exitValue == 0;
     }
 
@@ -290,7 +293,7 @@ public class LibvirtRestoreBackupCommandWrapper extends CommandWrapper<RestoreBa
         }
 
         String[] rsyncCmd = new String[] { Script.getExecutableAbsolutePath("rsync"), "-az", backupPath, volumePath };
-        int exitValue = Script.executeCommandForExitValue(rsyncCmd);
+        int exitValue = Script.executeCommandForExitValue(timeout, rsyncCmd);
         return exitValue == 0;
     }
 
@@ -366,36 +369,40 @@ public class LibvirtRestoreBackupCommandWrapper extends CommandWrapper<RestoreBa
                                      PrimaryDataStoreTO volumePool, String volumePath,
                                      String cacheMode) {
         String deviceToAttachDiskTo = getDeviceToAttachDisk(vmName);
-        List<String> virshCmd = new ArrayList<>();
-        virshCmd.add(Script.getExecutableAbsolutePath("virsh"));
         if (volumePool.getPoolType() == Storage.StoragePoolType.RBD) {
-            String xmlForRbdDisk = getXmlForRbdDisk(storagePoolMgr, volumePool, volumePath, deviceToAttachDiskTo, cacheMode);
-            logger.debug("RBD disk xml to attach: {}", xmlForRbdDisk);
-            virshCmd.add("attach-device");
-            virshCmd.add(vmName);
-            virshCmd.add("/dev/stdin");
-            virshCmd.add("<<EOF%sEOF");
-        } else {
-            virshCmd.add("attach-disk");
-            virshCmd.add(vmName);
-            virshCmd.add(volumePath);
-            virshCmd.add(deviceToAttachDiskTo);
-            if (Storage.StoragePoolType.Linstor.equals(volumePool.getPoolType())) {
-                virshCmd.add("--subdriver");
-                virshCmd.add("qcow2");
+            String xml = getXmlForRbdDisk(storagePoolMgr, volumePool, volumePath, deviceToAttachDiskTo, cacheMode);
+            Path xmlFile = null;
+            try {
+                xmlFile = Files.createTempFile(BACKUP_TEMP_FILE_PREFIX, ".xml");
+                Files.writeString(xmlFile, xml);
+                return Script.executeCommandForExitValue(Script.getExecutableAbsolutePath("virsh"),
+                        "attach-device", vmName, xmlFile.toString()) == 0;
+            } catch (IOException e) {
+                throw new CloudRuntimeException("Unable to prepare backup volume attachment", e);
+            } finally {
+                if (xmlFile != null) {
+                    try {
+                        Files.deleteIfExists(xmlFile);
+                    } catch (IOException e) {
+                        logger.warn("Unable to remove temporary backup attachment XML", e);
+                    }
+                }
             }
-            virshCmd.add("--cache");
-            virshCmd.add("none");
         }
-        int exitValue = Script.executeCommandForExitValue(virshCmd.toArray(new String[0]));
-        return exitValue == 0;
+        List<String> command = new ArrayList<>(List.of(Script.getExecutableAbsolutePath("virsh"), "attach-disk",
+                vmName, volumePath, deviceToAttachDiskTo, "--driver", "qemu"));
+        if (volumePool.getPoolType() != Storage.StoragePoolType.Linstor) {
+            command.addAll(List.of("--subdriver", "qcow2"));
+        }
+        command.addAll(List.of("--cache", StringUtils.defaultIfBlank(cacheMode, "none")));
+        return Script.executeCommandForExitValue(command.toArray(new String[0])) == 0;
     }
 
     private String getDeviceToAttachDisk(String vmName) {
         String[] domblkCmd = new String[] { Script.getExecutableAbsolutePath("virsh"), "domblklist", "--domain", vmName };
         String[] tailCmd = new String[] { Script.getExecutableAbsolutePath("tail"), "-n", "3" };
         String[] headCmd = new String[] { Script.getExecutableAbsolutePath("head"), "-n", "1" };
-        String[] awkCmd = new String[] { Script.getExecutableAbsolutePath("awk"), "'{print $1}'" };
+        String[] awkCmd = new String[] { Script.getExecutableAbsolutePath("awk"), "{print $1}" };
         Pair<Integer, String> result = Script.executePipedCommands(Arrays.asList(domblkCmd, tailCmd, headCmd, awkCmd), 0);
         String currentDevice = result.second();
         char lastChar = currentDevice.charAt(currentDevice.length() - 1);

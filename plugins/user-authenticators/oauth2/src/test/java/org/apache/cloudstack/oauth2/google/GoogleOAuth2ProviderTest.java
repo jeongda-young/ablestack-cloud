@@ -57,6 +57,7 @@ public class GoogleOAuth2ProviderTest {
     @Before
     public void setUp() {
         closeable = MockitoAnnotations.openMocks(this);
+        when(mockProvider.isEnabled()).thenReturn(true);
         when(mockProvider.getClientId()).thenReturn("test_client_id");
         when(mockProvider.getSecretKey()).thenReturn("test_secret_key");
         when(mockProvider.getRedirectUri()).thenReturn("http://localhost/redirect");

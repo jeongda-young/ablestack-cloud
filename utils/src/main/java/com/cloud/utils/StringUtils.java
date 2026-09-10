@@ -39,7 +39,7 @@ import java.util.stream.Collectors;
 
 public class StringUtils extends org.apache.commons.lang3.StringUtils {
     private static final char[] hexChar = {'0', '1', '2', '3', '4', '5', '6', '7', '8', '9', 'A', 'B', 'C', 'D', 'E', 'F'};
-    private static final Pattern PASSWORD_FIELD_PATTERN = Pattern.compile("\\\"password\\\":\\\"([^\\\"]*)\\\"+");
+    private static final Pattern PASSWORD_FIELD_PATTERN = Pattern.compile("\\\"password\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"\\\\])*)\\\"");
 
     private static final Charset preferredACSCharset;
     private static final String UTF8 = "UTF-8";
@@ -459,6 +459,6 @@ public class StringUtils extends org.apache.commons.lang3.StringUtils {
         if (isEmpty(password)) {
             return password;
         }
-        return password.charAt(0) + "*****";
+        return password.charAt(0) == '\\' ? "*****" : password.charAt(0) + "*****";
     }
 }

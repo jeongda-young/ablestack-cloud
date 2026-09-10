@@ -94,6 +94,7 @@ import com.cloud.upgrade.dao.Upgrade42010to42100;
 import com.cloud.upgrade.dao.Upgrade42100to42200;
 import com.cloud.upgrade.dao.Upgrade42200to42210;
 import com.cloud.upgrade.dao.Upgrade42210to42300;
+import com.cloud.upgrade.dao.EuropaSecuritySchemaUpgrade;
 import com.cloud.upgrade.dao.Upgrade420to421;
 import com.cloud.upgrade.dao.Upgrade421to430;
 import com.cloud.upgrade.dao.Upgrade430to440;
@@ -630,6 +631,9 @@ public class DatabaseUpgradeChecker implements SystemIntegrityChecker {
                 String errorMessage = "Unable to upgrade the database [afterUpgradeAblestack : " + ablestackVersion + "]";
                 LOGGER.error(errorMessage, e);
                 throw new CloudRuntimeException(errorMessage, e);
+            }
+            if ("Europa".equals(ablestackVersion)) {
+                EuropaSecuritySchemaUpgrade.migrate(conn);
             }
             final String scriptFile = "META-INF/db/schema-" + ablestackVersion +"-After.sql";
             final InputStream script = Thread.currentThread().getContextClassLoader().getResourceAsStream(scriptFile);

@@ -220,10 +220,9 @@ public class TemplateManagerImplTest {
     @Inject
     HeuristicRuleHelper heuristicRuleHelperMock;
 
-    @Mock
+    @Inject
     private UserDataDao userDataDaoMock;
 
-    @Mock
     private UserDataVO userDataMock;
 
     public class CustomThreadPoolExecutor extends ThreadPoolExecutor {
@@ -253,6 +252,8 @@ public class TemplateManagerImplTest {
 
     @Before
     public void setUp() {
+        userDataMock = Mockito.mock(UserDataVO.class);
+        Mockito.reset(userDataDaoMock);
         ComponentContext.initComponentsLifeCycle();
         AccountVO account = new AccountVO("admin", 1L, "networkDomain", Account.Type.NORMAL, "uuid");
         UserVO user = new UserVO(1, "testuser", "password", "firstname", "lastName", "email", "timezone", UUID.randomUUID().toString(), User.Source.UNKNOWN);
@@ -795,6 +796,12 @@ public class TemplateManagerImplTest {
             includeFilters = {@ComponentScan.Filter(value = TestConfiguration.Library.class, type = FilterType.CUSTOM)},
             useDefaultFilters = false)
     public static class TestConfiguration extends SpringUtils.CloudStackTestConfiguration {
+
+        @Bean
+        public UserDataDao userDataDao() {
+            return Mockito.mock(UserDataDao.class);
+        }
+
 
         @Bean
         public DataStoreManager dataStoreManager() {

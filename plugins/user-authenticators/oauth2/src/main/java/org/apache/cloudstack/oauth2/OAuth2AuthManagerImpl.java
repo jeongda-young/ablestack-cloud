@@ -165,7 +165,11 @@ public class OAuth2AuthManagerImpl extends ManagerBase implements OAuth2AuthMana
         String clientId = StringUtils.trim(cmd.getClientId());
         String redirectUri = StringUtils.trim(cmd.getRedirectUri());
         String secretKey = StringUtils.trim(cmd.getSecretKey());
-        Long domainId = normalizeGlobalScope(resolveDomainIdFromIdOrPath(cmd.getDomainId(), cmd.getDomainPath()));
+        Long resolvedDomainId = resolveDomainIdFromIdOrPath(cmd.getDomainId(), cmd.getDomainPath());
+        if (resolvedDomainId == null && (cmd.getDomainId() != null || StringUtils.isNotBlank(cmd.getDomainPath()))) {
+            throw new CloudRuntimeException("Unable to resolve the supplied domain");
+        }
+        Long domainId = normalizeGlobalScope(resolvedDomainId);
         String authorizeUrl = StringUtils.trim(cmd.getAuthorizeUrl());
         String tokenUrl = StringUtils.trim(cmd.getTokenUrl());
 
@@ -200,7 +204,7 @@ public class OAuth2AuthManagerImpl extends ManagerBase implements OAuth2AuthMana
         } else {
             providers = _oauthProviderDao.listAll();
         }
-        return providers;
+        return providers.stream().filter(Objects::nonNull).collect(java.util.stream.Collectors.toList());
     }
 
     @Override

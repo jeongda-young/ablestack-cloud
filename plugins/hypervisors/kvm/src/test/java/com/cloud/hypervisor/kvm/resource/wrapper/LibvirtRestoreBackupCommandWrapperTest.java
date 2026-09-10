@@ -92,7 +92,7 @@ public class LibvirtRestoreBackupCommandWrapperTest {
                         .thenReturn(null);
                 scriptMock.when(() -> Script.executeCommandForExitValue(any(String[].class)))
                         .thenReturn(0);
-                scriptMock.when(() -> Script.runSimpleBashScriptForExitValue(anyString()))
+                scriptMock.when(() -> Script.executeCommandForExitValue(any(String[].class)))
                         .thenReturn(0); // Other commands success
                 scriptMock.when(() -> Script.executePipedCommands(anyList(), anyLong()))
                         .thenReturn(new Pair<>(0, "vda"));
@@ -137,7 +137,7 @@ public class LibvirtRestoreBackupCommandWrapperTest {
                         .thenReturn(null);
                 scriptMock.when(() -> Script.executeCommandForExitValue(any(String[].class)))
                         .thenReturn(0);
-                scriptMock.when(() -> Script.runSimpleBashScriptForExitValue(anyString()))
+                scriptMock.when(() -> Script.executeCommandForExitValue(any(String[].class)))
                         .thenReturn(0); // Other commands success
 
                 filesMock.when(() -> Files.deleteIfExists(any(Path.class))).thenReturn(true);
@@ -178,7 +178,7 @@ public class LibvirtRestoreBackupCommandWrapperTest {
                         .thenReturn(null);
                 scriptMock.when(() -> Script.executeCommandForExitValue(any(String[].class)))
                         .thenReturn(0);
-                scriptMock.when(() -> Script.runSimpleBashScriptForExitValue(anyString()))
+                scriptMock.when(() -> Script.executeCommandForExitValue(any(String[].class)))
                         .thenReturn(0); // Other commands success
 
                 filesMock.when(() -> Files.deleteIfExists(any(Path.class))).thenReturn(true);
@@ -261,8 +261,8 @@ public class LibvirtRestoreBackupCommandWrapperTest {
             filesMock.when(() -> Files.createTempDirectory(anyString())).thenReturn(tempPath);
 
             try (MockedStatic<Script> scriptMock = mockStatic(Script.class)) {
-                scriptMock.when(() -> Script.executeCommand(any(String[].class)))
-                        .thenThrow(new RuntimeException("failure")); // Mount failure
+                scriptMock.when(() -> Script.executeCommandForExitValue(anyLong(), any(String[].class)))
+                        .thenReturn(1); // Mount failure
 
                 Answer result = wrapper.execute(command, libvirtComputingResource);
 
@@ -302,10 +302,10 @@ public class LibvirtRestoreBackupCommandWrapperTest {
             try (MockedStatic<Script> scriptMock = mockStatic(Script.class)) {
                 scriptMock.when(() -> Script.executeCommand(any(String[].class)))
                         .thenReturn(null);
-                scriptMock.when(() -> Script.runSimpleBashScriptForExitValue(anyString()))
+                scriptMock.when(() -> Script.executeCommandForExitValue(any(String[].class)))
                         .thenAnswer(invocation -> {
-                            String command = invocation.getArgument(0);
-                            if (command.contains("ls ")) {
+                            String command = Arrays.toString(invocation.getArguments());
+                            if (command.contains("-f")) {
                                 return 1; // File not found
                             }
                             return 0; // Other commands success
@@ -351,12 +351,12 @@ public class LibvirtRestoreBackupCommandWrapperTest {
             try (MockedStatic<Script> scriptMock = mockStatic(Script.class)) {
                 scriptMock.when(() -> Script.executeCommand(any(String[].class)))
                         .thenReturn(null);
-                scriptMock.when(() -> Script.runSimpleBashScriptForExitValue(anyString()))
+                scriptMock.when(() -> Script.executeCommandForExitValue(any(String[].class)))
                         .thenAnswer(invocation -> {
-                            String command = invocation.getArgument(0);
-                            if (command.contains("ls ")) {
+                            String command = Arrays.toString(invocation.getArguments());
+                            if (command.contains("-f")) {
                                 return 0; // File exists
-                            } else if (command.contains("qemu-img check")) {
+                            } else if (command.contains("check")) {
                                 return 1; // Corrupt file
                             }
                             return 0; // Other commands success
@@ -404,19 +404,19 @@ public class LibvirtRestoreBackupCommandWrapperTest {
                         .thenAnswer(invocation -> invocation.getArgument(0));
                 scriptMock.when(() -> Script.executeCommand(any(String[].class)))
                         .thenReturn(null);
-                scriptMock.when(() -> Script.executeCommandForExitValue(any(String[].class)))
+                scriptMock.when(() -> Script.executeCommandForExitValue(anyLong(), any(String[].class)))
                         .thenAnswer(invocation -> {
                             if (Arrays.stream(invocation.getArguments()).map(String::valueOf).anyMatch("rsync"::equals)) {
                                 return 1; // Rsync failure
                             }
                             return 0;
                         });
-                scriptMock.when(() -> Script.runSimpleBashScriptForExitValue(anyString()))
+                scriptMock.when(() -> Script.executeCommandForExitValue(any(String[].class)))
                         .thenAnswer(invocation -> {
-                            String command = invocation.getArgument(0);
-                            if (command.contains("ls ")) {
+                            String command = Arrays.toString(invocation.getArguments());
+                            if (command.contains("-f")) {
                                 return 0; // File exists
-                            } else if (command.contains("qemu-img check")) {
+                            } else if (command.contains("check")) {
                                 return 0; // File is valid
                             }
                             return 0; // Other commands success
@@ -470,16 +470,6 @@ public class LibvirtRestoreBackupCommandWrapperTest {
                                 return 1; // Attach failure
                             }
                             return 0;
-                        });
-                scriptMock.when(() -> Script.runSimpleBashScriptForExitValue(anyString()))
-                        .thenAnswer(invocation -> {
-                            String command = invocation.getArgument(0);
-                            if (command.contains("ls ")) {
-                                return 0; // File exists
-                            } else if (command.contains("qemu-img check")) {
-                                return 0; // File is valid
-                            }
-                            return 0; // Other commands success
                         });
                 scriptMock.when(() -> Script.executePipedCommands(anyList(), anyLong()))
                         .thenReturn(new Pair<>(0, "vda"));
@@ -561,7 +551,7 @@ public class LibvirtRestoreBackupCommandWrapperTest {
             filesMock.when(() -> Files.createTempDirectory(anyString())).thenReturn(tempPath);
 
             try (MockedStatic<Script> scriptMock = mockStatic(Script.class)) {
-                scriptMock.when(() -> Script.runSimpleBashScriptForExitValue(anyString()))
+                scriptMock.when(() -> Script.executeCommandForExitValue(any(String[].class)))
                         .thenReturn(0); // All commands success
                 scriptMock.when(() -> Script.executeCommand(any(String[].class)))
                         .thenReturn(null);
@@ -577,6 +567,89 @@ public class LibvirtRestoreBackupCommandWrapperTest {
                 BackupAnswer backupAnswer = (BackupAnswer) result;
                 Assert.assertTrue(backupAnswer.getResult());
             }
+        }
+    }
+    @Test
+    public void mountPreservesArgumentsTimeoutAndCifsOptions() throws Exception {
+        java.lang.reflect.Method mount = LibvirtRestoreBackupCommandWrapper.class.getDeclaredMethod(
+                "mountBackupDirectory", String.class, String.class, String.class, Integer.class);
+        mount.setAccessible(true);
+        String address = "//fixture/share with spaces";
+        String options = "username=fixture,password=fixture value";
+        try (MockedStatic<Script> script = mockStatic(Script.class)) {
+            script.when(() -> Script.getExecutableAbsolutePath("mount")).thenReturn("/usr/bin/mount");
+            script.when(() -> Script.executeCommandForExitValue(anyLong(), any(String[].class))).thenAnswer(call -> {
+                Assert.assertEquals(37000L, (long) call.getArgument(0));
+                Object[] args = call.getArguments();
+                Assert.assertEquals("sudo", args[1]);
+                Assert.assertEquals("/usr/bin/mount", args[2]);
+                Assert.assertEquals(address, args[5]);
+                Assert.assertEquals(options + ",nobrl", args[8]);
+                return 0;
+            });
+            String directory = (String) mount.invoke(wrapper, address, "cifs", options, 37000);
+            Assert.assertTrue(Files.isDirectory(Path.of(directory)));
+            Files.delete(Path.of(directory));
+        }
+    }
+
+    @Test
+    public void linstorAndFileAttachmentPreserveDiskFormatAndCache() throws Exception {
+        java.lang.reflect.Method attach = LibvirtRestoreBackupCommandWrapper.class.getDeclaredMethod(
+                "attachVolumeToVm", com.cloud.hypervisor.kvm.storage.KVMStoragePoolManager.class,
+                String.class, PrimaryDataStoreTO.class, String.class, String.class);
+        attach.setAccessible(true);
+        PrimaryDataStoreTO pool = Mockito.mock(PrimaryDataStoreTO.class);
+        java.util.List<String> captured = new java.util.ArrayList<>();
+        try (MockedStatic<Script> script = mockStatic(Script.class)) {
+            script.when(() -> Script.getExecutableAbsolutePath(anyString())).thenAnswer(call -> call.getArgument(0));
+            script.when(() -> Script.executePipedCommands(anyList(), anyLong())).thenReturn(new Pair<>(0, "vda"));
+            script.when(() -> Script.executeCommandForExitValue(any(String[].class))).thenAnswer(call -> {
+                captured.clear();
+                for (Object argument : call.getArguments()) {
+                    captured.add((String) argument);
+                }
+                return 0;
+            });
+            for (Storage.StoragePoolType type : Arrays.asList(Storage.StoragePoolType.Linstor, Storage.StoragePoolType.NetworkFilesystem)) {
+                when(pool.getPoolType()).thenReturn(type);
+                Assert.assertEquals(true, attach.invoke(wrapper, null, "vm with spaces", pool, "/volume path", "writeback"));
+                Assert.assertEquals("vm with spaces", captured.get(2));
+                Assert.assertEquals("/volume path", captured.get(3));
+                Assert.assertEquals("vdb", captured.get(4));
+                Assert.assertEquals("writeback", captured.get(captured.size() - 1));
+                Assert.assertEquals(type != Storage.StoragePoolType.Linstor, captured.contains("qcow2"));
+            }
+        }
+    }
+
+    @Test
+    public void rbdAttachmentUsesReadableXmlAndCleansItUp() throws Exception {
+        java.lang.reflect.Method attach = LibvirtRestoreBackupCommandWrapper.class.getDeclaredMethod(
+                "attachVolumeToVm", com.cloud.hypervisor.kvm.storage.KVMStoragePoolManager.class,
+                String.class, PrimaryDataStoreTO.class, String.class, String.class);
+        attach.setAccessible(true);
+        PrimaryDataStoreTO pool = Mockito.mock(PrimaryDataStoreTO.class);
+        when(pool.getPoolType()).thenReturn(Storage.StoragePoolType.RBD);
+        when(pool.getHost()).thenReturn("ceph.example");
+        when(pool.getUuid()).thenReturn("pool-id");
+        com.cloud.hypervisor.kvm.storage.KVMStoragePoolManager manager = Mockito.mock(com.cloud.hypervisor.kvm.storage.KVMStoragePoolManager.class);
+        java.util.List<Path> files = new java.util.ArrayList<>();
+        try (MockedStatic<Script> script = mockStatic(Script.class)) {
+            script.when(() -> Script.getExecutableAbsolutePath(anyString())).thenAnswer(call -> call.getArgument(0));
+            script.when(() -> Script.executePipedCommands(anyList(), anyLong())).thenReturn(new Pair<>(0, "vda"));
+            script.when(() -> Script.executeCommandForExitValue(any(String[].class))).thenAnswer(call -> {
+                Assert.assertEquals("attach-device", call.getArgument(1));
+                Path xml = Path.of((String) call.getArgument(3));
+                files.add(xml);
+                org.w3c.dom.Document document = javax.xml.parsers.DocumentBuilderFactory.newInstance().newDocumentBuilder().parse(xml.toFile());
+                Assert.assertEquals("raw", document.getElementsByTagName("driver").item(0).getAttributes().getNamedItem("type").getNodeValue());
+                Assert.assertEquals("writeback", document.getElementsByTagName("driver").item(0).getAttributes().getNamedItem("cache").getNodeValue());
+                return 0;
+            });
+            Assert.assertEquals(true, attach.invoke(wrapper, manager, "fixture-vm", pool, "pool/volume", "writeback"));
+            Assert.assertEquals(1, files.size());
+            Assert.assertFalse(Files.exists(files.get(0)));
         }
     }
 }

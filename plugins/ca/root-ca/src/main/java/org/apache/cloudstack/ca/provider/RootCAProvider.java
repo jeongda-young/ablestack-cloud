@@ -23,6 +23,7 @@ import java.math.BigInteger;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
 import java.net.SocketException;
+import java.security.GeneralSecurityException;
 import java.security.InvalidKeyException;
 import java.security.KeyManagementException;
 import java.security.KeyPair;
@@ -32,6 +33,7 @@ import java.security.NoSuchAlgorithmException;
 import java.security.NoSuchProviderException;
 import java.security.SecureRandom;
 import java.security.Security;
+import java.security.Signature;
 import java.security.SignatureException;
 import java.security.UnrecoverableKeyException;
 import java.security.cert.CertificateException;
@@ -359,8 +361,21 @@ public final class RootCAProvider extends AdapterBase implements CAProvider, Con
             return false;
         }
         try {
-            caKeyPair = new KeyPair(CertUtils.pemToPublicKey(rootCAPublicKey.value()), CertUtils.pemToPrivateKey(rootCAPrivateKey.value()));
-        } catch (InvalidKeySpecException | IOException e) {
+            final KeyPair loadedKeyPair = new KeyPair(CertUtils.pemToPublicKey(rootCAPublicKey.value()), CertUtils.pemToPrivateKey(rootCAPrivateKey.value()));
+            final byte[] challenge = new byte[32];
+            new SecureRandom().nextBytes(challenge);
+            final Signature signature = Signature.getInstance(CAManager.CertSignatureAlgorithm.value());
+            signature.initSign(loadedKeyPair.getPrivate());
+            signature.update(challenge);
+            final byte[] signed = signature.sign();
+            signature.initVerify(loadedKeyPair.getPublic());
+            signature.update(challenge);
+            if (!signature.verify(signed)) {
+                logger.error("The configured CA private and public keys do not match");
+                return false;
+            }
+            caKeyPair = loadedKeyPair;
+        } catch (GeneralSecurityException | IOException | RuntimeException e) {
             logger.error("Failed to load saved RootCA private/public keys due to exception:", e);
             return false;
         }
@@ -494,13 +509,15 @@ public final class RootCAProvider extends AdapterBase implements CAProvider, Con
         }
     }
 
-    private boolean setupCA() {
+    boolean setupCA() {
+        final boolean userProvidedCA = hasUserProvidedCAKeys();
         if (!loadRootCAKeyPair()) {
-            if (hasUserProvidedCAKeys()) {
+            if (userProvidedCA) {
                 logger.error("Failed to load user-provided CA keys from configuration. " +
                     "Check that ca.plugin.root.private.key, ca.plugin.root.public.key, and " +
                     "ca.plugin.root.ca.certificate are all set and in the correct PEM format. " +
-                    "Overwriting with auto-generated keys.");
+                    "The configured CA material has been preserved.");
+                return false;
             }
             if (!saveNewRootCAKeypair()) {
                 logger.error("Failed to save and load root CA keypair");
@@ -508,10 +525,11 @@ public final class RootCAProvider extends AdapterBase implements CAProvider, Con
             }
         }
         if (!loadRootCACertificate()) {
-            if (hasUserProvidedCAKeys()) {
+            if (userProvidedCA) {
                 logger.error("Failed to load user-provided CA certificate. " +
                     "Check that ca.plugin.root.ca.certificate is set and in PEM format. " +
-                    "Overwriting with auto-generated certificate.");
+                    "The configured CA material has been preserved.");
+                return false;
             }
             if (!saveNewRootCACertificate()) {
                 logger.error("Failed to save and load root CA certificate");

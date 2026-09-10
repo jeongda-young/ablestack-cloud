@@ -579,9 +579,16 @@ public class WebhookApiServiceImpl extends ManagerBase implements WebhookApiServ
             }
             webhook = webhookDao.findById(existingDelivery.getWebhookId());
         }
+        if (webhookId != null) {
+            webhook = webhookDao.findById(webhookId);
+            if (webhook == null) {
+                throw new InvalidParameterValueException("Invalid webhook specified");
+            }
+            accountManager.checkAccess(caller, SecurityChecker.AccessType.OperateEntry, false, webhook);
+        }
         URI uri = null;
         if (StringUtils.isNotBlank(payloadUrl)) {
-            long domainId = owner.getDomainId();
+            long domainId = caller.getDomainId();
             if (webhook != null) {
                 domainId = webhook.getDomainId();
             }

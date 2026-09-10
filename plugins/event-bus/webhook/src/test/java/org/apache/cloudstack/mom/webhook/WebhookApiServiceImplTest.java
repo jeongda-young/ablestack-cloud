@@ -110,6 +110,11 @@ public class WebhookApiServiceImplTest {
         CallContext callContextMock = Mockito.mock(CallContext.class);
         callContextMocked.when(CallContext::current).thenReturn(callContextMock);
         Mockito.when(callContextMock.getCallingAccount()).thenReturn(caller);
+        Mockito.when(accountManager.getAccount(Mockito.anyLong())).thenReturn(caller);
+        Mockito.when(accountManager.finalizeOwner(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any())).thenReturn(caller);
+        Mockito.when(accountManager.isRootAdmin(Mockito.anyLong())).thenAnswer(ignored -> caller.getType() == Account.Type.ADMIN);
+        Mockito.when(accountManager.isAdmin(Mockito.anyLong())).thenAnswer(ignored -> caller.getType() == Account.Type.ADMIN || caller.getType() == Account.Type.DOMAIN_ADMIN);
+
     }
 
     @After
@@ -294,42 +299,39 @@ public class WebhookApiServiceImplTest {
     @Test(expected = InvalidParameterValueException.class)
     public void basicWebhookDeliveryApiCheckThrowsExceptionForInvalidDeliveryId() {
         Mockito.when(webhookDeliveryDao.findById(1L)).thenReturn(null);
-        webhookApiServiceImpl.basicWebhookDeliveryApiCheck(Mockito.mock(Account.class), 1L, null, null, null, null);
+        webhookApiServiceImpl.basicWebhookDeliveryApiCheck(Mockito.mock(Account.class), 1L, null, null, null, null, false);
     }
 
     @Test(expected = InvalidParameterValueException.class)
     public void basicWebhookDeliveryApiCheckThrowsExceptionForInvalidWebhookId() {
         Mockito.when(webhookDao.findById(1L)).thenReturn(null);
-        webhookApiServiceImpl.basicWebhookDeliveryApiCheck(Mockito.mock(Account.class), null, 1L, null, null, null);
+        webhookApiServiceImpl.basicWebhookDeliveryApiCheck(Mockito.mock(Account.class), null, 1L, null, null, null, false);
     }
 
     @Test(expected = InvalidParameterValueException.class)
     public void basicWebhookDeliveryApiCheckThrowsExceptionForEndDateBeforeStartDate() {
-        webhookApiServiceImpl.basicWebhookDeliveryApiCheck(Mockito.mock(Account.class), null, null, null, new Date(), new Date(System.currentTimeMillis() - 1000));
+        webhookApiServiceImpl.basicWebhookDeliveryApiCheck(Mockito.mock(Account.class), null, null, null, new Date(), new Date(System.currentTimeMillis() - 1000), false);
     }
 
     @Test(expected = PermissionDeniedException.class)
     public void basicWebhookDeliveryApiCheckThrowsExceptionForNonAdminAccessToManagementServer() {
         Account caller = Mockito.mock(Account.class);
-        Mockito.when(caller.getType()).thenReturn(Account.Type.NORMAL);
-        webhookApiServiceImpl.basicWebhookDeliveryApiCheck(caller, null, null, 1L, null, null);
+        webhookApiServiceImpl.basicWebhookDeliveryApiCheck(caller, null, null, 1L, null, null, false);
     }
 
     @Test(expected = InvalidParameterValueException.class)
     public void basicWebhookDeliveryApiCheckThrowsExceptionForInvalidManagementServerId() {
         Account caller = Mockito.mock(Account.class);
-        Mockito.when(caller.getType()).thenReturn(Account.Type.ADMIN);
         Mockito.when(managementServerHostDao.findById(1L)).thenReturn(null);
-        webhookApiServiceImpl.basicWebhookDeliveryApiCheck(caller, null, null, 1L, null, null);
+        webhookApiServiceImpl.basicWebhookDeliveryApiCheck(caller, null, null, 1L, null, null, true);
     }
 
     @Test
     public void basicWebhookDeliveryApiCheckReturnsManagementServerHostVOForValidInput() {
         Account caller = Mockito.mock(Account.class);
-        Mockito.when(caller.getType()).thenReturn(Account.Type.ADMIN);
         ManagementServerHostVO managementServerHostVO = Mockito.mock(ManagementServerHostVO.class);
         Mockito.when(managementServerHostDao.findById(1L)).thenReturn(managementServerHostVO);
-        ManagementServerHostVO result = webhookApiServiceImpl.basicWebhookDeliveryApiCheck(caller, null, null, 1L, null, null);
+        ManagementServerHostVO result = webhookApiServiceImpl.basicWebhookDeliveryApiCheck(caller, null, null, 1L, null, null, true);
         Assert.assertNotNull(result);
         Assert.assertEquals(managementServerHostVO, result);
     }
@@ -501,7 +503,7 @@ public class WebhookApiServiceImplTest {
         Mockito.when(webhookDeliveryVO.getWebhookId()).thenReturn(1L);
         Mockito.when(webhookDao.findById(1L)).thenReturn(webhookVO);
         Mockito.doNothing().when(accountManager).checkAccess(caller, SecurityChecker.AccessType.OperateEntry, false, webhookVO);
-        webhookApiServiceImpl.basicWebhookDeliveryApiCheck(caller, 1L, null, null, null, null);
+        webhookApiServiceImpl.basicWebhookDeliveryApiCheck(caller, 1L, null, null, null, null, false);
         Mockito.verify(accountManager).checkAccess(caller, SecurityChecker.AccessType.OperateEntry, false, webhookVO);
     }
 
@@ -511,7 +513,7 @@ public class WebhookApiServiceImplTest {
         WebhookVO webhookVO = Mockito.mock(WebhookVO.class);
         Mockito.when(webhookDao.findById(1L)).thenReturn(webhookVO);
         Mockito.doNothing().when(accountManager).checkAccess(caller, SecurityChecker.AccessType.OperateEntry, false, webhookVO);
-        webhookApiServiceImpl.basicWebhookDeliveryApiCheck(caller, null, 1L, null, null, null);
+        webhookApiServiceImpl.basicWebhookDeliveryApiCheck(caller, null, 1L, null, null, null, false);
         Mockito.verify(accountManager).checkAccess(caller, SecurityChecker.AccessType.OperateEntry, false, webhookVO);
     }
 
@@ -895,7 +897,7 @@ public class WebhookApiServiceImplTest {
         webhookApiServiceImpl.createWebhook(cmd);
     }
 
-    @Test(expected = IllegalArgumentException.class)
+    @Test(expected = InvalidParameterValueException.class)
     public void createWebhookThrowsExceptionForInvalidUrl() {
         CreateWebhookCmd cmd = Mockito.mock(CreateWebhookCmd.class);
 
@@ -912,8 +914,6 @@ public class WebhookApiServiceImplTest {
         Mockito.when(cmd.getPayloadUrl()).thenReturn("http://example.com");
         Mockito.when(cmd.isSslVerification()).thenReturn(true);
         Mockito.doReturn(caller).when(webhookApiServiceImpl).getOwner(cmd);
-        Mockito.doNothing().when(webhookApiServiceImpl)
-                .validateWebhookOwnerPayloadUrl(caller, "http://example.com", null);
 
         webhookApiServiceImpl.createWebhook(cmd);
     }
@@ -1004,8 +1004,6 @@ public class WebhookApiServiceImplTest {
         Mockito.when(cmd.isSslVerification()).thenReturn(true);
         Mockito.when(webhook.getAccountId()).thenReturn(1L);
         Mockito.when(accountManager.getAccount(1L)).thenReturn(caller);
-        Mockito.doNothing().when(webhookApiServiceImpl)
-                .validateWebhookOwnerPayloadUrl(caller, "http://cloudstack.apache.org/", webhook);
         Mockito.when(webhookDao.findById(1L)).thenReturn(webhook);
 
         webhookApiServiceImpl.updateWebhook(cmd);
@@ -1050,7 +1048,7 @@ public class WebhookApiServiceImplTest {
         Mockito.when(cmd.getStartIndex()).thenReturn(0L);
         Mockito.when(cmd.getPageSizeVal()).thenReturn(10L);
         Mockito.when(webhookDeliveryJoinDao.searchAndCountByListApiParameters(Mockito.any(), Mockito.anyList(),
-                        Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any()))
+                        Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyBoolean()))
                 .thenReturn(new Pair<>(List.of(), 0));
 
         ListResponse<WebhookDeliveryResponse> response = webhookApiServiceImpl.listWebhookDeliveries(cmd);
@@ -1072,11 +1070,11 @@ public class WebhookApiServiceImplTest {
         Mockito.when(cmd.getStartIndex()).thenReturn(0L);
         Mockito.when(cmd.getPageSizeVal()).thenReturn(10L);
         Mockito.when(webhookDeliveryJoinDao.searchAndCountByListApiParameters(Mockito.any(), Mockito.anyList(),
-                        Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any()))
+                        Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyBoolean()))
                 .thenReturn(new Pair<>(List.of(delivery), 1));
         Mockito.doReturn(deliveryResponse).when(webhookApiServiceImpl).createWebhookDeliveryResponse(delivery);
         Mockito.doReturn(null).when(webhookApiServiceImpl)
-                .basicWebhookDeliveryApiCheck(caller, null, 1L, null, null, null);
+                .basicWebhookDeliveryApiCheck(caller, null, 1L, null, null, null, false);
 
         ListResponse<WebhookDeliveryResponse> response = webhookApiServiceImpl.listWebhookDeliveries(cmd);
 
@@ -1109,7 +1107,7 @@ public class WebhookApiServiceImplTest {
         Mockito.when(cmd.getStartIndex()).thenReturn(0L);
         Mockito.when(cmd.getPageSizeVal()).thenReturn(10L);
         Mockito.when(webhookDeliveryJoinDao.searchAndCountByListApiParameters(Mockito.any(), Mockito.anyList(),
-                        Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any()))
+                        Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyBoolean()))
                 .thenReturn(new Pair<>(List.of(delivery), 1));
         Mockito.doReturn(deliveryResponse).when(webhookApiServiceImpl).createWebhookDeliveryResponse(delivery);
 
@@ -1131,13 +1129,13 @@ public class WebhookApiServiceImplTest {
         Mockito.when(cmd.getStartDate()).thenReturn(null);
         Mockito.when(cmd.getEndDate()).thenReturn(null);
         Mockito.doReturn(null).when(webhookApiServiceImpl)
-                .basicWebhookDeliveryApiCheck(caller, null, 1L, null, null, null);
-        Mockito.when(webhookDeliveryDao.deleteByDeleteApiParams(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any())).thenReturn(5);
+                .basicWebhookDeliveryApiCheck(caller, null, 1L, null, null, null, false);
+        Mockito.when(webhookDeliveryDao.deleteByDeleteApiParams(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyBoolean())).thenReturn(5);
 
         int removed = webhookApiServiceImpl.deleteWebhookDelivery(cmd);
 
         Assert.assertEquals(5, removed);
-        Mockito.verify(webhookDeliveryDao).deleteByDeleteApiParams(null, 1L, null, null, null);
+        Mockito.verify(webhookDeliveryDao).deleteByDeleteApiParams(null, List.of(1L), null, null, null, false);
     }
 
     @Test(expected = InvalidParameterValueException.class)
@@ -1159,12 +1157,12 @@ public class WebhookApiServiceImplTest {
         Mockito.when(cmd.getStartDate()).thenReturn(null);
         Mockito.when(cmd.getEndDate()).thenReturn(null);
         Mockito.when(webhookDao.findById(1L)).thenReturn(Mockito.mock(WebhookVO.class));
-        Mockito.when(webhookDeliveryDao.deleteByDeleteApiParams(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any())).thenReturn(0);
+        Mockito.when(webhookDeliveryDao.deleteByDeleteApiParams(Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.any(), Mockito.anyBoolean())).thenReturn(0);
 
         int removed = webhookApiServiceImpl.deleteWebhookDelivery(cmd);
 
         Assert.assertEquals(0, removed);
-        Mockito.verify(webhookDeliveryDao).deleteByDeleteApiParams(null, 1L, null, null, null);
+        Mockito.verify(webhookDeliveryDao).deleteByDeleteApiParams(null, List.of(1L), null, null, null, false);
     }
 
     @Test(expected = PermissionDeniedException.class)
@@ -1173,7 +1171,6 @@ public class WebhookApiServiceImplTest {
 
         Mockito.when(cmd.getId()).thenReturn(null);
         Mockito.when(cmd.getWebhookId()).thenReturn(1L);
-        Mockito.when(caller.getType()).thenReturn(Account.Type.NORMAL);
         Mockito.when(webhookDao.findById(1L)).thenReturn(Mockito.mock(WebhookVO.class));
 
         webhookApiServiceImpl.deleteWebhookDelivery(cmd);
@@ -1227,7 +1224,7 @@ public class WebhookApiServiceImplTest {
         Mockito.when(webhookDeliveryDao.findById(1L)).thenReturn(delivery);
         Mockito.when(delivery.getWebhookId()).thenReturn(2L);
         Mockito.when(webhookDao.findById(2L)).thenReturn(webhook);
-        Mockito.when(webhookService.executeWebhookDelivery(delivery, webhook, null)).thenReturn(webhookDelivery);
+        Mockito.when(webhookService.executeWebhookDelivery(delivery, webhook, null, null)).thenReturn(webhookDelivery);
         Mockito.when(webhookDelivery.getId()).thenReturn(3L);
         Mockito.when(webhookDeliveryJoinDao.findById(3L)).thenReturn(Mockito.mock(WebhookDeliveryJoinVO.class));
         Mockito.doReturn(response).when(webhookApiServiceImpl).createWebhookDeliveryResponse(Mockito.any());
@@ -1248,7 +1245,7 @@ public class WebhookApiServiceImplTest {
         Mockito.when(cmd.getId()).thenReturn(null);
         Mockito.when(cmd.getWebhookId()).thenReturn(1L);
         Mockito.when(webhookDao.findById(1L)).thenReturn(webhook);
-        Mockito.when(webhookService.executeWebhookDelivery(null, webhook, null)).thenReturn(webhookDelivery);
+        Mockito.when(webhookService.executeWebhookDelivery(null, webhook, null, null)).thenReturn(webhookDelivery);
         Mockito.when(webhookDelivery.getId()).thenReturn(WebhookDelivery.ID_DUMMY);
         Mockito.doReturn(response).when(webhookApiServiceImpl).createTestWebhookDeliveryResponse(webhookDelivery, webhook);
 
@@ -1276,7 +1273,7 @@ public class WebhookApiServiceImplTest {
         Mockito.when(cmd.getWebhookId()).thenReturn(null);
         Mockito.when(cmd.getPayloadUrl()).thenReturn("https://example.com");
         Mockito.when(webhookService.executeWebhookDelivery(Mockito.eq(null), Mockito.any(Webhook.class),
-                Mockito.eq(null))).thenReturn(webhookDelivery);
+                Mockito.eq(null), Mockito.any())).thenReturn(webhookDelivery);
         Mockito.when(webhookDelivery.getId()).thenReturn(WebhookDelivery.ID_DUMMY);
         Mockito.doReturn(response).when(webhookApiServiceImpl).createTestWebhookDeliveryResponse(
                 Mockito.eq(webhookDelivery), Mockito.any(Webhook.class));
