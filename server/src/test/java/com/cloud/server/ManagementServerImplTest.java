@@ -78,6 +78,7 @@ import com.cloud.domain.dao.DomainDao;
 import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.host.DetailVO;
 import com.cloud.host.Host;
+import com.cloud.agent.manager.allocator.HostAllocator;
 import com.cloud.host.HostVO;
 import com.cloud.host.dao.HostDetailsDao;
 import com.cloud.network.IpAddress;
