@@ -17,11 +17,11 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-# Apache 4.23.0.0 → Europa: S1 추적 기준
+# Apache 4.23.0.0 → Europa: 통합 추적표
 
 부모: [Epic #987](https://github.com/ablecloud-team/ablestack-cloud/issues/987). 기준일: 2026-09-10.
 
-**범위 추출·작업 배정·사전분류를 완료한 초기 추적표다. 제품 코드를 반영하거나 299개 변경의 기능 검증을 완료한 결과가 아니다.**
+S1에서 확정한 범위를 유지하고 후속 통합 결과를 갱신하는 추적표다. **현재 S3까지 최종 판정 113개, Pending186개이며 전체 통합·릴리즈 완료가 아니다.** 초기 사전분류는 아래에 보존한다.
 
 ## 고정 기준
 
@@ -134,6 +134,14 @@ git show --remerge-diff --format= --no-ext-diff MERGE_SHA
 
 ## S2 진행 자료
 
-S1은 PR #1000으로 완료했다. S2 구현 PR #1002를 병합하여 baseline_ready를 완료했다. S2 원본77개 중 최종 판정41개(Applied5/Adapted8/Already Satisfied1/Excluded27), Pending36개이며 전체299개 중 Pending258개다. 다음 작업은 S3 #991이다. 최신 결과는 [S2 검증 보고](s2-verification.ko.md), [77개 검토표](s2-review.tsv), [테스트 결과](s2-test-results.tsv), [라이선스 변경](s2-license-headers.tsv)에 기록한다. 초기 299개 Pending 설명은 S1 시작 상태이며 현재 상태는 inventory.tsv의 decision을 기준으로 한다.
+S1은 PR #1000으로 완료했다. S2 구현 PR #1002를 병합하여 baseline_ready를 완료했다. S2 원본77개 중 최종 판정41개(Applied5/Adapted8/Already Satisfied1/Excluded27), Pending36개이며 전체299개 중 Pending258개다. 이 시점의 다음 작업은 S3 #991이었다. S2 기준 결과는 [S2 검증 보고](s2-verification.ko.md), [77개 검토표](s2-review.tsv), [테스트 결과](s2-test-results.tsv), [라이선스 변경](s2-license-headers.tsv)에 기록한다. 초기 299개 Pending 설명은 S1 시작 상태이며 현재 상태는 inventory.tsv의 decision을 기준으로 한다.
 
 S2에서 19개 remerge diff 해시를 다시 확인했다. 기존 요약의 13/6 집계는 잘못되어 실제 원본 표와 일치하는 14/5로 정정했다. SHA 집합과 개별 diff 해시는 변경하지 않았다.
+
+## S3 완료 자료
+
+S3 #991 구현 PR #1009에서 직접 배정66개와 S2 연계 일반 커밋6개를 최종 판정했다. S3 검토72개는 Applied28 / Adapted22 / Already Satisfied22다. 전체299개는 Applied33 / Adapted30 / Already Satisfied23 / Excluded27 / Pending186이다. S2 공동 마감은30개가 남아 #990을 OPEN으로 유지한다. 다른 기능이 남은 공유 merge는 Pending이며 S3 해결 부분의 검증 근거만 추가했다. 다음 작업은 S4 #992다.
+
+- [S3 검증 보고](s3-verification.ko.md): 제품 소스 SHA, DB/API/인증 검증 범위, 공식 Actions, 남은 게이트.
+- [원본별 판정](s3-review.tsv): 최초 적용 SHA, 적응 근거, 중복 peer, 최종 검증 SHA.
+- [로컬 Java 결과](s3-local-tests.tsv) / [공식 Java 결과](s3-ci-tests.tsv) / [Actions 기록](s3-ci-results.tsv) / [Rocky 9.8 산출물](s3-artifact-results.tsv).
