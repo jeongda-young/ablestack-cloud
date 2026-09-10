@@ -123,15 +123,19 @@ apply_backup_bandwidth_limit() {
 
     local attempt
     local blockjob_output=""
+    local bandwidth_applied=0
     for attempt in 1 2 3 4 5; do
       if blockjob_output=$(virsh -c qemu:///system blockjob "$VM" "$disk" --bandwidth "$bandwidth_limit_mibps" 2>&1); then
         log -ne "Applied backup bandwidth limit vm=[$VM] disk=[$disk] limitMbps=[$bandwidth_limit_mbps] virshLimitMiBps=[$bandwidth_limit_mibps] attempt=[$attempt]"
+        bandwidth_applied=1
         break
       fi
       sleep 1
     done
 
-    if [[ "$attempt" -eq 5 ]]; then
+    if [[ "$bandwidth_applied" -ne 1 ]] && [[ "$blockjob_output" == *"does not have an active block job"* || "$blockjob_output" == *"No current block job"* ]]; then
+      log -ne "Skipped backup bandwidth limit vm=[$VM] disk=[$disk] limitMbps=[$bandwidth_limit_mbps] virshLimitMiBps=[$bandwidth_limit_mibps] reason=[No active block job; backup may have already completed]"
+    elif [[ "$bandwidth_applied" -ne 1 ]]; then
       log -ne "WARNING failed to apply backup bandwidth limit vm=[$VM] disk=[$disk] limitMbps=[$bandwidth_limit_mbps] virshLimitMiBps=[$bandwidth_limit_mibps] output=[${blockjob_output:-Unknown error}]"
     fi
   done < <(virsh -c qemu:///system domblklist "$VM" --details 2>/dev/null | awk '/disk/ {print $3 "|" $4}')
