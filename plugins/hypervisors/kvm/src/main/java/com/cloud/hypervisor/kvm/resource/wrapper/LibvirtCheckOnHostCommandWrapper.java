@@ -40,7 +40,6 @@ import com.cloud.resource.ResourceWrapper;
 public final class LibvirtCheckOnHostCommandWrapper extends CommandWrapper<CheckOnHostCommand, Answer, LibvirtComputingResource> {
     @Override
     public Answer execute(final CheckOnHostCommand command, final LibvirtComputingResource libvirtComputingResource) {
-        final ExecutorService executors = Executors.newSingleThreadExecutor();
         final KVMHAMonitor monitor = libvirtComputingResource.getMonitor();
 
         final List<HAStoragePool> pools = monitor.getStoragePools();
@@ -51,8 +50,10 @@ public final class LibvirtCheckOnHostCommandWrapper extends CommandWrapper<Check
         final String volumeList = command.getVolumeList();
         final KVMHAChecker ha = new KVMHAChecker(pools, gfspools, rbdpools, clvmpools, host, command.shouldReportIfHeartBeatFailedForOneStoragePool(), volumeList);
 
-        final Future<Boolean> future = executors.submit(ha);
+        final ExecutorService executors = Executors.newSingleThreadExecutor();
+        Future<Boolean> future = null;
         try {
+            future = executors.submit(ha);
             final Boolean hasHeartBeat = future.get();
             if (hasHeartBeat == null) {
                 return new CheckOnHostAnswer(command, (Boolean) null, "No conclusive heartbeat observation");
@@ -68,7 +69,9 @@ public final class LibvirtCheckOnHostCommandWrapper extends CommandWrapper<Check
         } catch (final ExecutionException e) {
             return new CheckOnHostAnswer(command, "CheckOnHostCommand: can't get status of host: ExecutionException");
         } finally {
-            future.cancel(true);
+            if (future != null) {
+                future.cancel(true);
+            }
             executors.shutdownNow();
         }
     }

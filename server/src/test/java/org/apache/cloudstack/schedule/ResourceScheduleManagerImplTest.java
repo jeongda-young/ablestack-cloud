@@ -107,6 +107,7 @@ public class ResourceScheduleManagerImplTest {
 
     @After
     public void tearDown() throws Exception {
+        CallContext.unregister();
         closeable.close();
     }
 
@@ -423,5 +424,25 @@ public class ResourceScheduleManagerImplTest {
         ConfigKey<?>[] configKeys = resourceScheduleManager.getConfigKeys();
         Assert.assertEquals(1, configKeys.length);
         Assert.assertEquals(BaseScheduleWorker.ScheduledJobExpireInterval.key(), configKeys[0].key());
+    }
+    @Test
+    public void updateRejectsForeignOwnerBeforeChangingScheduleOrJobs() {
+        ResourceScheduleVO schedule = Mockito.mock(ResourceScheduleVO.class);
+        Mockito.when(resourceScheduleDao.findById(993L)).thenReturn(schedule);
+        Mockito.when(schedule.getResourceType()).thenReturn(ApiCommandResourceType.VirtualMachine);
+        Mockito.when(schedule.getResourceId()).thenReturn(123L);
+        Mockito.when(vmScheduleWorker.getEntityOwnerId(123L)).thenReturn(42L);
+        Account owner = Mockito.mock(Account.class);
+        Mockito.when(accountManager.getAccount(42L)).thenReturn(owner);
+        Mockito.doThrow(new com.cloud.exception.PermissionDeniedException("foreign account"))
+                .when(accountManager).checkAccess(Mockito.eq(CallContext.current().getCallingAccount()), Mockito.isNull(), Mockito.eq(false), Mockito.eq(owner));
+        try {
+            resourceScheduleManager.updateSchedule(993L, "changed", null, null, null, null, false, null);
+            Assert.fail("foreign owner must be denied");
+        } catch (com.cloud.exception.PermissionDeniedException expected) {
+            Mockito.verify(resourceScheduleDao, Mockito.never()).update(Mockito.anyLong(), Mockito.any());
+            Mockito.verifyNoInteractions(resourceScheduleDetailsDao);
+            Mockito.verify(vmScheduleWorker, Mockito.never()).parseAction(Mockito.any());
+        }
     }
 }

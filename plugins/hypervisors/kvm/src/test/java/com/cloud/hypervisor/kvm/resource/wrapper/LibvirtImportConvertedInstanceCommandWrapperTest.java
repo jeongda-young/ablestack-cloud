@@ -156,7 +156,7 @@ public class LibvirtImportConvertedInstanceCommandWrapperTest {
 
         KVMPhysicalDisk destDisk = Mockito.mock(KVMPhysicalDisk.class);
         Mockito.when(destDisk.getPath()).thenReturn("xyz");
-        Mockito.when(storagePoolManager.getStoragePool(Storage.StoragePoolType.RBD, destinationPoolUuid))
+        Mockito.when(storagePoolManager.getStoragePoolByUuid(destinationPoolUuid))
                 .thenReturn(destinationPool);
         Mockito.when(storagePoolManager.copyPhysicalDisk(Mockito.eq(sourceDisk), Mockito.anyString(), Mockito.eq(destinationPool), Mockito.anyInt()))
                 .thenReturn(destDisk);

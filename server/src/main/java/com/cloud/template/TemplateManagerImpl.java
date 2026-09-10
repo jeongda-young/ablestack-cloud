@@ -223,6 +223,10 @@ import com.cloud.utils.db.TransactionCallbackNoReturn;
 import com.cloud.utils.db.TransactionStatus;
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.vm.UserVmManager;
+import com.cloud.network.Network;
+import com.cloud.network.NetworkModel;
+import com.cloud.vm.NicVO;
+import com.cloud.vm.dao.NicDao;
 import com.cloud.vm.UserVmVO;
 import com.cloud.vm.VMInstanceVO;
 import com.cloud.vm.VirtualMachine;
@@ -287,6 +291,10 @@ public class TemplateManagerImpl extends ManagerBase implements TemplateManager,
     private AccountService _accountService;
     @Inject
     private ResourceLimitService _resourceLimitMgr;
+    @Inject
+    private NetworkModel networkModel;
+    @Inject
+    private NicDao nicDao;
     @Inject
     private ReservationDao reservationDao;
     @Inject
@@ -706,6 +714,9 @@ public class TemplateManagerImpl extends ManagerBase implements TemplateManager,
         // Pre-allocate every cdrom slot at boot. QEMU/IDE refuses to hot-add new cdrom drives, so
         // runtime attachIso can only media-swap into a slot the domain already owns.
         int totalSlots = Math.max(effectiveMaxCdroms(vm, dest.getHost().getId()), slotsNeededFor(slotToIsoId));
+        if (usesConfigDrive(vm) && slotToIsoId.containsKey(CDROM_PRIMARY_DEVICE_SEQ + 1)) {
+            throw new InvalidParameterValueException("The second CD-ROM slot is reserved for ConfigDrive; detach the extra ISO before starting or migrating this Instance.");
+        }
         for (int i = 0; i < totalSlots; i++) {
             int diskSeq = CDROM_PRIMARY_DEVICE_SEQ + i;
             Long isoId = slotToIsoId.get(diskSeq);
@@ -1289,17 +1300,6 @@ public class TemplateManagerImpl extends ManagerBase implements TemplateManager,
             throw new InvalidParameterValueException("Please specify a valid VM.");
         }
 
-        // Verify input parameters
-        UserVmVO vmInstanceCheck = _userVmDao.findById(vmId);
-        if (vmInstanceCheck == null) {
-            throw new InvalidParameterValueException("Unable to find an Instance with id " + vmId);
-        }
-
-        UserVm userVM = _userVmDao.findById(vmId);
-        if (userVM == null) {
-            throw new InvalidParameterValueException("Please specify a valid instance.");
-        }
-
         _accountMgr.checkAccess(caller, null, true, virtualMachine);
 
         Long isoId;
@@ -1339,8 +1339,8 @@ public class TemplateManagerImpl extends ManagerBase implements TemplateManager,
         boolean isVirtualRouter = extraParams != null && extraParams.length > 1 ? extraParams[1] : false;
 
         // Verify input parameters
-        VirtualMachine vm = _userVmDao.findById(vmId);
-        if (vm == null) {
+        VirtualMachine vm = isVirtualRouter ? _vmInstanceDao.findById(vmId) : _userVmDao.findById(vmId);
+        if (vm == null || (isVirtualRouter && vm.getType() != VirtualMachine.Type.DomainRouter)) {
             throw new InvalidParameterValueException("Unable to find an Instance with id " + vmId);
         }
         if (vm instanceof UserVm && UserVmManager.SHAREDFSVM.equals(((UserVm) vm).getUserVmType())) {
@@ -1581,12 +1581,21 @@ public class TemplateManagerImpl extends ManagerBase implements TemplateManager,
         Long clusterId = host != null ? host.getClusterId() : null;
         int configuredCap = VmIsoMaxCount.valueIn(clusterId);
         int hypervisorCap = advertisedCdromCap(hostId);
-        if (configuredCap > hypervisorCap) {
-            logger.warn("{} is set to {} but the placement host supports a maximum of {} CD-ROM(s) per Instance. Clamping to {}.",
-                    VmIsoMaxCount.key(), configuredCap, hypervisorCap, hypervisorCap);
-            return hypervisorCap;
+        int capacity = Math.max(1, Math.min(configuredCap, hypervisorCap));
+        // KVM has two IDE media slots. The existing ConfigDrive uses the second one.
+        return usesConfigDrive(vm) ? 1 : capacity;
+    }
+
+    boolean usesConfigDrive(VirtualMachine vm) {
+        if (vm.getHypervisorType() != HypervisorType.KVM) {
+            return false;
         }
-        return configuredCap;
+        for (NicVO nic : nicDao.listByVmId(vm.getId())) {
+            if (networkModel.isProviderForNetwork(Network.Provider.ConfigDrive, nic.getNetworkId())) {
+                return true;
+            }
+        }
+        return false;
     }
 
     int advertisedCdromCap(Long hostId) {
@@ -1598,7 +1607,8 @@ public class TemplateManagerImpl extends ManagerBase implements TemplateManager,
             return DEFAULT_CDROM_MAX_PER_VM;
         }
         try {
-            return Integer.parseInt(detail.getValue());
+            int value = Integer.parseInt(detail.getValue());
+            return value > 0 ? value : DEFAULT_CDROM_MAX_PER_VM;
         } catch (NumberFormatException e) {
             logger.warn("Invalid {} value '{}' for host {}; using default {}.",
                     Host.HOST_CDROM_MAX_COUNT, detail.getValue(), hostId, DEFAULT_CDROM_MAX_PER_VM);

@@ -23,6 +23,7 @@ package org.apache.cloudstack.api;
  */
 public abstract class BaseAsyncCmd extends BaseCmd {
 
+    public static final String vmIsoSyncObject = "vmiso";
     public static final String ipAddressSyncObject = "ipaddress";
     public static final String networkSyncObject = "network";
     public static final String vpcSyncObject = "vpc";

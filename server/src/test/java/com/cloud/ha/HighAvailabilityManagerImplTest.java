@@ -481,4 +481,33 @@ public class HighAvailabilityManagerImplTest {
         assertFalse(result);
         Mockito.verify(mockWork, Mockito.never()).setStep(Mockito.any());
     }
+    @Test
+    public void hostInspectionDefersVmWorkCancellationUntilAgentRecovers() {
+        for (org.apache.cloudstack.ha.HAConfig.HAState state : new org.apache.cloudstack.ha.HAConfig.HAState[]{
+                org.apache.cloudstack.ha.HAConfig.HAState.Suspect, org.apache.cloudstack.ha.HAConfig.HAState.Checking,
+                org.apache.cloudstack.ha.HAConfig.HAState.Recovered, org.apache.cloudstack.ha.HAConfig.HAState.Available}) {
+            HaWorkVO work = Mockito.mock(HaWorkVO.class);
+            Mockito.when(work.getStep()).thenReturn(Step.Investigating);
+            Mockito.when(work.getReasonType()).thenReturn(HighAvailabilityManager.ReasonType.HostDown);
+            Mockito.when(work.getHostId()).thenReturn(993L);
+            org.apache.cloudstack.ha.HAConfig config = Mockito.mock(org.apache.cloudstack.ha.HAConfig.class);
+            Mockito.when(config.isEnabled()).thenReturn(true);
+            Mockito.when(config.getState()).thenReturn(state);
+            Mockito.when(_haConfigDao.findHAResource(993L, org.apache.cloudstack.ha.HAResource.ResourceType.Host)).thenReturn(config);
+            HostVO host = Mockito.mock(HostVO.class);
+            boolean recovered = state == org.apache.cloudstack.ha.HAConfig.HAState.Recovered || state == org.apache.cloudstack.ha.HAConfig.HAState.Available;
+            if (recovered) {
+                Mockito.when(_hostDao.findById(993L)).thenReturn(host);
+                Mockito.when(host.getStatus()).thenReturn(Status.Disconnected);
+            }
+            assertFalse(highAvailabilityManagerSpy.checkAndCancelWorkIfNeeded(work));
+            Mockito.verify(work, Mockito.never()).setStep(Step.Cancelled);
+            if (recovered) {
+                Mockito.when(host.getStatus()).thenReturn(Status.Up);
+                Mockito.doReturn(Status.Up).when(highAvailabilityManagerSpy).investigate(993L);
+                assertTrue(highAvailabilityManagerSpy.checkAndCancelWorkIfNeeded(work));
+                Mockito.verify(work).setStep(Step.Cancelled);
+            }
+        }
+    }
 }

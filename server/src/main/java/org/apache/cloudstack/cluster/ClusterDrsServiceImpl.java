@@ -54,8 +54,8 @@ import com.cloud.utils.db.Transaction;
 import com.cloud.utils.db.TransactionCallback;
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.vm.VMInstanceVO;
-import com.cloud.vm.UserVmDetailVO;
-import com.cloud.vm.dao.UserVmDetailsDao;
+import com.cloud.vm.VMInstanceDetailVO;
+import com.cloud.vm.dao.VMInstanceDetailsDao;
 import com.cloud.vm.VirtualMachine;
 import com.cloud.vm.VmDetailConstants;
 import com.cloud.vm.dao.VMInstanceDao;
@@ -129,7 +129,7 @@ public class ClusterDrsServiceImpl extends ManagerBase implements ClusterDrsServ
     ServiceOfferingDao serviceOfferingDao;
 
     @Inject
-    UserVmDetailsDao userVmDetailsDao;
+    VMInstanceDetailsDao userVmDetailsDao;
 
     @Inject
     ManagementServer managementServer;
@@ -460,7 +460,7 @@ public class ClusterDrsServiceImpl extends ManagerBase implements ClusterDrsServ
         List<Long> vmIds = vmList.stream().map(VirtualMachine::getId).collect(Collectors.toList());
         Set<Long> skipDrsVmIds = userVmDetailsDao.listDetailsForResourceIdsAndKey(vmIds, VmDetailConstants.SKIP_DRS)
                 .stream().filter(d -> "true".equalsIgnoreCase(d.getValue()))
-                .map(UserVmDetailVO::getResourceId).collect(Collectors.toSet());
+                .map(VMInstanceDetailVO::getResourceId).collect(Collectors.toSet());
 
         for (VirtualMachine vm : vmList) {
             if (vm.getType().isUsedBySystem() || vm.getState() != VirtualMachine.State.Running ||

@@ -107,7 +107,8 @@ public class AncientDataMotionStrategyTest {
 
     @Test
     public void testAddFullCloneFlagOnXenServerDest() throws IllegalAccessException, NoSuchFieldException {
-        overrideDefaultConfigValue(StorageManager.XenserverCreateCloneFull, String.valueOf(FULL_CLONE_FLAG));
+        when(configDepot.getConfigStringValue(Mockito.eq(StorageManager.XenserverCreateCloneFull.key()), Mockito.any(ConfigKey.Scope.class), Mockito.nullable(Long.class)))
+                .thenReturn(FULL_CLONE_FLAG.toString());
         when(dataTO.getHypervisorType()).thenReturn(HypervisorType.XenServer);
         strategy.addFullCloneAndDiskprovisiongStrictnessFlagOnXenServerDest(dataTO);
         verify(dataStoreTO).setFullCloneFlag(FULL_CLONE_FLAG);

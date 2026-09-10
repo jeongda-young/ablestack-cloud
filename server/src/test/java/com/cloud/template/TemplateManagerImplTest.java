@@ -75,6 +75,10 @@ import com.cloud.user.dao.UserDataDao;
 import com.cloud.utils.concurrency.NamedThreadFactory;
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.uservm.UserVm;
+import com.cloud.network.Network;
+import com.cloud.network.NetworkModel;
+import com.cloud.vm.NicVO;
+import com.cloud.vm.dao.NicDao;
 import com.cloud.vm.UserVmVO;
 import com.cloud.vm.VMInstanceVO;
 import com.cloud.vm.VirtualMachine;
@@ -238,20 +242,25 @@ public class TemplateManagerImplTest {
     @Inject
     private UserDataDao userDataDaoMock;
 
+    @Inject
+    NetworkModel networkModel;
+    @Inject
+    NicDao nicDao;
+
     private UserDataVO userDataMock;
-    @Mock
+    @Inject
     UserVmDao _userVmDao;
 
-    @Mock
+    @Inject
     VmIsoMapDao _vmIsoMapDao;
 
-    @Mock
+    @Inject
     HostDao _hostDao;
 
-    @Mock
+    @Inject
     HostDetailsDao _hostDetailsDao;
 
-    @Mock
+    @Inject
     UserVmJoinDao _userVmJoinDao;
 
     public class CustomThreadPoolExecutor extends ThreadPoolExecutor {
@@ -282,7 +291,7 @@ public class TemplateManagerImplTest {
     @Before
     public void setUp() {
         userDataMock = Mockito.mock(UserDataVO.class);
-        Mockito.reset(userDataDaoMock);
+        Mockito.reset(userDataDaoMock, _userVmDao, _vmIsoMapDao, _hostDao, _hostDetailsDao, _userVmJoinDao, nicDao, networkModel);
         ComponentContext.initComponentsLifeCycle();
         AccountVO account = new AccountVO("admin", 1L, "networkDomain", Account.Type.NORMAL, "uuid");
         UserVO user = new UserVO(1, "testuser", "password", "firstname", "lastName", "email", "timezone", UUID.randomUUID().toString(), User.Source.UNKNOWN);
@@ -834,6 +843,35 @@ public class TemplateManagerImplTest {
     }
 
     @Test
+    public void virtualRouterIsoUsesPrimarySlotWithoutUserVmRow() {
+        VMInstanceVO router = mock(VMInstanceVO.class);
+        when(router.getType()).thenReturn(VirtualMachine.Type.DomainRouter);
+        when(router.getState()).thenReturn(VirtualMachine.State.Stopped);
+        when(_vmInstanceDao.findById(993L)).thenReturn(router);
+        VMTemplateVO iso = mock(VMTemplateVO.class);
+        when(iso.getTemplateType()).thenReturn(Storage.TemplateType.PERHOST);
+        when(_tmpltDao.findById(42L)).thenReturn(iso);
+        Assert.assertTrue(templateManager.attachIso(42L, 993L, false, true));
+        Assert.assertTrue(templateManager.detachIso(993L, 42L, false, true));
+        Mockito.verifyNoInteractions(_vmIsoMapDao);
+    }
+
+    @Test
+    public void configDriveReservesSecondMediaSlot() {
+        UserVmVO vm = mock(UserVmVO.class);
+        NicVO nic = mock(NicVO.class);
+        when(vm.getId()).thenReturn(1L);
+        when(vm.getHypervisorType()).thenReturn(Hypervisor.HypervisorType.KVM);
+        when(nic.getNetworkId()).thenReturn(17L);
+        when(nicDao.listByVmId(1L)).thenReturn(Arrays.asList(nic));
+        when(networkModel.isProviderForNetwork(Network.Provider.ConfigDrive, 17L)).thenReturn(true);
+        Assert.assertTrue(templateManager.usesConfigDrive(vm));
+        Assert.assertEquals(1, templateManager.effectiveMaxCdroms(vm, null));
+        when(networkModel.isProviderForNetwork(Network.Provider.ConfigDrive, 17L)).thenReturn(false);
+        Assert.assertFalse(templateManager.usesConfigDrive(vm));
+    }
+
+    @Test
     public void highestCdromMapEntryReturnsNullWhenMapIsEmpty() {
         Mockito.when(_vmIsoMapDao.listByVmId(1L)).thenReturn(new ArrayList<>());
         Assert.assertNull(templateManager.highestCdromMapEntry(1L));
@@ -1119,6 +1157,26 @@ public class TemplateManagerImplTest {
         @Bean
         public AccountManager accountManager() {
             return Mockito.mock(AccountManager.class);
+        }
+
+        @Bean
+        public VmIsoMapDao vmIsoMapDao() {
+            return Mockito.mock(VmIsoMapDao.class);
+        }
+
+        @Bean
+        public HostDetailsDao hostDetailsDao() {
+            return Mockito.mock(HostDetailsDao.class);
+        }
+
+        @Bean
+        public NetworkModel networkModel() {
+            return Mockito.mock(NetworkModel.class);
+        }
+
+        @Bean
+        public NicDao nicDao() {
+            return Mockito.mock(NicDao.class);
         }
 
         @Bean

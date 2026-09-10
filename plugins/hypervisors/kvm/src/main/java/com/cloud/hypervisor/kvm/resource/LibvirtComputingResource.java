@@ -4369,6 +4369,13 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
             int devId = volume.getDiskSeq().intValue();
             final boolean isShareableVolume = data instanceof VolumeObjectTO && ((VolumeObjectTO) data).getShareable();
             if (volume.getType() == Volume.Type.ISO) {
+                if (data.getPath() == null && disks.stream().anyMatch(other -> other != volume && other.getType() == Volume.Type.ISO
+                        && other.getDiskSeq().equals(volume.getDiskSeq()) && other.getData().getPath() != null)) {
+                    continue;
+                }
+                if (definedCdromSlots.contains(devId)) {
+                    throw new CloudRuntimeException("Multiple ISO images use CD-ROM slot " + devId);
+                }
                 final DiskDef.DiskType diskType = getDiskType(physicalDisk);
                 disk.defISODisk(volPath, devId, isUefiEnabled, diskType);
                 definedCdromSlots.add(devId);
@@ -4531,6 +4538,9 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
                 if (!definedCdromSlots.contains(slot)) {
                     final DiskDef emptyCdrom = new DiskDef();
                     emptyCdrom.defISODisk(null, slot, isUefiEnabled, DiskDef.DiskType.FILE);
+                    if ("aarch64".equals(guestCpuArch) || "s390x".equals(guestCpuArch)) {
+                        emptyCdrom.setBusType(DiskDef.DiskBus.SCSI);
+                    }
                     vm.getDevices().addDevice(emptyCdrom);
                 }
             }

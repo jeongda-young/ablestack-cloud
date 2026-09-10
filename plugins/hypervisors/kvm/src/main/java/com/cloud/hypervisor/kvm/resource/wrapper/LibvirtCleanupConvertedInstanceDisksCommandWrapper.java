@@ -22,7 +22,6 @@ import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.CleanupConvertedInstanceDisksCommand;
 import com.cloud.agent.api.to.DataStoreTO;
 import com.cloud.hypervisor.kvm.resource.LibvirtComputingResource;
-import com.cloud.hypervisor.kvm.resource.LibvirtDomainXMLParser;
 import com.cloud.hypervisor.kvm.storage.KVMPhysicalDisk;
 import com.cloud.hypervisor.kvm.storage.KVMStoragePool;
 import com.cloud.hypervisor.kvm.storage.KVMStoragePoolManager;
@@ -30,6 +29,8 @@ import com.cloud.resource.ResourceWrapper;
 
 import java.io.File;
 import java.util.List;
+import java.util.stream.Collectors;
+import com.cloud.utils.exception.CloudRuntimeException;
 
 @ResourceWrapper(handles = CleanupConvertedInstanceDisksCommand.class)
 public class LibvirtCleanupConvertedInstanceDisksCommandWrapper extends LibvirtBaseConvertCommandWrapper<CleanupConvertedInstanceDisksCommand, Answer, LibvirtComputingResource> {
@@ -40,24 +41,21 @@ public class LibvirtCleanupConvertedInstanceDisksCommandWrapper extends LibvirtB
         String vmVolumesPrefix = command.getVmVolumesPrefix();
 
         final KVMStoragePoolManager storagePoolMgr = serverResource.getStoragePoolMgr();
-        KVMStoragePool conversionPool = getTemporaryStoragePool(vmVolumesStore, storagePoolMgr);
-        final String conversionPoolPath = conversionPool.getLocalPath();
-
         try {
-            String volumesBasePath = String.format("%s/%s", conversionPoolPath, vmVolumesPrefix);
-            String xmlPath = String.format("%s.xml", volumesBasePath);
-            boolean xmlExists = new File(xmlPath).exists();
-
-            LibvirtDomainXMLParser xmlParser = xmlExists ? parseMigratedVMXmlDomain(volumesBasePath) : null;
-            List<KVMPhysicalDisk> temporaryDisks = xmlExists && xmlParser != null ?
-                    getTemporaryDisksFromParsedXml(conversionPool, xmlParser, volumesBasePath, conversionPoolPath, vmVolumesPrefix) :
-                    getTemporaryDisksWithPrefixFromTemporaryPool(conversionPool, conversionPoolPath, vmVolumesPrefix);
-
+            validateConversionPrefix(vmVolumesPrefix);
+            KVMStoragePool conversionPool = getTemporaryStoragePool(vmVolumesStore, storagePoolMgr);
+            if (conversionPool == null) {
+                throw new CloudRuntimeException("Conversion storage pool is unavailable");
+            }
+            conversionPool.refresh();
+            // XML may reference parent or unrelated images. Only this conversion's output is owned here.
+            List<KVMPhysicalDisk> temporaryDisks = conversionPool.listPhysicalDisks().stream()
+                    .filter(disk -> isConversionDisk(disk.getName(), vmVolumesPrefix))
+                    .collect(Collectors.toList());
+            boolean xmlExists = new File(conversionPool.getLocalPath(), vmVolumesPrefix + ".xml").exists();
             cleanupDisksAndDomainFromTemporaryLocation(temporaryDisks, conversionPool, vmVolumesPrefix, xmlExists);
-
         } catch (Exception e) {
-            String error = String.format("Error cleaning up converted disks with prefix %s from %s, due to: %s",
-                    vmVolumesPrefix, conversionPoolPath, e.getMessage());
+            String error = String.format("Error cleaning up converted disks with prefix %s: %s", vmVolumesPrefix, e.getMessage());
             logger.error(error, e);
             return new Answer(command, false, error);
         }

@@ -30,7 +30,6 @@ import com.cloud.hypervisor.kvm.storage.KVMStoragePoolManager;
 import com.cloud.resource.CommandWrapper;
 import com.cloud.resource.ServerResource;
 import com.cloud.storage.Storage;
-import com.cloud.utils.FileUtil;
 import com.cloud.utils.Pair;
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.utils.script.Script;
@@ -46,6 +45,7 @@ import java.io.FileInputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.Charset;
+import java.nio.file.Files;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.UUID;
@@ -107,14 +107,37 @@ public abstract class LibvirtBaseConvertCommandWrapper <T extends Command, A ext
     protected void cleanupDisksAndDomainFromTemporaryLocation(List<KVMPhysicalDisk> disks,
                                                             KVMStoragePool temporaryStoragePool,
                                                             String temporaryConvertUuid, boolean xmlExists) {
+        validateConversionPrefix(temporaryConvertUuid);
+        // Validate every name before deleting anything; imported XML cannot grant ownership.
         for (KVMPhysicalDisk disk : disks) {
-            logger.info(String.format("Cleaning up temporary disk %s after conversion from temporary location", disk.getName()));
-            temporaryStoragePool.deletePhysicalDisk(disk.getName(), Storage.ImageFormat.QCOW2);
+            if (disk == null || !isConversionDisk(disk.getName(), temporaryConvertUuid)) {
+                throw new CloudRuntimeException("Refusing to delete a disk not owned by this conversion");
+            }
+        }
+        for (KVMPhysicalDisk disk : disks) {
+            logger.info("Cleaning up temporary converted disk {}", disk.getName());
+            if (!temporaryStoragePool.deletePhysicalDisk(disk.getName(), Storage.ImageFormat.QCOW2)) {
+                throw new CloudRuntimeException("Unable to delete temporary converted disk " + disk.getName());
+            }
         }
         if (xmlExists) {
-            logger.info(String.format("Cleaning up temporary domain %s after conversion from temporary location", temporaryConvertUuid));
-            FileUtil.deleteFiles(temporaryStoragePool.getLocalPath(), temporaryConvertUuid, ".xml");
+            try {
+                // Delete the exact directory entry, never follow XML paths or filename globs.
+                Files.deleteIfExists(new File(temporaryStoragePool.getLocalPath(), temporaryConvertUuid + ".xml").toPath());
+            } catch (IOException e) {
+                throw new CloudRuntimeException("Unable to delete converted domain XML", e);
+            }
         }
+    }
+
+    protected void validateConversionPrefix(String prefix) {
+        if (prefix == null || !prefix.matches("[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}")) {
+            throw new CloudRuntimeException("Invalid conversion UUID");
+        }
+    }
+
+    protected boolean isConversionDisk(String name, String prefix) {
+        return name != null && name.startsWith(prefix + "-") && !name.contains("/") && !name.contains("\\") && !name.endsWith(".xml");
     }
 
     protected void sanitizeDisksPath(List<LibvirtVMDef.DiskDef> disks) {
@@ -132,26 +155,17 @@ public abstract class LibvirtBaseConvertCommandWrapper <T extends Command, A ext
         if (temporaryDisks.size() != destinationStoragePools.size()) {
             String warn = String.format("Discrepancy between the converted instance disks (%s) " +
                     "and the expected number of disks (%s)", temporaryDisks.size(), destinationStoragePools.size());
-            logger.warn(warn);
+            throw new CloudRuntimeException(warn);
         }
         for (int i = 0; i < temporaryDisks.size(); i++) {
             String poolPath = destinationStoragePools.get(i);
-            KVMStoragePool destinationPool = storagePoolMgr.getStoragePoolByUuid(poolPath);
-            if (destinationPool == null) {
-                String err = String.format("Could not find a storage pool by URI: %s", poolPath);
-                logger.error(err);
-                continue;
-            }
             KVMPhysicalDisk sourceDisk = temporaryDisks.get(i);
-            if (logger.isDebugEnabled()) {
-                String msg = String.format("Trying to copy converted instance disk number %s from the temporary location %s" +
-                        " to destination storage pool %s", i, sourceDisk.getPool().getLocalPath(), destinationPool.getUuid());
-                logger.debug(msg);
-            }
-
             String destinationName = UUID.randomUUID().toString();
-
             try {
+                KVMStoragePool destinationPool = storagePoolMgr.getStoragePoolByUuid(poolPath);
+                if (destinationPool == null) {
+                    throw new CloudRuntimeException("Destination storage pool unavailable: " + poolPath);
+                }
                 if (destinationPool.getAvailable() < sourceDisk.getSize()) {
                     String msg = String.format("Not enough space on destination pool %s (%s bytes) to copy disk %s (size %s)",
                             destinationPool.getUuid(), destinationPool.getAvailable(), sourceDisk.getName(), sourceDisk.getSize());
@@ -163,7 +177,7 @@ public abstract class LibvirtBaseConvertCommandWrapper <T extends Command, A ext
                 targetDisks.add(destinationDisk);
             } catch (Exception e) {
                 String err = String.format("Error copying converted instance disk number %s from the temporary location %s" +
-                        " to destination storage pool %s: %s", i, sourceDisk.getPool().getLocalPath(), destinationPool.getUuid(), e.getMessage());
+                        " to destination storage pool %s: %s", i, sourceDisk.getPool().getLocalPath(), poolPath, e.getMessage());
                 logger.error(err, e);
                 cleanupMovedDisksOnDestinationPool(targetDisks);
                 return null;

@@ -644,9 +644,16 @@ public class FirstFitAllocatorTest {
         .thenReturn(new ArrayList<>(Arrays.asList(host1, host2, host3)));
     when(hostDaoMock.listByHostCapability(type, clusterId, podId, dcId, Host.HOST_TPM_ENABLE))
         .thenReturn(new ArrayList<>(Arrays.asList(host2, host3)));
-    Assert.assertEquals(List.of(host2), firstFitAllocatorSpy.retrieveHosts(virtualMachineProfile, type,
-        candidates, vmTemplateVO, clusterId, podId, dcId, null, null));
-    Assert.assertEquals(Arrays.asList(host1, host2), candidates);
+    try (org.mockito.MockedStatic<com.cloud.api.ApiDBUtils> api = Mockito.mockStatic(com.cloud.api.ApiDBUtils.class)) {
+      api.when(() -> com.cloud.api.ApiDBUtils.getTemplateGuestOSName(vmTemplateVO)).thenReturn("Windows Server 2025 (64-bit)");
+      Assert.assertEquals(List.of(host2), firstFitAllocatorSpy.retrieveHosts(virtualMachineProfile, type,
+          candidates, vmTemplateVO, clusterId, podId, dcId, null, null));
+      when(hostDaoMock.findHostsWithGuestOsRulesThatDidNotMatchOsOfGuestVm("Windows Server 2025 (64-bit)"))
+          .thenReturn(List.of(host2));
+      Assert.assertTrue(firstFitAllocatorSpy.retrieveHosts(virtualMachineProfile, type,
+          candidates, vmTemplateVO, clusterId, podId, dcId, null, null).isEmpty());
+      Assert.assertEquals(Arrays.asList(host1, host2), candidates);
+    }
   }
 
 }

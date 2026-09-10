@@ -174,7 +174,6 @@ import org.apache.cloudstack.utils.bytescale.ByteScaleUtils;
 import org.apache.cloudstack.utils.security.ParserUtils;
 import org.apache.cloudstack.vm.UnmanagedVMsManager;
 import org.apache.cloudstack.vm.lease.VMLeaseManager;
-import org.apache.cloudstack.vm.schedule.VMScheduleManager;
 import org.apache.commons.collections.CollectionUtils;
 import org.apache.commons.collections.MapUtils;
 import org.apache.commons.lang.math.NumberUtils;
@@ -699,8 +698,6 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
     @Inject
     private AutoScaleManager autoScaleManager;
 
-    @Inject
-    VMScheduleManager vmScheduleManager;
     @Inject
     NsxProviderDao nsxProviderDao;
     @Inject

@@ -47,15 +47,13 @@ public class CheckOnHostCommand extends Command {
     }
 
     public CheckOnHostCommand(Host host, boolean reportIfHeartBeatFailedForOneStoragePool, final List<Volume> volumeList) {
-        super();
-        this.host = new HostTO(host);
-        this.reportIfHeartBeatFailedForOneStoragePool = reportIfHeartBeatFailedForOneStoragePool;
+        this(host, reportIfHeartBeatFailedForOneStoragePool);
         final StringBuilder stringBuilder = new StringBuilder();
         for (final Volume v : volumeList) {
             stringBuilder.append(v.getPath()).append(",");
         }
 
-        this.volumeList = stringBuilder.deleteCharAt(stringBuilder.length() - 1).toString();
+        this.volumeList = stringBuilder.length() == 0 ? "" : stringBuilder.substring(0, stringBuilder.length() - 1);
     }
 
     public HostTO getHost() {

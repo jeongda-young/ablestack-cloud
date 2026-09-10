@@ -3926,7 +3926,6 @@ public class UserVmManagerImplTest {
     public void createVirtualMachineWithExistingVolume() throws ResourceUnavailableException, InsufficientCapacityException, ResourceAllocationException {
         DeployVMCmd deployVMCmd = getDeployVMCmdFromVolume();
 
-        when(accountService.finalizeAccountId(nullable(String.class), nullable(Long.class), nullable(Long.class), eq(true))).thenReturn(accountId);
         when(accountService.getActiveAccountById(accountId)).thenReturn(account);
         when(entityManager.findById(DataCenter.class, zoneId)).thenReturn(_dcMock);
         when(entityManager.findById(ServiceOffering.class, serviceOfferingId)).thenReturn(serviceOffering);
@@ -3959,7 +3958,6 @@ public class UserVmManagerImplTest {
             throws ResourceUnavailableException, InsufficientCapacityException, ResourceAllocationException {
         DeployVMCmd deployVMCmd = getDeployVMCmdFromSnapshot();                                    // mock, no field hacks
 
-        when(accountService.finalizeAccountId(nullable(String.class), nullable(Long.class), nullable(Long.class), eq(true))).thenReturn(accountId);
         when(accountService.getActiveAccountById(accountId)).thenReturn(account);
         when(entityManager.findById(DataCenter.class, zoneId)).thenReturn(_dcMock);
         when(entityManager.findById(ServiceOffering.class, serviceOfferingId)).thenReturn(serviceOffering);
