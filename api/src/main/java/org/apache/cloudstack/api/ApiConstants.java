@@ -71,6 +71,8 @@ public class ApiConstants {
     public static final String IS_BACKUP_VM_EXPUNGED = "isbackupvmexpunged";
     public static final String BACKUP_TOTAL = "backuptotal";
     public static final String BACKEND_SSL = "backendssl";
+    public static final String BALANCE = "balance";
+    public static final String BALANCES = "balances";
     public static final String BASE64_IMAGE = "base64image";
     public static final String BGP_PEERS = "bgppeers";
     public static final String BGP_PEER_IDS = "bgppeerids";
@@ -159,6 +161,7 @@ public class ApiConstants {
     public static final String CUSTOM_ID = "customid";
     public static final String CUSTOM_ACTION_ID = "customactionid";
     public static final String CUSTOM_JOB_ID = "customjobid";
+    public static final String CURRENCY = "currency";
     public static final String CURRENT_START_IP = "currentstartip";
     public static final String CURRENT_END_IP = "currentendip";
     public static final String ENCRYPT = "encrypt";
@@ -177,6 +180,7 @@ public class ApiConstants {
     public static final String DATACENTER_NAME = "datacentername";
     public static final String DATADISKS_DETAILS = "datadisksdetails";
     public static final String DATADISK_OFFERING_LIST = "datadiskofferinglist";
+    public static final String DATE = "date";
     public static final String DEFAULT_VALUE = "defaultvalue";
     public static final String DELETE_PROTECTION = "deleteprotection";
     public static final String DESCRIPTION = "description";
@@ -285,6 +289,7 @@ public class ApiConstants {
     public static final String HEALTH = "health";
     public static final String HEADERS = "headers";
     public static final String HIDE_IP_ADDRESS_USAGE = "hideipaddressusage";
+    public static final String HISTORY = "history";
     public static final String HOST_ID = "hostid";
     public static final String HOST_IDS = "hostids";
     public static final String HOST_IP = "hostip";
@@ -554,6 +559,7 @@ public class ApiConstants {
     public static final String SESSIONKEY = "sessionkey";
     public static final String SHOW_CAPACITIES = "showcapacities";
     public static final String SHOW_REMOVED = "showremoved";
+    public static final String SHOW_RESOURCES = "showresources";
     public static final String SHOW_RESOURCE_ICON = "showicon";
     public static final String SHOW_INACTIVE = "showinactive";
     public static final String SHOW_UNIQUE = "showunique";
@@ -602,6 +608,8 @@ public class ApiConstants {
     public static final String SUCCESS_MESSAGE = "successmessage";
     public static final String SUITABLE_FOR_VM = "suitableforvirtualmachine";
     public static final String TARGET_IQN = "targetiqn";
+    public static final String TARIFF_ID = "tariffid";
+    public static final String TARIFF_NAME = "tariffname";
     public static final String TASKS_FILTER = "tasksfilter";
     public static final String TEMPLATE_FILTER = "templatefilter";
     public static final String TEMPLATE_ID = "templateid";
@@ -615,9 +623,11 @@ public class ApiConstants {
     public static final String TENANT_NAME = "tenantname";
     public static final String TOTAL = "total";
     public static final String TOTAL_SUBNETS = "totalsubnets";
+    public static final String TOTAL_QUOTA = "totalquota";
     public static final String TYPE = "type";
     public static final String TRUST_STORE = "truststore";
     public static final String TRUST_STORE_PASSWORD = "truststorepass";
+    public static final String UNIT = "unit";
     public static final String URL = "url";
     public static final String USAGE_INTERFACE = "usageinterface";
     public static final String USED = "used";
@@ -660,6 +670,7 @@ public class ApiConstants {
     public static final String VIRTUAL_MACHINE_STATE = "vmstate";
     public static final String VIRTUAL_MACHINES = "virtualmachines";
     public static final String USAGE_ID = "usageid";
+    public static final String USAGE_NAME = "usagename";
     public static final String USAGE_TYPE = "usagetype";
     public static final String INCLUDE_TAGS = "includetags";
 
@@ -877,6 +888,7 @@ public class ApiConstants {
     public static final String IS_SOURCE_NAT = "issourcenat";
     public static final String IS_STATIC_NAT = "isstaticnat";
     public static final String ITERATIONS = "iterations";
+    public static final String ITEMS = "items";
     public static final String SORT_BY = "sortby";
     public static final String CHANGE_CIDR = "changecidr";
     public static final String PURPOSE = "purpose";
@@ -1371,6 +1383,8 @@ public class ApiConstants {
     public static final String OBJECT_LOCKING = "objectlocking";
     public static final String ENCRYPTION = "encryption";
     public static final String QUOTA = "quota";
+    public static final String QUOTA_CONSUMED = "quotaconsumed";
+    public static final String QUOTA_USAGE = "quotausage";
     public static final String ACCESS_KEY = "accesskey";
 
     public static final String SOURCE_NAT_IP = "sourcenatipaddress";

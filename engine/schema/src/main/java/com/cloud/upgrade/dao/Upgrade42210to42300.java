@@ -69,6 +69,7 @@ public class Upgrade42210to42300 extends DbUpgradeAbstractImpl implements DbUpgr
         EuropaSecuritySchemaUpgrade.migrate(conn);
         migrateLegacyUserApiKeyPairs(conn);
         unhideJsInterpretationEnabled(conn);
+        dropUsageVmInstanceIndex(conn);
     }
 
     protected void migrateLegacyUserApiKeyPairs(Connection conn) {
@@ -180,5 +181,9 @@ public class Upgrade42210to42300 extends DbUpgradeAbstractImpl implements DbUpgr
         } catch (CloudRuntimeException e) {
             logger.warn("Error while decrypting configuration 'js.interpretation.enabled'. The configuration may already be decrypted.");
         }
+    }
+
+    private void dropUsageVmInstanceIndex(Connection conn) {
+        DbUpgradeUtils.dropIndexIfExists(conn, "cloud_usage", "usage_vm_instance", "vm_instance_id");
     }
 }

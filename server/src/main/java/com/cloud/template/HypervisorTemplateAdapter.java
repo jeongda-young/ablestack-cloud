@@ -34,10 +34,8 @@ import org.apache.cloudstack.annotation.AnnotationService;
 import org.apache.cloudstack.annotation.dao.AnnotationDao;
 import org.apache.cloudstack.api.ApiCommandResourceType;
 import org.apache.cloudstack.api.command.user.iso.DeleteIsoCmd;
-import org.apache.cloudstack.api.command.user.iso.GetUploadParamsForIsoCmd;
 import org.apache.cloudstack.api.command.user.iso.RegisterIsoCmd;
 import org.apache.cloudstack.api.command.user.template.DeleteTemplateCmd;
-import org.apache.cloudstack.api.command.user.template.GetUploadParamsForTemplateCmd;
 import org.apache.cloudstack.api.command.user.template.RegisterTemplateCmd;
 import org.apache.cloudstack.context.CallContext;
 import org.apache.cloudstack.direct.download.DirectDownloadManager;
@@ -199,19 +197,6 @@ public class HypervisorTemplateAdapter extends TemplateAdapterBase {
             profile.setSize(templateSize);
         }
         profile.setUrl(url);
-        // Check that the resource limit for secondary storage won't be exceeded
-        _resourceLimitMgr.checkResourceLimit(_accountMgr.getAccount(cmd.getEntityOwnerId()),
-                ResourceType.secondary_storage,
-                UriUtils.getRemoteSize(url, followRedirects));
-        return profile;
-    }
-
-    @Override
-    public TemplateProfile prepare(GetUploadParamsForIsoCmd cmd) throws ResourceAllocationException {
-        TemplateProfile profile = super.prepare(cmd);
-
-        // Check that the resource limit for secondary storage won't be exceeded
-        _resourceLimitMgr.checkResourceLimit(_accountMgr.getAccount(cmd.getEntityOwnerId()), ResourceType.secondary_storage);
         return profile;
     }
 
@@ -230,19 +215,7 @@ public class HypervisorTemplateAdapter extends TemplateAdapterBase {
             profile.setForCks(cmd.isForCks());
         }
         profile.setUrl(url);
-        // Check that the resource limit for secondary storage won't be exceeded
-        _resourceLimitMgr.checkResourceLimit(_accountMgr.getAccount(cmd.getEntityOwnerId()),
-                ResourceType.secondary_storage,
-                UriUtils.getRemoteSize(url, followRedirects));
-        return profile;
-    }
 
-    @Override
-    public TemplateProfile prepare(GetUploadParamsForTemplateCmd cmd) throws ResourceAllocationException {
-        TemplateProfile profile = super.prepare(cmd);
-
-        // Check that the resource limit for secondary storage won't be exceeded
-        _resourceLimitMgr.checkResourceLimit(_accountMgr.getAccount(cmd.getEntityOwnerId()), ResourceType.secondary_storage);
         return profile;
     }
 
@@ -270,7 +243,6 @@ public class HypervisorTemplateAdapter extends TemplateAdapterBase {
             persistDirectDownloadTemplate(template.getId(), profile.getSize());
         }
 
-        _resourceLimitMgr.incrementResourceCount(profile.getAccountId(), ResourceType.template);
         return template;
     }
 
@@ -412,7 +384,7 @@ public class HypervisorTemplateAdapter extends TemplateAdapterBase {
                 if(payloads.isEmpty()) {
                     throw new CloudRuntimeException("unable to find zone or an image store with enough capacity");
                 }
-                _resourceLimitMgr.incrementResourceCount(profile.getAccountId(), ResourceType.template);
+
                 return payloads;
             }
         });

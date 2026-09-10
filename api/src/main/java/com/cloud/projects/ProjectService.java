@@ -83,7 +83,7 @@ public interface ProjectService {
 
     Project updateProject(long id, String name, String displayText, String newOwnerName, Long userId, Role newRole) throws ResourceAllocationException;
 
-    boolean addAccountToProject(long projectId, String accountName, String email, Long projectRoleId, Role projectRoleType);
+    boolean addAccountToProject(long projectId, String accountName, String email, Long projectRoleId, Role projectRoleType) throws ResourceAllocationException;
 
     boolean deleteAccountFromProject(long projectId, String accountName);
 
@@ -101,7 +101,7 @@ public interface ProjectService {
 
     Project findByProjectAccountIdIncludingRemoved(long projectAccountId);
 
-    boolean addUserToProject(Long projectId, String username, String email, Long projectRoleId, Role projectRole);
+    boolean addUserToProject(Long projectId, String username, String email, Long projectRoleId, Role projectRole) throws ResourceAllocationException;
 
     void moveProjectAssociationsToUser(User oldUser, User newUser) throws ResourceAllocationException;
 }

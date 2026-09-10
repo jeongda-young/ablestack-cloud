@@ -380,8 +380,6 @@ public abstract class TemplateAdapterBase extends AdapterBase implements Templat
             throw new IllegalArgumentException("Unable to find user with id " + userId);
         }
 
-        _resourceLimitMgr.checkResourceLimit(templateOwner, ResourceType.template);
-
         // If a zoneId is specified, make sure it is valid
         if (zoneIdList != null) {
             for (Long zoneId :zoneIdList) {

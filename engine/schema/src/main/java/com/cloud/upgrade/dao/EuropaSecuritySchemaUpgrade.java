@@ -48,10 +48,13 @@ public final class EuropaSecuritySchemaUpgrade {
             if (!indexExists(connection, "uk_oauth_provider__provider_domain")) {
                 execute(connection, "ALTER TABLE cloud.oauth_provider ADD UNIQUE INDEX uk_oauth_provider__provider_domain (provider,domain_id)");
             }
-            if (scalar(connection, "SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema='cloud' "
-                    + "AND table_name='oauth_provider' AND constraint_name='fk_oauth_provider__domain_id' AND constraint_type='FOREIGN KEY'") == 0) {
-                execute(connection, "ALTER TABLE cloud.oauth_provider ADD CONSTRAINT fk_oauth_provider__domain_id "
-                        + "FOREIGN KEY (domain_id) REFERENCES cloud.domain(id)");
+            if (scalar(connection, "SELECT COUNT(*) FROM information_schema.referential_constraints WHERE constraint_schema='cloud' "
+                    + "AND table_name='oauth_provider' AND constraint_name='fk_oauth_provider__domain_id' AND delete_rule='CASCADE'") == 0) {
+                boolean existing = scalar(connection, "SELECT COUNT(*) FROM information_schema.table_constraints WHERE constraint_schema='cloud' "
+                        + "AND table_name='oauth_provider' AND constraint_name='fk_oauth_provider__domain_id' AND constraint_type='FOREIGN KEY'") > 0;
+                // Keep the existing constraint if validation of the replacement fails.
+                execute(connection, "ALTER TABLE cloud.oauth_provider " + (existing ? "DROP FOREIGN KEY fk_oauth_provider__domain_id, " : "")
+                        + "ADD CONSTRAINT fk_oauth_provider__domain_id FOREIGN KEY (domain_id) REFERENCES cloud.domain(id) ON DELETE CASCADE");
             }
             for (String role : List.of("User", "Domain Admin", "Resource Admin")) {
                 addPermission(connection, role);

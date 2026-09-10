@@ -544,8 +544,21 @@ public class TemplateManagerImplTest {
             }
         });
 
-        VMTemplateVO template = templateManager.createPrivateTemplateRecord(mockCreateCmd, mockTemplateOwner);
-        assertTrue("Template in a region store should have cross zones set", template.isCrossZones());
+        com.cloud.utils.db.GlobalLock lock = mock(com.cloud.utils.db.GlobalLock.class);
+        when(lock.lock(Mockito.anyInt())).thenReturn(true);
+        ReservationDao reservations = (ReservationDao) org.springframework.test.util.ReflectionTestUtils.getField(templateManager, "reservationDao");
+        when(reservations.persist(any(org.apache.cloudstack.reservation.ReservationVO.class))).thenAnswer(invocation -> {
+            org.apache.cloudstack.reservation.ReservationVO row = invocation.getArgument(0);
+            org.springframework.test.util.ReflectionTestUtils.setField(row, "id", 1L);
+            return row;
+        });
+        try (org.mockito.MockedStatic<com.cloud.utils.db.GlobalLock> locks = Mockito.mockStatic(com.cloud.utils.db.GlobalLock.class)) {
+            locks.when(() -> com.cloud.utils.db.GlobalLock.getInternLock(Mockito.anyString())).thenReturn(lock);
+            VMTemplateVO template = templateManager.createPrivateTemplateRecord(mockCreateCmd, mockTemplateOwner);
+            assertTrue("Template in a region store should have cross zones set", template.isCrossZones());
+            Mockito.verify(reservations).remove(1L);
+            Mockito.verify(lock).releaseRef();
+        }
     }
 
     @Test
