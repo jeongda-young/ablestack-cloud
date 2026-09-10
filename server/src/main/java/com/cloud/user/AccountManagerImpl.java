@@ -61,14 +61,20 @@ import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.TrustManager;
 
+import com.cloud.serializer.GsonHelper;
+import com.cloud.exception.ResourceAllocationException;
+import com.cloud.projects.dao.ProjectInvitationDao;
 import com.cloud.user.dao.AccountDao;
 import com.cloud.user.dao.SSHKeyPairDao;
 import com.cloud.user.dao.UserAccountDao;
 import com.cloud.user.dao.UserDao;
+import com.google.gson.reflect.TypeToken;
+import com.cloud.utils.db.TransactionCallbackWithException;
 import org.apache.cloudstack.acl.APIChecker;
 import org.apache.cloudstack.acl.ApiKeyPairManagerImpl;
 import org.apache.cloudstack.acl.ApiKeyPairPermissionVO;
 import org.apache.cloudstack.acl.ApiKeyPairVO;
+import org.apache.cloudstack.acl.APIAclChecker;
 import org.apache.cloudstack.acl.ControlledEntity;
 import org.apache.cloudstack.acl.InfrastructureEntity;
 import org.apache.cloudstack.acl.QuerySelector;
@@ -115,6 +121,7 @@ import org.apache.cloudstack.context.CallContext;
 import org.apache.cloudstack.engine.orchestration.service.NetworkOrchestrationService;
 import org.apache.cloudstack.framework.config.ConfigKey;
 import org.apache.cloudstack.framework.config.dao.ConfigurationDao;
+import org.apache.cloudstack.framework.jobs.impl.AsyncJobVO;
 import org.apache.cloudstack.framework.messagebus.MessageBus;
 import org.apache.cloudstack.framework.messagebus.PublishScope;
 import org.apache.cloudstack.managed.context.ManagedContextRunnable;
@@ -339,6 +346,8 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
     private DomainDao _domainDao;
     @Inject
     private ProjectAccountDao _projectAccountDao;
+    @Inject
+    private ProjectInvitationDao projectInvitationDao;
     @Inject
     private IPAddressDao _ipAddressDao;
     @Inject
@@ -1595,19 +1604,18 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
         }
 
         final Long domainIdFinal = domainId;
-        final String accountUUIDFinal = accountUUID;
+        final String resolvedAccountUUID = accountUUID != null ? accountUUID : UUID.randomUUID().toString();
+
+        // Check role escalation before the transaction — this is a read-only check
+        // that iterates all API commands and doesn't need a write transaction open.
+        AccountVO requestedAccount = new AccountVO(accountNameFinal, domainIdFinal, networkDomain, accountType, roleId, resolvedAccountUUID);
+        checkRoleEscalation(getCurrentCallingAccount(), requestedAccount);
+
         Pair<Long, Account> pair = Transaction.execute(new TransactionCallback<>() {
             @Override
             public Pair<Long, Account> doInTransaction(TransactionStatus status) {
-                // create account
-                String accountUUID = accountUUIDFinal;
-                if (accountUUID == null) {
-                    accountUUID = UUID.randomUUID().toString();
-                }
-                AccountVO account = createAccount(accountNameFinal, accountType, roleId, domainIdFinal, networkDomain, details, accountUUID);
+                AccountVO account = createAccount(accountNameFinal, accountType, roleId, domainIdFinal, networkDomain, details, resolvedAccountUUID);
                 long accountId = account.getId();
-
-                checkRoleEscalation(getCurrentCallingAccount(), account);
 
                 // create the first user for the account
                 UserVO user = createUser(accountId, userName, password, firstName, lastName, email, timezone, userUUID, source);
@@ -1877,41 +1885,40 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
                     requested.getUuid(),
                     requested.getRoleId()));
         }
-        List<APIChecker> apiCheckers = getEnabledApiCheckers();
-        for (String command : apiNameList) {
-            try {
-                checkApiAccess(apiCheckers, requested, command);
-            } catch (PermissionDeniedException pde) {
-                if (logger.isTraceEnabled()) {
-                    logger.trace(String.format(
-                            "Checking for permission to \"%s\" is irrelevant as it is not requested for %s [%s]",
-                            command,
-                            requested.getAccountName(),
-                            requested.getUuid()
-                        )
-                    );
-                }
-                continue;
+
+        List<APIAclChecker> aclCheckers = getApiACLCheckers();
+
+        List<String> allApis = new ArrayList<>(apiNameList);
+        List<String> requestedAllowed = allApis;
+        List<String> callerAllowed = new ArrayList<>();
+        try {
+            for (final APIAclChecker apiChecker : aclCheckers) {
+                requestedAllowed = apiChecker.getApisAllowedToAccount(requested, requestedAllowed);
             }
-            // so requested can, now make sure caller can as well
-            try {
-                if (logger.isTraceEnabled()) {
-                    logger.trace(String.format("permission to \"%s\" is requested",
-                            command));
-                }
-                checkApiAccess(apiCheckers, caller, command);
-            } catch (PermissionDeniedException pde) {
-                String msg = String.format("User of Account %s and domain %s can not create an account with access to more privileges they have themself.",
-                        caller, _domainMgr.getDomain(caller.getDomainId()));
-                logger.warn(msg);
-                throw new PermissionDeniedException(msg,pde);
+            callerAllowed = requestedAllowed;
+            for (final APIAclChecker apiChecker : aclCheckers) {
+                callerAllowed = apiChecker.getApisAllowedToAccount(caller, callerAllowed);
             }
+        } catch (PermissionDeniedException e) {
+            String msg = String.format("User of account: %s cannot assign this role on the requested account: %s", caller.getAccountName(), requested.getAccountName());
+            String logMsg = String.format("%s: %s", msg, e.getMessage());
+            logger.error(logMsg, e);
+            throw new PermissionDeniedException(msg);
+        }
+
+        if (callerAllowed.size() < requestedAllowed.size()) {
+            List<String> escalatedApis = new ArrayList<>(requestedAllowed);
+            escalatedApis.removeAll(callerAllowed);
+            String msg = String.format("User of Account %s and domain %s cannot create an account with access to more privileges than they have. Escalated APIs: %s",
+                    caller, _domainMgr.getDomain(caller.getDomainId()), CollectionUtils.isNotEmpty(escalatedApis) ? escalatedApis.size() : "None");
+            logger.warn(msg);
+            throw new PermissionDeniedException(msg);
         }
     }
 
-    private void checkApiAccess(List<APIChecker> apiCheckers, Account caller, String command, ApiKeyPairPermission... apiKeyPairPermissions) {
+    private void checkApiAccess(List<APIChecker> apiCheckers, Account caller, String command, ApiKeyPair keyPair, ApiKeyPairPermission... apiKeyPairPermissions) {
         for (final APIChecker apiChecker : apiCheckers) {
-            apiChecker.checkAccess(caller, command, apiKeyPairPermissions);
+            apiChecker.checkAccess(caller, command, keyPair, apiKeyPairPermissions);
         }
     }
 
@@ -1920,14 +1927,29 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
         List<APIChecker> apiCheckers = getEnabledApiCheckers();
 
         List<ApiKeyPairPermission> keyPairPermissions = new ArrayList<>();
+        ApiKeyPair keyPair = null;
         if (apiKey != null) {
             Ternary<User, Account, ApiKeyPair> keyPairTernary = findUserByApiKey(apiKey);
             if (keyPairTernary != null) {
                 keyPairPermissions = keyPairManager.findAllPermissionsByKeyPairId(keyPairTernary.third().getId(), caller.getRoleId());
+                keyPair = keyPairTernary.third();
             }
         }
 
-        checkApiAccess(apiCheckers, caller, command, keyPairPermissions.toArray(new ApiKeyPairPermission[0]));
+        checkApiAccess(apiCheckers, caller, command, keyPair, keyPairPermissions.toArray(new ApiKeyPairPermission[0]));
+    }
+
+    protected List<APIAclChecker> getApiACLCheckers() {
+        List<APIChecker> apiCheckers = getEnabledApiCheckers();
+
+        // Only ACL checkers should influence the set of APIs allowed to an account.
+        List<APIAclChecker> aclCheckers = new ArrayList<>();
+        for (APIChecker apiChecker : apiCheckers) {
+            if (apiChecker instanceof APIAclChecker) {
+                aclCheckers.add((APIAclChecker) apiChecker);
+            }
+        }
+        return aclCheckers;
     }
 
     @NotNull
@@ -2086,6 +2108,14 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
         if (!Account.Type.PROJECT.equals(userAccount.getType())) {
             checkCallerRoleTypeAllowedForUserOrAccountOperations(userAccount, null);
             checkCallerApiPermissionsForUserOrAccountOperations(userAccount);
+        }
+    }
+
+    @Override
+    public void refreshRoleCheckersCacheOnPermissionsChange(Role role) {
+        List<APIAclChecker> aclCheckers = getApiACLCheckers();
+        for (final APIAclChecker aclChecker : aclCheckers) {
+            aclChecker.refreshRoleCacheOnPermissionsChange(role);
         }
     }
 
@@ -2916,14 +2946,29 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
         checkAccountAndAccess(user, account);
         verifyCallerPrivilegeForUserOrAccountOperations(user);
 
-        removeUserApiKeys(id);
+        return deleteAndCleanupUser(user);
+    }
 
-        return _userDao.remove(id);
+    /**
+     * Removes the specified user and performs cleanup operations associated with the user.
+     *
+     * @param user the user to be deleted and cleaned up
+     * @return true if the user was successfully marked as removed, false otherwise
+     */
+    protected boolean deleteAndCleanupUser(User user) {
+        return Transaction.execute((TransactionCallback<Boolean>) status -> {
+            long userId = user.getId();
+
+            removeUserApiKeys(userId);
+            _projectMgr.cleanupProjectsForUser(null, user);
+
+            return _userDao.remove(userId);
+        });
     }
 
     @Override
     @ActionEvent(eventType = EventTypes.EVENT_USER_MOVE, eventDescription = "moving User to a new account")
-    public boolean moveUser(MoveUserCmd cmd) {
+    public boolean moveUser(MoveUserCmd cmd) throws ResourceAllocationException {
         final Long id = cmd.getId();
         UserVO user = getValidUserVO(id);
         Account oldAccount = _accountDao.findById(user.getAccountId());
@@ -2937,7 +2982,7 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
     }
 
     @Override
-    public boolean moveUser(long id, Long domainId, Account newAccount) {
+    public boolean moveUser(long id, Long domainId, Account newAccount) throws ResourceAllocationException {
         UserVO user = getValidUserVO(id);
         Account oldAccount = _accountDao.findById(user.getAccountId());
         checkAccountAndAccess(user, oldAccount);
@@ -2945,24 +2990,22 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
         return moveUser(user, newAccount.getId());
     }
 
-    private boolean moveUser(UserVO user, long newAccountId) {
+    private boolean moveUser(UserVO user, long newAccountId) throws ResourceAllocationException {
         if (newAccountId == user.getAccountId()) {
             // could do a not silent fail but the objective of the user is reached
             return true; // no need to create a new user object for this user
         }
 
-        return Transaction.execute(new TransactionCallback<>() {
-            @Override
-            public Boolean doInTransaction(TransactionStatus status) {
-                UserVO newUser = new UserVO(user);
-                user.setExternalEntity(user.getUuid());
-                user.setUuid(UUID.randomUUID().toString());
-                _userDao.update(user.getId(), user);
-                newUser.setAccountId(newAccountId);
-                boolean success = _userDao.remove(user.getId());
-                UserVO persisted = _userDao.persist(newUser);
-                return success && persisted.getUuid().equals(user.getExternalEntity());
-            }
+        return Transaction.execute((TransactionCallbackWithException<Boolean, ResourceAllocationException>) status -> {
+            UserVO newUser = new UserVO(user);
+            user.setExternalEntity(user.getUuid());
+            user.setUuid(UUID.randomUUID().toString());
+            _userDao.update(user.getId(), user);
+            newUser.setAccountId(newAccountId);
+            UserVO persisted = _userDao.persist(newUser);
+            _projectMgr.moveProjectAssociationsToUser(user, persisted);
+            boolean success = _userDao.remove(user.getId());
+            return success && persisted.getUuid().equals(user.getExternalEntity());
         });
     }
 
@@ -3121,7 +3164,7 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
             throw new InvalidParameterValueException("ProjectId and account/domainId can't be specified together");
         }
 
-        if (projectId != null) {
+        if (projectId != null && projectId != -1L) {
             Project project = _projectMgr.getProject(projectId);
             if (project == null) {
                 throw new InvalidParameterValueException("Unable to find project by id=" + projectId);
@@ -3752,24 +3795,29 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
     @Override
     public String getAccessingApiKey(BaseCmd cmd) {
         try {
-            if (cmd instanceof BaseAsyncCmd && ((BaseAsyncCmd) cmd).getJob().toString().contains("\"signature\"")) {
-                return parseApiKeyFromAsyncJob((BaseAsyncCmd) cmd);
+            Map<String, String> requestPayload = cmd.getFullUrlParams();
+
+            if (cmd instanceof BaseAsyncCmd && ((BaseAsyncCmd) cmd).getJob() instanceof AsyncJobVO) {
+                String asyncJobPayload = ((AsyncJobVO) ((BaseAsyncCmd) cmd).getJob()).getCmdInfo();
+                requestPayload = GsonHelper.getGson().fromJson(asyncJobPayload, new TypeToken<HashMap<String, String>>() {}.getType());
             }
-            boolean accessedByApiKey = cmd.getFullUrlParams().containsKey(ApiConstants.SIGNATURE);
-            String accessingApiKey = cmd.getFullUrlParams().get("apiKey");
+
+            boolean accessedByApiKey = requestPayload.keySet().stream().anyMatch(ApiConstants.SIGNATURE::equalsIgnoreCase);
             if (accessedByApiKey) {
-                return accessingApiKey;
+                String apiKey = requestPayload.entrySet().stream()
+                        .filter(e -> ApiConstants.API_KEY.equalsIgnoreCase(e.getKey()))
+                        .map(Map.Entry::getValue).findFirst().orElse(null);
+                if (apiKey != null) {
+                    logger.info("Request's API key is [{}].", apiKey);
+                    return apiKey;
+                }
             }
         } catch (NullPointerException e) {
-            logger.info("Accessing API through session.");
+            logger.warn("Unable to identify request API key due to: {}.", e);
         }
-        return null;
-    }
 
-    private String parseApiKeyFromAsyncJob(BaseAsyncCmd cmd) {
-        String jobString = cmd.getJob().toString();
-        int indexOfApiKey = jobString.indexOf("apiKey") + 9;
-        return jobString.substring(indexOfApiKey, jobString.indexOf("\"", indexOfApiKey));
+        logger.info("Request's signature or API key were not identified; assuming it has been authenticated via session.");
+        return null;
     }
 
     private Boolean isApiKeySupersetOfPermission(List<RolePermissionEntity> baseKeyPairPermissions, List<RolePermissionEntity> comparedPermissions) {
@@ -3784,6 +3832,7 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
         }
     }
 
+    @ActionEvent(eventType = EventTypes.EVENT_DELETE_SECRET_API_KEY, eventDescription = "deleting API key pair")
     public void deleteApiKey(DeleteUserKeysCmd cmd) {
         ApiKeyPair keyPair = apiKeyPairService.findById(cmd.getId());
         if (keyPair == null) {
@@ -3819,8 +3868,13 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
         internalDeleteApiKey(keyPair);
     }
 
+    @Override
+    public List<? extends ApiKeyPairPermission> getAllExplicitKeyPairPermissions(Long keyPairId) {
+        return apiKeyPairPermissionsDao.findAllByApiKeyPairId(keyPairId);
+    }
+
     private void internalDeleteApiKey(ApiKeyPair keyPair) {
-        List<ApiKeyPairPermissionVO> permissions = apiKeyPairPermissionsDao.findAllByApiKeyPairId(keyPair.getId());
+        List<? extends ApiKeyPairPermission> permissions = getAllExplicitKeyPairPermissions(keyPair.getId());
         for (ApiKeyPairPermission permission : permissions) {
             apiKeyPairPermissionsDao.remove(permission.getId());
         }
@@ -3988,6 +4042,14 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
             permissions.add(new ApiKeyPairPermissionVO(0, rule, rulePermission, ruleDescription));
         }
 
+        if (permissions.isEmpty() && accessingApiKey != null && doesKeyPairHaveExplicitPermissions(accessingApiKey)) {
+            logger.debug("No rules were specified for the new API key pair. Since the accessing API key [{}]" +
+                    " has explicit permissions, these permissions will be defined as the rule set for the new pair.", accessingApiKey);
+            permissions = allPermissions.stream().map(permission -> (
+                        new ApiKeyPairPermissionVO(0, permission.getRule().getRuleString(), permission.getPermission(), permission.getDescription())
+                    )).collect(Collectors.toList());
+        }
+
         if (!isApiKeySupersetOfPermission(allPermissions, permissions)) {
             throw new InvalidParameterValueException(String.format("The key pair being created has a bigger set of permissions than the account [%s] " +
                     "that owns it. This is not allowed.", account.getUuid()));
@@ -4000,6 +4062,16 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
             apiKeyPairPermissionsDao.persist(permissionVO);
         });
         return savedApiKeyPair;
+    }
+
+    private boolean doesKeyPairHaveExplicitPermissions(String apiKey) {
+        ApiKeyPair apiKeyPair = keyPairManager.findByApiKey(apiKey);
+        if (apiKeyPair == null) {
+            logger.info("Unable to find API key pair entity with the API key [{}].", apiKey);
+            return false;
+        }
+
+        return !getAllExplicitKeyPairPermissions(apiKeyPair.getId()).isEmpty();
     }
 
     @Override
@@ -4274,6 +4346,11 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
     @Override
     public UserAccount getUserByApiKey(String apiKey) {
         ApiKeyPairVO keyPair = apiKeyPairDao.findByApiKey(apiKey);
+
+        if (keyPair == null) {
+            return null;
+        }
+
         return userAccountDao.findById(keyPair.getUserId());
     }
 
@@ -4554,6 +4631,9 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
         Account owner = _accountService.getActiveAccountById(caller.getId());
 
         if (Boolean.TRUE.equals(cmd.getEnable())) {
+            if (cmd.getUserId() != null) {
+                throw new InvalidParameterValueException("User ID should not be provided when enabling 2FA for the current user");
+            }
             checkAccess(caller, null, true, owner);
             Long userId = CallContext.current().getCallingUserId();
 
@@ -4602,6 +4682,7 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
         UserVO userVO;
         if (userId != null) {
             userVO = validateUser(userId);
+            verifyCallerPrivilegeForUserOrAccountOperations(userVO);
             owner = _accountService.getActiveAccountById(userVO.getAccountId());
         } else {
             userId = CallContext.current().getCallingUserId();

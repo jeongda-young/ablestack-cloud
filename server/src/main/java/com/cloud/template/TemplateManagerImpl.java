@@ -200,6 +200,7 @@ import com.cloud.user.ResourceLimitService;
 import com.cloud.user.User;
 import com.cloud.user.UserData;
 import com.cloud.user.dao.AccountDao;
+import com.cloud.user.dao.UserDataDao;
 import com.cloud.uservm.UserVm;
 import com.cloud.utils.DateUtil;
 import com.cloud.utils.EncryptionUtil;
@@ -333,6 +334,9 @@ public class TemplateManagerImpl extends ManagerBase implements TemplateManager,
     private HeuristicRuleHelper heuristicRuleHelper;
 
     protected boolean backupSnapshotAfterTakingSnapshot = SnapshotInfo.BackupSnapshotAfterTakingSnapshot.value();
+
+    @Inject
+    private UserDataDao userDataDao;
 
     private TemplateAdapter getAdapter(HypervisorType type) {
         TemplateAdapter adapter = null;
@@ -2682,12 +2686,17 @@ public class TemplateManagerImpl extends ManagerBase implements TemplateManager,
 
         _accountMgr.checkAccess(caller, AccessType.OperateEntry, true, template);
 
-        template.setUserDataId(userDataId);
         if (userDataId != null) {
+            UserData userData = userDataDao.findById(userDataId);
+            if (userData == null) {
+                throw new InvalidParameterValueException("Unable to find user data with the specified ID.");
+            }
+            _accountMgr.checkAccess(caller, null, false, userData);
             template.setUserDataLinkPolicy(overridePolicy);
         } else {
             template.setUserDataLinkPolicy(null);
         }
+        template.setUserDataId(userDataId);
         _tmpltDao.update(template.getId(), template);
 
         return _tmpltDao.findById(template.getId());

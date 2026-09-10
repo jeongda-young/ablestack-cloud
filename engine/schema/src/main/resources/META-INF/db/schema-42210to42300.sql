@@ -21,6 +21,12 @@
 
 CALL `cloud`.`ADD_GUEST_OS_AND_HYPERVISOR_MAPPING` (13, 'Rocky Linux 10', 'KVM', 'default', 'Rocky Linux 10');
 
+CALL `cloud`.`IDEMPOTENT_ADD_COLUMN`('cloud.oauth_provider', 'domain_id', 'bigint unsigned DEFAULT NULL COMMENT "NULL for global provider, domain ID for domain-specific" AFTER `redirect_uri`');
+CALL `cloud`.`IDEMPOTENT_ADD_FOREIGN_KEY`('cloud.oauth_provider', 'fk_oauth_provider__domain_id', '(`domain_id`)', '`domain`(`id`)');
+CALL `cloud`.`IDEMPOTENT_ADD_KEY`('i_oauth_provider__domain_id', 'cloud.oauth_provider', '(`domain_id`)');
+
+CALL `cloud`.`IDEMPOTENT_ADD_UNIQUE_KEY`('cloud.oauth_provider', 'uk_oauth_provider__provider_domain', '(`provider`, `domain_id`)');
+
 CREATE TABLE IF NOT EXISTS `cloud`.`backup_offering_details` (
     `id` bigint unsigned NOT NULL auto_increment,
     `backup_offering_id` bigint unsigned NOT NULL COMMENT 'Backup offering id',
@@ -789,7 +795,7 @@ CREATE TABLE IF NOT EXISTS `cloud`.`api_keypair` (
     `user_id` bigint(20) unsigned NOT NULL,
     `start_date` datetime,
     `end_date` datetime,
-    `description` varchar(100),
+    `description` varchar(1024),
     `api_key` varchar(255) NOT NULL,
     `secret_key` varchar(255) NOT NULL,
     `created` datetime NOT NULL,
@@ -818,10 +824,14 @@ CREATE TABLE IF NOT EXISTS `cloud`.`api_keypair_permissions` (
 -- the format expected by the @Encrypt entity field. Legacy columns remain in place
 -- until the cleanup phase, allowing a failed migration to be retried safely.
 
--- Grant access to the "deleteUserKeys" API to the "User", "Domain Admin" and "Resource Admin" roles, similarly to the "registerUserKeys" API
+-- Grant access to the "deleteUserKeys" and "listUserKeyRules" APIs to the "User", "Domain Admin" and "Resource Admin" roles, similarly to the "registerUserKeys" API
 CALL `cloud`.`IDEMPOTENT_UPDATE_API_PERMISSION`('User', 'deleteUserKeys', 'ALLOW');
 CALL `cloud`.`IDEMPOTENT_UPDATE_API_PERMISSION`('Domain Admin', 'deleteUserKeys', 'ALLOW');
 CALL `cloud`.`IDEMPOTENT_UPDATE_API_PERMISSION`('Resource Admin', 'deleteUserKeys', 'ALLOW');
+
+CALL `cloud`.`IDEMPOTENT_UPDATE_API_PERMISSION`('User', 'listUserKeyRules', 'ALLOW');
+CALL `cloud`.`IDEMPOTENT_UPDATE_API_PERMISSION`('Domain Admin', 'listUserKeyRules', 'ALLOW');
+CALL `cloud`.`IDEMPOTENT_UPDATE_API_PERMISSION`('Resource Admin', 'listUserKeyRules', 'ALLOW');
 
 -- Add conserve mode for VPC offerings
 CALL `cloud`.`IDEMPOTENT_ADD_COLUMN`('cloud.vpc_offerings','conserve_mode', 'tinyint(1) unsigned NULL DEFAULT 0 COMMENT ''True if the VPC offering is IP conserve mode enabled, allowing public IP services to be used across multiple VPC tiers'' ');
@@ -1303,3 +1313,7 @@ CALL `cloud`.`IDEMPOTENT_ADD_COLUMN`('cloud.storage_service_instance', 'previous
 CALL `cloud`.`IDEMPOTENT_ADD_COLUMN`('cloud.storage_service_instance', 'runtime_state', 'varchar(32) DEFAULT NULL COMMENT "Current Storage Service runtime state"');
 CALL `cloud`.`IDEMPOTENT_ADD_COLUMN`('cloud.storage_service_instance', 'runtime_verified_at', 'datetime DEFAULT NULL COMMENT "Last verified Storage Service runtime time"');
 -- END Storage Service runtime in-place upgrade (#911)
+
+-- Add URLs for OAuth provider
+CALL `cloud`.`IDEMPOTENT_ADD_COLUMN`('cloud.oauth_provider','authorize_url', 'VARCHAR(255) DEFAULT NULL COMMENT ''Authorize URL for OAuth initialization'' ');
+CALL `cloud`.`IDEMPOTENT_ADD_COLUMN`('cloud.oauth_provider','token_url', 'VARCHAR(255) DEFAULT NULL COMMENT ''Token URL for OAuth finalization'' ');

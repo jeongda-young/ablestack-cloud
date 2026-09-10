@@ -193,6 +193,8 @@
         <cs.okhttp3.version>5.1.0</cs.okhttp3.version>
         <cs.protobuf.version>3.25.5</cs.protobuf.version>
         <cs.minio.version>8.6.0</cs.minio.version>
+        <cs.opentelemetry.version>1.51.0</cs.opentelemetry.version>
+        <cs.opentelemetry-instrumentation.version>2.16.0</cs.opentelemetry-instrumentation.version>
     </properties>
 
     <distributionManagement>
@@ -430,6 +432,16 @@
                 <groupId>commons-validator</groupId>
                 <artifactId>commons-validator</artifactId>
                 <version>${cs.commons-validator.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.opentelemetry</groupId>
+                <artifactId>opentelemetry-api</artifactId>
+                <version>${cs.opentelemetry.version}</version>
+            </dependency>
+            <dependency>
+                <groupId>io.opentelemetry.instrumentation</groupId>
+                <artifactId>opentelemetry-instrumentation-annotations</artifactId>
+                <version>${cs.opentelemetry-instrumentation.version}</version>
             </dependency>
             <dependency>
                 <groupId>javax.annotation</groupId>

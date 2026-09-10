@@ -57,6 +57,9 @@ import javax.naming.ConfigurationException;
 import javax.servlet.http.HttpServletResponse;
 import javax.servlet.http.HttpSession;
 
+import io.opentelemetry.api.trace.Span;
+import io.opentelemetry.instrumentation.annotations.WithSpan;
+
 import com.cloud.cluster.ManagementServerHostVO;
 import com.cloud.cluster.dao.ManagementServerHostDao;
 import com.cloud.utils.Ternary;
@@ -295,11 +298,11 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
             , "Do URL encoding for the api response, false by default"
             , false
             , ConfigKey.Scope.Global);
-    static final ConfigKey<String> JSONcontentType = new ConfigKey<>(ConfigKey.CATEGORY_ADVANCED
+    static final ConfigKey<String> JSONContentType = new ConfigKey<>(ConfigKey.CATEGORY_ADVANCED
             , String.class
             , "json.content.type"
             , "application/json; charset=UTF-8"
-            , "Http response content type for .js files (default is text/javascript)"
+            , "Http response content type for JSON"
             , false
             , ConfigKey.Scope.Global);
     static final ConfigKey<Boolean> EnableSecureSessionCookie = new ConfigKey<>(ConfigKey.CATEGORY_ADVANCED
@@ -314,13 +317,6 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
             , "enforce.post.requests.and.timestamps"
             , "false"
             , "Enable/Disable whether the ApiServer should only accept POST requests for state-changing APIs and requests with timestamps."
-            , false
-            , ConfigKey.Scope.Global);
-    private static final ConfigKey<String> JSONDefaultContentType = new ConfigKey<> (ConfigKey.CATEGORY_ADVANCED
-            , String.class
-            , "json.content.type"
-            , "application/json; charset=UTF-8"
-            , "Http response content type for JSON"
             , false
             , ConfigKey.Scope.Global);
 
@@ -425,7 +421,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
         Account jobOwner = accountMgr.getAccount(userJobOwner.getAccountId());
 
         // Get the event type from the cmdInfo json string
-        String info = job.getCmdInfo();
+        String info = StringUtils.obfuscatePasswordInJsonLikeString(job.getCmdInfo());
         String cmdEventType = "unknown";
         Map<String, Object> cmdInfoObj = new HashMap<>();
         if (info != null) {
@@ -465,7 +461,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
         eventDescription.put("instanceType", instanceType);
         eventDescription.put("commandEventType", cmdEventType);
         eventDescription.put("jobId", job.getUuid());
-        eventDescription.put("jobResult", ApiSerializerHelper.fromSerializedStringToMap(job.getResult()));
+        eventDescription.put("jobResult", ApiSerializerHelper.fromSerializedStringToMap(StringUtils.obfuscatePasswordInJsonLikeString(job.getResult())));
         eventDescription.put("cmdInfo", cmdInfoObj);
         eventDescription.put("status", "" + job.getStatus());
         // If the event.accountinfo boolean value is set, get the human readable value for the username / domainname
@@ -655,6 +651,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
     }
 
     @Override
+    @WithSpan("ApiServer.handleRequest")
     @SuppressWarnings("rawtypes")
     public String handleRequest(final Map params, final String responseType, final StringBuilder auditTrailSb) throws ServerApiException {
         checkCharacterInkParams(params);
@@ -664,6 +661,10 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
 
         try {
             command = (String[])params.get("command");
+            if (command != null && command.length > 0) {
+                Span.current().updateName("ApiServer.handleRequest " + command[0]);
+                Span.current().setAttribute("api.command", command[0]);
+            }
             if (command == null) {
                 logger.error("invalid request, no command sent");
                 if (logger.isTraceEnabled()) {
@@ -1019,7 +1020,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
             // if userId not null, that mean that user is logged in
             if (userId != null) {
                 final User user = ApiDBUtils.findUserById(userId);
-                return commandAvailable(remoteAddress, commandName, user);
+                return commandAvailable(remoteAddress, commandName, user, null);
             } else {
                 if (commandName.equalsIgnoreCase(ListGuiThemesCmd.class.getAnnotation(APICommand.class).name())) {
                     return true;
@@ -1132,7 +1133,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
                 return false;
             }
 
-            if (!commandAvailable(remoteAddress, commandName, user)) {
+            if (!commandAvailable(remoteAddress, commandName, user, null)) {
                 return false;
             }
 
@@ -1168,7 +1169,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
             CallContext.register(user, account);
 
             List<ApiKeyPairPermission> keyPairPermissions = keyPairManager.findAllPermissionsByKeyPairId(keyPair.getId(), account.getRoleId());
-            if (commandAvailable(remoteAddress, commandName, user, keyPairPermissions.toArray(new ApiKeyPairPermission[0]))) {
+            if (commandAvailable(remoteAddress, commandName, user, keyPair, keyPairPermissions.toArray(new ApiKeyPairPermission[0]))) {
                 logger.info("API accessed through API Key Pair. API Key: [{}].", keyPair.getApiKey());
                 return true;
             }
@@ -1182,9 +1183,9 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
         return false;
     }
 
-    private boolean commandAvailable(final InetAddress remoteAddress, final String commandName, final User user, ApiKeyPairPermission... rolePermissions) {
+    private boolean commandAvailable(final InetAddress remoteAddress, final String commandName, final User user, ApiKeyPair keyPair, ApiKeyPairPermission... rolePermissions) {
         try {
-            checkCommandAvailable(user, commandName, remoteAddress, rolePermissions);
+            checkCommandAvailable(user, commandName, remoteAddress, keyPair, rolePermissions);
         } catch (final RequestLimitException ex) {
             logger.debug(ex.getMessage());
             throw new ServerApiException(ApiErrorCode.API_LIMIT_EXCEED, ex.getMessage());
@@ -1541,7 +1542,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
         return domainIdArr[0];
     }
 
-    private void checkCommandAvailable(final User user, final String commandName, final InetAddress remoteAddress, ApiKeyPairPermission ... apiKeyPairPermissions) throws PermissionDeniedException {
+    private void checkCommandAvailable(final User user, final String commandName, final InetAddress remoteAddress, ApiKeyPair keyPair, ApiKeyPairPermission... apiKeyPairPermissions) throws PermissionDeniedException {
         if (user == null) {
             throw new PermissionDeniedException("User is null for role based API access check for command" + commandName);
         }
@@ -1559,7 +1560,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
         }
 
         for (final APIChecker apiChecker : apiAccessCheckers) {
-            apiChecker.checkAccess(user, commandName, apiKeyPairPermissions);
+            apiChecker.checkAccess(user, commandName, keyPair, apiKeyPairPermissions);
         }
     }
 
@@ -1602,7 +1603,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
             final BasicHttpEntity body = new BasicHttpEntity();
             if (HttpUtils.RESPONSE_TYPE_JSON.equalsIgnoreCase(responseType)) {
                 // JSON response
-                body.setContentType(JSONcontentType.value());
+                body.setContentType(JSONContentType.value());
                 if (responseText == null) {
                     body.setContent(new ByteArrayInputStream("{ \"error\" : { \"description\" : \"Internal Server Error\" } }".getBytes(HttpUtils.UTF_8)));
                 }
@@ -1848,7 +1849,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
                 ConcurrentSnapshotsThresholdPerHost,
                 EncodeApiResponse,
                 EnableSecureSessionCookie,
-                JSONDefaultContentType,
+                JSONContentType,
                 proxyForwardList,
                 useForwardHeader,
                 listOfForwardHeaders,
