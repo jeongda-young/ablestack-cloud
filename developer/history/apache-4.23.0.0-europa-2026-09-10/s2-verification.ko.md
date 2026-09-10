@@ -1,0 +1,110 @@
+<!--
+Licensed to the Apache Software Foundation (ASF) under one
+or more contributor license agreements.  See the NOTICE file
+distributed with this work for additional information
+regarding copyright ownership.  The ASF licenses this file
+to you under the Apache License, Version 2.0 (the
+"License"); you may not use this file except in compliance
+with the License.  You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing,
+software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, either express or implied.  See the License for the
+specific language governing permissions and limitations
+under the License.
+-->
+
+# S2 검증 기반 및 변경 검토
+
+부모 Epic #987 / 작업 #990 / 구현 PR #1002.
+
+## 상태와 경계
+
+S2의 `baseline_ready`와 전체 DONE은 별도 게이트다. 이 문서는 독립 빌드/도구/라이선스 작업의 증거를 기록한다. 원본 77개를 모두 검토했으며, 19개 merge와 기능/보안/DB/최종 릴리즈에 종속된 17개 변경은 여전히 미완료다. 이들 36개를 Applied 또는 Excluded로 대체하지 않는다. 담당 연결은 [s2-review.tsv](s2-review.tsv)를 참조한다.
+
+- 업그레이드 출발점: 사용자 확정 `014895d8f3dc2f062f379b51ee62d36a0adae88a`.
+- 구현 시작점: `bcb52804f3847c3dddebb2dc54cc93a627c52cd6`, #995 백업 후속과 #1000 추적표를 포함한다.
+- 첫 라이선스 수정: `5f4c96fdb7106de051caacf7168ee344d671b182`.
+- 의존성/도구 기본 반영: `8aa74e786d1416f20377579ac32182e0acd915aa`.
+- Europa 전용 BC 소비자 보완: `6611e09a99`.
+- 연결 누수 회귀 테스트: `d415cef44e`.
+- 실제 제품 코드의 빌드/테스트와 문서 추적표 검증은 다른 증거다. DB/실물 인프라/최종 RC 통합 검증은 S4~S8에서 계속한다.
+
+## 도구와 Rocky 9.8 경로
+
+| 항목 | 계약 및 검증 |
+| --- | --- |
+| OS/CPU | Rocky Linux 9.8, linux/amd64; 다른 OS/CPU는 준비 스크립트가 거부 |
+| Java | JDK17; RPM의 기존 BuildRequires를 위해 JDK11도 설치하되 JAVA_HOME은 17 |
+| Maven | 3.9.10; 공식 아카이브 SHA512 고정 |
+| Node/npm | 14.21.3 / 6.14.18; 공식 Node 아카이브 SHA256 고정 |
+| Python | 제품 3.10, 공식 빌드 3.10.21 소스 SHA256 고정; 시스템 DNF용 Python은 교체하지 않음 |
+| MySQL | 서버 8.0.46, Connector/J8.4.0 읽기 전용 SELECT 통과 |
+| lint | 제품과 분리된 Actions Python3.11; Node 제품 버전 변경 없음 |
+
+`tools/build/rocky98-prepare.sh --check`는 설치/저장소 변경 없이 도구 계약을 확인한다. 설치 모드는 일회용 Rocky9.8 컨테이너의 root에서만 사용한다. 기존 개발 컨테이너에서는 `--check`만 실행했다.
+
+신규 `rocky98-rpm-build.sh`와 `.github/workflows/rocky98-rpm.yml`은 기존 패키징, schema resource 비교, UI buildVersion 확인 및 Storage Service 공개키 주입 계약을 유지한다. 9.7 helper는 9.8에서 DNF 변경 전에 실패하며, 실행 전후 Rocky 저장소 파일의 SHA256이 동일함을 확인했다.
+
+공식 이미지: [Rocky9.8 20260525.0 x86_64 OCI](https://download.rockylinux.org/pub/rocky/9.8/images/x86_64/Rocky-9-Container-Base-9.8-20260525.0.x86_64.oci.tar.xz), SHA256 `1210df99dcf0ef4d73940244e6d703935175629598b09c0e430da20e76768402`.
+
+산출물에는 실제 checkout SHA, OS/아키텍처, 도구 버전, 패키징 입력, 고정 nonoss SHA, RPM 의존성 목록, POM/package-lock 해시와 RPM SHA256SUMS를 남긴다. Actions run 링크에서 artifact를 다운로드하며, 실패 로그도 업로드한다. 기존 9.7 release workflow 호출자는 이번에 자동 전환하지 않았으므로, S8 공식 Europa RC는 명시적으로 **Rocky9.8 workflow**를 선택하고 동일 SHA의 설치/업그레이드를 검증해야 한다.
+
+## 업스트림 적응
+
+- MySQL Java 좌표는 Europa에 이미 `com.mysql:mysql-connector-j`로 정리되어 있었다. 버전8.4.0, classpath, caching_sha2 인증과 Marvin 후속을 적용했다. 업스트림의 `MYSQL_CONNECTOR_VERSION = '8.4.0'`는 셸에서 명령으로 해석되므로 공백 없는 변수 대입으로 수정했다.
+- Bouncy Castle1.83/jdk18on과 MinIO8.6.0/okhttp5.1.0을 함께 적용했다. Apache에 없는 Europa automation/rack-management POM, utils artifact copy, securitycheck JAR 참조도 수정하여 빌드를 복구했다. LDAP의 구형 BC 전이 의존성 제외를 유지한다.
+- scoped config 조회의 Transaction 수명을 복구하고, 성공/예외 각각에서 연결을 닫는 테스트를 추가했다. 동일 수정의 두 upstream SHA를 중복 적용하지 않는다.
+- StatsCollector 정리 작업의 RuntimeException을 기록하여 주기 작업이 영구 중단되지 않도록 하는 upstream 수정과 테스트를 적용했다.
+- QemuImgTest의 네이티브 libvirt 로딩 실패는 명시적 skip으로 처리한다. 해당 컨테이너에서는 1개 skip이며 실제 KVM 기능 PASS를 의미하지 않는다.
+- CI의 기존 Europa workflow_call 인터페이스는 유지하면서 공통 setup-env/install-nonoss action, JDK/Python/Maven, npm ci, SHA 고정 action 및 Europa push branch 필터를 반영한다. Apache 전용 Sonar/CodeQL/gh-aw/협업자 자동화는 그대로 이식하지 않는다.
+- pre-commit 업데이트 중 기존 이미지 압축/Markdown 표 스타일을 대규모로 바꾸는 oxipng10.1.0과 markdownlint0.48.0은 현행9.1.5/0.45.0을 유지한다. 나머지 다섯 hook 버전은 반영하며 검사 자체를 제거하지 않는다. 이 결정은 새 검사 실패를 기존 실패로 오인하지 않기 위한 명시적 적응이다.
+
+## 로컬 검증
+
+모든 실행은 `./dev exec`를 통한 Docker 내부에서 수행했다. 원본 및 후보 UI lint는 `--no-fix`, 단위 테스트는 `--runInBand --coverage=false`다.
+
+| 검사 | 결과 |
+| --- | --- |
+| 기준 backend 014895d8f3 | 161개 reactor 전체 빌드 통과; 분리된 Maven 저장소 및 native Git 옵션 사용 |
+| 후보 backend | 161개 reactor 전체 빌드 통과; 테스트는 별도 실행 |
+| 기준 UI lint/unit | lint 통과; 27 suites / 341 tests 통과 |
+| 후보 UI lint/unit | lint 통과; 27 suites / 341 tests 통과 |
+| 영향 backend 테스트 | 174 tests, failures0, errors0, skipped1; FTCTL70 포함 |
+| MySQL connector | 기존 DB 읽기 전용 SELECT, MySQL8.0.46/Connector8.4.0 통과 |
+| Marvin 변경 의존성 | Python3.10 venv에서 mysql-connector-python8.4.0/pycryptodome3.23.0 설치, import/AES roundtrip 통과 |
+| 기준 RAT | 269 unknown 재현 |
+| 후보 RAT | 같은0.12 검사, unknown0/unapproved0 통과 |
+| Rocky platform guard | 기존9.7 helper가 9.8에서 종료1; repo 파일 해시 불변 |
+| 구문/추적 | actionlint, bash -n, git diff --check, 299 SHA ledger 검사 통과 |
+| 로컬 UI 배포 빌드 | 기준/후보 모두 통과; 로컬 검증용으로 productionSourceMap=false |
+| Actions UI Build / License Check | d415cef44e에서 둘 다 통과; UI는 원래 소스맵 포함 빌드 |
+| Actions Rocky9.8 RPM / full backend | 실행 중; 최종 결과는 후속 기록 |
+
+테스트 상세: [s2-test-results.tsv](s2-test-results.tsv). MinIO/LDAP는 단위 테스트이며 외부 서비스의 통합 인증은 S3/S5B에서 수행한다.
+
+기준 build의 최초 실패는 StorPool의 구형 JGit plugin이 Git worktree의 commit을 찾지 못하는 문제였다. native Git과 분리된 Maven 저장소로 전체 reactor를 재실행하여 통과했으며, 이 실패를 제품 회귀로 기록하지 않는다. 재현 명령:
+
+```bash
+mvn -B -ntp -Dmaven.repo.local=/tmp/epic990/baseline-m2 \
+  -Dmaven.gitcommitid.nativegit=true -Pdeveloper -Dsimulator -DskipTests -T2 install
+```
+
+client를 clean install하여 증분 빌드 디렉터리의 구형 BC1.70/MySQL8.0.33 JAR 잔존을 제거했다. 새 RPM 검사도 필요한 BC1.83/Connector8.4.0 JAR 존재와 구형 JAR 부재를 검사한다. 이 검사는 추가로 필요했던 실제 패키징 회귀 방지 항목이다.
+
+S1 merge 요약 숫자는 재검사에서 14개 nonempty/5개 empty가 맞았다. 기존13/6 요약을 정정했으며 19개 diff의 개별 SHA256은 모두 일치했다. 빈 diff를 부모 소스 반영 완료 또는 자동 제외로 처리하지 않는다.
+
+## RAT와 기존 실패
+
+269개는 Java115, JS12, Vue1, Python3, shell policy2, conf1, Markdown135 파일의 누락/축약 헤더였다. 전체 코드 변경에서 주석/공백 이외 내용이 동일한지 비교했고, 재검사에 새 exclude나 skip을 추가하지 않았다. [파일별 변경 해시](s2-license-headers.tsv)를 보관한다.
+
+기존 DB SQL99건 및 simulator FK 실패는 최초 개발 준비 로그에서 발견된 문제다. `92e12845a2..014895d8f3`의 engine/schema, setup/db, developer/src 경로에 변경이 없음을 확인했지만, S2에서 같은 DB를 재초기화하여 재실행한 결과로 표현하지 않는다. S4는 일회용 DB/기존 데이터 복제본에서 실제 재현·마이그레이션·재시작·복구 검증을 수행해야 한다.
+
+전체 저장소 lint는 S1 기준에서도 헤더/권한/깨진 링크/EOF/개행/공백/철자/Markdown 실패가 있었다. S2에서 라이선스 검사269건을 해결한 것이 전체 pre-commit 통과를 뜻하지 않는다. 변경 hook의 추가 실패와 원래 실패를 분리하여 기록하며, 전체 검사 비활성화로 통과시키지 않는다.
+
+## 남은 S2 마감
+
+19개 merge의 독립 remerge hunk와 17개 기능/DB/보안/릴리즈 종속 변경은 [77개 검토표](s2-review.tsv)에 담당 #991~#999와 이유를 기록했다. S2 전체 완료를 위해 이들 코드의 최종 판정/병합/검증이 필요하다. 특히 API ACL 서명, historical upgrade chain, fail-fast module startup, realhostip/SystemVM 및 최종 version stamping은 소유 단계의 구현과 함께 처리한다. `baseline_ready`가 확보되면 S3 착수는 가능하지만 #990을 자동 종료하지 않는다.
