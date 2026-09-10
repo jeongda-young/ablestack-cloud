@@ -742,7 +742,7 @@ pip3 install --upgrade urllib3
 %{_defaultdocdir}/%{name}-cli-%{version}/NOTICE
 
 %files marvin
-%attr(0644,root,root) %{_datadir}/%{name}-marvin/Marvin*.tar.gz
+%attr(0644,root,root) %{_datadir}/%{name}-marvin/[Mm]arvin*.tar.gz
 %{_defaultdocdir}/%{name}-marvin-%{version}/LICENSE
 %{_defaultdocdir}/%{name}-marvin-%{version}/NOTICE
 
