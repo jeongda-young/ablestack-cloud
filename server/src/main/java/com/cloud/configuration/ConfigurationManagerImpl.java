@@ -6675,7 +6675,6 @@ public class ConfigurationManagerImpl extends ManagerBase implements Configurati
 
             return vlan;
 
-            return vlan;
         }
     }
 

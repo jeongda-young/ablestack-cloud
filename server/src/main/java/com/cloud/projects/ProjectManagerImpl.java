@@ -279,30 +279,31 @@ public class ProjectManagerImpl extends ManagerBase implements ProjectManager, C
         //do resource limit check
         _resourceLimitMgr.checkResourceLimit(owner, ResourceType.project);
 
-                    //Create an account associated with the project
-                    StringBuilder acctNm = new StringBuilder("PrjAcct-");
-                    acctNm.append(name).append("-").append(ownerFinal.getDomainId());
+        final Account ownerFinal = owner;
+        User finalUser = user;
+        Project project =  Transaction.execute(new TransactionCallback<Project>() {
+            @Override
+            public Project doInTransaction(TransactionStatus status) {
 
-                    Account projectAccount = _accountMgr.createAccount(acctNm.toString(), Account.Type.PROJECT, null, domainId, null, null, UUID.randomUUID().toString());
+                //Create an account associated with the project
+                StringBuilder acctNm = new StringBuilder("PrjAcct-");
+                acctNm.append(name).append("-").append(ownerFinal.getDomainId());
 
-                    Project project = _projectDao.persist(new ProjectVO(name, displayText, ownerFinal.getDomainId(), projectAccount.getId()));
+                Account projectAccount = _accountMgr.createAccount(acctNm.toString(), Account.Type.PROJECT, null, domainId, null, null, UUID.randomUUID().toString());
 
-                    //assign owner to the project
-                    assignAccountToProject(project, ownerFinal.getId(), ProjectAccount.Role.Admin,
-                            Optional.ofNullable(finalUser).map(User::getId).orElse(null),  null);
+                Project project = _projectDao.persist(new ProjectVO(name, displayText, ownerFinal.getDomainId(), projectAccount.getId()));
 
-                    if (project != null) {
-                        CallContext.current().setEventDetails("Project id=" + project.getId());
-                        CallContext.current().putContextParameter(Project.class, project.getUuid());
-                    }
+                //assign owner to the project
+                assignAccountToProject(project, ownerFinal.getId(), ProjectAccount.Role.Admin,
+                        Optional.ofNullable(finalUser).map(User::getId).orElse(null),  null);
 
                 if (project != null) {
                     CallContext.current().setEventDetails("Project ID: " + project.getUuid());
                     CallContext.current().putContextParameter(Project.class, project.getUuid());
                 }
-            });
 
-            messageBus.publish(_name, ProjectManager.MESSAGE_CREATE_TUNGSTEN_PROJECT_EVENT, PublishScope.LOCAL, project);
+                //Increment resource count
+                _resourceLimitMgr.incrementResourceCount(ownerFinal.getId(), ResourceType.project);
 
                 return project;
             }
