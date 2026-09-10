@@ -31,7 +31,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 
 public class ResourceSchedulePermissionTest {
     @Test
-    public void allGenericApisCheckLegacyVmPermissionBeforeExecuting() {
+    public void allGenericApisCheckLegacyVmPermissionBeforeExecuting() throws Exception {
         List<BaseCmd> commands = List.of(new CreateResourceScheduleCmd(), new ListResourceScheduleCmd(),
                 new UpdateResourceScheduleCmd(), new DeleteResourceScheduleCmd());
         String[] legacyApis = {"createVMSchedule", "listVMSchedule", "updateVMSchedule", "deleteVMSchedule"};
