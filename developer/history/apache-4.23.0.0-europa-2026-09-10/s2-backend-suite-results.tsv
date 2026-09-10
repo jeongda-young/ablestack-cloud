@@ -14,6 +14,8 @@
 # KIND, either express or implied.  See the License for the
 # specific language governing permissions and limitations
 # under the License.
+# Baseline source: 014895d8f3dc2f062f379b51ee62d36a0adae88a
+# Candidate source: 347d8d2b7cbc5bf16c11464b118ec97a5be13116; verified again after clean install.
 variant	module	test_class	tests	failures	errors	skipped
 baseline	agent	com.cloud.agent.AgentShellTest	24	0	0	0
 baseline	agent	com.cloud.agent.AgentTest	27	0	0	0

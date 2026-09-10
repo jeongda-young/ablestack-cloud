@@ -102,7 +102,7 @@ S1은 추적 기준 관리, S8은 통합 게이트이므로 직접 배정 SHA는
 | [b3b9caddc1](https://github.com/apache/cloudstack/commit/b3b9caddc191da6842b99ee6b2f2d5f92cb70145) | 2 | S5A,S4 | HostJoinDao 및 VolumeApiService 테스트 해결. host core/자원 테스트 대조. |
 | [c7e2c748f7](https://github.com/apache/cloudstack/commit/c7e2c748f74619e3b0454d6f2904b89abaf39003) | 9 | S4,S5A,S5B,S3 | upgrade 체인/JSONContentType/DRS VMInstanceDetails/업로드 getAPI async 합성. DB와 local-upload 회귀 포함. |
 | [846803db07](https://github.com/apache/cloudstack/commit/846803db0766e95e618d0675186268c4d31fefb0) | 2 | S6,S5B | NetworkOrchestrator DHCP+throttling 설정 합성, backup restore/attach 제한 메시지 일치. |
-| [a503a52ba6](https://github.com/apache/cloudstack/commit/a503a52ba6907cdfa704212dac9d5d831a248f3d) | 0 | S2 | remerge 차이 없음. Ubuntu/systemvm 부모 변경을 지원 환경별 판정. |
+| [a503a52ba6](https://github.com/apache/cloudstack/commit/a503a52ba6907cdfa704212dac9d5d831a248f3d) | 0 | S2,S6,S5B | remerge 차이 없음. 부모1c1611df2fd3의 공통 SystemVM/tmpdir 변경은 #997/#994에서 경로·소유권·권한 검증. |
 | [76a4bc8c9d](https://github.com/apache/cloudstack/commit/76a4bc8c9dea970f829772fdb8419013974797f9) | 2 | S5A | ManagementServer migration 조회 메서드 경계와 테스트 합성. 17e5947a6d 후속과 함께 검토. |
 | [fe3df6b660](https://github.com/apache/cloudstack/commit/fe3df6b660d3757797235cf4cbd3f96716feffbe) | 1 | S5A | ManagementServerImplTest vGPU/DeploymentPlanningManager mock 중복 해결. |
 | [e1cf0f335a](https://github.com/apache/cloudstack/commit/e1cf0f335a7f2e4b6cd71c3147ef64bcd89d486e) | 0 | S7,S6 | remerge 차이 없음. 부모 VNF UI 수정 등은 별도 추적. |
@@ -134,6 +134,6 @@ git show --remerge-diff --format= --no-ext-diff MERGE_SHA
 
 ## S2 진행 자료
 
-S1은 PR #1000으로 완료했다. 현재 S2 구현은 PR #1002에서 진행하며, 최신 결과는 [S2 검증 보고](s2-verification.ko.md), [77개 검토표](s2-review.tsv), [테스트 결과](s2-test-results.tsv), [라이선스 변경](s2-license-headers.tsv)에 기록한다. 초기 299개 Pending 설명은 S1 시작 상태이며 현재 상태는 inventory.tsv의 decision을 기준으로 한다.
+S1은 PR #1000으로 완료했다. S2 구현 PR #1002를 병합하여 baseline_ready를 완료했다. S2 원본77개 중 최종 판정41개(Applied5/Adapted8/Already Satisfied1/Excluded27), Pending36개이며 전체299개 중 Pending258개다. 다음 작업은 S3 #991이다. 최신 결과는 [S2 검증 보고](s2-verification.ko.md), [77개 검토표](s2-review.tsv), [테스트 결과](s2-test-results.tsv), [라이선스 변경](s2-license-headers.tsv)에 기록한다. 초기 299개 Pending 설명은 S1 시작 상태이며 현재 상태는 inventory.tsv의 decision을 기준으로 한다.
 
 S2에서 19개 remerge diff 해시를 다시 확인했다. 기존 요약의 13/6 집계는 잘못되어 실제 원본 표와 일치하는 14/5로 정정했다. SHA 집합과 개별 diff 해시는 변경하지 않았다.

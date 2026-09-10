@@ -23,6 +23,8 @@ under the License.
 
 ## 상태와 경계
 
+**baseline_ready 완료**, 구현 PR #1002 병합 SHA `17287b59fe3dffccd64003e366c17e274a9b0b28`. S2 전체 DONE은 아니다. 77개 중 Applied5 / Adapted8 / Already Satisfied1 / Excluded27로 **41개 판정 확정**, Pending36개를 유지한다. 전체299개는 최종 판정41개 / Pending258개다.
+
 S2의 `baseline_ready`와 전체 DONE은 별도 게이트다. 이 문서는 독립 빌드/도구/라이선스 작업의 증거를 기록한다. 원본 77개를 모두 검토했으며, 19개 merge와 기능/보안/DB/최종 릴리즈에 종속된 17개 변경은 여전히 미완료다. 이들 36개를 Applied 또는 Excluded로 대체하지 않는다. 담당 연결은 [s2-review.tsv](s2-review.tsv)를 참조한다.
 
 - 업그레이드 출발점: 사용자 확정 `014895d8f3dc2f062f379b51ee62d36a0adae88a`.
@@ -31,6 +33,8 @@ S2의 `baseline_ready`와 전체 DONE은 별도 게이트다. 이 문서는 독�
 - 의존성/도구 기본 반영: `8aa74e786d1416f20377579ac32182e0acd915aa`.
 - Europa 전용 BC 소비자 보완: `6611e09a99`.
 - 연결 누수 회귀 테스트: `d415cef44e`.
+- 최종 Java 의존성/전체 로컬 테스트: `347d8d2b7cbc5bf16c11464b118ec97a5be13116`.
+- 최종 패키징 후보: `0725e2c585b35b45d9e9e8f180f051d2022a59a6`. 직전347d 대비 CentOS7/8 spec의 Marvin glob4곳만 변경했으며 Java/UI 제품 소스는 동일하다.
 - 실제 제품 코드의 빌드/테스트와 문서 추적표 검증은 다른 증거다. DB/실물 인프라/최종 RC 통합 검증은 S4~S8에서 계속한다.
 
 ## 도구와 Rocky 9.8 경로
@@ -49,7 +53,7 @@ S2의 `baseline_ready`와 전체 DONE은 별도 게이트다. 이 문서는 독�
 
 신규 `rocky98-rpm-build.sh`와 `.github/workflows/rocky98-rpm.yml`은 기존 패키징, schema resource 비교, UI buildVersion 확인 및 Storage Service 공개키 주입 계약을 유지한다. 9.7 helper는 9.8에서 DNF 변경 전에 실패하며, 실행 전후 Rocky 저장소 파일의 SHA256이 동일함을 확인했다.
 
-Python3.10.21에 포함된 setuptools79.0.1은 sdist 이름을 `marvin-*.tar.gz`로 정규화한다. 첫 공식9.8 RPM 실행에서 기존 대문자 전용 glob 때문에 `%install`이 실패한 것을 확인했다. 공통 RPM spec의 복사/설치3곳을 `[Mm]arvin-*.tar.gz`로 바꾸어 기존53.0.0의 대문자 아카이브와 새 소문자 아카이브를 모두 지원한다. Python 버전이나 RPM 설치 경로는 변경하지 않는다.
+Python3.10.21에 포함된 setuptools79.0.1은 sdist 이름을 `marvin-*.tar.gz`로 정규화한다. 첫 공식9.8 RPM 실행에서 기존 대문자 전용 glob 때문에 `%install`이 실패한 것을 확인했다. CentOS7/8 RPM spec의 복사·설치·파일 목록7곳을 `[Mm]arvin` glob으로 바꾸어 기존53.0.0의 대문자 아카이브와 새 소문자 아카이브를 모두 지원한다. Python 버전이나 RPM 설치 경로는 변경하지 않는다. 초기 수정이 CentOS7 spec에만 반영되어 실제 Rocky 경로인 CentOS8의 %install에서 같은 오류가 재현되었다. 두 spec의 %files 목록까지 함께 수정했으며 이를 기존 실패로 처리하지 않는다.
 
 공식 이미지: [Rocky9.8 20260525.0 x86_64 OCI](https://download.rockylinux.org/pub/rocky/9.8/images/x86_64/Rocky-9-Container-Base-9.8-20260525.0.x86_64.oci.tar.xz), SHA256 `1210df99dcf0ef4d73940244e6d703935175629598b09c0e430da20e76768402`.
 
@@ -74,7 +78,7 @@ Python3.10.21에 포함된 setuptools79.0.1은 sdist 이름을 `marvin-*.tar.gz`
 | 기준 backend 014895d8f3 | 161개 reactor 전체 빌드 통과; 분리된 Maven 저장소 및 native Git 옵션 사용 |
 | 후보 backend | 161개 reactor 전체 빌드 통과; 테스트는 별도 실행 |
 | 기준 전체 backend unit | 938 suite reports / 11,478 tests, failures0/errors0/skipped14; 161 reactor PASS |
-| 후보 전체 backend unit (b7dd4539e3, HTTP 통일 전) | 같은938 suite reports / 11,484 tests, failures0/errors0/skipped14; 161 reactor PASS |
+| 후보 전체 backend unit (347d8d2b7c, 최종 JVM 의존성) | 같은938 suite reports / 11,484 tests, failures0/errors0/skipped14; 161 reactor PASS |
 | 기준 UI lint/unit | lint 통과; 27 suites / 341 tests 통과 |
 | 후보 UI lint/unit | lint 통과; 27 suites / 341 tests 통과 |
 | HTTP/JVM 의존성 통일 후 | 161 reactor **clean install** PASS; Redfish 포함 영향 108 tests/failures0/errors0/skipped0 및 새 JAR BC/MinIO/InfluxDB smoke PASS |
@@ -86,12 +90,12 @@ Python3.10.21에 포함된 setuptools79.0.1은 sdist 이름을 `marvin-*.tar.gz`
 | Rocky platform guard | 기존9.7 helper가 9.8에서 종료1; repo 파일 해시 불변 |
 | 구문/추적 | actionlint, bash -n, git diff --check, 299 SHA ledger 검사 통과 |
 | 로컬 UI 배포 빌드 | 기준/후보 모두 통과; 로컬 검증용으로 productionSourceMap=false |
-| Actions UI Build / License Check | b7dd4539e3 후보에서 둘 다 통과; UI는 원래 소스맵 포함 빌드 |
-| Actions full backend | [Build 34449558672](https://github.com/ablecloud-team/ablestack-cloud/actions/runs/34449558672): 172 reactor PASS, 12,265 tests/failures0/errors0/skipped17 |
-| Actions Rocky9.7 RPM | [기존 경로 34449558720](https://github.com/ablecloud-team/ablestack-cloud/actions/runs/34449558720) PASS; 9.8 증거와 구분 |
-| Actions Rocky9.8 RPM | 실행 중; 최종 결과는 후속 기록 |
+| Actions UI Build / License Check | 최종0725e2c585의 [UI34459707777](https://github.com/ablecloud-team/ablestack-cloud/actions/runs/34459707777) / [RAT34459707708](https://github.com/ablecloud-team/ablestack-cloud/actions/runs/34459707708) PASS; UI는 원래 소스맵 포함 빌드 |
+| Actions full backend | [Build 34459707761](https://github.com/ablecloud-team/ablestack-cloud/actions/runs/34459707761): 172 reactor PASS, 12,265 tests/failures0/errors0/skipped17 |
+| Actions Rocky9.7 RPM | [기존 경로 34459707733](https://github.com/ablecloud-team/ablestack-cloud/actions/runs/34459707733) PASS; 9.8 증거와 구분 |
+| Actions Rocky9.8 RPM | [34459707809](https://github.com/ablecloud-team/ablestack-cloud/actions/runs/34459707809) PASS; 실제 RPM classpath smoke 및 다운로드 artifact 검증 완료 |
 
-테스트 상세: [영향 테스트](s2-test-results.tsv), [모듈별 기준/후보 전체 테스트](s2-backend-suite-results.tsv). 전체 테스트는 Maven `-Pdeveloper -Dsimulator -T2 test`로 별도 실행했고, 기준은 위 빌드와 같은 분리 저장소/native Git 옵션을 사용했다. 실제 Surefire XML과 로그 집계를 대조했다. 전체 로컬 XML은 b7dd4539e3 시점의 스냅샷이며, 이후 HTTP 의존성 통일은 별도 영향 테스트와 최종 Actions에서 검증한다. 기준 대비 추가6개는 ConfigDepotImplTest2개와 StatsCollectorTest4개다. 영향 테스트210개는 전체 테스트와 중복되므로 합산하지 않는다. MinIO/LDAP는 단위 테스트이며 외부 서비스의 통합 인증은 S3/S5B에서 수행한다.
+테스트 상세: [영향 테스트](s2-test-results.tsv), [모듈별 기준/후보 전체 테스트](s2-backend-suite-results.tsv). 전체 테스트는 Maven `-Pdeveloper -Dsimulator -T2 test`로 별도 실행했고, 기준은 위 빌드와 같은 분리 저장소/native Git 옵션을 사용했다. 실제 Surefire XML과 로그 집계를 대조했다. 전체 로컬 XML은 최종 JVM 의존성의347d8d2b7c에서 clean install 후 재실행했고, 같은938개 suite별 결과와 총11,484개/실패0/오류0/skip14를 확인했다. 기준 대비 추가6개는 ConfigDepotImplTest2개와 StatsCollectorTest4개다. 영향 테스트210개는 전체 테스트와 중복되므로 합산하지 않는다. MinIO/LDAP는 단위 테스트이며 외부 서비스의 통합 인증은 S3/S5B에서 수행한다.
 
 기준 build의 최초 실패는 StorPool의 구형 JGit plugin이 Git worktree의 commit을 찾지 못하는 문제였다. native Git과 분리된 Maven 저장소로 전체 reactor를 재실행하여 통과했으며, 이 실패를 제품 회귀로 기록하지 않는다. 재현 명령:
 
@@ -114,8 +118,18 @@ S1 merge 요약 숫자는 재검사에서 14개 nonempty/5개 empty가 맞았다
 
 이는 기존 실패를 분리한 기준 증거이며 정상 설치/업그레이드 PASS가 아니다. S4는 저장 프로시저 분리, 복수 SQL 실행, storage_service_instance 누락, backups.extenal_id 오타와 실제 기존 데이터 업그레이드·동일 버전 재실행을 수정/검증해야 한다.
 
-전체 저장소 lint는 S1 기준에서도 헤더/권한/깨진 링크/EOF/개행/공백/철자/Markdown 실패가 있었다. S2에서 라이선스 검사269건을 해결한 것이 전체 pre-commit 통과를 뜻하지 않는다. 변경 hook의 추가 실패와 원래 실패를 분리하여 기록하며, 전체 검사 비활성화로 통과시키지 않는다.
+전체 저장소 lint는 S1 기준에서도 헤더/권한/깨진 링크/EOF/개행/공백/철자/Markdown 실패가 있었다. S2에서 라이선스 검사269건을 해결한 것이 전체 pre-commit 통과를 뜻하지 않는다. 최종347d8d2b7c의 [Lint34456069898](https://github.com/ablecloud-team/ablestack-cloud/actions/runs/34456069898)는 FAIL이다. S1 기준34443963672와 실패 hook 종류14개가 같고 새 S2/rocky98/ManagementRuntimeSmoke 경로의 추가 진단은 없었다. oxipng, Markdown/properties/shell/SQL/Vue/YAML 라이선스, 실행 권한, 깨진 symlink, EOF, 혼합 개행, 후행 공백, codespell, markdownlint 범주가 남아 있다. 개별 기존 진단 모두 동일하거나 전체 CI가 성공했다고 간주하지 않는다. 최종 RPM spec 보완0725e2c585에서도 [Lint34459707721](https://github.com/ablecloud-team/ablestack-cloud/actions/runs/34459707721)의 실패 hook 집합14개가 같고 실행 진단에 새 S2 경로는 없었다. PR Merge Conflict Check의 pull_request_target 실행34459704199는 같은 concurrency group의 새 실행에 의해 취소되었고 최신 pull_request 실행34459707758은 통과했다.
 
 ## 남은 S2 마감
 
 19개 merge의 독립 remerge hunk와 17개 기능/DB/보안/릴리즈 종속 변경은 [77개 검토표](s2-review.tsv)에 담당 #991~#999와 이유를 기록했다. S2 전체 완료를 위해 이들 코드의 최종 판정/병합/검증이 필요하다. 특히 API ACL 서명, historical upgrade chain, fail-fast module startup, realhostip/SystemVM 및 최종 version stamping은 소유 단계의 구현과 함께 처리한다. `baseline_ready`가 확보되면 S3 착수는 가능하지만 #990을 자동 종료하지 않는다.
+
+## 최종 CI와 산출물 식별
+
+- 검증 head: `0725e2c585b35b45d9e9e8f180f051d2022a59a6`; PR checkout merge SHA: `7db9b8115e83a9200ab98280a390de9bf6705d86`. merge checkout과 head의 전체 tree가 동일함을 확인했다.
+- 구현 병합 SHA: `17287b59fe3dffccd64003e366c17e274a9b0b28`. 추적표 갱신은 이후 문서 전용 PR이며 제품 코드 tree를 변경하지 않는다.
+- [Rocky9.8 run34459707809](https://github.com/ablecloud-team/ablestack-cloud/actions/runs/34459707809)의 `rocky98-rpm-34459707809` artifact에 환경, RPM manifest, SHA256SUMS, runtime-smoke.txt, 빌드 로그가 있다. 다운로드 후 checksum을 재검증했다. 상세 식별자는 [산출물 검증표](s2-artifact-results.tsv)를 참조한다.
+- 이번 산출물은 S2의 `4.23.0.0-SNAPSHOT` 검증용이다. S8에서는 최종 병합 SHA로 다시 빌드하고 서명/Storage Service key 주입, 설치/업그레이드·실물 인프라·복구를 검증한다. 이번 PR의 key 다운로드/주입 및 Apache 전용 Sonar/coverage skip은 해당 기능의 PASS가 아니다.
+- S3 #991 착수가 가능하다. S2의36개 공동 검증 행은 #991~#999에서 마감하며 최종 stamping은 S8와 함께 처리한다. 전체 S2 DONE을 S8 stamping의 선행 조건으로 삼아 순환 의존성을 만들지 않는다.
+
+다운로드 검증에서 RPM9개 SHA256 및176개 POM/package-lock 입력 해시가 일치했다. 실제 artifact의 UI override는 미설정이어서 helper의 override 비교는 실행되지 않았다. 별도로 UI RPM을 추출하여 소스0725e2c585의 buildVersion `V4.0-4.0.15`와 일치함을 확인했다. Marvin RPM 파일 목록에는 소문자 `marvin-4.23.0.0.tar.gz`가 포함된다. 최종 버전/브랜딩 stamping은 S8에서 수행한다.
