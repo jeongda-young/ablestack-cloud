@@ -26,6 +26,10 @@ DISTRO=${DISTRO:-rocky9}
 RELEASE=${RELEASE:-}
 TEMPLATES=${TEMPLATES:-}
 NODE_VERSION=${NODE_VERSION:-14.21.3}
+if [[ "$NODE_VERSION" != 14.21.3 ]]; then
+    echo "Europa requires Node.js 14.21.3" >&2
+    exit 1
+fi
 BRAND=${BRAND:-}
 PACKAGE_VERSION=${PACKAGE_VERSION:-}
 TIMESTAMP_VALUE=${TIMESTAMP_VALUE:-}
@@ -44,7 +48,7 @@ if [ "$DISTRO" != "rocky9" ] && [ "$DISTRO" != "centos8" ]; then
     exit 1
 fi
 
-echo "== Rocky 9.7 RPM build helper =="
+echo "== Rocky 9.8 RPM build helper =="
 echo "ROOT_DIR=$ROOT_DIR"
 echo "DISTRO=$DISTRO"
 echo "PACK=$PACK"
@@ -60,70 +64,8 @@ echo "USE_TIMESTAMP=$USE_TIMESTAMP"
 echo "LOCAL_FAST=$LOCAL_FAST"
 echo "ABLESTACK_UI_BUILD_VERSION=${ABLESTACK_UI_BUILD_VERSION:-<source-config>}"
 
-source /etc/os-release
-if [[ "$ID" != rocky || "$VERSION_ID" != 9.7 ]]; then
-    echo "This legacy helper requires Rocky 9.7; use rocky98-rpm-build.sh for 9.8" >&2
-    exit 1
-fi
-
-configure_rocky_vault_repositories() {
-    local repo
-
-    for repo in /etc/yum.repos.d/rocky*.repo; do
-        [ -f "$repo" ] || continue
-        sed -E -i \
-            -e 's|^mirrorlist=|#mirrorlist=|' \
-            -e 's|^#?baseurl=https?://dl\.rockylinux\.org/\$contentdir|baseurl=https://dl.rockylinux.org/vault/rocky|' \
-            "$repo"
-    done
-}
-
-# Rocky 9.7 is archived, so both the container image and its package
-# repositories must use the Rocky vault.
-configure_rocky_vault_repositories
-
-if [ "$DISTRO" = "rocky9" ]; then
-    echo "Pinning Rocky 9.7 DNF repositories to vault baseurl"
-    for repo_file in /etc/yum.repos.d/rocky*.repo; do
-        [ -f "$repo_file" ] || continue
-        sed -i -E             -e 's|^mirrorlist=|#mirrorlist=|'             -e 's|^#?baseurl=https?://dl\.rockylinux\.org/\$contentdir/\$releasever/|baseurl=https://dl.rockylinux.org/vault/rocky/\$releasever/|'             -e 's|^#?baseurl=https?://download\.rockylinux\.org/pub/rocky/\$releasever/|baseurl=https://dl.rockylinux.org/vault/rocky/\$releasever/|'             "$repo_file"
-    done
-    dnf --releasever=9.7 clean all || true
-fi
-
-DNF=(dnf --releasever=9.7 -y)
-
-"${DNF[@]}" install dnf-plugins-core
-dnf --releasever=9.7 config-manager --set-enabled crb || true
-"${DNF[@]}" install epel-release || true
-"${DNF[@]}" install \
-    bash \
-    bzip2 \
-    ca-certificates \
-    cpio \
-    findutils \
-    gcc \
-    genisoimage \
-    git \
-    glibc-devel \
-    gzip \
-    java-11-openjdk-devel \
-    java-17-openjdk-devel \
-    jq \
-    maven \
-    nodejs \
-    openssl-devel \
-    python3-devel \
-    python3-pip \
-    python3-setuptools \
-    rpm-build \
-    systemd-rpm-macros \
-    shadow-utils \
-    tar \
-    unzip \
-    wget \
-    which \
-    xz
+"$ROOT_DIR/tools/build/rocky98-prepare.sh"
+export PATH="/opt/apache-maven-3.9.10/bin:/opt/python-3.10/bin:$PATH"
 
 if [ "$PACK" = "noredist" ] || [ "$PACK" = "NOREDIST" ]; then
     echo "Installing non-redistributable VMware build dependencies"
@@ -154,8 +96,11 @@ export RPM_NODE_BIN_DIR="$NODE_BIN_DIR"
 
 git config --global --add safe.directory "$ROOT_DIR"
 
-mkdir -p "$ROOT_DIR/dist/rocky97-build"
+mkdir -p "$ROOT_DIR/dist/rocky98-build"
 {
+    echo "source_sha=$(git -C "$ROOT_DIR" rev-parse HEAD)"
+    echo "architecture=$(uname -m)"
+    echo "python_version=$(python3 --version)"
     echo "date=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
     echo "os_release=$(tr '\n' ' ' </etc/os-release)"
     echo "java_version=$("$JAVA_HOME/bin/java" -version 2>&1 | tr '\n' ' ' )"
@@ -175,7 +120,9 @@ mkdir -p "$ROOT_DIR/dist/rocky97-build"
     echo "use_timestamp=$USE_TIMESTAMP"
     echo "local_fast=$LOCAL_FAST"
     echo "ui_build_version=${ABLESTACK_UI_BUILD_VERSION:-<source-config>}"
-} >"$ROOT_DIR/dist/rocky97-build/environment.txt"
+} >"$ROOT_DIR/dist/rocky98-build/environment.txt"
+rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort > "$ROOT_DIR/dist/rocky98-build/rpm-dependencies.txt"
+"$ROOT_DIR/tools/build/rocky98-prepare.sh" --check
 
 build_args=(
     --distribution "$DISTRO"
@@ -334,4 +281,8 @@ verify_ui_build_version() {
 verify_ui_build_version
 
 find dist/rpmbuild -type f \( -name '*.rpm' -o -name '*.src.rpm' \) | sort \
-    > dist/rocky97-build/artifacts.txt
+    > dist/rocky98-build/artifacts.txt
+
+while IFS= read -r artifact; do
+    sha256sum "$artifact"
+done < dist/rocky98-build/artifacts.txt > dist/rocky98-build/SHA256SUMS
