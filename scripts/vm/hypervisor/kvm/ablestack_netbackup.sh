@@ -120,10 +120,19 @@ apply_backup_bandwidth_limit() {
 
   while IFS='|' read -r disk target; do
     [[ -z "$disk" ]] && continue
-    if virsh -c qemu:///system blockjob "$VM" "$disk" --bandwidth "$bandwidth_limit_mibps" >> "$logFile" 2>&1; then
-      log -ne "Applied backup bandwidth limit vm=[$VM] disk=[$disk] limitMbps=[$bandwidth_limit_mbps] virshLimitMiBps=[$bandwidth_limit_mibps]"
-    else
-      log -ne "WARNING failed to apply backup bandwidth limit vm=[$VM] disk=[$disk] limitMbps=[$bandwidth_limit_mbps]"
+
+    local attempt
+    local blockjob_output=""
+    for attempt in 1 2 3 4 5; do
+      if blockjob_output=$(virsh -c qemu:///system blockjob "$VM" "$disk" --bandwidth "$bandwidth_limit_mibps" 2>&1); then
+        log -ne "Applied backup bandwidth limit vm=[$VM] disk=[$disk] limitMbps=[$bandwidth_limit_mbps] virshLimitMiBps=[$bandwidth_limit_mibps] attempt=[$attempt]"
+        break
+      fi
+      sleep 1
+    done
+
+    if [[ "$attempt" -eq 5 ]]; then
+      log -ne "WARNING failed to apply backup bandwidth limit vm=[$VM] disk=[$disk] limitMbps=[$bandwidth_limit_mbps] virshLimitMiBps=[$bandwidth_limit_mibps] output=[${blockjob_output:-Unknown error}]"
     fi
   done < <(virsh -c qemu:///system domblklist "$VM" --details 2>/dev/null | awk '/disk/ {print $3 "|" $4}')
 }
