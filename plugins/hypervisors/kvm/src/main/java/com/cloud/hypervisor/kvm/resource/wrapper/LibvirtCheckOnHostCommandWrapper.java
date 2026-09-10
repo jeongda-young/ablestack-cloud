@@ -54,15 +54,22 @@ public final class LibvirtCheckOnHostCommandWrapper extends CommandWrapper<Check
         final Future<Boolean> future = executors.submit(ha);
         try {
             final Boolean hasHeartBeat = future.get();
+            if (hasHeartBeat == null) {
+                return new CheckOnHostAnswer(command, (Boolean) null, "No conclusive heartbeat observation");
+            }
             if (hasHeartBeat) {
                 return new CheckOnHostAnswer(command, true, "Heart is beating");
             } else {
                 return new CheckOnHostAnswer(command, false, "Heart is not beating");
             }
         } catch (final InterruptedException e) {
+            Thread.currentThread().interrupt();
             return new CheckOnHostAnswer(command, "CheckOnHostCommand: can't get status of host: InterruptedException");
         } catch (final ExecutionException e) {
             return new CheckOnHostAnswer(command, "CheckOnHostCommand: can't get status of host: ExecutionException");
+        } finally {
+            future.cancel(true);
+            executors.shutdownNow();
         }
     }
 }

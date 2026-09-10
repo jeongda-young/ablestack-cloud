@@ -220,7 +220,8 @@ public class VirtualMachineTO {
     }
 
     public long getRequestedRam() {
-        return requestedRam;
+        // Older management servers do not send requestedRam.
+        return requestedRam > 0 ? requestedRam : maxRam;
     }
 
     public String getHostName() {

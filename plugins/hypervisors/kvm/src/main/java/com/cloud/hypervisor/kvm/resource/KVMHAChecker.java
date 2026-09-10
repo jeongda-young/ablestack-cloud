@@ -46,57 +46,32 @@ public class KVMHAChecker extends KVMHABase implements Callable<Boolean> {
      */
     @Override
     public Boolean hasHeartBeat() {
-        boolean validResult = false;
-
-        // NFS
-        for (HAStoragePool pool : storagePools) {
-            logger.debug(String.format(
-                "Checking heart beat with KVMHAChecker NFS for host IP [%s] in pool [%s]",
-                host.getPrivateNetwork().getIp(),
-                pool.getPoolUUID()
-            ));
-            validResult = pool.getPool().hasHeartBeat(pool, host);
-            if (reportIfHeartBeatFailedForOneStoragePool && !validResult) break;
+        boolean checked = false;
+        boolean unknown = false;
+        List<List<HAStoragePool>> poolGroups = java.util.Arrays.asList(storagePools, gfsStoragePools, rbdStoragePools, clvmStoragePools);
+        for (List<HAStoragePool> pools : poolGroups) {
+            if (pools == null) {
+                continue;
+            }
+            for (HAStoragePool pool : pools) {
+                checked = true;
+                Boolean alive = pools == rbdStoragePools
+                        ? pool.getPool().checkingHeartBeatRBD(pool, host, volumeList)
+                        : pool.getPool().hasHeartBeat(pool, host);
+                if (alive == null) {
+                    unknown = true;
+                } else if (reportIfHeartBeatFailedForOneStoragePool && !alive) {
+                    return false;
+                } else if (!reportIfHeartBeatFailedForOneStoragePool && alive) {
+                    return true;
+                }
+            }
         }
-
-        // SharedMountPoint(GFS)
-        for (HAStoragePool gfspool : gfsStoragePools) {
-            logger.debug(String.format(
-                "Checking heart beat with KVMHAChecker SharedMountPoint for host IP [%s] in pool [%s]",
-                host.getPrivateNetwork().getIp(),
-                gfspool.getPoolUUID()
-            ));
-            validResult = gfspool.getPool().hasHeartBeat(gfspool, host);
-            if (reportIfHeartBeatFailedForOneStoragePool && !validResult) break;
+        // No observation, including an unknown result, is not proof of host death.
+        if (!checked || unknown) {
+            return null;
         }
-
-        // RBD
-        for (HAStoragePool rbdpool : rbdStoragePools) {
-            logger.debug(String.format(
-                "Checking heart beat with KVMHAChecker RBD for host IP [%s] in pool [%s]",
-                host.getPrivateNetwork().getIp(),
-                rbdpool.monHost
-            ));
-            validResult = rbdpool.getPool().checkingHeartBeatRBD(rbdpool, host, volumeList);
-            if (reportIfHeartBeatFailedForOneStoragePool && !validResult) break;
-        }
-
-        // CLVM
-        for (HAStoragePool clvmpool : clvmStoragePools) {
-            logger.debug(String.format(
-                "Checking heart beat with KVMHAChecker CLVM for host IP [%s] in pool [%s]",
-                host.getPrivateNetwork().getIp(),
-                clvmpool.poolIp
-            ));
-            validResult = clvmpool.getPool().hasHeartBeat(clvmpool, host);
-            if (reportIfHeartBeatFailedForOneStoragePool && !validResult) break;
-        }
-
-        if (!validResult) {
-            // 마지막 검사한 pool의 정보만 남음(가장 마지막 실패 기준)
-            logger.warn("All checks with KVMHAChecker considered it as dead. It may cause a shutdown of the host.");
-        }
-        return validResult;
+        return reportIfHeartBeatFailedForOneStoragePool;
     }
 
     @Override
