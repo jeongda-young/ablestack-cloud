@@ -37,6 +37,15 @@ public class EuropaUsageRuntimeSmoke {
             UsageServer usage = new UsageServer();
             usage.start();
             System.out.println("S4_USAGE_SPRING_START_PASS");
+            if (args.length > 1 && "aggregate".equals(args[1])) {
+                java.lang.reflect.Field field = UsageServer.class.getDeclaredField("appContext");
+                field.setAccessible(true);
+                org.springframework.context.ApplicationContext context = (org.springframework.context.ApplicationContext) field.get(usage);
+                if (!context.getBean(org.apache.cloudstack.quota.QuotaManager.class).calculateQuotaUsage()) {
+                    throw new AssertionError("Quota aggregation failed");
+                }
+                System.out.println("S4_QUOTA_AGGREGATION_RETURNED_SUCCESS");
+            }
             usage.stop();
             System.exit(0);
         } catch (Exception failure) {

@@ -633,9 +633,9 @@ public class FirstFitAllocatorTest {
       return null;
     }).when(firstFitAllocatorSpy).addHostsBasedOnTagRules(Mockito.nullable(String.class), Mockito.anyList());
     when(userVmDetailsDaoMock.findDetail(virtualMachineProfile.getId(), "UEFI"))
-        .thenReturn(new VMInstanceDetailVO(virtualMachineProfile.getId(), "UEFI", "SECURE", true));
+        .thenReturn(new VMInstanceDetailVO(0L, "UEFI", "SECURE", true));
     when(userVmDetailsDaoMock.findDetail(virtualMachineProfile.getId(), "tpmversion"))
-        .thenReturn(new VMInstanceDetailVO(virtualMachineProfile.getId(), "tpmversion", "2.0", true));
+        .thenReturn(new VMInstanceDetailVO(0L, "tpmversion", "2.0", true));
     when(hostDaoMock.listByHostCapability(type, clusterId, podId, dcId, Host.HOST_UEFI_ENABLE))
         .thenReturn(new ArrayList<>(Arrays.asList(host1, host2, host3)));
     when(hostDaoMock.listByHostCapability(type, clusterId, podId, dcId, Host.HOST_TPM_ENABLE))
