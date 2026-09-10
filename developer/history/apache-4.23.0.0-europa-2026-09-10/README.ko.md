@@ -86,7 +86,7 @@ S1은 추적 기준 관리, S8은 통합 게이트이므로 직접 배정 SHA는
 
 ## Merge 개별 분석
 
-`git show --remerge-diff`(Git 2.52.0, 기본 merge 설정)로 **13개에서 차이**, **6개에서 빈 diff**를 확인했다. 빈 diff는 현재 Git 알고리즘 기준 해결 차이가 없다는 뜻이며 부모 커밋 반영 완료나 무검증 제외의 근거가 아니다. 비어 있지 않은 diff에도 conflict marker 제거·버전 유지가 포함되므로 모든 줄을 신규 기능으로 해석하지 않는다.
+`git show --remerge-diff`(Git 2.52.0, 기본 merge 설정)로 **14개에서 차이**, **5개에서 빈 diff**를 확인했다. 빈 diff는 현재 Git 알고리즘 기준 해결 차이가 없다는 뜻이며 부모 커밋 반영 완료나 무검증 제외의 근거가 아니다. 비어 있지 않은 diff에도 conflict marker 제거·버전 유지가 포함되므로 모든 줄을 신규 기능으로 해석하지 않는다.
 
 | merge | 해결 파일 수 | 관련 작업 | S1 분석 / 후속 검증 |
 |---|---:|---|---|
@@ -131,3 +131,9 @@ git show --remerge-diff --format= --no-ext-diff MERGE_SHA
 ```
 
 역적용 결과를 재현하려면 **시작 SHA의 깨끗한 별도 컨테이너 worktree**를 사용한다. 현재 작업 브랜치를 reset/checkout해서 사용자 변경을 지우지 않는다. `reverse_check=FAIL`은 코드가 없다는 증명이 아니며, 적응 구현·문맥 변화·경로 차이 때문에 실패할 수 있다. remerge-diff 해시는 알고리즘/설정에 영향을 받으므로 Git 버전과 함께 해석한다.
+
+## S2 진행 자료
+
+S1은 PR #1000으로 완료했다. 현재 S2 구현은 PR #1002에서 진행하며, 최신 결과는 [S2 검증 보고](s2-verification.ko.md), [77개 검토표](s2-review.tsv), [테스트 결과](s2-test-results.tsv), [라이선스 변경](s2-license-headers.tsv)에 기록한다. 초기 299개 Pending 설명은 S1 시작 상태이며 현재 상태는 inventory.tsv의 decision을 기준으로 한다.
+
+S2에서 19개 remerge diff 해시를 다시 확인했다. 기존 요약의 13/6 집계는 잘못되어 실제 원본 표와 일치하는 14/5로 정정했다. SHA 집합과 개별 diff 해시는 변경하지 않았다.
