@@ -58,7 +58,7 @@ Python3.10.21에 포함된 setuptools79.0.1은 sdist 이름을 `marvin-*.tar.gz`
 ## 업스트림 적응
 
 - MySQL Java 좌표는 Europa에 이미 `com.mysql:mysql-connector-j`로 정리되어 있었다. 버전8.4.0, classpath, caching_sha2 인증과 Marvin 후속을 적용했다. 업스트림의 `MYSQL_CONNECTOR_VERSION = '8.4.0'`는 셸에서 명령으로 해석되므로 공백 없는 변수 대입으로 수정했다.
-- Bouncy Castle1.83/jdk18on과 MinIO8.6.0/okhttp5.1.0을 함께 적용했다. Apache에 없는 Europa automation/rack-management POM, utils artifact copy, securitycheck JAR 참조도 수정하여 빌드를 복구했다. LDAP의 구형 BC 전이 의존성 제외를 유지한다.
+- Bouncy Castle1.83/jdk18on과 MinIO8.6.0/okhttp5.1.0을 함께 적용했다. MinIO 모듈의 선언만 바꾸면 최종 client에서 공통 의존성 관리가 OkHttp4.9.3과 interceptor4.12.0을 선택하는 것을 추가로 발견했다. 루트 OkHttp/interceptor 관리를5.1.0으로 통일하여 실제 실행 파일의 버전도 맞췄다. Apache에 없는 Europa automation/rack-management POM, utils artifact copy, securitycheck JAR 참조도 수정하여 빌드를 복구했다. LDAP의 구형 BC 전이 의존성 제외를 유지한다.
 - scoped config 조회의 Transaction 수명을 복구하고, 성공/예외 각각에서 연결을 닫는 테스트를 추가했다. 동일 수정의 두 upstream SHA를 중복 적용하지 않는다.
 - StatsCollector 정리 작업의 RuntimeException을 기록하여 주기 작업이 영구 중단되지 않도록 하는 upstream 수정과 테스트를 적용했다.
 - QemuImgTest의 네이티브 libvirt 로딩 실패는 명시적 skip으로 처리한다. 해당 컨테이너에서는 1개 skip이며 실제 KVM 기능 PASS를 의미하지 않는다.
@@ -74,9 +74,10 @@ Python3.10.21에 포함된 setuptools79.0.1은 sdist 이름을 `marvin-*.tar.gz`
 | 기준 backend 014895d8f3 | 161개 reactor 전체 빌드 통과; 분리된 Maven 저장소 및 native Git 옵션 사용 |
 | 후보 backend | 161개 reactor 전체 빌드 통과; 테스트는 별도 실행 |
 | 기준 전체 backend unit | 938 suite reports / 11,478 tests, failures0/errors0/skipped14; 161 reactor PASS |
-| 후보 전체 backend unit | 같은938 suite reports / 11,484 tests, failures0/errors0/skipped14; 161 reactor PASS |
+| 후보 전체 backend unit (b7dd4539e3, HTTP 통일 전) | 같은938 suite reports / 11,484 tests, failures0/errors0/skipped14; 161 reactor PASS |
 | 기준 UI lint/unit | lint 통과; 27 suites / 341 tests 통과 |
 | 후보 UI lint/unit | lint 통과; 27 suites / 341 tests 통과 |
+| HTTP 의존성 통일 후 | 161 reactor 재빌드 PASS; 영향 89 tests/failures0/errors0/skipped0 및 최종 JAR BC/MinIO/InfluxDB smoke PASS |
 | 영향 backend 테스트 | 210 tests, failures0, errors0, skipped1; FTCTL70 및 추가 BC/TLS36 포함 |
 | MySQL connector | 기존 DB 읽기 전용 SELECT 및 격리 MySQL8.0.46 caching_sha2_password 인증, Connector8.4.0 통과 |
 | Marvin 변경 의존성 | Python3.10 venv에서 mysql-connector-python8.4.0/pycryptodome3.23.0 설치, import/AES roundtrip 통과 |
@@ -90,7 +91,7 @@ Python3.10.21에 포함된 setuptools79.0.1은 sdist 이름을 `marvin-*.tar.gz`
 | Actions Rocky9.7 RPM | [기존 경로 34449558720](https://github.com/ablecloud-team/ablestack-cloud/actions/runs/34449558720) PASS; 9.8 증거와 구분 |
 | Actions Rocky9.8 RPM | 실행 중; 최종 결과는 후속 기록 |
 
-테스트 상세: [영향 테스트](s2-test-results.tsv), [모듈별 기준/후보 전체 테스트](s2-backend-suite-results.tsv). 전체 테스트는 Maven `-Pdeveloper -Dsimulator -T2 test`로 별도 실행했고, 기준은 위 빌드와 같은 분리 저장소/native Git 옵션을 사용했다. 실제 Surefire XML과 로그 집계를 대조했다. 기준 대비 추가6개는 ConfigDepotImplTest2개와 StatsCollectorTest4개다. 영향 테스트210개는 전체 테스트와 중복되므로 합산하지 않는다. MinIO/LDAP는 단위 테스트이며 외부 서비스의 통합 인증은 S3/S5B에서 수행한다.
+테스트 상세: [영향 테스트](s2-test-results.tsv), [모듈별 기준/후보 전체 테스트](s2-backend-suite-results.tsv). 전체 테스트는 Maven `-Pdeveloper -Dsimulator -T2 test`로 별도 실행했고, 기준은 위 빌드와 같은 분리 저장소/native Git 옵션을 사용했다. 실제 Surefire XML과 로그 집계를 대조했다. 전체 로컬 XML은 b7dd4539e3 시점의 스냅샷이며, 이후 HTTP 의존성 통일은 별도 영향 테스트와 최종 Actions에서 검증한다. 기준 대비 추가6개는 ConfigDepotImplTest2개와 StatsCollectorTest4개다. 영향 테스트210개는 전체 테스트와 중복되므로 합산하지 않는다. MinIO/LDAP는 단위 테스트이며 외부 서비스의 통합 인증은 S3/S5B에서 수행한다.
 
 기준 build의 최초 실패는 StorPool의 구형 JGit plugin이 Git worktree의 commit을 찾지 못하는 문제였다. native Git과 분리된 Maven 저장소로 전체 reactor를 재실행하여 통과했으며, 이 실패를 제품 회귀로 기록하지 않는다. 재현 명령:
 
@@ -99,7 +100,7 @@ mvn -B -ntp -Dmaven.repo.local=/tmp/epic990/baseline-m2 \
   -Dmaven.gitcommitid.nativegit=true -Pdeveloper -Dsimulator -DskipTests -T2 install
 ```
 
-client를 clean install하여 증분 빌드 디렉터리의 구형 BC1.70/MySQL8.0.33 JAR 잔존을 제거했다. 새 RPM 검사도 필요한 BC1.83/Connector8.4.0 JAR 존재와 구형 JAR 부재를 검사한다. 이 검사는 추가로 필요했던 실제 패키징 회귀 방지 항목이다.
+client를 clean install하여 증분 빌드 디렉터리의 구형 BC1.70/MySQL8.0.33 JAR 잔존을 제거했다. 새 RPM 검사도 필요한 BC1.83/Connector8.4.0 JAR 존재와 구형 JAR 부재를 검사한다. 이 검사는 추가로 필요했던 실제 패키징 회귀 방지 항목이다. `ManagementRuntimeSmoke.java`도 추출된 RPM의 실제 classpath에서 실행한다. reflection으로 실제 로드된 OkHttp5.1.0을 확인하고 BC RSA/X.509 서명·검증 및 loopback HTTP 서버에 대한 MinIO bucket list/object upload, InfluxDB ping/write를 검증한다. 기존 OkHttp4.9.3을 classpath 앞에 두는 음성 대조에서는 검사 실패를 확인했다. 외부 MinIO/InfluxDB 서비스 통합 검증을 대신하는 것은 아니다.
 
 S1 merge 요약 숫자는 재검사에서 14개 nonempty/5개 empty가 맞았다. 기존13/6 요약을 정정했으며 19개 diff의 개별 SHA256은 모두 일치했다. 빈 diff를 부모 소스 반영 완료 또는 자동 제외로 처리하지 않는다.
 

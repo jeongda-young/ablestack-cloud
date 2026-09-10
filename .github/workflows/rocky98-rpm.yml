@@ -25,6 +25,7 @@ on:
       - '.github/workflows/rocky98-rpm.yml'
       - 'packaging/**'
       - 'tools/build/rocky98-*.sh'
+      - 'tools/build/ManagementRuntimeSmoke.java'
       - 'ui/**'
       - '**/pom.xml'
   workflow_dispatch:
@@ -161,6 +162,7 @@ on:
       - '.github/workflows/rocky98-rpm.yml'
       - 'packaging/**'
       - 'tools/build/rocky98-*.sh'
+      - 'tools/build/ManagementRuntimeSmoke.java'
       - 'ui/**'
       - '**/pom.xml'
 
