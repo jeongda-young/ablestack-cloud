@@ -159,6 +159,20 @@ public class ResourceScheduleManagerImpl extends MutualExclusiveIdsManagerBase i
     }
 
     @Override
+    public void checkVmScheduleApiAccess(String legacyApi, ApiCommandResourceType resourceType, Long scheduleId, String apiKey) {
+        if (scheduleId != null) {
+            ResourceScheduleVO existing = resourceScheduleDao.findById(scheduleId);
+            if (existing == null) {
+                throw new InvalidParameterValueException("Schedule does not exist: " + scheduleId);
+            }
+            resourceType = existing.getResourceType();
+        }
+        if (ApiCommandResourceType.VirtualMachine == resourceType) {
+            accountManager.checkApiAccess(CallContext.current().getCallingAccount(), legacyApi, apiKey);
+        }
+    }
+
+    @Override
     @ActionEvent(eventType = EventTypes.EVENT_SCHEDULE_CREATE, eventDescription = "Creating Resource Schedule", create = true)
     public ResourceScheduleResponse createSchedule(ApiCommandResourceType resourceType, String resourceUuid, String description,
                                                    String schedule, String timeZoneStr, String action,

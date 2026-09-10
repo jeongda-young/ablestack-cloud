@@ -34,9 +34,19 @@ import com.cloud.hypervisor.kvm.storage.KVMStoragePoolManager;
 import com.cloud.storage.Storage;
 import com.cloud.utils.exception.CloudRuntimeException;
 
-import static org.junit.Assert.*;
-import static org.mockito.Mockito.*;
-import static org.mockito.ArgumentMatchers.*;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
+import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.ArgumentMatchers.eq;
 
 public class LibvirtCleanupConvertedInstanceDisksCommandWrapperTest {
     private static final String PREFIX = "be749de2-963e-4d60-8e2c-8e4c424aaab8";
@@ -65,8 +75,8 @@ public class LibvirtCleanupConvertedInstanceDisksCommandWrapperTest {
     public void deletesOnlyOwnedOutputAndRetryIsIdempotent() throws Exception {
         File xml = folder.newFile(PREFIX + ".xml");
         Files.writeString(xml.toPath(), "<domain><devices><disk type='file' device='disk'><source file='/parent/unrelated'/></disk></devices></domain>");
-        when(pool.listPhysicalDisks()).thenReturn(List.of(disk(PREFIX + "-sda"), disk("parent-image"), disk(PREFIX + "other-sda")))
-                .thenReturn(List.of(disk("parent-image")));
+        doReturn(List.of(disk(PREFIX + "-sda"), disk("parent-image"), disk(PREFIX + "other-sda")),
+                List.of(disk("parent-image"))).when(pool).listPhysicalDisks();
         when(pool.deletePhysicalDisk(PREFIX + "-sda", Storage.ImageFormat.QCOW2)).thenReturn(true);
         CleanupConvertedInstanceDisksCommand command = new CleanupConvertedInstanceDisksCommand(store, PREFIX);
         assertTrue(wrapper.execute(command, resource).getResult());
@@ -89,7 +99,7 @@ public class LibvirtCleanupConvertedInstanceDisksCommandWrapperTest {
     @Test
     public void failureIsReportedAndXmlRemainsForRetry() throws Exception {
         File xml = folder.newFile(PREFIX + ".xml");
-        when(pool.listPhysicalDisks()).thenReturn(List.of(disk(PREFIX + "-sda")));
+        doReturn(List.of(disk(PREFIX + "-sda"))).when(pool).listPhysicalDisks();
         when(pool.deletePhysicalDisk(anyString(), any())).thenReturn(false);
         assertFalse(wrapper.execute(new CleanupConvertedInstanceDisksCommand(store, PREFIX), resource).getResult());
         assertTrue(xml.exists());

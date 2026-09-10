@@ -74,6 +74,8 @@ public class DeleteResourceScheduleCmd extends BaseCmd {
 
     @Override
     public void execute() {
+        resourceScheduleManager.checkVmScheduleApiAccess("deleteVMSchedule", getResourceType(), null,
+                getFullUrlParams() == null ? null : getFullUrlParams().get(ApiConstants.API_KEY));
         resourceScheduleManager.removeSchedule(getResourceType(), getResourceId(), getId(), getIds());
         SuccessResponse response = new SuccessResponse(getCommandName());
         setResponseObject(response);

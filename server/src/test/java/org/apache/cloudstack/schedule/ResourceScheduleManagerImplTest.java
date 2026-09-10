@@ -445,4 +445,27 @@ public class ResourceScheduleManagerImplTest {
             Mockito.verify(vmScheduleWorker, Mockito.never()).parseAction(Mockito.any());
         }
     }
+    @Test(expected = com.cloud.exception.PermissionDeniedException.class)
+    public void genericVmScheduleKeepsLegacyApiKeyDenial() {
+        Account caller = CallContext.current().getCallingAccount();
+        Mockito.doThrow(new com.cloud.exception.PermissionDeniedException("legacy VM schedule denied"))
+                .when(accountManager).checkApiAccess(caller, "createVMSchedule", "fixture-key");
+        resourceScheduleManager.checkVmScheduleApiAccess("createVMSchedule", ApiCommandResourceType.VirtualMachine, null, "fixture-key");
+    }
+
+    @Test
+    public void genericUpdateDerivesVmPermissionFromStoredSchedule() {
+        ResourceScheduleVO existing = Mockito.mock(ResourceScheduleVO.class);
+        Mockito.when(resourceScheduleDao.findById(42L)).thenReturn(existing);
+        Mockito.when(existing.getResourceType()).thenReturn(ApiCommandResourceType.VirtualMachine);
+        resourceScheduleManager.checkVmScheduleApiAccess("updateVMSchedule", null, 42L, "fixture-key");
+        Mockito.verify(accountManager).checkApiAccess(CallContext.current().getCallingAccount(), "updateVMSchedule", "fixture-key");
+    }
+
+    @Test
+    public void autoScaleScheduleDoesNotInheritVmOnlyDenial() {
+        resourceScheduleManager.checkVmScheduleApiAccess("deleteVMSchedule", ApiCommandResourceType.AutoScaleVmGroup, null, null);
+        Mockito.verify(accountManager, Mockito.never()).checkApiAccess(Mockito.any(), Mockito.anyString(), Mockito.any());
+    }
+
 }

@@ -95,6 +95,8 @@ public class UpdateResourceScheduleCmd extends BaseCmd {
 
     @Override
     public void execute() {
+        resourceScheduleManager.checkVmScheduleApiAccess("updateVMSchedule", null, getId(),
+                getFullUrlParams() == null ? null : getFullUrlParams().get(ApiConstants.API_KEY));
         ResourceScheduleResponse response = resourceScheduleManager.updateSchedule(getId(), getDescription(), getSchedule(),
                 getTimeZone(), getStartDate(), getEndDate(), getEnabled(), getDetails());
         response.setResponseName(getCommandName());

@@ -88,7 +88,6 @@ import com.cloud.vm.dao.UserVmDao;
 import com.cloud.vm.dao.VMInstanceDao;
 import com.cloud.vm.dao.VmIsoMapDao;
 
-import junit.framework.TestCase;
 
 import org.apache.cloudstack.api.command.user.template.CreateTemplateCmd;
 import org.apache.cloudstack.api.command.user.template.DeleteTemplateCmd;

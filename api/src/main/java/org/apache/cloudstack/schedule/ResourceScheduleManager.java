@@ -28,6 +28,9 @@ import java.util.Map;
 
 public interface ResourceScheduleManager {
 
+    /** Require the legacy VM API permission as well as the generic schedule API permission. */
+    void checkVmScheduleApiAccess(String legacyApi, ApiCommandResourceType resourceType, Long scheduleId, String apiKey);
+
     ResourceScheduleResponse createSchedule(ApiCommandResourceType resourceType, String resourceUuid,
                                             String description, String schedule, String timeZone, String action,
                                             Date startDate, Date endDate, boolean enabled, Map<String, String> details);

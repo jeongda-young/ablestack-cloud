@@ -119,6 +119,8 @@ public class CreateResourceScheduleCmd extends BaseCmd {
 
     @Override
     public void execute() {
+        resourceScheduleManager.checkVmScheduleApiAccess("createVMSchedule", getResourceType(), null,
+                getFullUrlParams() == null ? null : getFullUrlParams().get(ApiConstants.API_KEY));
         ResourceScheduleResponse response = resourceScheduleManager.createSchedule(getResourceType(), getResourceId(),
                 getDescription(), getSchedule(), getTimeZone(), getAction(), getStartDate(), getEndDate(), getEnabled(), getDetails());
         response.setResponseName(getCommandName());

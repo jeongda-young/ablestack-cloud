@@ -87,6 +87,8 @@ public class ListResourceScheduleCmd extends BaseListCmd {
 
     @Override
     public void execute() {
+        resourceScheduleManager.checkVmScheduleApiAccess("listVMSchedule", getResourceType(), null,
+                getFullUrlParams() == null ? null : getFullUrlParams().get(ApiConstants.API_KEY));
         ListResponse<ResourceScheduleResponse> response = resourceScheduleManager.listSchedule(
                 getId(), getIds(), getResourceType(), getResourceId(), getAction(), getEnabled(),
                 getStartIndex(), getPageSizeVal()

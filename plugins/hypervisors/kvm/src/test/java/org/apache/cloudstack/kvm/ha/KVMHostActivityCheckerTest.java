@@ -27,7 +27,6 @@ import com.cloud.agent.AgentManager;
 import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.CheckOnHostAnswer;
 import com.cloud.agent.api.CheckOnHostCommand;
-import com.cloud.host.Host;
 import com.cloud.host.HostVO;
 import com.cloud.host.Status;
 import com.cloud.hypervisor.Hypervisor.HypervisorType;
@@ -39,14 +38,20 @@ import com.cloud.vm.VMInstanceVO;
 import com.cloud.vm.dao.VMInstanceDao;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
-import org.apache.cloudstack.outofbandmanagement.OutOfBandManagement;
 import org.apache.cloudstack.outofbandmanagement.OutOfBandManagement.PowerState;
 import org.apache.cloudstack.outofbandmanagement.OutOfBandManagementVO;
 import org.apache.cloudstack.outofbandmanagement.dao.OutOfBandManagementDao;
 
-import static org.junit.Assert.*;
-import static org.mockito.Mockito.*;
-import static org.mockito.ArgumentMatchers.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.when;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 
 @RunWith(MockitoJUnitRunner.class)
 public class KVMHostActivityCheckerTest {
@@ -89,7 +94,7 @@ public class KVMHostActivityCheckerTest {
     @Test
     public void missingOrUnknownOobmCannotOverrideAliveNeighbor() {
         when(agentMgr.easySend(eq(1L), any(CheckOnHostCommand.class))).thenReturn(null);
-        when(agentMgr.easySend(eq(2L), any(CheckOnHostCommand.class))).thenReturn(observation(true));
+        doReturn(observation(true)).when(agentMgr).easySend(eq(2L), any(CheckOnHostCommand.class));
         assertEquals(Status.Disconnected, checker.getHostAgentStatus(host));
         OutOfBandManagementVO oobm = mock(OutOfBandManagementVO.class);
         when(outOfBandManagementDao.findByHost(1L)).thenReturn(oobm);
@@ -101,12 +106,12 @@ public class KVMHostActivityCheckerTest {
 
     @Test
     public void unknownNeighborsDoNotProveHostDeath() {
-        when(agentMgr.easySend(eq(1L), any(CheckOnHostCommand.class))).thenReturn(observation(null));
+        doReturn(observation(null)).when(agentMgr).easySend(eq(1L), any(CheckOnHostCommand.class));
         when(agentMgr.easySend(eq(2L), any(CheckOnHostCommand.class))).thenReturn(new Answer(null, false, "agent unavailable"));
         assertEquals(Status.Disconnected, checker.getHostAgentStatus(host));
-        when(agentMgr.easySend(eq(2L), any(CheckOnHostCommand.class))).thenReturn(observation(false));
+        doReturn(observation(false)).when(agentMgr).easySend(eq(2L), any(CheckOnHostCommand.class));
         assertEquals(Status.Down, checker.getHostAgentStatus(host));
-        when(agentMgr.easySend(eq(1L), any(CheckOnHostCommand.class))).thenReturn(observation(true));
+        doReturn(observation(true)).when(agentMgr).easySend(eq(1L), any(CheckOnHostCommand.class));
         assertEquals(Status.Up, checker.getHostAgentStatus(host));
     }
 

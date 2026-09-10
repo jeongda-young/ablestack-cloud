@@ -62,7 +62,6 @@ import com.cloud.api.query.vo.UserVmJoinVO;
 import com.cloud.gpu.GPU;
 import com.cloud.gpu.dao.VgpuProfileDao;
 import com.cloud.host.ControlState;
-import com.cloud.hypervisor.Hypervisor;
 import com.cloud.host.DetailVO;
 import com.cloud.host.Host;
 import com.cloud.host.HostVO;
