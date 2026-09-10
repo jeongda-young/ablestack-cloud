@@ -515,7 +515,7 @@ backup_running_vm() {
         echo "Virsh backup job failed"; resume_vm_if_paused; cleanup; exit 1 ;;
     esac
     wait_count=$((wait_count + 1))
-    if (( wait_count % 12 == 0 )); then
+    if (( wait_count == 12 || wait_count % 120 == 0 )); then
       log -ne "WAIT libvirt backup job pending vm=[$VM] checkpoint=[$CHECKPOINT_NAME] elapsedSeconds=[$((wait_count * 5))] status=[${status:-unknown}]"
     fi
     sleep 5
