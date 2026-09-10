@@ -145,3 +145,12 @@ S3 #991 구현 PR #1009에서 직접 배정66개와 S2 연계 일반 커밋6개�
 - [S3 검증 보고](s3-verification.ko.md): 제품 소스 SHA, DB/API/인증 검증 범위, 공식 Actions, 남은 게이트.
 - [원본별 판정](s3-review.tsv): 최초 적용 SHA, 적응 근거, 중복 peer, 최종 검증 SHA.
 - [로컬 Java 결과](s3-local-tests.tsv) / [공식 Java 결과](s3-ci-tests.tsv) / [Actions 기록](s3-ci-results.tsv) / [Rocky 9.8 산출물](s3-artifact-results.tsv).
+
+## S4 완료 자료
+
+S4 #992 구현 PR #1016에서 직접 배정38개와 S2 연계2개를 최종 판정했다. 40개는 Applied6 / Adapted19 / Already Satisfied14 / Excluded1이다. 고정299개 전체는 Applied39 / Adapted49 / Already Satisfied37 / Excluded28 / Pending146이다. 범위 이전 Apache #9590의 실제 Quota UI 의존성은 별도 보충 목록으로 반영했다. 고정 inventory와 사전 증거를 늘리거나 바꾸지 않았다. 남은 side commit이 있는 공유 merge는 Pending을 유지한다. 다음 작업은 S5A #993이다.
+
+- [S4 검증 보고](s4-verification.ko.md): 동일 버전 migration, 실제014 DB 전체 복제본·신규·실패 복구·동시/반복 시작·관리 서버 API·예약·Quota 결과.
+- [원본40개 판정](s4-review.tsv) / [연관 의존성 검토](s4-dependencies.tsv).
+- [로컬 Java](s4-local-tests.tsv) / [공식 Java](s4-ci-tests.tsv) / [Actions](s4-ci-results.tsv) / [DB 및 runtime](s4-db-results.tsv) / [Rocky9.8 산출물](s4-artifact-results.tsv).
+- [격리 fixture 실행 조건](s4-fixtures/README.ko.md). S2의 기존 SQL99 오류와 simulator template111 FK 인수 사항을 해결했다. 다른 기능의 S2 공동 마감과 실제 운영 규모/물리 환경의 S8 검증은 남는다.
