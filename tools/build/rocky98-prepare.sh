@@ -46,7 +46,7 @@ dnf --releasever=9.8 -y install dnf-plugins-core
 dnf --releasever=9.8 config-manager --set-enabled crb
 dnf --releasever=9.8 -y install epel-release
 dnf --releasever=9.8 -y install \
-    bash bzip2 bzip2-devel ca-certificates cpio curl findutils gcc gcc-c++ \
+    bash bzip2 bzip2-devel ca-certificates cpio curl-minimal findutils gcc gcc-c++ \
     genisoimage git glibc-devel gzip java-11-openjdk-devel java-17-openjdk-devel \
     jq libffi-devel make nodejs openssl-devel python3-devel python3-pip \
     python3-setuptools readline-devel rpm-build shadow-utils sqlite-devel \
