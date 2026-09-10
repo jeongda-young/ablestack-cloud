@@ -15,23 +15,23 @@
 # specific language governing permissions and limitations
 # under the License.
 item	value	result	sha256
-Actions run	https://github.com/ablecloud-team/ablestack-cloud/actions/runs/34459707809	PASS	
-artifact	rocky98-rpm-34459707809	downloaded and verified	
-source_sha	7db9b8115e83a9200ab98280a390de9bf6705d86	recorded/checked	
-architecture	x86_64	recorded/checked	
-os_release	"NAME=""Rocky Linux"" VERSION=""9.8 (Blue Onyx)"" RELEASE_TYPE=""stable"" ID=""rocky"" ID_LIKE=""rhel centos fedora"" VERSION_ID=""9.8"" PLATFORM_ID=""platform:el9"" PRETTY_NAME=""Rocky Linux 9.8 (Blue Onyx)"" ANSI_COLOR=""0;32"" LOGO=""fedora-logo-icon"" CPE_NAME=""cpe:/o:rocky:rocky:9::baseos"" HOME_URL=""https://rockylinux.org/"" VENDOR_NAME=""RESF"" VENDOR_URL=""https://resf.org/"" BUG_REPORT_URL=""https://bugs.rockylinux.org/"" SUPPORT_END=""2032-05-31"" ROCKY_SUPPORT_PRODUCT=""Rocky-Linux-9"" ROCKY_SUPPORT_PRODUCT_VERSION=""9.8"" REDHAT_SUPPORT_PRODUCT=""Rocky Linux"" REDHAT_SUPPORT_PRODUCT_VERSION=""9.8"" "	recorded/checked	
-java_version	"openjdk version ""17.0.20.1"" 2026-08-18 LTS OpenJDK Runtime Environment (Red_Hat-17.0.20.1.1-1) (build 17.0.20.1+1-LTS) OpenJDK 64-Bit Server VM (Red_Hat-17.0.20.1.1-1) (build 17.0.20.1+1-LTS, mixed mode, sharing) "	recorded/checked	
-maven_version	Apache Maven 3.9.10 (5f519b97e944483d878815739f519b2eade0a91d)	recorded/checked	
-python_version	Python 3.10.21	recorded/checked	
-node_version	v14.21.3	recorded/checked	
-npm_version	6.14.18	recorded/checked	
-nonoss_sha	f94b5cfcd12e7ce50f9e732ff0e12affa9030640	recorded/checked	
-pack	noredist	recorded/checked	
-simulator	default	recorded/checked	
-distro	rocky9	recorded/checked	
-local_fast	false	recorded/checked	
-build_srpm	false	recorded/checked	
-ui_build_version	<source-config>	recorded/checked	
+Actions run	https://github.com/ablecloud-team/ablestack-cloud/actions/runs/34459707809	PASS	-
+artifact	rocky98-rpm-34459707809	downloaded and verified	-
+source_sha	7db9b8115e83a9200ab98280a390de9bf6705d86	recorded/checked	-
+architecture	x86_64	recorded/checked	-
+os_release	"NAME=""Rocky Linux"" VERSION=""9.8 (Blue Onyx)"" RELEASE_TYPE=""stable"" ID=""rocky"" ID_LIKE=""rhel centos fedora"" VERSION_ID=""9.8"" PLATFORM_ID=""platform:el9"" PRETTY_NAME=""Rocky Linux 9.8 (Blue Onyx)"" ANSI_COLOR=""0;32"" LOGO=""fedora-logo-icon"" CPE_NAME=""cpe:/o:rocky:rocky:9::baseos"" HOME_URL=""https://rockylinux.org/"" VENDOR_NAME=""RESF"" VENDOR_URL=""https://resf.org/"" BUG_REPORT_URL=""https://bugs.rockylinux.org/"" SUPPORT_END=""2032-05-31"" ROCKY_SUPPORT_PRODUCT=""Rocky-Linux-9"" ROCKY_SUPPORT_PRODUCT_VERSION=""9.8"" REDHAT_SUPPORT_PRODUCT=""Rocky Linux"" REDHAT_SUPPORT_PRODUCT_VERSION=""9.8"" "	recorded/checked	-
+java_version	"openjdk version ""17.0.20.1"" 2026-08-18 LTS OpenJDK Runtime Environment (Red_Hat-17.0.20.1.1-1) (build 17.0.20.1+1-LTS) OpenJDK 64-Bit Server VM (Red_Hat-17.0.20.1.1-1) (build 17.0.20.1+1-LTS, mixed mode, sharing) "	recorded/checked	-
+maven_version	Apache Maven 3.9.10 (5f519b97e944483d878815739f519b2eade0a91d)	recorded/checked	-
+python_version	Python 3.10.21	recorded/checked	-
+node_version	v14.21.3	recorded/checked	-
+npm_version	6.14.18	recorded/checked	-
+nonoss_sha	f94b5cfcd12e7ce50f9e732ff0e12affa9030640	recorded/checked	-
+pack	noredist	recorded/checked	-
+simulator	default	recorded/checked	-
+distro	rocky9	recorded/checked	-
+local_fast	false	recorded/checked	-
+build_srpm	false	recorded/checked	-
+ui_build_version	<source-config>	recorded/checked	-
 runtime-smoke.txt	PASS packaged BC: RSA and X.509 signing/verification; PASS packaged OkHttp 5.1.0: MinIO list/upload and InfluxDB ping/write	PASS	33d9943ff4411787b4fe7ef7cfa82b4c5ea6488d89fee80476db0a4adc94eebf
 cloudstack-agent-4.23.0.0-SNAPSHOT.x86_64.rpm	cloudstack-agent 4.23.0.0-SNAPSHOT x86_64	SHA256 PASS	d2fcb478ac701517997d6db564880dcb8f77ea6adc22f2287088bba2acf7b8ae
 cloudstack-baremetal-agent-4.23.0.0-SNAPSHOT.x86_64.rpm	cloudstack-baremetal-agent 4.23.0.0-SNAPSHOT x86_64	SHA256 PASS	a872886739c9bbc299fc80f3d641d986b49473626196c5fc6147034ff29e29ff
@@ -48,5 +48,5 @@ rpm-dependencies.txt	rocky98-build/rpm-dependencies.txt	recorded	ffd2e250b7fd852
 SHA256SUMS	rocky98-build/SHA256SUMS	recorded	c718ec899e19c062c8d17f4130fa859c5d373863c52cf631f8fcb46c35846544
 build.log	rocky98-build/build.log	recorded	e47f952add5e9a3f38294ebab0bd4c050fb5bacdc516d8da4b292bbdd1386c52
 artifact URL	https://github.com/ablecloud-team/ablestack-cloud/actions/runs/34459707809/artifacts/10146134512	available until 2026-12-09T09:16:15Z	467dd49d33adb1be5077302708526b042b1c98e953e609023af874f4cf4a579b
-UI RPM buildVersion	V4.0-4.0.15 equals source0725e2c585 config; optional workflow override unset	independent extracted RPM check PASS	
-Marvin RPM file list	/usr/share/cloudstack-marvin/marvin-4.23.0.0.tar.gz	rpm -qlp PASS	
+UI RPM buildVersion	V4.0-4.0.15 equals source0725e2c585 config; optional workflow override unset	independent extracted RPM check PASS	-
+Marvin RPM file list	/usr/share/cloudstack-marvin/marvin-4.23.0.0.tar.gz	rpm -qlp PASS	-
