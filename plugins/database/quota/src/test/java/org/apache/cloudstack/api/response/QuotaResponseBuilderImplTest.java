@@ -895,7 +895,7 @@ public class QuotaResponseBuilderImplTest extends TestCase {
 
         QuotaBalanceResponse expected = new QuotaBalanceResponse();
         expected.setObjectName("balance");
-        expected.setCurrency("$");
+        expected.setCurrency(QuotaConfig.QuotaCurrencySymbol.value());
 
         Mockito.doReturn(balances).when(quotaServiceMock).listQuotaBalancesForAccount(Mockito.any(), Mockito.any(), Mockito.any());
         QuotaBalanceResponse result = quotaResponseBuilderSpy.createQuotaBalanceResponse(new QuotaBalanceCmd());
