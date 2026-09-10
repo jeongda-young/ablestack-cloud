@@ -32,7 +32,7 @@ repos:
         name: Add TOC for Markdown files
         files: ^CONTRIBUTING\.md$|^INSTALL\.md$|^README\.md$
   - repo: https://github.com/oxipng/oxipng
-    rev: v10.1.0
+    rev: v9.1.5
     hooks:
       - id: oxipng
         name: run oxipng
@@ -188,7 +188,7 @@ repos:
         ^setup/bindir/cloud-setup-encryption\.in$|
         ^venv/.*$
   - repo: https://github.com/igorshubovych/markdownlint-cli
-    rev: v0.48.0
+    rev: v0.45.0
     hooks:
       - id: markdownlint
         name: run markdownlint

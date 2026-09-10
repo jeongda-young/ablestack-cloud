@@ -21,6 +21,7 @@ set -euo pipefail
 
 ROOT_DIR=$(cd "$(dirname "$0")/../.." && pwd -P)
 PACK=${PACK:-oss}
+NONOSS_SHA=not-used
 SIMULATOR=${SIMULATOR:-default}
 DISTRO=${DISTRO:-rocky9}
 RELEASE=${RELEASE:-}
@@ -69,8 +70,11 @@ export PATH="/opt/apache-maven-3.9.10/bin:/opt/python-3.10/bin:$PATH"
 
 if [ "$PACK" = "noredist" ] || [ "$PACK" = "NOREDIST" ]; then
     echo "Installing non-redistributable VMware build dependencies"
+    NONOSS_SHA=f94b5cfcd12e7ce50f9e732ff0e12affa9030640
     tmp_nonoss_dir=$(mktemp -d /tmp/cloudstack-nonoss-XXXXXX)
     git clone --depth 1 https://github.com/shapeblue/cloudstack-nonoss.git "$tmp_nonoss_dir"
+    git -C "$tmp_nonoss_dir" fetch --depth 1 origin f94b5cfcd12e7ce50f9e732ff0e12affa9030640
+    git -C "$tmp_nonoss_dir" checkout --detach f94b5cfcd12e7ce50f9e732ff0e12affa9030640
     (
         cd "$tmp_nonoss_dir"
         bash -x install-non-oss.sh
@@ -108,6 +112,7 @@ mkdir -p "$ROOT_DIR/dist/rocky98-build"
     echo "maven_opts=$MAVEN_OPTS"
     echo "node_version=$(node -v)"
     echo "npm_version=$(npm -v)"
+    echo "nonoss_sha=$NONOSS_SHA"
     echo "pack=$PACK"
     echo "simulator=$SIMULATOR"
     echo "distro=$DISTRO"
@@ -123,6 +128,8 @@ mkdir -p "$ROOT_DIR/dist/rocky98-build"
 } >"$ROOT_DIR/dist/rocky98-build/environment.txt"
 rpm -qa --qf '%{NAME}-%{VERSION}-%{RELEASE}.%{ARCH}\n' | sort > "$ROOT_DIR/dist/rocky98-build/rpm-dependencies.txt"
 "$ROOT_DIR/tools/build/rocky98-prepare.sh" --check
+git -C "$ROOT_DIR" ls-files -z '*pom.xml' ui/package-lock.json | \
+    (cd "$ROOT_DIR" && xargs -0 sha256sum) > "$ROOT_DIR/dist/rocky98-build/dependency-inputs.sha256"
 
 build_args=(
     --distribution "$DISTRO"
@@ -215,6 +222,24 @@ verify_management_schema_resources() {
 
     if find "$extract_dir/usr/share/cloudstack-management/lib" -maxdepth 1 -type f -name 'cloud-engine-schema-*.jar' | grep -q .; then
         echo "Standalone cloud-engine-schema jar must not be packaged beside the application jar" >&2
+        rm -rf "$extract_dir"
+        return 1
+    fi
+
+    for dependency in \
+        bcprov-jdk18on-1.83.jar \
+        bcpkix-jdk18on-1.83.jar \
+        bctls-jdk18on-1.83.jar \
+        mysql-connector-j-8.4.0.jar; do
+        if [[ ! -f "$extract_dir/usr/share/cloudstack-management/lib/$dependency" ]]; then
+            echo "Missing required runtime dependency: $dependency" >&2
+            rm -rf "$extract_dir"
+            return 1
+        fi
+    done
+    if find "$extract_dir/usr/share/cloudstack-management/lib" -maxdepth 1 \
+        \( -name '*-jdk15on-*.jar' -o -name 'mysql-connector-j-8.0.*.jar' \) | grep -q .; then
+        echo "Obsolete BC/MySQL runtime dependency in management RPM" >&2
         rm -rf "$extract_dir"
         return 1
     fi

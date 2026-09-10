@@ -19,6 +19,7 @@ name: UI Build
 
 on:
   push:
+    branches: [ablestack-europa]
   pull_request:
   workflow_call:
     inputs:

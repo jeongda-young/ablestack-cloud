@@ -17,7 +17,10 @@
 
 name: Simulator CI
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [ablestack-europa]
+  pull_request:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}

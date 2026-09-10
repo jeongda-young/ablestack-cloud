@@ -243,6 +243,15 @@ jobs:
             exit 1
           fi
 
+      - name: Cache Maven and npm downloads
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: |
+            ${{ runner.temp }}/rocky98-m2
+            ${{ runner.temp }}/rocky98-npm
+          key: rocky98-amd64-${{ hashFiles('**/pom.xml', 'ui/package-lock.json', 'tools/build/rocky98-prepare.sh') }}
+          restore-keys: rocky98-amd64-
+
       - name: Install host prerequisites
         run: |
           sudo apt-get update
@@ -264,7 +273,7 @@ jobs:
 
       - name: Build RPM packages inside Rocky 9.8
         run: |
-          mkdir -p dist/rocky98-build
+          mkdir -p dist/rocky98-build "$RUNNER_TEMP/rocky98-m2" "$RUNNER_TEMP/rocky98-npm"
           set -o pipefail
           docker run --rm --platform linux/amd64 \
             --workdir /workspace \
@@ -280,6 +289,8 @@ jobs:
             -e TEMPLATES="$BUILD_TEMPLATES" \
             -e DISTRO="rocky9" \
             -e NODE_VERSION="$BUILD_NODE_VERSION" \
+            -v "$RUNNER_TEMP/rocky98-m2":/root/.m2 \
+            -v "$RUNNER_TEMP/rocky98-npm":/root/.npm \
             -v "$GITHUB_WORKSPACE":/workspace \
             ablestack/rocky98-build:latest \
             bash -lc './tools/build/rocky98-rpm-build.sh' | tee dist/rocky98-build/build.log
