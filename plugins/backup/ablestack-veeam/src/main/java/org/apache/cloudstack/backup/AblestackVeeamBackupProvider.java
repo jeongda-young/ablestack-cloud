@@ -715,6 +715,44 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                 new SimpleDateFormat("yyyy.MM.dd.HH.mm.ss.SSS").format(new Date()));
     }
 
+    /**
+     * Host-mode first FULL exports under {@code .../&lt;vm&gt;/&lt;ts&gt;/&lt;disk&gt;} and creates a live
+     * qcow2 dirty bitmap named {@code &lt;ts&gt;}. Seed import previously stamped a new {@code buildBackupPath()}
+     * timestamp as {@code ablestack.veeam.checkpoint.name}, so INCREMENTAL looked for a bitmap that
+     * never existed on disk. For QCOW2, reuse the staging parent directory name when it looks like a
+     * checkpoint timestamp.
+     */
+    private String resolveSeedCheckpointName(final String backupPath, final List<String> stagingDiskPaths,
+            final String backupEngine) {
+        final String fallback = backupPath.substring(backupPath.lastIndexOf('/') + 1);
+        if (!BACKUP_ENGINE_QCOW2.equals(backupEngine) || CollectionUtils.isEmpty(stagingDiskPaths)) {
+            return fallback;
+        }
+        final String stagingDisk = StringUtils.trimToNull(stagingDiskPaths.get(0));
+        if (stagingDisk == null) {
+            return fallback;
+        }
+        final Path parent = Path.of(stagingDisk).getParent();
+        if (parent == null || parent.getFileName() == null) {
+            return fallback;
+        }
+        final String candidate = parent.getFileName().toString();
+        if (!isCheckpointTimestampName(candidate)) {
+            return fallback;
+        }
+        if (!StringUtils.equals(candidate, fallback)) {
+            LOG.info("Veeam QCOW2 seed import reusing host-export checkpoint name [{}] from staging [{}] "
+                            + "(import backupPath basename was [{}])",
+                    candidate, stagingDisk, fallback);
+        }
+        return candidate;
+    }
+
+    private boolean isCheckpointTimestampName(final String name) {
+        return StringUtils.isNotBlank(name)
+                && name.matches("\\d{4}\\.\\d{2}\\.\\d{2}\\.\\d{2}\\.\\d{2}\\.\\d{2}\\.\\d{3}");
+    }
+
     private String getBackupStageRootPath() {
         return Path.of(StringUtils.defaultIfBlank(AblestackVeeamStageRootPath.value(), DEFAULT_STAGE_ROOT_PATH))
                 .toAbsolutePath()
@@ -2453,8 +2491,11 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         validateVolumePoolTypes(volumePoolsAndPaths.first());
 
         final String backupPath = buildBackupPath(vm);
-        final String checkpointName = backupPath.substring(backupPath.lastIndexOf("/") + 1);
         final String backupEngine = areAllVolumesOnRbdPool(volumePoolsAndPaths.first()) ? BACKUP_ENGINE_RBD_DIFF : BACKUP_ENGINE_QCOW2;
+        // QCOW2 host-export → import-seed: reuse staging dir timestamp as checkpoint so the next
+        // INCREMENTAL parent matches the live dirty bitmap created during host export.
+        // (A fresh buildBackupPath() timestamp would leave Mold pointing at a non-existent bitmap.)
+        final String checkpointName = resolveSeedCheckpointName(backupPath, stagingDiskPaths, backupEngine);
         final List<String> backupFiles = buildBackupFileNames(vmVolumes, backupEngine, false);
         final Map<String, String> details = getBackupDetails(vm, backupPath, checkpointName, backupEngine, null, false, null);
         details.put(DETAIL_VEEAM_IMPORTED, "true");
