@@ -30,6 +30,7 @@ VM=""
 BACKUP_DIR=""
 DISK_PATHS=""
 QUIESCE=""
+BACKUP_BANDWIDTH_LIMIT_MBPS=0
 BACKUP_TYPE="FULL"
 CHECKPOINT_NAME=""
 PARENT_BACKUP_DIR=""
@@ -105,6 +106,26 @@ resume_vm_if_paused() {
     log -ne "VM [$VM] is paused after backup failure; trying to resume"
     virsh -c qemu:///system resume "$VM" >> "$logFile" 2>&1 || log -ne "WARNING: failed to resume paused VM [$VM]"
   fi
+}
+
+apply_backup_bandwidth_limit() {
+  local bandwidth_limit_mbps="${BACKUP_BANDWIDTH_LIMIT_MBPS:-0}"
+
+  if ! [[ "$bandwidth_limit_mbps" =~ ^[0-9]+$ ]] || [[ "$bandwidth_limit_mbps" -le 0 ]]; then
+    return 0
+  fi
+
+  local bandwidth_limit_mibps=$(( (bandwidth_limit_mbps + 7) / 8 ))
+  [[ "$bandwidth_limit_mibps" -lt 1 ]] && bandwidth_limit_mibps=1
+
+  while IFS='|' read -r disk target; do
+    [[ -z "$disk" ]] && continue
+    if virsh -c qemu:///system blockjob "$VM" "$disk" --bandwidth "$bandwidth_limit_mibps" >> "$logFile" 2>&1; then
+      log -ne "Applied backup bandwidth limit vm=[$VM] disk=[$disk] limitMbps=[$bandwidth_limit_mbps] virshLimitMiBps=[$bandwidth_limit_mibps]"
+    else
+      log -ne "WARNING failed to apply backup bandwidth limit vm=[$VM] disk=[$disk] limitMbps=[$bandwidth_limit_mbps]"
+    fi
+  done < <(virsh -c qemu:///system domblklist "$VM" --details 2>/dev/null | awk '/disk/ {print $3 "|" $4}')
 }
 
 cleanup() {
@@ -467,6 +488,8 @@ backup_running_vm() {
     exit 1
   fi
 
+  apply_backup_bandwidth_limit
+
   backup_domain_information "$VM"
 
   local wait_count=0
@@ -737,7 +760,7 @@ delete_backup() {
 
 usage() {
   echo ""
-  echo "Usage: $0 -o <operation> -v|--vm <domain name> -p <backup path> -b <FULL|INCREMENTAL> -c <checkpoint name> -r <parent backup path> -i <parent checkpoint name> -j <parent checkpoint path> -f <backup files> -d <disks path> -q|--quiesce <true|false>"
+  echo "Usage: $0 -o <operation> -v|--vm <domain name> -p <backup path> -b <FULL|INCREMENTAL> -c <checkpoint name> -r <parent backup path> -i <parent checkpoint name> -j <parent checkpoint path> -f <backup files> -d <disks path> -q|--quiesce <true|false> --bandwidth-limit-mbps <mbps>"
   echo ""
   exit 1
 }
@@ -755,6 +778,7 @@ while [[ $# -gt 0 ]]; do
     -f|--backupfiles) BACKUP_FILES="$2"; shift; shift ;;
     -q|--quiesce) QUIESCE="$2"; shift; shift ;;
     -d|--diskpaths) DISK_PATHS="$2"; shift; shift ;;
+    --bandwidth-limit-mbps) BACKUP_BANDWIDTH_LIMIT_MBPS="$2"; shift; shift ;;
     -C|--cleanupcheckpoints) CLEANUP_CHECKPOINT_NAMES="$2"; shift; shift ;;
     -x|--forced) FORCED="$2"; shift; shift ;;
     -h|--help) usage ;;
@@ -770,7 +794,7 @@ fi
 dest="$BACKUP_DIR"
 sanity_checks
 
-log -ne "ablestack_cvtbackup.sh start op=[$OP] vm=[$VM] backupDir=[$BACKUP_DIR] backupType=[$BACKUP_TYPE] checkpoint=[$CHECKPOINT_NAME] parentBackup=[$PARENT_BACKUP_DIR] parentCheckpoint=[$PARENT_CHECKPOINT_NAME] diskPaths=[$DISK_PATHS] backupFiles=[$BACKUP_FILES]"
+log -ne "ablestack_cvtbackup.sh start op=[$OP] vm=[$VM] backupDir=[$BACKUP_DIR] backupType=[$BACKUP_TYPE] checkpoint=[$CHECKPOINT_NAME] parentBackup=[$PARENT_BACKUP_DIR] parentCheckpoint=[$PARENT_CHECKPOINT_NAME] diskPaths=[$DISK_PATHS] backupFiles=[$BACKUP_FILES] bandwidthLimitMbps=[$BACKUP_BANDWIDTH_LIMIT_MBPS]"
 
 if [[ "$OP" == "backup-running" ]]; then
   backup_running_vm
