@@ -184,9 +184,6 @@ public class Upgrade42210to42300 extends DbUpgradeAbstractImpl implements DbUpgr
     }
 
     private void dropUsageVmInstanceIndex(Connection conn) {
-        final List<String> indexList = new ArrayList<>();
-        logger.debug("Dropping index vm_instance_id from usage_vm_instance table if it exists");
-        indexList.add("vm_instance_id");
-        DbUpgradeUtils.dropKeysIfExist(conn, "cloud_usage.usage_vm_instance", indexList, false);
+        DbUpgradeUtils.dropIndexIfExists(conn, "cloud_usage", "usage_vm_instance", "vm_instance_id");
     }
 }

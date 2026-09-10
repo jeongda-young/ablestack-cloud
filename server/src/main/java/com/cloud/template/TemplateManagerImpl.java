@@ -1041,8 +1041,6 @@ public class TemplateManagerImpl extends ManagerBase implements TemplateManager,
                 _tmpltSvr.syncTemplateToRegionStore(template, srcSecStore);
             }
 
-            AccountVO templateOwner = _accountDao.findById(template.getAccountId());
-
             for (Long destZoneId : destZoneIds) {
                 DataStore dstSecStore = getImageStore(destZoneId, templateId);
                 if (dstSecStore != null) {

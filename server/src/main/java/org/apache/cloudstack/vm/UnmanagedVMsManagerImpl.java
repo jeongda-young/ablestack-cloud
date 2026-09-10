@@ -4444,7 +4444,12 @@ public class UnmanagedVMsManagerImpl implements UnmanagedVMsManager {
                 if (targetStoragePool != null) {
                     checkConvertedDiskOfferingForTargetStoragePool(task, disk, candidate, owner, zone, targetStoragePool);
                 } else {
-                    checkUnmanagedDiskAndOfferingForImport(task.getSourceVMName(), disk, candidate, null, owner, zone, cluster, false);
+                    List<Reserver> candidateReservations = new ArrayList<>();
+                    try {
+                        checkUnmanagedDiskAndOfferingForImport(task.getSourceVMName(), disk, candidate, null, owner, zone, cluster, false, candidateReservations);
+                    } finally {
+                        ReservationHelper.closeAll(candidateReservations);
+                    }
                 }
                 return candidate.getId();
             } catch (Exception e) {

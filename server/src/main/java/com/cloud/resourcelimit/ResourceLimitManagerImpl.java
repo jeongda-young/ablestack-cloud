@@ -2048,7 +2048,9 @@ public class ResourceLimitManagerImpl extends ManagerBase implements ResourceLim
         reservations.add(memReservation);
 
         Long gpu = serviceOffering.getGpuCount() != null ? Long.valueOf(serviceOffering.getGpuCount()) : 0L;
-        reservations.add(new CheckedReservation(owner, ResourceType.gpu, tags, gpu, reservationDao, resourceLimitService));
+        if (gpu > 0) {
+            reservations.add(new CheckedReservation(owner, ResourceType.gpu, tags, gpu, reservationDao, resourceLimitService));
+        }
     }
 
     @Override
@@ -2147,8 +2149,10 @@ public class ResourceLimitManagerImpl extends ManagerBase implements ResourceLim
         reservations.add(memReservation);
         Long currentGpu = currentOffering.getGpuCount() != null ? Long.valueOf(currentOffering.getGpuCount()) : 0L;
         Long newGpu = newOffering.getGpuCount() != null ? Long.valueOf(newOffering.getGpuCount()) : 0L;
-        reservations.add(new CheckedReservation(owner, ResourceType.gpu, null, tagsAfterUpdate,
-                currentTags, newGpu, currentGpu, reservationDao, resourceLimitService));
+        if (newGpu > 0 || currentGpu > 0) {
+            reservations.add(new CheckedReservation(owner, ResourceType.gpu, null, tagsAfterUpdate,
+                    currentTags, newGpu, currentGpu, reservationDao, resourceLimitService));
+        }
     }
 
     @Override

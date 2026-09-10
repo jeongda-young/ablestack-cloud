@@ -104,8 +104,15 @@ export default {
       })
     },
     handleSubmit (e) {
-      e.preventDefault()
+      if (e && typeof e.preventDefault === 'function') e.preventDefault()
       if (this.loading) return
+      if (!this.owner.projectid && (!this.owner.account || !this.owner.domainid)) {
+        const message = !this.owner.account
+          ? 'message.action.quota.credit.add.error.accountrequired'
+          : 'message.action.quota.credit.add.error.domainidrequired'
+        this.$message.error(this.$t(message))
+        return
+      }
 
       this.formRef.value.validate().then(() => {
         const formRaw = toRaw(this.form)
@@ -151,7 +158,7 @@ export default {
           return
         }
         this.owner.projectid = ownerOptions.selectedProject
-        this.owner.name = ownerOptions.projects.find(p => p.id === ownerOptions.selectedProject).name
+        this.owner.name = ownerOptions.projects.find(p => p.id === ownerOptions.selectedProject)?.name || ownerOptions.selectedProject
       }
     }
   }

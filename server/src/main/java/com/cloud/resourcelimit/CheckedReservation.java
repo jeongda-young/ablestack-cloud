@@ -75,10 +75,24 @@ public class CheckedReservation implements Reserver {
             return;
         }
         CallContext.current().removeContextParameter(getContextParameterKey());
+        RuntimeException failure = null;
+        List<ResourceReservation> remaining = new ArrayList<>();
         for (ResourceReservation reservation : reservations) {
-            reservationDao.remove(reservation.getId());
+            try {
+                reservationDao.remove(reservation.getId());
+            } catch (RuntimeException e) {
+                remaining.add(reservation);
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
         }
-        this.reservations = null;
+        this.reservations = remaining;
+        if (failure != null) {
+            throw failure;
+        }
     }
 
     protected void checkLimitAndPersistReservations(Account account, Long domainId, ResourceType resourceType, Long resourceId, List<String> resourceLimitTags, Long amount) throws ResourceAllocationException {
@@ -89,9 +103,13 @@ public class CheckedReservation implements Reserver {
                     checkLimitAndPersistReservation(account, domainId, resourceType, resourceId, tag, amount);
                 }
             }
-        } catch (ResourceAllocationException rae) {
-            removeAllReservations();
-            throw rae;
+        } catch (ResourceAllocationException | RuntimeException failure) {
+            try {
+                removeAllReservations();
+            } catch (RuntimeException cleanupFailure) {
+                failure.addSuppressed(cleanupFailure);
+            }
+            throw failure;
         }
     }
 
@@ -104,6 +122,9 @@ public class CheckedReservation implements Reserver {
             reservationVO.setResourceId(resourceId);
         }
         ResourceReservation reservation = reservationDao.persist(reservationVO);
+        if (reservation == null) {
+            throw new CloudRuntimeException("Unable to persist resource reservation");
+        }
         this.reservations.add(reservation);
     }
 
@@ -171,18 +192,19 @@ public class CheckedReservation implements Reserver {
         if (this.reservationAmount != null && this.reservationAmount != 0) {
             if (reservationAmount > 0) {
                 setGlobalLock();
-                if (quotaLimitLock.lock(TRY_TO_GET_LOCK_TIME)) {
+                try {
+                    if (!quotaLimitLock.lock(TRY_TO_GET_LOCK_TIME)) {
+                        throw new ResourceAllocationException(String.format("unable to acquire resource reservation \"%s\"", quotaLimitLock.getName()), resourceType);
+                    }
                     try {
                         adjustCountToNotConsiderExistingAmount();
                         checkLimitAndPersistReservations(account, this.domainId, resourceType, resourceId, reservationTags, reservationAmount);
                         CallContext.current().putContextParameter(getContextParameterKey(), getIds());
-                    } catch (NullPointerException npe) {
-                        throw new CloudRuntimeException("not enough means to check limits", npe);
                     } finally {
                         quotaLimitLock.unlock();
                     }
-                } else {
-                    throw new ResourceAllocationException(String.format("unable to acquire resource reservation \"%s\"", quotaLimitLock.getName()), resourceType);
+                } finally {
+                    quotaLimitLock.releaseRef();
                 }
             } else {
                 checkLimitAndPersistReservations(account, this.domainId, resourceType, resourceId, reservationTags, reservationAmount);

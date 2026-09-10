@@ -134,6 +134,7 @@ CALL `cloud`.`IDEMPOTENT_ADD_COLUMN`('cloud.guest_os_category', 'removed', 'date
 -- Begin: Changes for Guest OS category cleanup
 -- Add new OS categories if not present
 DROP PROCEDURE IF EXISTS `cloud`.`INSERT_CATEGORY_IF_NOT_EXIST`;
+DELIMITER $$
 CREATE PROCEDURE `cloud`.`INSERT_CATEGORY_IF_NOT_EXIST`(IN os_name VARCHAR(255))
 BEGIN
     IF NOT EXISTS ((SELECT 1 FROM `cloud`.`guest_os_category` WHERE name = os_name))
@@ -141,7 +142,8 @@ BEGIN
         INSERT INTO `cloud`.`guest_os_category` (name, uuid)
             VALUES (os_name, UUID())
 ;   END IF
-; END;
+; END$$
+DELIMITER ;
 
 CALL `cloud`.`INSERT_CATEGORY_IF_NOT_EXIST`('Fedora');
 CALL `cloud`.`INSERT_CATEGORY_IF_NOT_EXIST`('Rocky Linux');
@@ -149,6 +151,7 @@ CALL `cloud`.`INSERT_CATEGORY_IF_NOT_EXIST`('AlmaLinux');
 
 -- Move existing guest OS to new categories
 DROP PROCEDURE IF EXISTS `cloud`.`UPDATE_CATEGORY_FOR_GUEST_OSES`;
+DELIMITER $$
 CREATE PROCEDURE `cloud`.`UPDATE_CATEGORY_FOR_GUEST_OSES`(IN category_name VARCHAR(255), IN os_name VARCHAR(255))
 BEGIN
     DECLARE category_id BIGINT
@@ -162,13 +165,15 @@ BEGIN
 ;   UPDATE `cloud`.`guest_os`
     SET `category_id` = category_id
     WHERE `display_name` LIKE CONCAT('%', os_name, '%')
-; END;
+; END$$
+DELIMITER ;
 CALL `cloud`.`UPDATE_CATEGORY_FOR_GUEST_OSES`('Rocky Linux', 'Rocky Linux');
 CALL `cloud`.`UPDATE_CATEGORY_FOR_GUEST_OSES`('AlmaLinux', 'AlmaLinux');
 CALL `cloud`.`UPDATE_CATEGORY_FOR_GUEST_OSES`('Fedora', 'Fedora');
 
 -- Move existing guest OS whose category will be deleted to Other category
 DROP PROCEDURE IF EXISTS `cloud`.`UPDATE_NEW_AND_DELETE_OLD_CATEGORY_FOR_GUEST_OS`;
+DELIMITER $$
 CREATE PROCEDURE `cloud`.`UPDATE_NEW_AND_DELETE_OLD_CATEGORY_FOR_GUEST_OS`(IN to_category_name VARCHAR(255), IN from_category_name VARCHAR(255))
 BEGIN
     DECLARE done INT DEFAULT 0
@@ -184,7 +189,8 @@ BEGIN
     SET `category_id` = to_category_id
     WHERE `category_id` = (SELECT `id` FROM `cloud`.`guest_os_category` WHERE `name` = from_category_name)
 ;   UPDATE `cloud`.`guest_os_category` SET `removed`=now() WHERE `name` = from_category_name
-; END;
+; END$$
+DELIMITER ;
 CALL `cloud`.`UPDATE_NEW_AND_DELETE_OLD_CATEGORY_FOR_GUEST_OS`('Other', 'Novel');
 CALL `cloud`.`UPDATE_NEW_AND_DELETE_OLD_CATEGORY_FOR_GUEST_OS`('Other', 'None');
 CALL `cloud`.`UPDATE_NEW_AND_DELETE_OLD_CATEGORY_FOR_GUEST_OS`('Other', 'Unix');
@@ -446,6 +452,7 @@ CALL `cloud`.`IDEMPOTENT_ADD_COLUMN`('cloud.vm_template', 'extension_id', 'bigin
 -- Add built-in Extensions and Custom Actions
 
 DROP PROCEDURE IF EXISTS `cloud`.`INSERT_EXTENSION_IF_NOT_EXISTS`;
+DELIMITER $$
 CREATE PROCEDURE `cloud`.`INSERT_EXTENSION_IF_NOT_EXISTS`(
     IN ext_name VARCHAR(255),
     IN ext_desc VARCHAR(255),
@@ -465,9 +472,11 @@ BEGIN
             ext_path, 1, 0, 'Enabled', NOW(), NULL
         )
 ;   END IF
-;END;
+;END$$
+DELIMITER ;
 
 DROP PROCEDURE IF EXISTS `cloud`.`INSERT_EXTENSION_DETAIL_IF_NOT_EXISTS`;
+DELIMITER $$
 CREATE PROCEDURE `cloud`.`INSERT_EXTENSION_DETAIL_IF_NOT_EXISTS`(
     IN ext_name VARCHAR(255),
     IN detail_key VARCHAR(255),
@@ -488,13 +497,15 @@ BEGIN
             ext_id, detail_key, detail_value, display
         )
 ;   END IF
-;END;
+;END$$
+DELIMITER ;
 
 CALL `cloud`.`INSERT_EXTENSION_IF_NOT_EXISTS`('Proxmox', 'Sample extension for Proxmox written in bash', 'Proxmox/proxmox.sh');
 CALL `cloud`.`INSERT_EXTENSION_DETAIL_IF_NOT_EXISTS`('Proxmox', 'orchestratorrequirespreparevm', 'true', 0);
 CALL `cloud`.`INSERT_EXTENSION_IF_NOT_EXISTS`('HyperV', 'Sample extension for HyperV written in python', 'HyperV/hyperv.py');
 
 DROP PROCEDURE IF EXISTS `cloud`.`INSERT_EXTENSION_CUSTOM_ACTION_IF_NOT_EXISTS`;
+DELIMITER $$
 CREATE PROCEDURE `cloud`.`INSERT_EXTENSION_CUSTOM_ACTION_IF_NOT_EXISTS`(
     IN ext_name VARCHAR(255),
     IN action_name VARCHAR(255),
@@ -522,9 +533,11 @@ BEGIN
             1, timeout_seconds, NOW(), NULL
         )
 ;   END IF
-;END;
+;END$$
+DELIMITER ;
 
 DROP PROCEDURE IF EXISTS `cloud`.`INSERT_EXTENSION_CUSTOM_ACTION_DETAILS_IF_NOT_EXISTS`;
+DELIMITER $$
 CREATE PROCEDURE `cloud`.`INSERT_EXTENSION_CUSTOM_ACTION_DETAILS_IF_NOT_EXISTS` (
     IN ext_name VARCHAR(255),
     IN action_name VARCHAR(255),
@@ -552,7 +565,8 @@ BEGIN
             0
         )
 ;   END IF
-;END;
+;END$$
+DELIMITER ;
 
 CALL `cloud`.`INSERT_EXTENSION_CUSTOM_ACTION_IF_NOT_EXISTS`('Proxmox', 'ListSnapshots', 'List Instance snapshots', 'VirtualMachine', 15, 'Snapshots fetched for {{resourceName}} in {{extensionName}}', 'List Snapshots failed for {{resourceName}}', 60);
 CALL `cloud`.`INSERT_EXTENSION_CUSTOM_ACTION_IF_NOT_EXISTS`('Proxmox', 'CreateSnapshot', 'Create an Instance snapshot', 'VirtualMachine', 15, 'Snapshot created for {{resourceName}} in {{extensionName}}', 'Snapshot creation failed for {{resourceName}}', 60);

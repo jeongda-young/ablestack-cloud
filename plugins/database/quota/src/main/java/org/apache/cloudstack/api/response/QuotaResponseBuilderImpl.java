@@ -582,7 +582,7 @@ public class QuotaResponseBuilderImpl implements QuotaResponseBuilder {
             case QuotaTypes.LOAD_BALANCER_POLICY:
                 LoadBalancerVO loadBalancer = loadBalancerDao.findByIdIncludingRemoved(resourceId);
                 if (loadBalancer != null) {
-                    return new QuotaUsageResourceVO(loadBalancer.getUuid(), loadBalancer.getName(), loadBalancer.getRemoved());
+                    return new QuotaUsageResourceVO(loadBalancer.getUuid(), loadBalancer.getName(), null);
                 }
                 break;
             case QuotaTypes.PORT_FORWARDING_RULE:
@@ -598,7 +598,7 @@ public class QuotaResponseBuilderImpl implements QuotaResponseBuilder {
                 String displayName = String.format("%s:%s-%s to %s:%s-%s", source.getAddress(), portForwardingRule.getSourcePortStart(),
                         portForwardingRule.getSourcePortEnd(), destination, portForwardingRule.getDestinationPortStart(),
                         portForwardingRule.getDestinationPortEnd());
-                return new QuotaUsageResourceVO(portForwardingRule.getUuid(), displayName, portForwardingRule.getRemoved());
+                return new QuotaUsageResourceVO(portForwardingRule.getUuid(), displayName, null);
         }
         return null;
     }
@@ -1251,7 +1251,7 @@ public class QuotaResponseBuilderImpl implements QuotaResponseBuilder {
         addAllPresetVariables(PresetVariables.class, quotaType, usageTypeVariablesAndDescriptions, null);
         List<String> usageTypeVariables = usageTypeVariablesAndDescriptions.stream().map(Pair::first).collect(Collectors.toList());
 
-        try (JsInterpreter jsInterpreter = new JsInterpreter(QuotaConfig.QuotaActivationRuleTimeout.value(), QuotaConfig.QuotaActivationRuleTimeout.key())) {
+        try (JsInterpreter jsInterpreter = new JsInterpreter(QuotaConfig.QuotaActivationRuleTimeout.value())) {
             Map<String, String> newVariables = injectUsageTypeVariables(jsInterpreter, usageTypeVariables);
             String scriptToExecute = jsInterpreterHelper.replaceScriptVariables(activationRule, newVariables);
             jsInterpreter.executeScript(String.format("new Function(\"%s\")", scriptToExecute.replaceAll("\n", "")));

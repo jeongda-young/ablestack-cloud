@@ -18,8 +18,6 @@ package com.cloud.upgrade.dao;
 
 import java.io.InputStream;
 import java.sql.Connection;
-import java.util.ArrayList;
-import java.util.List;
 
 public class Upgrade42030to42040 extends DbUpgradeAbstractImpl implements DbUpgrade, DbUpgradeSystemVmTemplate {
 
@@ -45,10 +43,7 @@ public class Upgrade42030to42040 extends DbUpgradeAbstractImpl implements DbUpgr
 
     @Override
     public void performDataMigration(Connection conn) {
-        final List<String> indexList = new ArrayList<String>();
-        logger.debug("Dropping index vm_instance_id from usage_vm_instance table if it exists");
-        indexList.add("vm_instance_id");
-        DbUpgradeUtils.dropKeysIfExist(conn, "cloud_usage.usage_vm_instance", indexList, false);
+        DbUpgradeUtils.dropIndexIfExists(conn, "cloud_usage", "usage_vm_instance", "vm_instance_id");
     }
 
     @Override

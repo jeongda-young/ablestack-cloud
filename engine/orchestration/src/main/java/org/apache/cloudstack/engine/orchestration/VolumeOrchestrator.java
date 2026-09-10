@@ -186,6 +186,7 @@ import com.cloud.vm.dao.SecondaryStorageVmDao;
 import com.cloud.vm.dao.UserVmCloneSettingDao;
 import com.cloud.vm.dao.UserVmDao;
 import com.cloud.vm.dao.VMInstanceDetailsDao;
+import com.cloud.vm.dao.VMInstanceDao;
 
 public class VolumeOrchestrator extends ManagerBase implements VolumeOrchestrationService, Configurable {
 
@@ -258,6 +259,8 @@ public class VolumeOrchestrator extends ManagerBase implements VolumeOrchestrati
     TemplateService templateService;
     @Inject
     VMInstanceDetailsDao vmInstanceDetailsDao;
+    @Inject
+    VMInstanceDao vmInstanceDao;
     @Inject
     private SecondaryStorageVmDao secondaryStorageVmDao;
     @Inject

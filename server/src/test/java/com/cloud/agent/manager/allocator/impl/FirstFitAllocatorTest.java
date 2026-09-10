@@ -245,7 +245,7 @@ public class FirstFitAllocatorTest {
     Mockito.doReturn(hostsWithHaTag).when(hostDaoMock).listByHostTag(Mockito.any(Host.Type.class), Mockito.anyLong(), Mockito.anyLong(), Mockito.anyLong(), Mockito.anyString());
     Mockito.doNothing().when(firstFitAllocatorSpy).filterHostsWithUefiEnabled(Mockito.any(Host.Type.class), Mockito.any(VirtualMachineProfile.class), Mockito.anyLong(), Mockito.anyLong(), Mockito.anyLong(), Mockito.anyList());
     Mockito.doNothing().when(firstFitAllocatorSpy).addHostsBasedOnTagRules(Mockito.anyString(), Mockito.anyList());
-    List<HostVO> resultHosts = firstFitAllocatorSpy.retrieveHosts(virtualMachineProfile, type, emptyList, clusterId, podId, dcId, hostTag, templateTag);
+    List<HostVO> resultHosts = firstFitAllocatorSpy.retrieveHosts(virtualMachineProfile, type, null, clusterId, podId, dcId, hostTag, templateTag);
 
     Assert.assertEquals(2, resultHosts.size());
     Assert.assertEquals(host1, resultHosts.get(0));
@@ -278,7 +278,7 @@ public class FirstFitAllocatorTest {
     Mockito.doReturn(upAndEnabledHostsWithNoHa).when(resourceManagerMock).listAllUpAndEnabledNonHAHosts(Mockito.any(Host.Type.class), Mockito.anyLong(), Mockito.anyLong(), Mockito.anyLong());
     Mockito.doNothing().when(firstFitAllocatorSpy).filterHostsWithUefiEnabled(Mockito.any(Host.Type.class), Mockito.any(VirtualMachineProfile.class), Mockito.anyLong(), Mockito.anyLong(), Mockito.anyLong(), Mockito.anyList());
     Mockito.doNothing().when(firstFitAllocatorSpy).addHostsBasedOnTagRules(Mockito.nullable(String.class), Mockito.anyList());
-    List<HostVO> resultHosts = firstFitAllocatorSpy.retrieveHosts(virtualMachineProfile, type, emptyList, clusterId, podId, dcId, null, null);
+    List<HostVO> resultHosts = firstFitAllocatorSpy.retrieveHosts(virtualMachineProfile, type, null, clusterId, podId, dcId, null, null);
 
     Assert.assertEquals(2, resultHosts.size());
     Assert.assertEquals(host1, resultHosts.get(0));
@@ -293,7 +293,7 @@ public class FirstFitAllocatorTest {
     Mockito.doNothing().when(firstFitAllocatorSpy).retainHostsMatchingServiceOfferingAndTemplateTags(Mockito.anyList(), Mockito.any(Host.Type.class), Mockito.anyLong(), Mockito.anyLong(), Mockito.anyLong(), Mockito.anyString(), Mockito.anyString());
     Mockito.doNothing().when(firstFitAllocatorSpy).filterHostsWithUefiEnabled(Mockito.any(Host.Type.class), Mockito.any(VirtualMachineProfile.class), Mockito.anyLong(), Mockito.anyLong(), Mockito.anyLong(), Mockito.anyList());
     Mockito.doNothing().when(firstFitAllocatorSpy).addHostsBasedOnTagRules(Mockito.anyString(), Mockito.anyList());
-    firstFitAllocatorSpy.retrieveHosts(virtualMachineProfile, type, emptyList, clusterId, podId, dcId, hostTag, templateTag);
+    firstFitAllocatorSpy.retrieveHosts(virtualMachineProfile, type, null, clusterId, podId, dcId, hostTag, templateTag);
 
     Mockito.verify(firstFitAllocatorSpy, Mockito.times(1)).retainHostsMatchingServiceOfferingAndTemplateTags(Mockito.anyList(), Mockito.any(Host.Type.class), Mockito.anyLong(), Mockito.anyLong(), Mockito.anyLong(), Mockito.anyString(), Mockito.anyString());
   }
@@ -610,4 +610,39 @@ public class FirstFitAllocatorTest {
     when(memCapacity1.getCapacityType()).thenReturn(CapacityVO.CAPACITY_TYPE_MEMORY);
     return Arrays.asList(cpuCapacity1, memCapacity1, cpuCapacity2, memCapacity2);
   }
+  @Test
+  public void explicitEmptyCandidatesCannotBeRepopulatedByTagRules() {
+    Mockito.doAnswer(invocation -> {
+      ((List<HostVO>) invocation.getArgument(1)).add(host3);
+      return null;
+    }).when(firstFitAllocatorSpy).addHostsBasedOnTagRules(Mockito.nullable(String.class), Mockito.anyList());
+    List<HostVO> candidates = new ArrayList<>();
+    Assert.assertTrue(firstFitAllocatorSpy.retrieveHosts(virtualMachineProfile, type, candidates,
+        clusterId, podId, dcId, null, null).isEmpty());
+    Assert.assertTrue(candidates.isEmpty());
+    Mockito.verify(resourceManagerMock, Mockito.never()).listAllUpAndEnabledHosts(type, clusterId, podId, dcId);
+  }
+
+  @Test
+  public void tagRulesRespectOriginalCandidatesAndUefiAndTpmCapabilities() {
+    List<HostVO> candidates = new ArrayList<>(Arrays.asList(host1, host2));
+    Mockito.doReturn(new ArrayList<>(Arrays.asList(host1, host2))).when(resourceManagerMock)
+        .listAllUpAndEnabledNonHAHosts(type, clusterId, podId, dcId);
+    Mockito.doAnswer(invocation -> {
+      ((List<HostVO>) invocation.getArgument(1)).add(host3);
+      return null;
+    }).when(firstFitAllocatorSpy).addHostsBasedOnTagRules(Mockito.nullable(String.class), Mockito.anyList());
+    when(userVmDetailsDaoMock.findDetail(virtualMachineProfile.getId(), "UEFI"))
+        .thenReturn(new VMInstanceDetailVO(virtualMachineProfile.getId(), "UEFI", "SECURE", true));
+    when(userVmDetailsDaoMock.findDetail(virtualMachineProfile.getId(), "tpmversion"))
+        .thenReturn(new VMInstanceDetailVO(virtualMachineProfile.getId(), "tpmversion", "2.0", true));
+    when(hostDaoMock.listByHostCapability(type, clusterId, podId, dcId, Host.HOST_UEFI_ENABLE))
+        .thenReturn(new ArrayList<>(Arrays.asList(host1, host2, host3)));
+    when(hostDaoMock.listByHostCapability(type, clusterId, podId, dcId, Host.HOST_TPM_ENABLE))
+        .thenReturn(new ArrayList<>(Arrays.asList(host2, host3)));
+    Assert.assertEquals(List.of(host2), firstFitAllocatorSpy.retrieveHosts(virtualMachineProfile, type,
+        candidates, clusterId, podId, dcId, null, null));
+    Assert.assertEquals(Arrays.asList(host1, host2), candidates);
+  }
+
 }

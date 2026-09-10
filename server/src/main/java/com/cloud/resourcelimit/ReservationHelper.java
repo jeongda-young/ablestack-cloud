@@ -27,8 +27,20 @@ import java.util.List;
 public class ReservationHelper {
 
     public static void closeAll(List<Reserver> reservations) throws CloudRuntimeException {
+        RuntimeException failure = null;
         for (Reserver reservation : reservations) {
-            reservation.close();
+            try {
+                reservation.close();
+            } catch (RuntimeException e) {
+                if (failure == null) {
+                    failure = e;
+                } else {
+                    failure.addSuppressed(e);
+                }
+            }
+        }
+        if (failure != null) {
+            throw failure;
         }
     }
 
