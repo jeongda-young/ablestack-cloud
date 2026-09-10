@@ -58,7 +58,7 @@ Python3.10.21에 포함된 setuptools79.0.1은 sdist 이름을 `marvin-*.tar.gz`
 ## 업스트림 적응
 
 - MySQL Java 좌표는 Europa에 이미 `com.mysql:mysql-connector-j`로 정리되어 있었다. 버전8.4.0, classpath, caching_sha2 인증과 Marvin 후속을 적용했다. 업스트림의 `MYSQL_CONNECTOR_VERSION = '8.4.0'`는 셸에서 명령으로 해석되므로 공백 없는 변수 대입으로 수정했다.
-- Bouncy Castle1.83/jdk18on과 MinIO8.6.0/okhttp5.1.0을 함께 적용했다. MinIO 모듈의 선언만 바꾸면 최종 client에서 공통 의존성 관리가 OkHttp4.9.3과 interceptor4.12.0을 선택하는 것을 추가로 발견했다. 루트 OkHttp/interceptor 관리를5.1.0으로 통일하여 실제 실행 파일의 버전도 맞췄다. Apache에 없는 Europa automation/rack-management POM, utils artifact copy, securitycheck JAR 참조도 수정하여 빌드를 복구했다. LDAP의 구형 BC 전이 의존성 제외를 유지한다.
+- Bouncy Castle1.83/jdk18on과 MinIO8.6.0/okhttp5.1.0을 함께 적용했다. MinIO 모듈의 선언만 바꾸면 최종 client에서 공통 의존성 관리가 OkHttp4.9.3과 interceptor4.12.0을 선택하는 것을 추가로 발견했다. 루트 OkHttp/interceptor 관리를5.1.0으로 통일하여 실제 실행 파일의 버전도 맞췄다. OkHttp5의 기본 artifact는 JVM 클래스가 없는 multiplatform artifact이므로 Maven 소비자인 utils/MinIO는 `okhttp-jvm`을 명시한다. 이 누락은 증분 빌드에서 드러나지 않고 클린 CI의 Redfish 컴파일에서 발견했으며, 수정 후 전체161 reactor `clean install`을 실제 실행하여 통과했다(11:58). Apache에 없는 Europa automation/rack-management POM, utils artifact copy, securitycheck JAR 참조도 수정하여 빌드를 복구했다. LDAP의 구형 BC 전이 의존성 제외를 유지한다.
 - scoped config 조회의 Transaction 수명을 복구하고, 성공/예외 각각에서 연결을 닫는 테스트를 추가했다. 동일 수정의 두 upstream SHA를 중복 적용하지 않는다.
 - StatsCollector 정리 작업의 RuntimeException을 기록하여 주기 작업이 영구 중단되지 않도록 하는 upstream 수정과 테스트를 적용했다.
 - QemuImgTest의 네이티브 libvirt 로딩 실패는 명시적 skip으로 처리한다. 해당 컨테이너에서는 1개 skip이며 실제 KVM 기능 PASS를 의미하지 않는다.
@@ -77,7 +77,7 @@ Python3.10.21에 포함된 setuptools79.0.1은 sdist 이름을 `marvin-*.tar.gz`
 | 후보 전체 backend unit (b7dd4539e3, HTTP 통일 전) | 같은938 suite reports / 11,484 tests, failures0/errors0/skipped14; 161 reactor PASS |
 | 기준 UI lint/unit | lint 통과; 27 suites / 341 tests 통과 |
 | 후보 UI lint/unit | lint 통과; 27 suites / 341 tests 통과 |
-| HTTP 의존성 통일 후 | 161 reactor 재빌드 PASS; 영향 89 tests/failures0/errors0/skipped0 및 최종 JAR BC/MinIO/InfluxDB smoke PASS |
+| HTTP/JVM 의존성 통일 후 | 161 reactor **clean install** PASS; Redfish 포함 영향 108 tests/failures0/errors0/skipped0 및 새 JAR BC/MinIO/InfluxDB smoke PASS |
 | 영향 backend 테스트 | 210 tests, failures0, errors0, skipped1; FTCTL70 및 추가 BC/TLS36 포함 |
 | MySQL connector | 기존 DB 읽기 전용 SELECT 및 격리 MySQL8.0.46 caching_sha2_password 인증, Connector8.4.0 통과 |
 | Marvin 변경 의존성 | Python3.10 venv에서 mysql-connector-python8.4.0/pycryptodome3.23.0 설치, import/AES roundtrip 통과 |
