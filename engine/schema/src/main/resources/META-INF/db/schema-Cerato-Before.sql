@@ -117,10 +117,10 @@ CREATE TABLE IF NOT EXISTS `automation_deployed_resources_group_details` (
 -- Event that changes the service state by checking the automation controller state
 DELIMITER $$
 CREATE EVENT IF NOT EXISTS `cloud`.`automation_service_checker`
-ON SCHEDULE EVERY 1 MINUTE 
+ON SCHEDULE EVERY 1 MINUTE
 COMMENT 'Check the status of the automation controller in 1 minute'
 DO
-BEGIN 
+BEGIN
 	-- If the status of the Automation Controller is not Running, change the service group status to Disconnected
 	UPDATE automation_deployed_resources_group adrg
 	SET adrg.state = 'Disconnected'

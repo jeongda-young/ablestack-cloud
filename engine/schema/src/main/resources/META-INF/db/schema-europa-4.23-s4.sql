@@ -16,11 +16,9 @@
 -- under the License.
 
 
-
 -- Same-version Europa S4 migration. Keep statements safe to retry after partial DDL.
 
-
---- Quota tariff/usage mapping
+-- Quota tariff/usage mapping
 CREATE TABLE IF NOT EXISTS `cloud_usage`.`quota_tariff_usage` (
     `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
     `tariff_id` bigint(20) unsigned NOT NULL COMMENT 'ID of the tariff of the Quota usage detail calculated, foreign key to quota_tariff table',
@@ -30,12 +28,11 @@ CREATE TABLE IF NOT EXISTS `cloud_usage`.`quota_tariff_usage` (
     CONSTRAINT `fk_quota_tariff_usage__tariff_id` FOREIGN KEY (`tariff_id`) REFERENCES `cloud_usage`.`quota_tariff` (`id`),
     CONSTRAINT `fk_quota_tariff_usage__quota_usage_id` FOREIGN KEY (`quota_usage_id`) REFERENCES `cloud_usage`.`quota_usage` (`id`));
 
---- Quota resource statement
+-- Quota resource statement
 INSERT INTO cloud.role_permissions (uuid, role_id, rule, permission, sort_order)
 SELECT uuid(), role_id, 'quotaResourceStatement', permission, sort_order
 FROM cloud.role_permissions rp
 WHERE rule = 'quotaStatement' AND NOT EXISTS(SELECT 1 FROM cloud.role_permissions rp_ WHERE rp.role_id = rp_.role_id AND rp_.rule = 'quotaResourceStatement');
-
 
 
 CREATE TABLE IF NOT EXISTS `cloud`.`storage_service_instance` (
@@ -230,3 +227,6 @@ SELECT uuid(), role_id, 'quotaCreditsList', permission, sort_order
 FROM cloud.role_permissions rp
 WHERE rp.rule = 'quotaStatement'
 AND NOT EXISTS (SELECT 1 FROM cloud.role_permissions existing WHERE rp.role_id = existing.role_id AND existing.rule = 'quotaCreditsList');
+
+-- Baseline created this DR table before the later CREATE IF NOT EXISTS added its index.
+CALL `cloud`.`IDEMPOTENT_ADD_KEY`('i_dr_sync_cycle__plan_run_sequence', 'cloud.dr_sync_cycle', '(plan_id, engine_run_uuid, sequence)');
