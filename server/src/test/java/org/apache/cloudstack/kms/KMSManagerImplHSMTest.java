@@ -36,6 +36,7 @@ import org.apache.cloudstack.kms.dao.KMSKekVersionDao;
 import org.apache.cloudstack.kms.dao.KMSKeyDao;
 import org.apache.cloudstack.kms.dao.KMSWrappedKeyDao;
 import org.junit.Test;
+import org.springframework.test.util.ReflectionTestUtils;
 import org.junit.runner.RunWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
@@ -175,7 +176,6 @@ public class KMSManagerImplHSMTest {
 
         HSMProfileDetailsVO detail2 = mock(HSMProfileDetailsVO.class);
         when(detail2.getName()).thenReturn("pin");
-        when(detail2.getValue()).thenReturn("ENC(encrypted_value)");
 
         when(hsmProfileDetailsDao.listByProfileId(profileId)).thenReturn(Arrays.asList(detail1, detail2));
 
@@ -183,6 +183,11 @@ public class KMSManagerImplHSMTest {
             HSMProfileResponse response = kmsManager.createHSMProfileResponse(profile);
 
             assertNotNull("Response should not be null", response);
+            @SuppressWarnings("unchecked")
+            java.util.Map<String, String> details = (java.util.Map<String, String>)
+                    ReflectionTestUtils.getField(response, "details");
+            org.junit.Assert.assertEquals("*****", details.get("pin"));
+            org.junit.Assert.assertEquals("/path/to/lib.so", details.get("library_path"));
             verify(hsmProfileDetailsDao).listByProfileId(profileId);
         }
     }

@@ -1019,7 +1019,10 @@ public class VolumeObject implements VolumeInfo {
             }
         }
 
-        // Fallback to legacy passphrase-based encryption
+        if (volumeVO.getKmsKeyId() != null && volumeVO.getPassphraseId() == null) {
+            throw KMSException.kekNotFound("Wrapped encryption key is missing for volume " + volumeVO.getUuid());
+        }
+        // Existing passphrase volumes retain their original encryption secret.
         PassphraseVO passphrase = passphraseDao.findById(volumeVO.getPassphraseId());
         if (passphrase != null) {
             return passphrase.getPassphrase();

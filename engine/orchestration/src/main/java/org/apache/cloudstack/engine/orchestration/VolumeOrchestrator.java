@@ -2331,7 +2331,11 @@ public class VolumeOrchestrator extends ManagerBase implements VolumeOrchestrati
         if (volume.getKmsKeyId() == null) {
             return null;
         }
-        return kmsKeyDao.findById(volume.getKmsKeyId());
+        KMSKeyVO key = kmsKeyDao.findById(volume.getKmsKeyId());
+        if (key == null) {
+            throw new CloudRuntimeException("Configured KMS key is missing for volume " + volume.getUuid());
+        }
+        return key;
     }
 
     private VolumeVO setKmsKeyForVolumeEncryption(VolumeVO volume, KMSKeyVO kmsKey, Long callerAccountId) {
@@ -2379,7 +2383,10 @@ public class VolumeOrchestrator extends ManagerBase implements VolumeOrchestrati
         if (kmsKey != null) {
             return setKmsKeyForVolumeEncryption(volume, kmsKey, callerAccountId);
         }
-        // Legacy: passphrase-based encryption (fallback when KMS not enabled or KMS key not specified)
+        if (volume.getKmsKeyId() != null) {
+            throw new CloudRuntimeException("Configured KMS key is unavailable for volume " + volume.getUuid());
+        }
+        // Existing callers without a KMS selection retain passphrase-based encryption.
         return setPassphraseForVolumeEncryption(volume);
     }
 

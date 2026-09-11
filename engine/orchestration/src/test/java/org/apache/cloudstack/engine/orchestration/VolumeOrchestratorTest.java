@@ -945,4 +945,21 @@ public class VolumeOrchestratorTest {
         return null;
     }
 
+
+    @Test
+    public void missingConfiguredKmsKeyNeverCreatesLegacyPassphrase() {
+        VolumeOrchestrator orchestrator = new VolumeOrchestrator();
+        org.apache.cloudstack.kms.dao.KMSKeyDao keys = Mockito.mock(org.apache.cloudstack.kms.dao.KMSKeyDao.class);
+        org.springframework.test.util.ReflectionTestUtils.setField(orchestrator, "kmsKeyDao", keys);
+        org.springframework.test.util.ReflectionTestUtils.setField(orchestrator, "passphraseDao", passphraseDao);
+        VolumeVO volume = new VolumeVO(com.cloud.storage.Volume.Type.DATADISK, "fixture", 3L, 1L,
+                2L, 1L, com.cloud.storage.Storage.ProvisioningType.THIN, 1024L, null, null, null);
+        volume.setKmsKeyId(9L);
+        Assert.assertThrows(CloudRuntimeException.class,
+                () -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(orchestrator, "getKmsKeyFromVolume", volume));
+        Assert.assertThrows(CloudRuntimeException.class,
+                () -> org.springframework.test.util.ReflectionTestUtils.invokeMethod(orchestrator,
+                        "setPassphraseForVolumeEncryption", volume, null, 2L));
+        Mockito.verifyNoInteractions(passphraseDao);
+    }
 }

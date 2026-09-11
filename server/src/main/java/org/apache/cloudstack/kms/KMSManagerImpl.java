@@ -48,6 +48,7 @@ import com.cloud.utils.db.GlobalLock;
 import com.cloud.utils.db.SearchBuilder;
 import com.cloud.utils.db.SearchCriteria;
 import com.cloud.utils.db.Transaction;
+import com.cloud.utils.db.TransactionCallback;
 import com.cloud.utils.db.TransactionCallbackWithException;
 import com.cloud.utils.exception.CloudRuntimeException;
 import org.apache.cloudstack.api.ApiCommandResourceType;
@@ -87,6 +88,8 @@ import org.apache.logging.log4j.Logger;
 import javax.inject.Inject;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Base64;
+import java.util.Objects;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -100,6 +103,7 @@ import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
+import java.util.function.Supplier;
 
 public class KMSManagerImpl extends ManagerBase implements KMSManager, PluggableService {
     private static final Logger logger = LogManager.getLogger(KMSManagerImpl.class);
@@ -296,6 +300,10 @@ public class KMSManagerImpl extends ManagerBase implements KMSManager, Pluggable
             throw KMSException.invalidParameter("KMS key purpose is not VOLUME_ENCRYPTION: " + kmsKey);
         }
 
+        return withKmsKeyLock(kmsKey.getId(), () -> generateVolumeKeyWithKekLocked(kmsKey));
+    }
+
+    private WrappedKey generateVolumeKeyWithKekLocked(KMSKey kmsKey) {
         KMSKekVersionVO activeVersion = getActiveKekVersion(kmsKey.getId());
 
         HSMProfileVO hsmProfile = hsmProfileDao.findById(activeVersion.getHsmProfileId());
@@ -340,6 +348,25 @@ public class KMSManagerImpl extends ManagerBase implements KMSManager, Pluggable
         logger.debug("Generated {} key using KMS key {} with KEK version {}, wrapped key UUID: {}",
                 kmsKey.getPurpose().getName(), kmsKey, activeVersion.getVersionNumber(), wrappedKey.getUuid());
         return wrappedKey;
+    }
+
+    <T> T withKmsKeyLock(Long keyId, Supplier<T> operation) {
+        if (keyId == null) {
+            throw KMSException.invalidParameter("KMS key ID must be specified");
+        }
+        GlobalLock lock = GlobalLock.getInternLock("kms.key." + keyId);
+        try {
+            if (!lock.lock(5)) {
+                throw KMSException.kekOperationFailed("KMS key is busy; retry the operation", null);
+            }
+            try {
+                return operation.get();
+            } finally {
+                lock.unlock();
+            }
+        } finally {
+            lock.releaseRef();
+        }
     }
 
     private KMSKekVersionVO getActiveKekVersion(Long kmsKeyId) throws KMSException {
@@ -616,6 +643,13 @@ public class KMSManagerImpl extends ManagerBase implements KMSManager, Pluggable
     }
 
     void deleteUserKMSKey(KMSKeyVO key) throws KMSException {
+        withKmsKeyLock(key.getId(), () -> {
+            deleteUserKMSKeyLocked(key);
+            return null;
+        });
+    }
+
+    private void deleteUserKMSKeyLocked(KMSKeyVO key) throws KMSException {
         long wrappedKeyCount = kmsWrappedKeyDao.countByKmsKeyId(key.getId());
         if (wrappedKeyCount > 0) {
             throw new InvalidParameterValueException("Cannot delete KMS key: " + key + ". " + wrappedKeyCount +
@@ -653,6 +687,10 @@ public class KMSManagerImpl extends ManagerBase implements KMSManager, Pluggable
 
     @Override
     public String rotateKMSKey(RotateKMSKeyCmd cmd) throws KMSException {
+        return withKmsKeyLock(cmd.getId(), () -> rotateKMSKeyLocked(cmd));
+    }
+
+    private String rotateKMSKeyLocked(RotateKMSKeyCmd cmd) throws KMSException {
         Account caller = CallContext.current().getCallingAccount();
         Integer keyBits = cmd.getKeyBits();
         Long hsmProfileId = cmd.getHsmProfileId();
@@ -796,6 +834,10 @@ public class KMSManagerImpl extends ManagerBase implements KMSManager, Pluggable
     @Override
     @ActionEvent(eventType = EventTypes.EVENT_VOLUME_MIGRATE_TO_KMS, eventDescription = "Migrating Volumes to KMS")
     public int migrateVolumesToKMS(MigrateVolumesToKMSCmd cmd) throws KMSException {
+        return withKmsKeyLock(cmd.getKmsKeyId(), () -> migrateVolumesToKMSLocked(cmd));
+    }
+
+    private int migrateVolumesToKMSLocked(MigrateVolumesToKMSCmd cmd) throws KMSException {
         Account caller = CallContext.current().getCallingAccount();
         String accountName = cmd.getAccountName();
         Long domainId = cmd.getDomainId();
@@ -856,6 +898,9 @@ public class KMSManagerImpl extends ManagerBase implements KMSManager, Pluggable
             if (volume.getAccountId() != kmsKey.getAccountId()) {
                 mismatchedVolumeUuids.add(volume.getUuid());
             }
+            if (!Objects.equals(volume.getDataCenterId(), kmsKey.getZoneId())) {
+                throw new InvalidParameterValueException("Volume " + volume.getUuid() + " is not in the KMS key's zone");
+            }
         }
         if (!mismatchedVolumeUuids.isEmpty()) {
             throw new InvalidParameterValueException(
@@ -882,53 +927,61 @@ public class KMSManagerImpl extends ManagerBase implements KMSManager, Pluggable
         return successCount;
     }
 
-    private boolean migrateVolumeToKmsKey(KMSProvider provider, VolumeVO volume, KMSKey kmsKey,
-                                          KMSKekVersionVO activeVersion) {
-        if (volume.getAccountId() != kmsKey.getAccountId()) {
-            throw new InvalidParameterValueException(
-                    "Volume " + volume.getUuid() + " does not belong to the same account as KMS key " + kmsKey.getUuid());
-        }
-        PassphraseVO passphrase = passphraseDao.findById(volume.getPassphraseId());
-        if (passphrase == null) {
-            logger.warn(
-                    "Skipping migration of volume from to the KMS key {} because passphrase id: {} not found for "
-                            + "volume {}",
-                    kmsKey, volume.getPassphraseId(), volume);
-            return false;
-        }
-
-        // PassphraseVO.getPassphrase() returns Base64-encoded bytes matching KVM/QEMU
-        // format
-        byte[] passphraseBytes = passphrase.getPassphrase();
-        try {
-            WrappedKey wrappedKey = provider.wrapKey(
-                    passphraseBytes,
-                    KeyPurpose.VOLUME_ENCRYPTION,
-                    activeVersion.getKekLabel(),
-                    activeVersion.getHsmProfileId());
-
-            KMSWrappedKeyVO wrappedKeyVO = new KMSWrappedKeyVO(
-                    kmsKey.getId(),
-                    activeVersion.getId(),
-                    volume.getDataCenterId(),
-                    wrappedKey.getWrappedKeyMaterial());
-            wrappedKeyVO = kmsWrappedKeyDao.persist(wrappedKeyVO);
-
-            volume.setKmsWrappedKeyId(wrappedKeyVO.getId());
-            volume.setKmsKeyId(kmsKey.getId());
-            volume.setPassphraseId(null);
-            volumeDao.update(volume.getId(), volume);
-
-            ActionEventUtils.onCompletedActionEvent(CallContext.current().getCallingUserId(),
-                    kmsKey.getAccountId(), EventVO.LEVEL_INFO, EventTypes.EVENT_VOLUME_MIGRATE_TO_KMS, true,
-                    String.format("Successfully migrated volume encryption key to KMS key %s (v%d)", kmsKey.getUuid(), activeVersion.getVersionNumber()),
-                    volume.getId(), ApiCommandResourceType.Volume.toString(), CallContext.current().getStartEventId());
-            return true;
-        } finally {
-            if (passphraseBytes != null) {
-                Arrays.fill(passphraseBytes, (byte) 0);
+    boolean migrateVolumeToKmsKey(KMSProvider provider, VolumeVO requestedVolume, KMSKey kmsKey,
+                                 KMSKekVersionVO activeVersion) {
+        // Serialize concurrent migrations of the same volume and commit both key references together.
+        return Transaction.execute((TransactionCallback<Boolean>) status -> {
+            VolumeVO volume = volumeDao.lockRow(requestedVolume.getId(), true);
+            if (volume == null) {
+                throw new InvalidParameterValueException("Volume no longer exists: " + requestedVolume.getUuid());
             }
-        }
+            if (volume.getAccountId() != kmsKey.getAccountId()
+                    || !Objects.equals(volume.getDataCenterId(), kmsKey.getZoneId())) {
+                throw new InvalidParameterValueException("Volume and KMS key must belong to the same account and zone");
+            }
+            if (volume.getKmsWrappedKeyId() != null || volume.getPassphraseId() == null) {
+                return false;
+            }
+            PassphraseVO passphrase = passphraseDao.findById(volume.getPassphraseId());
+            if (passphrase == null) {
+                throw new CloudRuntimeException("Legacy passphrase is missing for volume " + volume.getUuid());
+            }
+
+            // Libvirt consumes Base64, while the provider wraps raw DEK bytes.
+            // VolumeObject encodes the unwrapped bytes once when building the libvirt secret.
+            byte[] encodedPassphrase = passphrase.getPassphrase();
+            byte[] dek = null;
+            try {
+                dek = Base64.getDecoder().decode(encodedPassphrase);
+                final byte[] rawDek = dek;
+                WrappedKey wrappedKey = retryOperation(() -> provider.wrapKey(rawDek, KeyPurpose.VOLUME_ENCRYPTION,
+                        activeVersion.getKekLabel(), activeVersion.getHsmProfileId()));
+                KMSWrappedKeyVO wrappedKeyVO = kmsWrappedKeyDao.persist(new KMSWrappedKeyVO(kmsKey.getId(),
+                        activeVersion.getId(), volume.getDataCenterId(), wrappedKey.getWrappedKeyMaterial()));
+                volume.setKmsWrappedKeyId(wrappedKeyVO.getId());
+                volume.setKmsKeyId(kmsKey.getId());
+                volume.setPassphraseId(null);
+                if (!volumeDao.update(volume.getId(), volume)) {
+                    throw new CloudRuntimeException("Failed to save KMS references for volume " + volume.getUuid());
+                }
+
+                ActionEventUtils.onCompletedActionEvent(CallContext.current().getCallingUserId(),
+                        kmsKey.getAccountId(), EventVO.LEVEL_INFO, EventTypes.EVENT_VOLUME_MIGRATE_TO_KMS, true,
+                        String.format("Successfully migrated volume encryption key to KMS key %s (v%d)",
+                                kmsKey.getUuid(), activeVersion.getVersionNumber()),
+                        volume.getId(), ApiCommandResourceType.Volume.toString(), CallContext.current().getStartEventId());
+                return true;
+            } catch (Exception e) {
+                throw new CloudRuntimeException("Failed to migrate encryption key for volume " + volume.getUuid(), e);
+            } finally {
+                if (encodedPassphrase != null) {
+                    Arrays.fill(encodedPassphrase, (byte) 0);
+                }
+                if (dek != null) {
+                    Arrays.fill(dek, (byte) 0);
+                }
+            }
+        });
     }
 
     @Override
@@ -1378,7 +1431,7 @@ public class KMSManagerImpl extends ManagerBase implements KMSManager, Pluggable
             List<HSMProfileDetailsVO> details = hsmProfileDetailsDao.listByProfileId(profile.getId());
             Map<String, String> detailsMap = new HashMap<>();
             for (HSMProfileDetailsVO detail : details) {
-                detailsMap.put(detail.getName(), detail.getValue());
+                detailsMap.put(detail.getName(), isSensitiveKey(detail.getName()) ? "*****" : detail.getValue());
             }
             response.setDetails(detailsMap);
         }
@@ -1684,6 +1737,13 @@ public class KMSManagerImpl extends ManagerBase implements KMSManager, Pluggable
     }
 
     private void processVersionRewrap(KMSKekVersionVO oldVersion, int batchSize) throws KMSException {
+        withKmsKeyLock(oldVersion.getKmsKeyId(), () -> {
+            processVersionRewrapLocked(oldVersion, batchSize);
+            return null;
+        });
+    }
+
+    private void processVersionRewrapLocked(KMSKekVersionVO oldVersion, int batchSize) throws KMSException {
         KMSKeyVO kmsKey = kmsKeyDao.findById(oldVersion.getKmsKeyId());
         if (kmsKey == null) {
             logger.warn("KMS key not found for KEK version {}, skipping", oldVersion);

@@ -102,12 +102,20 @@ public interface OrchestrationService {
     VirtualMachineEntity getVirtualMachine(@QueryParam("id") String id);
 
     /** Preserve pre-KMS Europa callers without selecting a KMS key. */
-    default VirtualMachineEntity createVirtualMachine(String id, String owner, String templateId, String hostName, String displayName, String hypervisor, int cpu, int speed, long memory, Map<String, String> customParameters, Long diskSize, List<String> computeTags, List<String> rootDiskTags, Map<String, List<NicProfile>> networkNicMap, DeploymentPlan plan, Long rootDiskSize, Map<String, Map<Integer, String>> extraDhcpOptionMap, Map<Long, DiskOffering> datadiskTemplateToDiskOfferingMap, Long diskOfferingId, Long rootDiskOfferingId, List<VmDiskInfo> dataDiskInfoList, Volume volume, Snapshot snapshot) throws InsufficientCapacityException {
-        return createVirtualMachine(id, owner, templateId, hostName, displayName, hypervisor, cpu, speed, memory, customParameters, diskSize, computeTags, rootDiskTags, networkNicMap, plan, rootDiskSize, extraDhcpOptionMap, datadiskTemplateToDiskOfferingMap, diskOfferingId, rootDiskOfferingId, null, dataDiskInfoList, volume, snapshot);
+    default VirtualMachineEntity createVirtualMachine(String id, String owner, String templateId, String hostName, String displayName, String hypervisor, int cpu, int speed,
+            long memory, Map<String, String> customParameters, Long diskSize, List<String> computeTags, List<String> rootDiskTags, Map<String, List<NicProfile>> networkNicMap,
+            DeploymentPlan plan, Long rootDiskSize, Map<String, Map<Integer, String>> extraDhcpOptionMap, Map<Long, DiskOffering> datadiskTemplateToDiskOfferingMap,
+            Long diskOfferingId, Long rootDiskOfferingId, List<VmDiskInfo> dataDiskInfoList, Volume volume, Snapshot snapshot) throws InsufficientCapacityException {
+        return createVirtualMachine(id, owner, templateId, hostName, displayName, hypervisor, cpu, speed, memory, customParameters, diskSize, computeTags, rootDiskTags,
+            networkNicMap, plan, rootDiskSize, extraDhcpOptionMap, datadiskTemplateToDiskOfferingMap, diskOfferingId, rootDiskOfferingId, null, dataDiskInfoList, volume, snapshot);
     }
 
     /** Preserve pre-KMS Europa callers without selecting a KMS key. */
-    default VirtualMachineEntity createVirtualMachineFromScratch(String id, String owner, String isoId, String hostName, String displayName, String hypervisor, String os, int cpu, int speed, long memory, Map<String, String> customParameters, Long diskSize, List<String> computeTags, List<String> rootDiskTags, Map<String, List<NicProfile>> networkNicMap, DeploymentPlan plan, Map<String,  Map<Integer, String>> extraDhcpOptionMap, Long diskOfferingId, List<VmDiskInfo> dataDiskInfoList, Volume volume, Snapshot snapshot) throws InsufficientCapacityException {
-        return createVirtualMachineFromScratch(id, owner, isoId, hostName, displayName, hypervisor, os, cpu, speed, memory, customParameters, diskSize, computeTags, rootDiskTags, networkNicMap, plan, extraDhcpOptionMap, diskOfferingId, null, dataDiskInfoList, volume, snapshot);
+    default VirtualMachineEntity createVirtualMachineFromScratch(String id, String owner, String isoId, String hostName, String displayName, String hypervisor, String os, int cpu,
+            int speed, long memory, Map<String, String> customParameters, Long diskSize, List<String> computeTags, List<String> rootDiskTags, Map<String,
+            List<NicProfile>> networkNicMap, DeploymentPlan plan, Map<String,  Map<Integer, String>> extraDhcpOptionMap, Long diskOfferingId, List<VmDiskInfo> dataDiskInfoList,
+            Volume volume, Snapshot snapshot) throws InsufficientCapacityException {
+        return createVirtualMachineFromScratch(id, owner, isoId, hostName, displayName, hypervisor, os, cpu, speed, memory, customParameters, diskSize, computeTags, rootDiskTags,
+            networkNicMap, plan, extraDhcpOptionMap, diskOfferingId, null, dataDiskInfoList, volume, snapshot);
     }
 }

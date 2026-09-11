@@ -204,12 +204,14 @@ public interface VolumeOrchestrationService {
     Pair<List<String>, Set<String>> getVolumeCheckpointPathsAndImageStoreUrls(long volumeId, HypervisorType hypervisorType);
 
     /** Preserve pre-KMS Europa callers without selecting a KMS key. */
-    default DiskProfile allocateRawVolume(Type type, String name, DiskOffering offering, Long size, Long minIops, Long maxIops, VirtualMachine vm, VirtualMachineTemplate template, Account owner, Long deviceId, boolean incrementResourceCount) {
+    default DiskProfile allocateRawVolume(Type type, String name, DiskOffering offering, Long size, Long minIops, Long maxIops, VirtualMachine vm, VirtualMachineTemplate template,
+            Account owner, Long deviceId, boolean incrementResourceCount) {
         return allocateRawVolume(type, name, offering, size, minIops, maxIops, vm, template, owner, deviceId, null, incrementResourceCount);
     }
 
     /** Preserve pre-KMS Europa callers without selecting a KMS key. */
-    default List<DiskProfile> allocateTemplatedVolumes(Type type, String name, DiskOffering offering, Long rootDisksize, Long minIops, Long maxIops, VirtualMachineTemplate template, VirtualMachine vm, Account owner, Volume volume, Snapshot snapshot) {
+    default List<DiskProfile> allocateTemplatedVolumes(Type type, String name, DiskOffering offering, Long rootDisksize, Long minIops, Long maxIops,
+            VirtualMachineTemplate template, VirtualMachine vm, Account owner, Volume volume, Snapshot snapshot) {
         return allocateTemplatedVolumes(type, name, offering, rootDisksize, minIops, maxIops, template, vm, owner, null, volume, snapshot);
     }
 }

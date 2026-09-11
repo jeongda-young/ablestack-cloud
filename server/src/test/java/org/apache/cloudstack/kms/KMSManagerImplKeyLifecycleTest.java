@@ -90,6 +90,8 @@ public class KMSManagerImplKeyLifecycleTest {
 
     @Before
     public void setUp() {
+        Mockito.doAnswer(i -> ((java.util.function.Supplier<?>) i.getArgument(1)).get())
+                .when(kmsManager).withKmsKeyLock(anyLong(), any());
         executor = Executors.newSingleThreadExecutor(r -> {
             Thread t = new Thread(r, "kms-test");
             t.setDaemon(true);
