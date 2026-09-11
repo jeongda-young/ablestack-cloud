@@ -154,3 +154,9 @@ S4 #992 구현 PR #1016에서 직접 배정38개와 S2 연계2개를 최종 판�
 - [원본40개 판정](s4-review.tsv) / [연관 의존성 검토](s4-dependencies.tsv).
 - [로컬 Java](s4-local-tests.tsv) / [공식 Java](s4-ci-tests.tsv) / [Actions](s4-ci-results.tsv) / [DB 및 runtime](s4-db-results.tsv) / [Rocky9.8 산출물](s4-artifact-results.tsv).
 - [격리 fixture 실행 조건](s4-fixtures/README.ko.md). S2의 기존 SQL99 오류와 simulator template111 FK 인수 사항을 해결했다. 다른 기능의 S2 공동 마감과 실제 운영 규모/물리 환경의 S8 검증은 남는다.
+
+## 기능 코드 병합과 실물 검증의 분리 (2026-09-11)
+
+사용자 확정: S3~S7은 Apache 변경을 Europa 코드에 안전하게 반영하고 코드 검토·자동 테스트·CI를 통과하면 정상 병합한다. 실물 테스트 미실행을 이유로 기능 PR을 Draft로 유지하거나 기능 이슈를 미완료 처리하지 않는다. 이 지침은 이전 개별 기능 이슈의 실물 선행 조건보다 우선한다.
+
+각 배치의 실물 시험은 [#1025](https://github.com/ablecloud-team/ablestack-cloud/issues/1025)에 시나리오·기대 결과를 누적하고, 모든 코드 병합이 끝난 최종 SHA에서 S8 #999가 실행·판정한다. 미실행을 PASS로 표시하지 않으며 최종 RC/릴리즈 승인은 별도 게이트다.

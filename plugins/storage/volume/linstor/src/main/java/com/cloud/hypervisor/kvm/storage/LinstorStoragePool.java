@@ -228,11 +228,11 @@ public class LinstorStoragePool implements KVMStoragePool {
     public String createHeartBeatCommand(HAStoragePool pool, String hostPrivateIp,
             boolean hostValidation) {
         LOGGER.trace(String.format("Linstor.createHeartBeatCommand: %s, %s, %b", pool.getPoolIp(), hostPrivateIp, hostValidation));
-        boolean isStorageNodeUp = checkingHeartBeat(pool, null);
+        boolean isStorageNodeUp = hasHeartBeat(pool, null);
         if (!isStorageNodeUp && !hostValidation) {
             //restart the host
             LOGGER.debug(String.format("The host [%s] will be restarted because the health check failed for the storage pool [%s]", hostPrivateIp, pool.getPool().getType()));
-            Script cmd = new Script(pool.getPool().getHearthBeatPath(), Duration.millis(HeartBeatUpdateTimeout), LOGGER);
+            Script cmd = new Script(pool.getPool().getHearthBeatPath(), Duration.millis(HeartBeatUpdateTimeoutInMs), LOGGER);
             cmd.add("-c");
             cmd.execute();
             return "Down";
@@ -258,7 +258,7 @@ public class LinstorStoragePool implements KVMStoragePool {
     }
 
     @Override
-    public Boolean checkingHeartBeat(HAStoragePool pool, HostTO host) {
+    public Boolean hasHeartBeat(HAStoragePool pool, HostTO host) {
         String hostName;
         if (host == null) {
             hostName = localNodeName;
@@ -274,7 +274,7 @@ public class LinstorStoragePool implements KVMStoragePool {
     }
 
     private String executeDrbdSetupStatus(OutputInterpreter.AllLinesParser parser) {
-        Script sc = new Script("drbdsetup", Duration.millis(HeartBeatUpdateTimeout), LOGGER);
+        Script sc = new Script("drbdsetup", Duration.millis(HeartBeatUpdateTimeoutInMs), LOGGER);
         sc.add("status");
         sc.add("--json");
         return sc.execute(parser);
@@ -315,21 +315,21 @@ public class LinstorStoragePool implements KVMStoragePool {
         boolean otherNodeOnline = false;
         if (connectionFound) {
             LOGGER.warn(String.format(
-                    "checkingHeartBeat: connection found, but not in state 'Connected' to %s", otherNodeName));
+                    "hasHeartBeat: connection found, but not in state 'Connected' to %s", otherNodeName));
         } else {
             LOGGER.warn(String.format(
-                    "checkingHeartBeat: no resource connected to %s, checking LINSTOR", otherNodeName));
+                    "hasHeartBeat: no resource connected to %s, checking LINSTOR", otherNodeName));
             otherNodeOnline = checkLinstorNodeOnline(otherNodeName);
         }
         LOGGER.info(String.format(
-                "checkingHeartBeat: other node %s is %s.",
+                "hasHeartBeat: other node %s is %s.",
                 otherNodeName,
                 otherNodeOnline ? "online on controller" : "down"));
         return otherNodeOnline;
     }
 
     private String executeDrbdEventsNow(OutputInterpreter.AllLinesParser parser) {
-        Script sc = new Script("drbdsetup", Duration.millis(HeartBeatUpdateTimeout), LOGGER);
+        Script sc = new Script("drbdsetup", Duration.millis(HeartBeatUpdateTimeoutInMs), LOGGER);
         sc.add("events2");
         sc.add("--now");
         return sc.execute(parser);
@@ -374,9 +374,9 @@ public class LinstorStoragePool implements KVMStoragePool {
     }
 
     @Override
-    public Boolean vmActivityCheck(HAStoragePool pool, HostTO host, Duration activityScriptTimeout, String volumeUUIDListString, String vmActivityCheckPath, long duration) {
-        LOGGER.trace(String.format("Linstor.vmActivityCheck: %s, %s", pool.getPoolIp(), host.getPrivateNetwork().getIp()));
-        return checkingHeartBeat(pool, host);
+    public Boolean hasVmActivity(HAStoragePool pool, HostTO host, Duration activityScriptTimeout, String volumeUUIDListString, String vmActivityCheckPath, long duration) {
+        LOGGER.trace(String.format("Linstor.hasVmActivity: %s, %s", pool.getPoolIp(), host.getPrivateNetwork().getIp()));
+        return hasHeartBeat(pool, host);
     }
 
 }

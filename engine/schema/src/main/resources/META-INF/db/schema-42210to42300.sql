@@ -42,6 +42,19 @@ CREATE TABLE IF NOT EXISTS `cloud`.`backup_offering_details` (
 UPDATE `cloud`.`configuration` SET value='random' WHERE name IN ('vm.allocation.algorithm', 'volume.allocation.algorithm') AND value='userconcentratedpod_random' AND value <> 'random';
 UPDATE `cloud`.`configuration` SET value='firstfit' WHERE name IN ('vm.allocation.algorithm', 'volume.allocation.algorithm') AND value='userconcentratedpod_firstfit' AND value <> 'firstfit';
 
+-- Add Windows Server 2025 guest OS and mappings
+CALL ADD_GUEST_OS_AND_HYPERVISOR_MAPPING (6, 'Windows Server 2025 (64-bit)', 'VMware', '7.0', 'windows2022srvNext_64Guest');
+CALL ADD_GUEST_OS_AND_HYPERVISOR_MAPPING (6, 'Windows Server 2025 (64-bit)', 'VMware', '7.0.1.0', 'windows2022srvNext_64Guest');
+CALL ADD_GUEST_OS_AND_HYPERVISOR_MAPPING (6, 'Windows Server 2025 (64-bit)', 'VMware', '7.0.2.0', 'windows2022srvNext_64Guest');
+CALL ADD_GUEST_OS_AND_HYPERVISOR_MAPPING (6, 'Windows Server 2025 (64-bit)', 'VMware', '7.0.3.0', 'windows2022srvNext_64Guest');
+CALL ADD_GUEST_OS_AND_HYPERVISOR_MAPPING (6, 'Windows Server 2025 (64-bit)', 'VMware', '8.0', 'windows2022srvNext_64Guest');
+CALL ADD_GUEST_OS_AND_HYPERVISOR_MAPPING (6, 'Windows Server 2025 (64-bit)', 'VMware', '8.0.0.1', 'windows2022srvNext_64Guest');
+CALL ADD_GUEST_OS_AND_HYPERVISOR_MAPPING (6, 'Windows Server 2025 (64-bit)', 'VMware', '8.0.0.2', 'windows2022srvNext_64Guest');
+CALL ADD_GUEST_OS_AND_HYPERVISOR_MAPPING (6, 'Windows Server 2025 (64-bit)', 'VMware', '8.0.0.3', 'windows2022srvNext_64Guest');
+CALL ADD_GUEST_OS_AND_HYPERVISOR_MAPPING (6, 'Windows Server 2025 (64-bit)', 'VMware', '8.0.1', 'windows2022srvNext_64Guest');
+CALL ADD_GUEST_OS_AND_HYPERVISOR_MAPPING (6, 'Windows Server 2025 (64-bit)', 'VMware', '8.0.2', 'windows2022srvNext_64Guest');
+CALL ADD_GUEST_OS_AND_HYPERVISOR_MAPPING (6, 'Windows Server 2025 (64-bit)', 'VMware', '8.0.3', 'windows2022srvNext_64Guest');
+
 -- Create kubernetes_cluster_affinity_group_map table for CKS per-node-type affinity groups
 CREATE TABLE IF NOT EXISTS `cloud`.`kubernetes_cluster_affinity_group_map` (
     `id` bigint unsigned NOT NULL AUTO_INCREMENT,
@@ -1338,3 +1351,38 @@ WHERE rule = 'quotaStatement' AND NOT EXISTS(SELECT 1 FROM cloud.role_permission
 -- usage records introduced in 4.22.1 (cumulative and per-VM) can coexist. See #13399.
 CALL `cloud_usage`.`IDEMPOTENT_DROP_INDEX`('id', 'cloud_usage.usage_volume');
 CALL `cloud_usage`.`IDEMPOTENT_ADD_UNIQUE_INDEX`('cloud_usage.usage_volume', 'id', '(volume_id ASC, created ASC, vm_id ASC)');
+
+--- Per-VM ISO attachments. user_vm.iso_id remains as the primary/bootable ISO pointer.
+CREATE TABLE IF NOT EXISTS `cloud`.`vm_iso_map` (
+    `id` bigint(20) unsigned NOT NULL AUTO_INCREMENT,
+    `vm_id` bigint(20) unsigned NOT NULL COMMENT 'foreign key to user_vm',
+    `iso_id` bigint(20) unsigned NOT NULL COMMENT 'foreign key to vm_template (ISOs are templates of format ISO)',
+    `device_seq` int(10) unsigned NOT NULL COMMENT 'cdrom slot index used to derive the libvirt device label (3=hdc, 4=hdd)',
+    `created` datetime NOT NULL,
+    PRIMARY KEY (`id`),
+    UNIQUE KEY `uc_vm_iso_map__vm_iso` (`vm_id`, `iso_id`),
+    UNIQUE KEY `uc_vm_iso_map__vm_seq` (`vm_id`, `device_seq`),
+    CONSTRAINT `fk_vm_iso_map__vm_id` FOREIGN KEY (`vm_id`) REFERENCES `cloud`.`user_vm` (`id`) ON DELETE CASCADE,
+    CONSTRAINT `fk_vm_iso_map__iso_id` FOREIGN KEY (`iso_id`) REFERENCES `cloud`.`vm_template` (`id`)
+);
+
+
+-- Creates the 'kvm.memory.dynamic.scaling.capacity' and, for already active ACS environments,
+-- initializes it with the value of the setting 'vm.serviceoffering.ram.size.max'
+INSERT INTO `cloud`.`configuration` (`category`, `instance`, `component`, `name`, `value`, `default_value`, `updated`, `scope`, `is_dynamic`, `group_id`, `subgroup_id`, `display_text`, `description`)
+SELECT 'Advanced', 'DEFAULT', 'CapacityManager', 'kvm.memory.dynamic.scaling.capacity', `cfg`.`value`, 0, NULL, 4, 1, 6, 27,
+       'KVM memory dynamic scaling capacity', 'Defines the maximum memory capacity in MiB for which VMs can be dynamically scaled to with KVM. The ''kvm.memory.dynamic.scaling.capacity'' setting''s value will be used to define the value of the ''<maxMemory />'' element of domain XMLs. If it is set to a value less than or equal to ''0'', then the host''s memory capacity will be considered.'
+FROM `cloud`.`configuration` `cfg`
+WHERE NOT EXISTS (SELECT 1 FROM `cloud`.`configuration` WHERE `name` = 'kvm.memory.dynamic.scaling.capacity')
+  AND `cfg`.`name` = 'vm.serviceoffering.ram.size.max';
+
+-- Creates the 'kvm.cpu.dynamic.scaling.capacity' and, for already active ACS environments,
+-- initializes it with the value of the setting 'vm.serviceoffering.cpu.cores.max'
+INSERT INTO `cloud`.`configuration` (`category`, `instance`, `component`, `name`, `value`, `default_value`, `updated`, `scope`, `is_dynamic`, `group_id`, `subgroup_id`, `display_text`, `description`)
+SELECT 'Advanced', 'DEFAULT', 'CapacityManager', 'kvm.cpu.dynamic.scaling.capacity', `cfg`.`value`, 0, NULL, 4, 1, 6, 27,
+       'KVM CPU dynamic scaling capacity', 'Defines the maximum vCPU capacity for which VMs can be dynamically scaled to with KVM. The ''kvm.cpu.dynamic.scaling.capacity'' setting''s value will be used to define the value of the ''<vcpu />'' element of domain XMLs. If it is set to a value less than or equal to ''0'', then the host''s CPU cores capacity will be considered.'
+FROM `cloud`.`configuration` `cfg`
+WHERE NOT EXISTS (SELECT 1 FROM `cloud`.`configuration` WHERE `name` = 'kvm.cpu.dynamic.scaling.capacity')
+  AND `cfg`.`name` = 'vm.serviceoffering.cpu.cores.max';
+
+-- Schedule table changes are applied by the retry-safe Europa S5A named phase.

@@ -458,6 +458,7 @@ public class ApiConstants {
     public static final String MAX_VGPU_PER_PHYSICAL_GPU = "maxvgpuperphysicalgpu";
     public static final String GUEST_OS_LIST = "guestoslist";
     public static final String GUEST_OS_COUNT = "guestoscount";
+    public static final String GUEST_OS_RULE = "guestosrule";
     public static final String OS_MAPPING_CHECK_ENABLED = "osmappingcheckenabled";
     public static final String OUTOFBANDMANAGEMENT_POWERSTATE = "outofbandmanagementpowerstate";
     public static final String OUTOFBANDMANAGEMENT_ENABLED = "outofbandmanagementenabled";
@@ -1598,7 +1599,7 @@ public class ApiConstants {
     }
 
     public enum HostDetails {
-        all, capacity, events, stats, min;
+        all, capacity, core, events, stats, min;
     }
 
     public enum VMDetails {

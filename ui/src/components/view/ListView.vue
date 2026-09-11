@@ -870,7 +870,7 @@
         {{ text && $toLocaleDate(text) }}
       </template>
       <template
-        v-if="['startdate', 'enddate'].includes(column.key) && ['vm', 'vnfapp'].includes($route.path.split('/')[1])"
+        v-if="['startdate', 'enddate'].includes(column.key) && ['vm', 'vnfapp', 'autoscalevmgroup'].includes($route.path.split('/')[1])"
       >
         {{ getDateAtTimeZone(text, record.timezone) }}
       </template>
@@ -1128,22 +1128,6 @@
           @onClick="editTariffValue(record)"
         />
         <slot></slot>
-      </template>
-      <template v-if="column.key === 'vmScheduleActions'">
-        <tooltip-button
-          :tooltip="$t('label.edit')"
-          :disabled="!('updateVMSchedule' in $store.getters.apis)"
-          icon="edit-outlined"
-          @onClick="updateVMSchedule(record)"
-        />
-        <tooltip-button
-          :tooltip="$t('label.remove')"
-          :disabled="!('deleteVMSchedule' in $store.getters.apis)"
-          icon="delete-outlined"
-          :danger="true"
-          type="primary"
-          @onClick="removeVMSchedule(record)"
-        />
       </template>
       <template v-if="column.key === 'scheduleActions'">
         <slot
@@ -1661,12 +1645,6 @@ export default {
     },
     editTariffValue (record) {
       this.$emit('edit-tariff-action', true, record)
-    },
-    updateVMSchedule (record) {
-      this.$emit('update-vm-schedule', record)
-    },
-    removeVMSchedule (record) {
-      this.$emit('remove-vm-schedule', record)
     },
     ipAddress (text, record) {
       if (!record || !record.nic || record.nic.length === 0) {

@@ -600,6 +600,10 @@ public class MockAccountManager extends ManagerBase implements AccountManager {
     }
 
     @Override
+    public void checkApiAccessForUser(User user, String command, String apiKey) throws PermissionDeniedException {
+    }
+
+    @Override
     public UserAccount clearUserTwoFactorAuthenticationInSetupStateOnLogin(UserAccount user) {
         return null;
     }
