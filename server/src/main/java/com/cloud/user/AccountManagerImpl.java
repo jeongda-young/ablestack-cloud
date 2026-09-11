@@ -1939,6 +1939,25 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
         checkApiAccess(apiCheckers, caller, command, keyPair, keyPairPermissions.toArray(new ApiKeyPairPermission[0]));
     }
 
+    /** Check an additional API permission without consuming another rate-limit request. */
+    @Override
+    public void checkApiAccessForUser(User caller, String command, String apiKey) {
+        Account account = getAccount(caller.getAccountId());
+        ApiKeyPair keyPair = null;
+        List<ApiKeyPairPermission> permissions = new ArrayList<>();
+        if (apiKey != null) {
+            Ternary<User, Account, ApiKeyPair> resolved = findUserByApiKey(apiKey);
+            if (resolved == null || resolved.first().getId() != caller.getId()) {
+                throw new PermissionDeniedException("API key does not belong to the calling user");
+            }
+            keyPair = resolved.third();
+            permissions = keyPairManager.findAllPermissionsByKeyPairId(keyPair.getId(), account.getRoleId());
+        }
+        for (APIAclChecker checker : getApiACLCheckers()) {
+            checker.checkAccess(caller, command, keyPair, permissions.toArray(new ApiKeyPairPermission[0]));
+        }
+    }
+
     protected List<APIAclChecker> getApiACLCheckers() {
         List<APIChecker> apiCheckers = getEnabledApiCheckers();
 

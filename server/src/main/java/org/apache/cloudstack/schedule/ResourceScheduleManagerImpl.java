@@ -168,7 +168,7 @@ public class ResourceScheduleManagerImpl extends MutualExclusiveIdsManagerBase i
             resourceType = existing.getResourceType();
         }
         if (ApiCommandResourceType.VirtualMachine == resourceType) {
-            accountManager.checkApiAccess(CallContext.current().getCallingAccount(), legacyApi, apiKey);
+            accountManager.checkApiAccessForUser(CallContext.current().getCallingUser(), legacyApi, apiKey);
         }
     }
 

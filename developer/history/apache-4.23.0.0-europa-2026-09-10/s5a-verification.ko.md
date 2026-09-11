@@ -57,7 +57,7 @@ DB 구조 전환을 검증한 소스는 `0906ef2deb`이다. 이후 소스 보완
 
 조립된 OSS 관리 서버 JAR을 전용 DB와 loopback HTTP18993으로 실행하고 두 번 재시작했다. 신규 API로 생성 → 기존 VM API로 수정 → 신규 API로 삭제하는 흐름을3회 통과했다. 기존 schedule5개는 유지됐고 version51행과 모든 migration timestamp가 보존됐다.
 
-VM schedule의 일반 API 권한만 확인하면 기존 `createVMSchedule` 등의 거부 규칙을 우회할 수 있어 추가 검사했다. VM 대상의 신규4개 API는 기존 VM API 권한도 요구한다. update는 저장된 schedule의 resource type을 사용하며 API 키를 동일하게 전달한다. AutoScaleVmGroup은 VM 전용 거부 규칙을 상속하지 않는다. 소유자 검사도 유지한다. 관리자 정상 CRUD와 권한 거부 시험은 서로 다른 검증이다.
+VM schedule의 일반 API 권한만 확인하면 기존 `createVMSchedule` 등의 거부 규칙을 우회할 수 있어 추가 검사했다. VM 대상의 신규4개 API는 기존 VM API 권한도 요구한다. update는 저장된 schedule의 resource type을 사용하며 API 키를 동일하게 전달한다. AutoScaleVmGroup은 VM 전용 거부 규칙을 상속하지 않는다. 프로젝트 역할은 사용자 기준 ACL로 확인하고 추가 권한 검사에서 rate-limit 카운터를 다시 차감하지 않는다. 소유자 검사도 유지한다. 관리자 정상 CRUD와 권한 거부 시험은 서로 다른 검증이다.
 
 관리 서버 fixture는 실제 KVM agent가 없는 환경이다. 초기 네트워크/LB, systemd Usage, 클러스터 주소·인증서 관련 백그라운드 경고는 남으며 운영 클러스터 전체 정상화를 뜻하지 않는다. 최종 권한 보완 이후 JAR의 API 결과는 검사 완료 시 이 문서에 추가한다.
 
@@ -76,7 +76,7 @@ VM schedule의 일반 API 권한만 확인하면 기존 `createVMSchedule` 등�
 
 Rocky Linux9.8 linux/amd64, JDK17, Maven3.9.10, Node14.21.3/npm6, Python3.10을 사용한다. 소스·의존성·테스트는 Docker 내부에서 수행했다. NonOSS 의존성은 공식 Actions와 같은 고정 SHA `f94b5cfcd12e7ce50f9e732ff0e12affa9030640`을 사용했다.
 
-현재 확인된 결과: UI30 suites/351 tests PASS, KVM HA/cleanup/import 집중21 tests PASS, server migration/allocator/template/API dispatcher 집중345 tests PASS. 최종 noredist+simulator clean install과 공식 Actions는 진행 중이며 최종 결과를 후속 반영한다. 중간 실행에서 발견한 미사용 import·Mockito fixture 오류를 수정했다. UI 집중 시험의 초기 exit137은 전체 coverage 수집 중 메모리 부족이며 최종 UI 전체 시험은 coverage=false로 성공했다.
+현재 확인된 결과: UI30 suites/351 tests PASS, KVM HA/cleanup/import 집중21 tests PASS, server migration/allocator/template/API dispatcher 집중345 tests PASS. 최종 noredist+simulator clean install과 공식 Actions는 진행 중이며 최종 결과를 후속 반영한다. 사용자/프로젝트/API key ACL 및 rate-limit 이중 차감 방지 보완17개 테스트도 별도 컴파일/JUnit 실행으로 통과했다. 중간 실행에서 발견한 미사용 import·Mockito fixture 오류를 수정했다. UI 집중 시험의 초기 exit137은 전체 coverage 수집 중 메모리 부족이며 최종 UI 전체 시험은 coverage=false로 성공했다.
 
 `codecov`/Sonar 등 skip은 PASS가 아니다. PR conflict triage는 다른 PR #1022에 label을 쓰는 단계에서 integration 권한 오류로 실패했다. 이를 제품 빌드 성공이나 이번 PR의 실제 충돌로 해석하지 않는다. 워크플로를 비활성화하거나 관리자 우회 merge를 사용하지 않는다.
 
