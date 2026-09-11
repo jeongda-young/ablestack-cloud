@@ -238,26 +238,26 @@ public class VolumeOrchestratorTest {
         String path = "volume path";
         String chainInfo = "chain info";
 
-        MockedConstruction<VolumeVO> volumeVOMockedConstructionConstruction = Mockito.mockConstruction(VolumeVO.class, (mock, context) -> {
-        });
+        try (MockedConstruction<VolumeVO> volumeVOMockedConstructionConstruction = Mockito.mockConstruction(VolumeVO.class)) {
 
-        VolumeVO volumeVO = Mockito.mock(VolumeVO.class);
-        Mockito.when(volumeDao.persist(Mockito.any(VolumeVO.class))).thenReturn(volumeVO);
+            VolumeVO volumeVO = Mockito.mock(VolumeVO.class);
+            Mockito.when(volumeDao.persist(Mockito.any(VolumeVO.class))).thenReturn(volumeVO);
 
-        volumeOrchestrator.importVolume(volumeType, name, diskOffering, sizeInBytes, null, null,
-                zoneId, hypervisorType, null, null, owner,
-                deviceId, poolId, Storage.StoragePoolType.NetworkFilesystem, path, chainInfo);
+            volumeOrchestrator.importVolume(volumeType, name, diskOffering, sizeInBytes, null, null,
+                    zoneId, hypervisorType, null, null, owner,
+                    deviceId, poolId, Storage.StoragePoolType.NetworkFilesystem, path, chainInfo);
 
-        VolumeVO volume = volumeVOMockedConstructionConstruction.constructed().get(0);
-        Mockito.verify(volume, Mockito.never()).setInstanceId(Mockito.anyLong());
-        Mockito.verify(volume, Mockito.never()).setAttached(Mockito.any(Date.class));
-        Mockito.verify(volume, Mockito.times(1)).setDeviceId(deviceId);
-        Mockito.verify(volume, Mockito.never()).setDisplayVolume(Mockito.any(Boolean.class));
-        Mockito.verify(volume, Mockito.times(1)).setFormat(Storage.ImageFormat.QCOW2);
-        Mockito.verify(volume, Mockito.times(1)).setPoolId(poolId);
-        Mockito.verify(volume, Mockito.times(1)).setPath(path);
-        Mockito.verify(volume, Mockito.times(1)).setChainInfo(chainInfo);
-        Mockito.verify(volume, Mockito.times(1)).setState(Volume.State.Ready);
+            VolumeVO volume = volumeVOMockedConstructionConstruction.constructed().get(0);
+            Mockito.verify(volume, Mockito.never()).setInstanceId(Mockito.anyLong());
+            Mockito.verify(volume, Mockito.never()).setAttached(Mockito.any(Date.class));
+            Mockito.verify(volume, Mockito.times(1)).setDeviceId(deviceId);
+            Mockito.verify(volume, Mockito.never()).setDisplayVolume(Mockito.any(Boolean.class));
+            Mockito.verify(volume, Mockito.times(1)).setFormat(Storage.ImageFormat.QCOW2);
+            Mockito.verify(volume, Mockito.times(1)).setPoolId(poolId);
+            Mockito.verify(volume, Mockito.times(1)).setPath(path);
+            Mockito.verify(volume, Mockito.times(1)).setChainInfo(chainInfo);
+            Mockito.verify(volume, Mockito.times(1)).setState(Volume.State.Ready);
+        }
     }
 
     @Test

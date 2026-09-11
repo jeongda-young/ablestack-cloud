@@ -535,7 +535,7 @@ public class VolumeOrchestrator extends ManagerBase implements VolumeOrchestrati
         DiskOffering diskOffering = _entityMgr.findById(DiskOffering.class, volume.getDiskOfferingId());
         if (diskOffering.getEncrypt()) {
             VolumeVO vol = (VolumeVO) volume;
-            volume = setPassphraseForVolumeEncryption(vol);
+            volume = setPassphraseForVolumeEncryption(vol, getKmsKeyFromVolume(vol), volume.getAccountId());
         }
         DataCenter dc = _entityMgr.findById(DataCenter.class, volume.getDataCenterId());
         DiskProfile dskCh = new DiskProfile(volume, diskOffering, snapshot.getHypervisorType());

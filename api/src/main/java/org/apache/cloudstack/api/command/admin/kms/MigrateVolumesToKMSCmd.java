@@ -24,10 +24,10 @@ import org.apache.cloudstack.api.ApiErrorCode;
 import org.apache.cloudstack.api.BaseAsyncCmd;
 import org.apache.cloudstack.api.Parameter;
 import org.apache.cloudstack.api.ServerApiException;
-import org.apache.cloudstack.api.response.AsyncJobResponse;
 import org.apache.cloudstack.api.response.DomainResponse;
 import org.apache.cloudstack.api.response.KMSKeyResponse;
 import org.apache.cloudstack.api.response.VolumeResponse;
+import org.apache.cloudstack.api.response.SuccessResponse;
 import org.apache.cloudstack.context.CallContext;
 import org.apache.cloudstack.framework.kms.KMSException;
 import org.apache.cloudstack.kms.KMSKey;
@@ -38,7 +38,7 @@ import java.util.List;
 
 @APICommand(name = "migrateVolumesToKMS",
             description = "Migrates encrypted volumes to KMS",
-            responseObject = AsyncJobResponse.class,
+            responseObject = SuccessResponse.class,
             since = "4.23.0",
             authorized = {RoleType.Admin},
             requestHasSensitiveInfo = false,
@@ -94,6 +94,7 @@ public class MigrateVolumesToKMSCmd extends BaseAsyncCmd {
     public void execute() {
         try {
             kmsManager.migrateVolumesToKMS(this);
+            setResponseObject(new SuccessResponse(getCommandName()));
         } catch (KMSException e) {
             throw new ServerApiException(ApiErrorCode.INTERNAL_ERROR,
                     "Failed to migrate volumes to KMS: " + e.getMessage());

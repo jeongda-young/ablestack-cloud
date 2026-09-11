@@ -99,7 +99,7 @@ public class HSMProfileResponse extends BaseResponse implements ControlledViewEn
     private Date created;
 
     @SerializedName(ApiConstants.DETAILS)
-    @Param(description = "HSM configuration details (sensitive values are encrypted)")
+    @Param(description = "HSM configuration details (sensitive values are masked)")
     private Map<String, String> details;
 
     public void setId(String id) {

@@ -924,6 +924,9 @@ public class KMSManagerImpl extends ManagerBase implements KMSManager, Pluggable
                 successCount + failureCount, kmsKey.getName(), kmsKey.getUuid(), successCount, failureCount);
         logger.info(details);
         CallContext.current().setEventDetails(details);
+        if (failureCount > 0) {
+            throw KMSException.wrapUnwrapFailed(details, null);
+        }
         return successCount;
     }
 

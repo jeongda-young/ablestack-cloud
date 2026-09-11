@@ -94,8 +94,11 @@ public class DatabaseKMSProviderTest {
         WrappedKey first = provider.wrapKey(raw, KeyPurpose.VOLUME_ENCRYPTION, "v1");
         WrappedKey second = provider.wrapKey(raw, KeyPurpose.VOLUME_ENCRYPTION, "v1");
         assertFalse(java.util.Arrays.equals(first.getWrappedKeyMaterial(), second.getWrappedKeyMaterial()));
-        first.getWrappedKeyMaterial()[13] ^= 1;
-        assertThrows(KMSException.class, () -> provider.unwrapKey(first));
+        byte[] corrupted = first.getWrappedKeyMaterial();
+        corrupted[13] ^= 1;
+        WrappedKey tampered = new WrappedKey(first.getKekId(), first.getPurpose(), first.getAlgorithm(),
+                corrupted, first.getProviderName(), first.getCreated(), first.getZoneId());
+        assertThrows(KMSException.class, () -> provider.unwrapKey(tampered));
         assertArrayEquals(raw, provider.unwrapKey(second));
     }
 
