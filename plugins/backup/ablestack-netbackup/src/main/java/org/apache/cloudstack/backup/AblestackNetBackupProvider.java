@@ -103,6 +103,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.cloudstack.backup.BackupManager.BackupChainSize;
 import static org.apache.cloudstack.backup.BackupManager.BackupCommandTimeout;
+import static org.apache.cloudstack.backup.BackupManager.BackupQosBandwidthLimitMbps;
 import static org.apache.cloudstack.backup.BackupManager.BackupFrameworkEnabled;
 import static org.apache.cloudstack.backup.BackupManager.BackupRestoreTimeout;
 import static org.apache.cloudstack.backup.BackupManager.KvmIncrementalBackup;
@@ -209,7 +210,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
     }
 
     @Override
-    public Pair<Boolean, Backup> takeBackup(final VirtualMachine vm, final Boolean quiesceVM, final Long backupScheduleId) {
+    public Pair<Boolean, Backup> takeBackup(final VirtualMachine vm, final Boolean quiesceVM, boolean isolated, final Long backupScheduleId) {
         final Host host = getVMHypervisorHostForBackup(vm);
         validateVmSnapshotCoexistenceForBackup(vm);
 
@@ -293,6 +294,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         command.setCheckpointName(checkpointName);
         command.setBackupFiles(backupFiles);
         command.setPolicyId(backupDetails.get(DETAIL_POLICY_NAME));
+        command.setBandwidthLimitMbps(BackupQosBandwidthLimitMbps.value());
         if (incrementalBackup && latestBackup != null) {
             command.setParentBackupPath(getBackupDetail(latestBackup, DETAIL_PARENT_BACKUP_PATH,
                     latestBackup.getExternalId()));
@@ -1112,7 +1114,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
     }
 
     @Override
-    public Pair<Boolean, String> restoreBackupToVM(final VirtualMachine vm, final Backup backup, final String hostIp, final String dataStoreUuid) {
+    public Pair<Boolean, String> restoreBackupToVM(final VirtualMachine vm, final Backup backup, final String hostIp, final String dataStoreUuid, boolean quickRestore) {
         return restoreVirtualMachine(vm, backup, hostIp);
     }
 
@@ -1132,7 +1134,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
     }
 
     @Override
-    public boolean restoreVMFromBackup(final VirtualMachine vm, final Backup backup) {
+    public boolean restoreVMFromBackup(final VirtualMachine vm, final Backup backup, boolean quickRestore, Long hostId) {
         return restoreVirtualMachine(vm, backup, null, false).first();
     }
 
@@ -1285,7 +1287,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
 
     @Override
     public Pair<Boolean, String> restoreBackedUpVolume(final Backup backup, final Backup.VolumeInfo backupVolumeInfo, final String hostIp,
-            final String dataStoreUuid, final Pair<String, VirtualMachine.State> vmNameAndState) {
+            final String dataStoreUuid, final Pair<String, VirtualMachine.State> vmNameAndState, VirtualMachine targetVm, boolean quickRestore) {
         loadBackupDetailsIfNeeded(backup);
         validateRestoreChainIntegrity(backup);
 

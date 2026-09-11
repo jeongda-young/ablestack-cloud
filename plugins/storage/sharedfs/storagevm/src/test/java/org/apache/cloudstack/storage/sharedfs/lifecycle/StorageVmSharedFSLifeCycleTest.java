@@ -251,6 +251,7 @@ public class StorageVmSharedFSLifeCycleTest {
         when(sharedFS.getName()).thenReturn(s_name);
         when(sharedFS.getServiceOfferingId()).thenReturn(s_serviceOfferingId);
         when(sharedFS.getFsType()).thenReturn(SharedFS.FileSystemType.valueOf(s_fsFormat));
+        when(sharedFS.getNetworkMode()).thenReturn(SharedFS.NetworkMode.DHCP);
         when(sharedFS.getAccountId()).thenReturn(s_ownerId);
 
         DataCenterVO zone = mock(DataCenterVO.class);
@@ -283,7 +284,7 @@ public class StorageVmSharedFSLifeCycleTest {
                 anyString(), anyLong(), anyLong(), any(), isNull(), any(Hypervisor.HypervisorType.class), any(BaseCmd.HTTPMethod.class), anyString(),
                 isNull(), isNull(), anyList(), isNull(), any(Network.IpAddresses.class), isNull(), isNull(), isNull(),
                 anyMap(), isNull(), isNull(), isNull(), isNull(),
-                anyBoolean(), anyString(), isNull(), isNull(), isNull())).thenReturn(vm);
+                anyBoolean(), anyString(), isNull(), isNull(), isNull(), isNull())).thenReturn(vm);
 
         VolumeVO rootVol = mock(VolumeVO.class);
         when(rootVol.getVolumeType()).thenReturn(Volume.Type.ROOT);

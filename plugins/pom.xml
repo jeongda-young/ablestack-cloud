@@ -69,6 +69,7 @@
         <module>backup/veeam</module>
         <module>backup/ablestack-veeam</module>
         <module>backup/bx</module>
+        <module>backup/kboss</module>
 
         <module>ca/root-ca</module>
 
@@ -90,8 +91,6 @@
 
         <module>ha-planners/skip-heurestics</module>
 
-        <module>host-allocators/random</module>
-
         <module>hypervisors/baremetal</module>
         <module>hypervisors/external</module>
         <module>hypervisors/hyperv</module>
@@ -109,6 +108,10 @@
         <module>integrations/automation-service</module>
         <module>integrations/disaster-recovery</module>
         <module>integrations/rack-management</module>
+        <module>integrations/veeam-control-service</module>
+
+        <module>kms</module>
+
         <module>metrics</module>
 
         <module>network-elements/bigswitch</module>
@@ -218,13 +221,13 @@
         <dependency>
             <groupId>io.minio</groupId>
             <artifactId>minio</artifactId>
-            <version>8.5.2</version>
+            <version>${cs.minio.version}</version>
             <scope>compile</scope>
         </dependency>
         <dependency>
             <groupId>io.minio</groupId>
             <artifactId>minio-admin</artifactId>
-            <version>8.5.2</version>
+            <version>${cs.minio.version}</version>
             <scope>compile</scope>
         </dependency>
         <dependency>

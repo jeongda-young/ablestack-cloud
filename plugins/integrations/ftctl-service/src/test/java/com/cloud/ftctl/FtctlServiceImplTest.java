@@ -1488,8 +1488,9 @@ public class FtctlServiceImplTest {
         RegisterFtctlProtectionCmd cmd = buildRegisterCmd();
         setField(cmd, "mode", "ft");
         setField(cmd, "provisioningBackend", FtctlProtectionProvisioningService.BACKEND_CLOUD_MANAGED);
-        setField(cmd, "xcoloProxyEndpoint", "10.0.0.11:9001");
-        setField(cmd, "xcoloNbdEndpoint", "10.0.0.11:10809");
+        setField(cmd, "xcoloPortAllocationMode", "manual");
+        setField(cmd, "xcoloProxyEndpoint", "tcp:10.0.0.11:9001");
+        setField(cmd, "xcoloNbdEndpoint", "tcp:10.0.0.12:10809");
         setField(cmd, "xcoloMigrateUri", "tcp:10.0.0.12:9000");
         vmDetails.put("101:" + VmDetailConstants.KVM_GUEST_OS_MACHINE_TYPE, "pc-i440fx-9.2");
         Mockito.when(userVm.isHaEnabled()).thenReturn(true);
@@ -1497,6 +1498,8 @@ public class FtctlServiceImplTest {
         HostVO peerHost = mockHost(202L, 301L, "10.0.0.12");
         Mockito.when(hostDao.findById(201L)).thenReturn(localHost);
         Mockito.when(hostDao.findById(202L)).thenReturn(peerHost);
+        FtctlProtectionVO protection = new FtctlProtectionVO(101L);
+        Mockito.when(ftctlProtectionDao.findActiveByPrimaryVmId(101L)).thenReturn(protection);
         Mockito.doReturn(new FtctlProtectionProvisioningContext(
                 FtctlProtectionProvisioningService.BACKEND_CLOUD_MANAGED,
                 FtctlProtectionProvisioningService.STATE_READY,
@@ -1533,8 +1536,9 @@ public class FtctlServiceImplTest {
         RegisterFtctlProtectionCmd cmd = buildRegisterCmd();
         setField(cmd, "mode", "ft");
         setField(cmd, "provisioningBackend", FtctlProtectionProvisioningService.BACKEND_CLOUD_MANAGED);
-        setField(cmd, "xcoloProxyEndpoint", "10.0.0.11:9001");
-        setField(cmd, "xcoloNbdEndpoint", "10.0.0.11:10809");
+        setField(cmd, "xcoloPortAllocationMode", "manual");
+        setField(cmd, "xcoloProxyEndpoint", "tcp:10.0.0.11:9001");
+        setField(cmd, "xcoloNbdEndpoint", "tcp:10.0.0.12:10809");
         setField(cmd, "xcoloMigrateUri", "tcp:10.0.0.12:9000");
 
         try {
@@ -1554,8 +1558,9 @@ public class FtctlServiceImplTest {
         RegisterFtctlProtectionCmd cmd = buildRegisterCmd();
         setField(cmd, "mode", "ft");
         setField(cmd, "provisioningBackend", FtctlProtectionProvisioningService.BACKEND_CLOUD_MANAGED);
-        setField(cmd, "xcoloProxyEndpoint", "10.0.0.11:9001");
-        setField(cmd, "xcoloNbdEndpoint", "10.0.0.11:10809");
+        setField(cmd, "xcoloPortAllocationMode", "manual");
+        setField(cmd, "xcoloProxyEndpoint", "tcp:10.0.0.11:9001");
+        setField(cmd, "xcoloNbdEndpoint", "tcp:10.0.0.12:10809");
         setField(cmd, "xcoloMigrateUri", "tcp:10.0.0.12:9000");
         vmDetails.put("101:" + VmDetailConstants.KVM_GUEST_OS_MACHINE_TYPE, "pc-q35-9.2");
 
@@ -1717,7 +1722,6 @@ public class FtctlServiceImplTest {
         vmDetails.put("101:" + VmDetailConstants.KVM_GUEST_OS_MACHINE_TYPE, "pc-i440fx-9.2");
 
         StoragePoolVO clusterPool = mockStoragePool();
-        Mockito.when(clusterPool.getScope()).thenReturn(ScopeType.CLUSTER);
         Mockito.when(clusterPool.getPath()).thenReturn("rbd");
         Mockito.when(primaryDataStoreDao.findById(501L)).thenReturn(clusterPool);
         FtctlProtectionVO protection = new FtctlProtectionVO(101L);

@@ -215,6 +215,7 @@ public class LoadBalancingRulesManagerImplTest{
         when(_lbDao.findById(lbRuleId)).thenReturn(loadBalancerMock);
         when(loadBalancerMock.getId()).thenReturn(lbRuleId);
         when(loadBalancerMock.getNetworkId()).thenReturn(networkId);
+        when(_networkDao.findById(networkId)).thenReturn(networkMock);
 
         Mockito.doNothing().when(_accountMgr).checkAccess(Mockito.any(Account.class), Mockito.isNull(SecurityChecker.AccessType.class), Mockito.eq(true), Mockito.any(LoadBalancerVO.class));
 

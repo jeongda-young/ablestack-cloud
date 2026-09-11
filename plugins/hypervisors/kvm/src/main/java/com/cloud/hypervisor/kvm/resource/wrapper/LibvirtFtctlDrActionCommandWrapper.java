@@ -511,12 +511,21 @@ public class LibvirtFtctlDrActionCommandWrapper extends CommandWrapper<FtctlDrAc
         if (exitValue == 0 && payload != null) {
             return false;
         }
+        if (payload != null && isCommitAcknowledgementTimeout(payload)) {
+            return true;
+        }
         if (payload != null && isSemanticFailureStatus(payload)) {
             return false;
         }
         return StringUtils.isBlank(output)
                 || containsTransportFailure(result)
                 || (payload == null && containsTransportFailure(output));
+    }
+
+    private static boolean isCommitAcknowledgementTimeout(JsonObject payload) {
+        String errorCode = LibvirtFtctlDrCommandHelper.getString(payload, "error_code");
+        return StringUtils.equalsAnyIgnoreCase(errorCode,
+                "DR_FAILBACK_COMMIT_ACK_TIMEOUT", "DR_CUTOVER_COMMIT_ACK_TIMEOUT");
     }
 
     private static boolean containsTransportFailure(String value) {

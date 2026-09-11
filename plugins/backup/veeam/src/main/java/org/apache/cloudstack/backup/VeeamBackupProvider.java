@@ -221,7 +221,7 @@ public class VeeamBackupProvider extends AdapterBase implements BackupProvider, 
     }
 
     @Override
-    public Pair<Boolean, Backup> takeBackup(final VirtualMachine vm, Boolean quiesceVM) {
+    public Pair<Boolean, Backup> takeBackup(final VirtualMachine vm, Boolean quiesceVM, boolean isolated, Long backupScheduleId) {
         final VeeamClient client = getClient(vm.getDataCenterId());
         Boolean result = client.startBackupJob(vm.getBackupExternalId());
         return new Pair<Boolean, Backup>(result, null);
@@ -258,7 +258,7 @@ public class VeeamBackupProvider extends AdapterBase implements BackupProvider, 
     }
 
     @Override
-    public boolean restoreVMFromBackup(VirtualMachine vm, Backup backup) {
+    public boolean restoreVMFromBackup(VirtualMachine vm, Backup backup, boolean quickRestore, Long hostId) {
         final String restorePointId = backup.getExternalId();
         try {
             return getClient(vm.getDataCenterId()).restoreFullVM(vm.getInstanceName(), restorePointId);
@@ -293,7 +293,8 @@ public class VeeamBackupProvider extends AdapterBase implements BackupProvider, 
     }
 
     @Override
-    public Pair<Boolean, String> restoreBackedUpVolume(Backup backup, Backup.VolumeInfo backupVolumeInfo, String hostIp, String dataStoreUuid, Pair<String, VirtualMachine.State> vmNameAndState) {
+    public Pair<Boolean, String> restoreBackedUpVolume(Backup backup, Backup.VolumeInfo backupVolumeInfo, String hostIp, String dataStoreUuid,
+            Pair<String, VirtualMachine.State> vmNameAndState, VirtualMachine vm, boolean quickRestore) {
         final Long zoneId = backup.getZoneId();
         final String restorePointId = backup.getExternalId();
         return getClient(zoneId).restoreVMToDifferentLocation(restorePointId, null, hostIp, dataStoreUuid);
@@ -339,7 +340,7 @@ public class VeeamBackupProvider extends AdapterBase implements BackupProvider, 
     }
 
     @Override
-    public Pair<Boolean, String> restoreBackupToVM(VirtualMachine vm, Backup backup, String hostIp, String dataStoreUuid) {
+    public Pair<Boolean, String> restoreBackupToVM(VirtualMachine vm, Backup backup, String hostIp, String dataStoreUuid, boolean quickrestore) {
         final Long zoneId = backup.getZoneId();
         final String restorePointId = backup.getExternalId();
         final String restoreLocation = vm.getInstanceName();

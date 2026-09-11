@@ -90,6 +90,7 @@ import static org.apache.cloudstack.backup.BackupManager.BackupChainSize;
 import static org.apache.cloudstack.backup.BackupManager.BackupCommandTimeout;
 import static org.apache.cloudstack.backup.BackupManager.BackupRestoreTimeout;
 import static org.apache.cloudstack.backup.BackupManager.BackupFrameworkEnabled;
+import static org.apache.cloudstack.backup.BackupManager.BackupQosBandwidthLimitMbps;
 import static org.apache.cloudstack.backup.BackupManager.KvmIncrementalBackup;
 
 public class AblestackNasBackupProvider extends AdapterBase implements BackupProvider, Configurable {
@@ -269,7 +270,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
     }
 
     @Override
-    public Pair<Boolean, Backup> takeBackup(final VirtualMachine vm, Boolean quiesceVM, Long backupScheduleId) {
+    public Pair<Boolean, Backup> takeBackup(final VirtualMachine vm, Boolean quiesceVM, boolean isolated, Long backupScheduleId) {
         final Host host = getVMHypervisorHostForBackup(vm);
 
         final BackupRepository backupRepository = backupRepositoryDao.findByBackupOfferingId(vm.getBackupOfferingId());
@@ -403,6 +404,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         command.setMountOptions(backupRepository.getMountOptions());
         command.setMountTimeout(NASBackupRestoreMountTimeout.value());
         command.setQuiesce(quiesceVM);
+        command.setBandwidthLimitMbps(BackupQosBandwidthLimitMbps.value());
 
         BackupAnswer answer;
         final long backupStartTime = System.currentTimeMillis();
@@ -837,12 +839,12 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
     }
 
     @Override
-    public Pair<Boolean, String> restoreBackupToVM(VirtualMachine vm, Backup backup, String hostIp, String dataStoreUuid) {
+    public Pair<Boolean, String> restoreBackupToVM(VirtualMachine vm, Backup backup, String hostIp, String dataStoreUuid, boolean quickRestore) {
         return restoreVMBackup(vm, backup);
     }
 
     @Override
-    public boolean restoreVMFromBackup(VirtualMachine vm, Backup backup) {
+    public boolean restoreVMFromBackup(VirtualMachine vm, Backup backup, boolean quickRestore, Long hostId) {
         return restoreVMBackup(vm, backup).first();
     }
 
@@ -1150,7 +1152,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
     }
 
     @Override
-    public Pair<Boolean, String> restoreBackedUpVolume(Backup backup, Backup.VolumeInfo backupVolumeInfo, String hostIp, String dataStoreUuid, Pair<String, VirtualMachine.State> vmNameAndState) {
+    public Pair<Boolean, String> restoreBackedUpVolume(Backup backup, Backup.VolumeInfo backupVolumeInfo, String hostIp, String dataStoreUuid, Pair<String, VirtualMachine.State> vmNameAndState, VirtualMachine targetVm, boolean quickRestore) {
         validateRestoreChainIntegrity(backup);
         final VolumeVO volume = volumeDao.findByUuid(backupVolumeInfo.getUuid());
         final DiskOffering diskOffering = diskOfferingDao.findByUuid(backupVolumeInfo.getDiskOfferingId());

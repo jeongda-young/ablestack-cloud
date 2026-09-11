@@ -111,6 +111,7 @@ import javax.inject.Inject;
 
 import static org.apache.cloudstack.backup.BackupManager.BackupChainSize;
 import static org.apache.cloudstack.backup.BackupManager.BackupCommandTimeout;
+import static org.apache.cloudstack.backup.BackupManager.BackupQosBandwidthLimitMbps;
 import static org.apache.cloudstack.backup.BackupManager.BackupRestoreTimeout;
 import static org.apache.cloudstack.backup.BackupManager.KvmIncrementalBackup;
 
@@ -319,7 +320,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
     }
 
     @Override
-    public Pair<Boolean, Backup> takeBackup(VirtualMachine vm, Boolean quiesceVM, Long backupScheduleId) {
+    public Pair<Boolean, Backup> takeBackup(VirtualMachine vm, Boolean quiesceVM, boolean isolated, Long backupScheduleId) {
         final Host vmHost = getVMHypervisorHostForBackup(vm);
         final HostVO vmHostVO = hostDao.findById(vmHost.getId());
         validateNoKvmFileBasedVmSnapshots(vm);
@@ -692,6 +693,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         command.setBackupType(requestedBackupType);
         command.setCheckpointName(checkpointName);
         command.setBackupFiles(backupFiles);
+        command.setBandwidthLimitMbps(BackupQosBandwidthLimitMbps.value());
         if (incrementalBackup && latestBackup != null) {
             command.setParentBackupPath(getBackupPathFromExternalId(latestBackup));
             command.setParentCheckpointName(getBackupDetail(latestBackup, DETAIL_CHECKPOINT_NAME));
@@ -1372,13 +1374,13 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
 
     // 백업에서 새 인스턴스 생성
     @Override
-    public Pair<Boolean, String> restoreBackupToVM(VirtualMachine vm, Backup backup, String hostIp, String dataStoreUuid) {
+    public Pair<Boolean, String> restoreBackupToVM(VirtualMachine vm, Backup backup, String hostIp, String dataStoreUuid, boolean quickRestore) {
         return restoreVMBackup(vm, backup);
     }
 
     // 가상머신 백업 복원
     @Override
-    public boolean restoreVMFromBackup(VirtualMachine vm, Backup backup) {
+    public boolean restoreVMFromBackup(VirtualMachine vm, Backup backup, boolean quickRestore, Long hostId) {
         return restoreVMBackup(vm, backup).first();
     }
 
@@ -1527,7 +1529,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
 
     // 백업 볼륨 복원 및 연결
     @Override
-    public Pair<Boolean, String> restoreBackedUpVolume(Backup backup, Backup.VolumeInfo backupVolumeInfo, String hostIp, String dataStoreUuid, Pair<String, VirtualMachine.State> vmNameAndState) {
+    public Pair<Boolean, String> restoreBackedUpVolume(Backup backup, Backup.VolumeInfo backupVolumeInfo, String hostIp, String dataStoreUuid, Pair<String, VirtualMachine.State> vmNameAndState, VirtualMachine targetVm, boolean quickRestore) {
         validateRestoreChainIntegrity(backup);
         loadBackupDetailsIfNeeded(backup);
         try {
