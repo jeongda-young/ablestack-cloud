@@ -268,6 +268,11 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     }
 
     @Override
+    public Pair<Boolean, Backup> takeBackup(final VirtualMachine vm, final Boolean quiesceVM, final boolean isolated, final Long backupScheduleId) {
+        return takeBackup(vm, quiesceVM, backupScheduleId, null);
+    }
+
+    @Override
     public Pair<Boolean, Backup> takeBackup(final VirtualMachine vm, final Boolean quiesceVM, final Long backupScheduleId) {
         return takeBackup(vm, quiesceVM, backupScheduleId, null);
     }
@@ -1220,7 +1225,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     }
 
     @Override
-    public Pair<Boolean, String> restoreBackupToVM(final VirtualMachine vm, final Backup backup, final String hostIp, final String dataStoreUuid) {
+    public Pair<Boolean, String> restoreBackupToVM(final VirtualMachine vm, final Backup backup, final String hostIp, final String dataStoreUuid, final boolean quickRestore) {
         return restoreVirtualMachine(vm, backup, hostIp);
     }
 
@@ -1240,7 +1245,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     }
 
     @Override
-    public boolean restoreVMFromBackup(final VirtualMachine vm, final Backup backup) {
+    public boolean restoreVMFromBackup(final VirtualMachine vm, final Backup backup, final boolean quickRestore, final Long hostId) {
         return restoreVirtualMachine(vm, backup, null, false).first();
     }
 
@@ -1396,7 +1401,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
 
     @Override
     public Pair<Boolean, String> restoreBackedUpVolume(final Backup backup, final Backup.VolumeInfo backupVolumeInfo, final String hostIp,
-            final String dataStoreUuid, final Pair<String, VirtualMachine.State> vmNameAndState) {
+            final String dataStoreUuid, final Pair<String, VirtualMachine.State> vmNameAndState, final VirtualMachine targetVm, final boolean quickRestore) {
         loadBackupDetailsIfNeeded(backup);
         validateRestoreChainIntegrity(backup);
 
