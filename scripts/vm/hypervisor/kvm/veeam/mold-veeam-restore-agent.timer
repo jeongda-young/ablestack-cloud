@@ -20,9 +20,12 @@ Description=Poll Veeam restores and trigger Mold datadisk restore every 3 minute
 
 [Timer]
 OnBootSec=1min
+# Calendar keeps polling even if a previous oneshot hung until TimeoutStartSec.
+OnCalendar=*:0/3
 OnUnitActiveSec=3min
 AccuracySec=30s
 Persistent=true
+Unit=mold-veeam-restore-agent.service
 
 [Install]
 WantedBy=timers.target

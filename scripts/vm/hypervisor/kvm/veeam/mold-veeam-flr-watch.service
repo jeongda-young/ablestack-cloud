@@ -15,22 +15,22 @@
 # specific language governing permissions and limitations
 # under the License.
 
-# Polls Veeam for completed restore sessions and triggers Mold datadisk restore on the
-# KVM host that owns the VM. Uses the Veeam UI restore point id to select the matching
-# Mold backup_id (not always the latest).
+# Watches /tmp/mold/veeam-agent for Veeam UI FLR file drops and triggers Mold
+# restore immediately (seconds), without waiting for the 3-minute poll timer.
 [Unit]
-Description=Mold Veeam restore agent (detect Veeam restore, trigger Mold restore)
-After=network-online.target cloudstack-agent.service
+Description=Mold Veeam FLR immediate watch (agent payload → Mold restore)
+After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=oneshot
-# Veeam SSH cleanup can hang forever without this; timer must stay schedulable.
-TimeoutStartSec=120
-TimeoutStopSec=30
+Type=simple
 EnvironmentFile=-/etc/ablestack/veeam/mold-backup.env
-Environment="MOLD_BACKUP_CONF=/etc/ablestack/veeam/Mold_Host_Backup.conf"
-ExecStart=/etc/ablestack/veeam/mold-veeam-restore-agent.sh
+Environment=FLR_WATCH_INTERVAL_SEC=1
+Environment=FLR_WATCH_QUIET_SEC=2
+Environment=FLR_WATCH_PUBLISH_GRACE_SEC=120
+ExecStart=/etc/ablestack/veeam/mold-veeam-flr-watch.sh
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

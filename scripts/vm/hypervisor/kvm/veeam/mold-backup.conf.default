@@ -14,6 +14,8 @@ BACKUP_OFFERING_NAME="VeeamBackup"
 # --- Job (policy) ---
 VEEAM_JOB_NAME=""
 VEEAM_SCHEDULE_NAME="default"
+# Mold UI interval type for Veeam Job triggers (not a Mold schedule).
+VEEAM_BACKUP_INTERVAL_TYPE="EXTERNAL"
 VEEAM_MAX_CHAIN="7"
 ZONE_ID=""
 RETENTION_PERIOD="P7D"
@@ -49,6 +51,8 @@ BACKUP_REPO_NAME="Ablestack Data Disk"
 NAS_REPO_MOUNT=""
 
 VEEAM_HOST_BACKUP_PATH="/tmp/mold/veeam"
+# Veeam Agent SelectedFiles — RBD sparse .raw stays under VEEAM_HOST_BACKUP_PATH (Mold restore only)
+VEEAM_AGENT_PAYLOAD_PATH="/tmp/mold/veeam-agent"
 STAGING_PATH="/tmp/mold/veeam"
 KVM_PRE_NOTIFY_SCRIPT="/etc/ablestack/veeam/ablestack_veeam_pre_notify.sh"
 KVM_POST_NOTIFY_SCRIPT="/etc/ablestack/veeam/ablestack_veeam_post_notify.sh"
@@ -70,7 +74,8 @@ VEEAM_RESTORE_VM=""
 BACKUP_MODE="host"
 IMPORT_MODE="auto"
 
-CLEANUP_STAGING_AFTER_BACKUP="true"
+# Must stay false when STAGING_PATH == VEEAM_HOST_BACKUP_PATH (durable Mold RBD/qcow2 stage).
+CLEANUP_STAGING_AFTER_BACKUP="false"
 NAS_BACKUP_SCRIPT="/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/ablestack_nasbackup.sh"
 CVT_BACKUP_SCRIPT="/etc/ablestack/veeam/ablestack_cvtbackup.sh"
 LOG_FILE="/var/log/mold/veeam-hook.log"
