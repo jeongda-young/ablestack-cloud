@@ -20,7 +20,7 @@
 set -eo pipefail
 
 # Ablestack Veeam host-mode disk export (libvirt FULL/INCREMENTAL → staging).
-# Same implementation as scripts/vm/hypervisor/kvm/ablestack_cvtbackup.sh (Commvault agent path).
+# Commvault agent path remains scripts/vm/hypervisor/kvm/ablestack_cvtbackup.sh.
 
 # TODO: do libvirt/logging etc checks
 

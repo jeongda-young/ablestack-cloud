@@ -310,6 +310,13 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
     boolean restoreBackup(final Long backupId, boolean quickRestore, Long hostId);
 
     /**
+     * Compatibility for leftover callers that still pass only backupId.
+     */
+    default boolean restoreBackup(final Long backupId) {
+        return restoreBackup(backupId, false, null);
+    }
+
+    /**
      * Restore a VM from NetBackup using a restore pathname.
      */
     boolean restoreNetBackup(final RestoreNetBackupCmd cmd);

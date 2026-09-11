@@ -47,29 +47,24 @@ done
 EXPORT_SRC=""
 for _export_candidate in \
   "${ABLESTACK_HOST_EXPORT_SRC:-}" \
-  "${ABLESTACK_CVT_BACKUP_SRC:-}" \
-  "${SCRIPT_DIR}/ablestack_veeam_host_export.sh" \
-  "${SCRIPT_DIR}/ablestack_cvtbackup.sh" \
-  "${SCRIPT_DIR}/../ablestack_cvtbackup.sh" \
-  "/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/ablestack_cvtbackup.sh"; do
+  "${SCRIPT_DIR}/ablestack_veeam_host_export.sh"; do
   [[ -n "${_export_candidate}" && -f "${_export_candidate}" ]] || continue
   EXPORT_SRC="${_export_candidate}"
   break
 done
 if [[ -n "${EXPORT_SRC}" ]]; then
-  # Primary Veeam name + legacy Commvault filename (agent/Commvault still use cvtbackup).
+  # Veeam-only copies. Never overwrite Commvault's kvm/ablestack_cvtbackup.sh.
   install -m 0755 "${EXPORT_SRC}" "${ETC_DIR}/ablestack_veeam_host_export.sh"
   install -m 0755 "${EXPORT_SRC}" "${ETC_DIR}/ablestack_cvtbackup.sh"
   install -m 0755 "${EXPORT_SRC}" "${SHARE_DIR}/ablestack_veeam_host_export.sh"
   install -m 0755 "${EXPORT_SRC}" "${SHARE_DIR}/ablestack_cvtbackup.sh"
-  CS_CVT_DIR="/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm"
-  if [[ -d "${CS_CVT_DIR}" ]]; then
-    install -m 0755 "${EXPORT_SRC}" "${CS_CVT_DIR}/ablestack_cvtbackup.sh"
-    install -m 0755 "${EXPORT_SRC}" "${CS_CVT_DIR}/ablestack_veeam_host_export.sh"
+  CS_KVM_DIR="/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm"
+  if [[ -d "${CS_KVM_DIR}" ]]; then
+    install -m 0755 "${EXPORT_SRC}" "${CS_KVM_DIR}/ablestack_veeam_host_export.sh"
   fi
   echo "Installed host export script: ${ETC_DIR}/ablestack_veeam_host_export.sh (from ${EXPORT_SRC})"
 else
-  echo "ERROR: host export script not found (ablestack_veeam_host_export.sh / ablestack_cvtbackup.sh)." >&2
+  echo "ERROR: host export script not found (ablestack_veeam_host_export.sh)." >&2
   echo "  Copy scripts/vm/hypervisor/kvm/veeam/ or set ABLESTACK_HOST_EXPORT_SRC=/path/to/script" >&2
   exit 1
 fi
@@ -77,22 +72,21 @@ fi
 NAS_SRC=""
 for _nas_candidate in \
   "${ABLESTACK_NAS_BACKUP_SRC:-}" \
-  "${SCRIPT_DIR}/ablestack_nasbackup.sh" \
-  "${SCRIPT_DIR}/../ablestack_nasbackup.sh" \
-  "/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/ablestack_nasbackup.sh"; do
+  "${SCRIPT_DIR}/ablestack_veeam_nasbackup.sh" \
+  "${SCRIPT_DIR}/../ablestack_veeam_nasbackup.sh"; do
   [[ -n "${_nas_candidate}" && -f "${_nas_candidate}" ]] || continue
   NAS_SRC="${_nas_candidate}"
   break
 done
 if [[ -n "${NAS_SRC}" ]]; then
-  install -m 0755 "${NAS_SRC}" "${ETC_DIR}/ablestack_nasbackup.sh"
-  install -m 0755 "${NAS_SRC}" "${SHARE_DIR}/ablestack_nasbackup.sh"
+  install -m 0755 "${NAS_SRC}" "${ETC_DIR}/ablestack_veeam_nasbackup.sh"
+  install -m 0755 "${NAS_SRC}" "${SHARE_DIR}/ablestack_veeam_nasbackup.sh"
   CS_KVM_DIR="/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm"
   install -d -m 0755 "${CS_KVM_DIR}"
-  install -m 0755 "${NAS_SRC}" "${CS_KVM_DIR}/ablestack_nasbackup.sh"
-  echo "Installed NAS backup script: ${CS_KVM_DIR}/ablestack_nasbackup.sh (from ${NAS_SRC})"
+  install -m 0755 "${NAS_SRC}" "${CS_KVM_DIR}/ablestack_veeam_nasbackup.sh"
+  echo "Installed Veeam NAS backup script: ${ETC_DIR}/ablestack_veeam_nasbackup.sh (from ${NAS_SRC})"
 else
-  echo "WARN: ablestack_nasbackup.sh not found — import-veeam-seed requires agent + this script" >&2
+  echo "WARN: ablestack_veeam_nasbackup.sh not found — import-veeam-seed requires agent + this script" >&2
 fi
 
 install -m 0644 "${SCRIPT_DIR}/mold-ms-backup-schema-fix.sql" "${SHARE_DIR}/mold-ms-backup-schema-fix.sql" 2>/dev/null || true

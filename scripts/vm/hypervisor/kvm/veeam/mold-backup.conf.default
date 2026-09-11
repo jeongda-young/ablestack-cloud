@@ -76,7 +76,7 @@ IMPORT_MODE="auto"
 
 # Must stay false when STAGING_PATH == VEEAM_HOST_BACKUP_PATH (durable Mold RBD/qcow2 stage).
 CLEANUP_STAGING_AFTER_BACKUP="false"
-NAS_BACKUP_SCRIPT="/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/ablestack_nasbackup.sh"
-CVT_BACKUP_SCRIPT="/etc/ablestack/veeam/ablestack_cvtbackup.sh"
+NAS_BACKUP_SCRIPT="/etc/ablestack/veeam/ablestack_veeam_nasbackup.sh"
+CVT_BACKUP_SCRIPT="/etc/ablestack/veeam/ablestack_veeam_host_export.sh"
 LOG_FILE="/var/log/mold/veeam-hook.log"
 LOG_TAG="mold-veeam-hook"

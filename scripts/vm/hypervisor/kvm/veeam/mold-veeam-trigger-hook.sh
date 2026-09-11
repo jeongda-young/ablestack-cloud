@@ -17,7 +17,7 @@
 # under the License.
 
 # Mold -> Veeam trigger (bidirectional mode C).
-# Invoked best-effort by ablestack_nasbackup.sh after a VM backup completes.
+# Invoked best-effort by ablestack_veeam_nasbackup.sh after a VM backup completes.
 # Starts the matching Veeam Agent job over SSH unless the current backup was
 # itself triggered by Veeam (veeam-active marker present).
 #

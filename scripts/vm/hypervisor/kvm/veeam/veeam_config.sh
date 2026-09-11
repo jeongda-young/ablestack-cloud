@@ -517,7 +517,7 @@ VM_NAME="${VM_NAME_CFG}"
 CLEANUP_STAGING_AFTER_BACKUP="false"
 CLEANUP_STAGING_ON_ERROR="true"
 
-NAS_BACKUP_SCRIPT="/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/ablestack_nasbackup.sh"
+NAS_BACKUP_SCRIPT="/etc/ablestack/veeam/ablestack_veeam_nasbackup.sh"
 HOST_EXPORT_SCRIPT="/etc/ablestack/veeam/ablestack_veeam_host_export.sh"
 CVT_BACKUP_SCRIPT="${HOST_EXPORT_SCRIPT}"
 LOG_FILE="/var/log/mold/veeam-hook.log"

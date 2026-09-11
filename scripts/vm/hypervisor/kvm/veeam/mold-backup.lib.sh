@@ -27,7 +27,7 @@ VEEAM_HOST_BACKUP_PATH="${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}"
 # .raw/.rbdiff for restore; Agent SyncDirs must only see this payload tree (markers / qcow2).
 VEEAM_AGENT_PAYLOAD_PATH="${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}"
 CVT_BACKUP_SCRIPT="${CVT_BACKUP_SCRIPT:-}"
-# Veeam host-mode disk export (libvirt → /tmp/mold/veeam). Legacy name: ablestack_cvtbackup.sh
+# Veeam host-mode disk export (libvirt → /tmp/mold/veeam). Never use Commvault kvm/ablestack_cvtbackup.sh.
 HOST_EXPORT_SCRIPT="${HOST_EXPORT_SCRIPT:-${CVT_BACKUP_SCRIPT:-}}"
 
 # Strip ASCII + Unicode curly/smart quotes from conf/UI-pasted values.
@@ -46,17 +46,52 @@ mold_backup_normalize_job_name() {
   mold_backup_strip_wrapping_quotes "${1:-}"
 }
 
+mold_backup_is_shared_provider_script() {
+  # NAS/NetBackup/Commvault originals live next to other kvm scripts; Veeam must not reuse them.
+  case "$1" in
+    */hypervisor/kvm/ablestack_nasbackup.sh|*/hypervisor/kvm/ablestack_cvtbackup.sh) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
 mold_backup_resolve_host_export_script() {
   local cand
+  if mold_backup_is_shared_provider_script "${HOST_EXPORT_SCRIPT:-}"; then
+    HOST_EXPORT_SCRIPT=""
+  fi
+  if mold_backup_is_shared_provider_script "${CVT_BACKUP_SCRIPT:-}"; then
+    CVT_BACKUP_SCRIPT=""
+  fi
   for cand in \
     "${HOST_EXPORT_SCRIPT}" \
     "${CVT_BACKUP_SCRIPT}" \
     "${ABLESTACK_VEEAM_ETC_DIR}/ablestack_veeam_host_export.sh" \
     "${ABLESTACK_VEEAM_ETC_DIR}/ablestack_cvtbackup.sh" \
-    "/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/ablestack_cvtbackup.sh"; do
+    "/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/ablestack_veeam_host_export.sh" \
+    "/usr/share/mold/backup/veeam/ablestack_veeam_host_export.sh"; do
     [[ -n "$cand" && -x "$cand" ]] || continue
+    mold_backup_is_shared_provider_script "$cand" && continue
     HOST_EXPORT_SCRIPT="$cand"
     CVT_BACKUP_SCRIPT="$cand"
+    return 0
+  done
+  return 1
+}
+
+mold_backup_resolve_nas_backup_script() {
+  local cand
+  if mold_backup_is_shared_provider_script "${NAS_BACKUP_SCRIPT:-}"; then
+    NAS_BACKUP_SCRIPT=""
+  fi
+  for cand in \
+    "${NAS_BACKUP_SCRIPT}" \
+    "${ABLESTACK_VEEAM_ETC_DIR}/ablestack_veeam_nasbackup.sh" \
+    "/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/ablestack_veeam_nasbackup.sh" \
+    "/usr/share/mold/backup/veeam/ablestack_veeam_nasbackup.sh" \
+    "${ABLESTACK_VEEAM_ETC_DIR}/ablestack_nasbackup.sh"; do
+    [[ -n "$cand" && -x "$cand" ]] || continue
+    mold_backup_is_shared_provider_script "$cand" && continue
+    NAS_BACKUP_SCRIPT="$cand"
     return 0
   done
   return 1
@@ -151,7 +186,8 @@ mold_backup_load_config() {
 
   LOG_FILE="${LOG_FILE:-/var/log/mold/backup-veeam.log}"
   LOG_TAG="${LOG_TAG:-mold-veeam-backup}"
-  NAS_BACKUP_SCRIPT="${NAS_BACKUP_SCRIPT:-/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/ablestack_nasbackup.sh}"
+  NAS_BACKUP_SCRIPT="${NAS_BACKUP_SCRIPT:-/etc/ablestack/veeam/ablestack_veeam_nasbackup.sh}"
+  mold_backup_resolve_nas_backup_script || true
   IMPORT_MODE="${IMPORT_MODE:-auto}"
   BACKUP_MODE="${BACKUP_MODE:-host}"
   VM_INCLUDE="${VM_INCLUDE:-*}"
@@ -866,7 +902,7 @@ mold_backup_run_local_incremental_on_mount() {
     -q "${quiesce}" \
     -f "${backup_files}" \
     -d "${disk_paths}" \
-    || mold_backup_die "ablestack_nasbackup.sh ${op} failed"
+    || mold_backup_die "ablestack_veeam_nasbackup.sh ${op} failed"
 }
 
 mold_backup_run_local_incremental() {
@@ -1062,7 +1098,7 @@ mold_backup_run_local_seed_import() {
     --source-format "${source_format}" \
     --veeam-restore-point "${VEEAM_RESTORE_POINT_ID}" \
     --bootstrap-checkpoint "${BOOTSTRAP_CHECKPOINT}" \
-    || mold_backup_die "ablestack_nasbackup.sh import-veeam-seed failed"
+    || mold_backup_die "ablestack_veeam_nasbackup.sh import-veeam-seed failed"
 }
 
 mold_backup_api_import_seed() {
@@ -2001,7 +2037,7 @@ mold_backup_api_log_repository_hint() {
 mold_backup_api_log_agent_import_seed_hint() {
   local msg="$1"
   [[ "$msg" == *UnsupportedAnswer* ]] || return 0
-  mold_backup_notify_log err "KVM mold-agent does not handle AblestackNasImportVeeamSeedCommand (import-veeam-seed). Update mold-agent to a build that includes LibvirtAblestackNasImportVeeamSeedCommandWrapper, ensure ablestack_nasbackup.sh supports -o import-veeam-seed, then: systemctl restart cloudstack-agent"
+  mold_backup_notify_log err "KVM mold-agent does not handle AblestackVeeamImportSeedCommand. Update mold-agent to a build that includes LibvirtAblestackVeeamImportSeedCommandWrapper, then: systemctl restart cloudstack-agent"
 }
 
 mold_backup_api_extract_async_job_error() {

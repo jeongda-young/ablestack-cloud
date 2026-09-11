@@ -19,8 +19,7 @@
 
 set -eo pipefail
 
-# CloudStack B&R KVM disk export tool (historically Commvault; also used by Veeam host mode).
-# Veeam installs this as /etc/ablestack/veeam/ablestack_veeam_host_export.sh
+# CloudStack B&R Commvault Backup and Recovery Tool for KVM
 
 # TODO: do libvirt/logging etc checks
 
@@ -362,10 +361,21 @@ cleanup_created_rbd_snapshots() {
 }
 
 cleanup_parent_rbd_snapshot_after_success() {
-  # Keep parent RBD snapshots for Mold snap-rollback restore / re-export-diff.
   [[ "$BACKUP_TYPE" != "INCREMENTAL" || -z "$PARENT_CHECKPOINT_NAME" ]] && return
   [[ "$PARENT_CHECKPOINT_NAME" == "$CHECKPOINT_NAME" ]] && return
-  log -ne "Keeping RBD parent snapshot [${PARENT_CHECKPOINT_NAME}] for Mold restore (skip delete after INC)"
+
+  while IFS= read -r disk_path; do
+    [[ -z "$disk_path" ]] && continue
+    parse_rbd_uri "$disk_path"
+    build_rbd_cmd
+
+    if timeout 30s "${RBD_CMD[@]}" snap ls "$RBD_IMAGE" 2>/dev/null | awk 'NR>1 {print $2}' | grep -Fxq "$PARENT_CHECKPOINT_NAME"; then
+      log -ne "Deleting previous RBD parent snapshot after successful backup [${RBD_IMAGE}@${PARENT_CHECKPOINT_NAME}]"
+      if ! "${RBD_CMD[@]}" snap rm "${RBD_IMAGE}@${PARENT_CHECKPOINT_NAME}" >> "$logFile" 2>&1; then
+        log -ne "Failed to delete previous RBD parent snapshot [${RBD_IMAGE}@${PARENT_CHECKPOINT_NAME}]"
+      fi
+    fi
+  done < <(split_csv "$DISK_PATHS")
 }
 
 write_rbd_backup_metadata() {

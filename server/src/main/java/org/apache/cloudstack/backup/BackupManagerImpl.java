@@ -1445,7 +1445,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         if (backupOffering == null || !BackupProviderNameUtils.isVeeamFamily(backupOffering.getProvider())) {
             throw new CloudRuntimeException("Backup is not from an ablestack-veeam offering");
         }
-        return restoreBackup(backupId);
+        return restoreBackup(backupId, false, null);
     }
 
     @Override

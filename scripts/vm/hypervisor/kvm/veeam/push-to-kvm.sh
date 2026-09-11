@@ -80,10 +80,10 @@ kvm_scp() {
 
 echo "=== SCP veeam scripts → ${KVM_HOST}:/tmp/veeam-install/ ==="
 kvm_ssh "$KVM_HOST" "mkdir -p /tmp/veeam-install"
-# Include parent ablestack_nasbackup.sh (agent restore path)
-NAS_PARENT="${SCRIPT_DIR}/../ablestack_nasbackup.sh"
+# Include parent Veeam NAS helper (seed import / local datadisk). Do not overwrite NAS/CVT originals.
+VEEAM_NAS_PARENT="${SCRIPT_DIR}/../ablestack_veeam_nasbackup.sh"
 kvm_scp -r "${SCRIPT_DIR}/"* "${KVM_HOST}:/tmp/veeam-install/"
-[[ -f "$NAS_PARENT" ]] && kvm_scp "$NAS_PARENT" "${KVM_HOST}:/tmp/veeam-install/ablestack_nasbackup.sh"
+[[ -f "$VEEAM_NAS_PARENT" ]] && kvm_scp "$VEEAM_NAS_PARENT" "${KVM_HOST}:/tmp/veeam-install/ablestack_veeam_nasbackup.sh"
 
 echo "=== install.sh on KVM ==="
 kvm_ssh "$KVM_HOST" "bash /tmp/veeam-install/install.sh"
