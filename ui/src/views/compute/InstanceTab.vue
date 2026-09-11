@@ -418,8 +418,6 @@ export default {
       this.setCurrentTab()
     }
   },
-  computed: {
-  },
   mounted () {
     this.setCurrentTab()
   },
