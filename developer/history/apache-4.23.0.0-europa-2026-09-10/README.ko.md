@@ -21,7 +21,7 @@ under the License.
 
 부모: [Epic #987](https://github.com/ablecloud-team/ablestack-cloud/issues/987). 기준일: 2026-09-10.
 
-S1에서 확정한 범위를 유지하고 후속 통합 결과를 갱신하는 추적표다. **현재 S3까지 최종 판정 113개, Pending186개이며 전체 통합·릴리즈 완료가 아니다.** 초기 사전분류는 아래에 보존한다.
+S1에서 확정한 범위를 유지하고 후속 통합 결과를 갱신하는 추적표다. **현재 S5B까지 최종 판정240개, Pending59개이며 전체 통합·릴리즈 완료가 아니다.** 초기 사전분류는 아래에 보존한다.
 
 ## 고정 기준
 
@@ -160,3 +160,13 @@ S4 #992 구현 PR #1016에서 직접 배정38개와 S2 연계2개를 최종 판�
 사용자 확정: S3~S7은 Apache 변경을 Europa 코드에 안전하게 반영하고 코드 검토·자동 테스트·CI를 통과하면 정상 병합한다. 실물 테스트 미실행을 이유로 기능 PR을 Draft로 유지하거나 기능 이슈를 미완료 처리하지 않는다. 이 지침은 이전 개별 기능 이슈의 실물 선행 조건보다 우선한다.
 
 각 배치의 실물 시험은 [#1025](https://github.com/ablecloud-team/ablestack-cloud/issues/1025)에 시나리오·기대 결과를 누적하고, 모든 코드 병합이 끝난 최종 SHA에서 S8 #999가 실행·판정한다. 미실행을 PASS로 표시하지 않으며 최종 RC/릴리즈 승인은 별도 게이트다.
+
+## S5B 코드 통합 판정 (2026-09-11)
+
+S5B #994 / PR #1035는 직접 원본47개와 S2 일반1개·공유 merge6개를 판정했다. 이 배치54개는 Applied27 / Adapted20 / Already Satisfied7이다. 고정299개 전체는 Applied77 / Adapted86 / Already Satisfied49 / Excluded28 / Pending59이며 원본 범위를 늘리지 않았다. S2는61개 판정/16개 Pending(merge12 + 일반4)으로 #990을 OPEN 유지한다. 다음 코드 통합은 S5C #996이다.
+
+Apache #12617 CLVM 및 migration/ISO 후속2개를 포함한다. 증분 NAS·KBOSS·Veeam·ONTAP/LINSTOR/FlashArray 및 template/SSVM 업로드를 기존 Europa provider, FTCTL/DR, 자원 예약·비밀값/ACL 계약과 합성했다. 신규 same-version 단계는 `europa-4.23-s5b-v1`이다. 실물 시험은 #1025에서 인수하며 이 코드 PR의 Draft 유지 조건이 아니다.
+
+- [S5B 검증 보고](s5b-verification.ko.md) / [원본54개 판정](s5b-review.tsv) / [공유 merge 검토](s5b-merge-review.tsv).
+- [로컬 Java 결과](s5b-local-tests.tsv) / [DB·API 결과](s5b-db-results.tsv) / [검증 fixture](s5b-fixtures/README.ko.md) / [후속 의존성](s5b-dependencies.tsv).
+- S6 기능이 남은 공유 merge는 Pending이다. `e2012133599a`는 ONTAP README 부분만 반영했으며 Network Extension README를 #997에서 검토하기 전까지 전체 원본을 완료로 계산하지 않는다.
