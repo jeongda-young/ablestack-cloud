@@ -325,7 +325,7 @@ export default {
           'type', 'scope', 'managementserverid', 'serviceofferingid',
           'diskofferingid', 'networkid', 'usagetype', 'restartrequired', 'gpuenabled',
           'displaynetwork', 'guestiptype', 'usersource', 'arch', 'oscategoryid', 'templatetype', 'gpucardid', 'vgpuprofileid',
-          'extensionid', 'backupoffering', 'volumeid', 'virtualmachineid', 'status'].includes(item)
+          'extensionid', 'backupoffering', 'volumeid', 'virtualmachineid'].includes(item) || (item === 'status' && this.apiName === 'listBackups')
         ) {
           type = 'list'
         } else if (item === 'tags') {
@@ -663,7 +663,7 @@ export default {
         promises.push(await this.fetchVolumes(searchKeyword))
       }
 
-      if (arrayField.includes('status')) {
+      if (this.apiName === 'listBackups' && arrayField.includes('status')) {
         backupStatusIndex = this.fields.findIndex(item => item.name === 'status')
         this.fields[backupStatusIndex].opts = this.fetchAvailableBackupStatus()
       }

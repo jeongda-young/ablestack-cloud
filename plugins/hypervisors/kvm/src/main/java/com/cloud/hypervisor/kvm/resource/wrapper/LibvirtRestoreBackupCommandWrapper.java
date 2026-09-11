@@ -292,7 +292,7 @@ public class LibvirtRestoreBackupCommandWrapper extends CommandWrapper<RestoreBa
                     backupPath, timeout, createTargetVolume, size);
         }
 
-        if (hasBackingChain(backupPath)) {
+        if (hasBackingChain(backupPath, timeout)) {
             String[] flattenCmd = {Script.getExecutableAbsolutePath("qemu-img"), "convert", "-O", "qcow2", backupPath, volumePath};
             return Script.executeCommandForExitValue(timeout, flattenCmd) == 0;
         }
@@ -301,9 +301,9 @@ public class LibvirtRestoreBackupCommandWrapper extends CommandWrapper<RestoreBa
         return exitValue == 0;
     }
 
-    private boolean hasBackingChain(String qcow2Path) {
+    private boolean hasBackingChain(String qcow2Path, int timeout) {
         try {
-            return StringUtils.isNotBlank(new QemuImg(0).info(new QemuImgFile(qcow2Path)).get(QemuImg.BACKING_FILE));
+            return StringUtils.isNotBlank(new QemuImg(timeout).info(new QemuImgFile(qcow2Path)).get(QemuImg.BACKING_FILE));
         } catch (QemuImgException | LibvirtException e) {
             throw new CloudRuntimeException("Unable to inspect backup chain before restore", e);
         }

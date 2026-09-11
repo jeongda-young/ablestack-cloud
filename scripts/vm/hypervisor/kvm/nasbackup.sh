@@ -482,7 +482,7 @@ backup_stopped_vm() {
     # snapshot mechanisms and qemu-img bitmap is not the right primitive there.
     # bitmap --add should not fail on a file-backed qcow2; if it does, fail the backup so the
     # underlying problem is surfaced rather than silently degrading future backups to full.
-    if [[ -n "$BITMAP_NEW" && "$disk" != rbd:* && "$disk" != /dev/drbd/by-res/* ]]; then
+    if [[ -n "$BITMAP_NEW" && "$disk" != rbd:* && "$disk" != /dev/drbd/by-res/* && "$disk" != /dev/drbd[0-9]* ]]; then
       if ! qemu-img bitmap --add "$disk" "$BITMAP_NEW" 2>>"$logFile"; then
         echo "Failed to pre-seed bitmap $BITMAP_NEW on $disk"
         cleanup

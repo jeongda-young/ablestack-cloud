@@ -255,6 +255,10 @@ public interface ResourceLimitService {
     void updateTaggedResourceLimitsAndCountsForDomains(List<DomainResponse> responses, String tag);
     void checkVolumeResourceLimit(Account owner, Boolean display, Long size, DiskOffering diskOffering, List<Reserver> reservations) throws ResourceAllocationException;
     List<String> getResourceLimitStorageTagsForResourceCountOperation(Boolean display, DiskOffering diskOffering, Boolean enforceResourceLimitOnDisplayFalse);
+
+    default List<String> getResourceLimitStorageTagsForResourceCountOperation(Boolean display, DiskOffering diskOffering) {
+        return getResourceLimitStorageTagsForResourceCountOperation(display, diskOffering, null);
+    }
     void checkVolumeResourceLimitForDiskOfferingChange(Account owner, Boolean display, Long currentSize, Long newSize,
             DiskOffering currentOffering, DiskOffering newOffering, List<Reserver> reservations) throws ResourceAllocationException;
 

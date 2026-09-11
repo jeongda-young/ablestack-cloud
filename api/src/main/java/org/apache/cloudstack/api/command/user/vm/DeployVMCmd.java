@@ -17,6 +17,7 @@
 package org.apache.cloudstack.api.command.user.vm;
 
 import java.util.Map;
+import java.util.List;
 import java.util.Objects;
 import java.util.stream.Stream;
 

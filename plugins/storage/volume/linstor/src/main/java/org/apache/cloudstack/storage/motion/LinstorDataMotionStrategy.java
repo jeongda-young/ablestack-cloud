@@ -342,7 +342,9 @@ public class LinstorDataMotionStrategy implements DataMotionStrategy {
                     || destStoragePool.getPoolType() != Storage.StoragePoolType.Linstor) {
                 continue;
             }
-            DevelopersApi api = LinstorUtil.getLinstorAPI(destStoragePool.getHostAddress());
+            DevelopersApi api = LinstorUtil.getLinstorAPI(destStoragePool.getHostAddress(),
+                    LinstorConfigurationManager.ApiToken.valueIn(destStoragePool.getId()),
+                    Boolean.TRUE.equals(LinstorConfigurationManager.InsecureSsl.valueIn(destStoragePool.getId())));
             try {
                 List<String> nodes = LinstorUtil.getLinstorNodeNames(api);
                 if (nodes == null) {

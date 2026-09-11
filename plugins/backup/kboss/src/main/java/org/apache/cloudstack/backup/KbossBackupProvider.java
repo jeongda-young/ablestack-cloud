@@ -349,7 +349,7 @@ public class KbossBackupProvider extends AdapterBase implements InternalBackupPr
     }
 
     @Override
-    public Pair<Boolean, Backup> takeBackup(VirtualMachine vm, Boolean quiesceVm, boolean isolated) {
+    public Pair<Boolean, Backup> takeBackup(VirtualMachine vm, Boolean quiesceVm, boolean isolated, Long backupScheduleId) {
         logger.debug("Queueing backup on VM [{}].", vm.getUuid());
         Outcome<?> outcome = createBackupThroughJobQueue(vm, ObjectUtils.defaultIfNull(quiesceVm, false), isolated);
 

@@ -168,7 +168,6 @@ public class ApiConstants {
     public static final String CURRENT_END_IP = "currentendip";
     public static final String ENCRYPT = "encrypt";
     public static final String ENCRYPT_FORMAT = "encryptformat";
-    public static final String COMPRESS = "compress";
     public static final String DEDUP = "dedup";
     public static final String USED_FS_BYTES = "usedfsbytes";
     public static final String USED_PHYSICAL_SIZE = "usedphysicalsize";

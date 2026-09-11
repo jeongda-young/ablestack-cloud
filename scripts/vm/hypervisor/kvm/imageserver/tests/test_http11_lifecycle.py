@@ -18,6 +18,7 @@
 """Integration tests for HTTP/1.1 connection lifecycle behavior."""
 
 import http.client
+import os
 import socket
 import threading
 import time
@@ -133,6 +134,12 @@ class TestTeardownTiming(ImageServerTestCase):
 
         try:
             self.assertTrue(started.wait(5), "PUT request did not start in time")
+            # Sending TCP bytes does not prove that the server has acquired the transfer.
+            # The file backend truncates the 2 MiB destination before reading this 1 MiB PUT.
+            deadline = time.monotonic() + 5
+            while os.path.getsize(_path) == 2 * 1024 * 1024 and time.monotonic() < deadline:
+                time.sleep(0.005)
+            self.assertLess(os.path.getsize(_path), 2 * 1024 * 1024, "PUT backend did not start")
 
             t0 = time.monotonic()
             unregister_resp = self.ctrl({"action": "unregister", "transfer_id": transfer_id})

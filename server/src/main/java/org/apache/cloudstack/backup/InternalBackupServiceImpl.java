@@ -354,8 +354,14 @@ public class InternalBackupServiceImpl extends ComponentLifecycleBase implements
 
     protected InternalBackupProvider getInternalBackupProviderForZone(long zoneId) {
         return Transaction.execute(TransactionLegacy.CLOUD_DB, (TransactionCallback<InternalBackupProvider>)status -> {
-            BackupProvider backupProvider = backupManager.getBackupProvider(zoneId);
-            return internalBackupProviderMap.get(backupProvider.getName());
+            // Europa supports multiple providers in a zone; do not interpret the comma-separated configuration as one provider.
+            for (BackupProvider backupProvider : backupManager.listBackupProvidersForZone(zoneId)) {
+                InternalBackupProvider internalProvider = internalBackupProviderMap.get(backupProvider.getName());
+                if (internalProvider != null) {
+                    return internalProvider;
+                }
+            }
+            return null;
         });
     }
 

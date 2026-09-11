@@ -2215,7 +2215,7 @@ public class ResourceLimitManagerImpl extends ManagerBase implements ResourceLim
 
     @Override
     public void checkVmGpuResourceLimit(Account owner, Boolean display, ServiceOffering serviceOffering, VirtualMachineTemplate template, Long gpu) throws ResourceAllocationException {
-        List<String> tags = getResourceLimitHostTagsForResourceCountOperation(display, serviceOffering, template);
+        List<String> tags = getResourceLimitHostTagsForResourceCountOperation(display, serviceOffering, template, null);
         if (CollectionUtils.isEmpty(tags)) {
             return;
         }

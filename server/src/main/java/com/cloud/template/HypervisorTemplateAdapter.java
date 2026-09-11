@@ -344,23 +344,6 @@ public class HypervisorTemplateAdapter extends TemplateAdapterBase {
                     throw new CloudRuntimeException("Unable to persist the template " + profile.getTemplate());
                 }
 
-                List<Long> zoneIdList = profile.getZoneIdList();
-                Long uploadZoneId;
-
-                if (zoneIdList == null) {
-                    // It's a cross-zone local upload. Pick the first available zone as the pivot for the initial upload.
-                    List<DataCenterVO> dcs = _dcDao.listAll();
-                    if (dcs.isEmpty()) {
-                        throw new CloudRuntimeException("No zones are present in the system, cannot upload template.");
-                    }
-                    uploadZoneId = dcs.get(0).getId();
-                } else {
-                    if (zoneIdList.size() > 1) {
-                        throw new CloudRuntimeException("Operation is not supported for more than one zone id at a time.");
-                    }
-                    uploadZoneId = zoneIdList.get(0);
-                }
-
                 // Set Event Details for Template/ISO Upload
                 String eventType = template.getFormat().equals(ImageFormat.ISO) ? "Iso" : "Template";
                 String eventResourceId = template.getUuid();
@@ -371,24 +354,35 @@ public class HypervisorTemplateAdapter extends TemplateAdapterBase {
                     CallContext.current().setEventResourceId(template.getId());
                 }
 
-                Long zoneId = uploadZoneId;
-                DataStore imageStore = templateMgr.verifyHeuristicRulesForZone(template, zoneId);
-                List<TemplateOrVolumePostUploadCommand> payloads = new LinkedList<>();
-
-                if (imageStore == null) {
-                    List<DataStore> imageStores = getImageStoresThrowsExceptionIfNotFound(zoneId, profile);
-                    postUploadAllocation(imageStores, template, payloads);
-                } else {
-                    postUploadAllocation(List.of(imageStore), template, payloads);
-                }
-
-                if(payloads.isEmpty()) {
-                    throw new CloudRuntimeException("unable to find zone or an image store with enough capacity");
-                }
+                List<TemplateOrVolumePostUploadCommand> payloads = allocatePostUpload(profile, template);
 
                 return payloads;
             }
         });
+    }
+
+    protected List<TemplateOrVolumePostUploadCommand> allocatePostUpload(TemplateProfile profile, VMTemplateVO template) {
+        List<Long> zoneIds = profile.getZoneIdList();
+        boolean crossZone = zoneIds == null;
+        if (crossZone) {
+            zoneIds = _dcDao.listAll().stream().map(DataCenterVO::getId).collect(Collectors.toList());
+        } else if (zoneIds.size() != 1) {
+            throw new CloudRuntimeException("Upload requires exactly one zone ID or the all-zone option.");
+        }
+        List<TemplateOrVolumePostUploadCommand> payloads = new LinkedList<>();
+        for (Long zoneId : zoneIds) {
+            DataStore selected = verifyHeuristicRulesForZone(template, zoneId);
+            List<DataStore> stores = selected == null ? storeMgr.getImageStoresByZoneIds(zoneId) : List.of(selected);
+            if (CollectionUtils.isEmpty(stores)) {
+                continue;
+            }
+            // Only the successful pivot gets a template_store_ref; cross-zone visibility is retained on the template.
+            postUploadAllocation(new ArrayList<>(stores), template, payloads);
+            if (!payloads.isEmpty()) {
+                return payloads;
+            }
+        }
+        throw new CloudRuntimeException("Unable to find an available zone with writable secondary storage, enough capacity and an SSVM for upload.");
     }
 
     private class CreateTemplateContext<T> extends AsyncRpcContext<T> {

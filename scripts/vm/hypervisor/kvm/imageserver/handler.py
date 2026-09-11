@@ -233,12 +233,11 @@ class Handler(BaseHTTPRequestHandler):
         if image_id is None or tail is not None:
             self._send_error_json(HTTPStatus.NOT_FOUND, "not found")
             return
-        cfg = self._image_cfg(image_id)
-        if cfg is None:
-            self._send_error_json(HTTPStatus.NOT_FOUND, "unknown image_id")
-            return
 
-        with self._registry.request_lifecycle(image_id):
+        with self._registry.request_lifecycle(image_id) as cfg:
+            if cfg is None:
+                self._send_error_json(HTTPStatus.NOT_FOUND, "unknown image_id")
+                return
             backend = create_backend(cfg)
             try:
                 max_writers = MAX_PARALLEL_WRITES
@@ -300,13 +299,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send_error_json(HTTPStatus.NOT_FOUND, "not found")
             return
 
-        cfg = self._image_cfg(image_id)
-        if cfg is None:
-            self._send_error_json(HTTPStatus.NOT_FOUND, "unknown image_id")
-            return
 
         if tail == "extents":
-            with self._registry.request_lifecycle(image_id):
+            with self._registry.request_lifecycle(image_id) as cfg:
+                if cfg is None:
+                    self._send_error_json(HTTPStatus.NOT_FOUND, "unknown image_id")
+                    return
                 query = self._parse_query()
                 context = (query.get("context") or [None])[0]
                 self._handle_get_extents(image_id, cfg, context=context)
@@ -316,7 +314,10 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         range_header = self.headers.get("Range")
-        with self._registry.request_lifecycle(image_id):
+        with self._registry.request_lifecycle(image_id) as cfg:
+            if cfg is None:
+                self._send_error_json(HTTPStatus.NOT_FOUND, "unknown image_id")
+                return
             self._handle_get_image(image_id, cfg, range_header)
 
     def do_PUT(self) -> None:
@@ -325,12 +326,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send_error_json(HTTPStatus.NOT_FOUND, "not found")
             return
 
-        cfg = self._image_cfg(image_id)
-        if cfg is None:
-            self._send_error_json(HTTPStatus.NOT_FOUND, "unknown image_id")
-            return
 
-        with self._registry.request_lifecycle(image_id):
+        with self._registry.request_lifecycle(image_id) as cfg:
+            if cfg is None:
+                self._send_error_json(HTTPStatus.NOT_FOUND, "unknown image_id")
+                return
             if self.headers.get("Range") is not None:
                 self._send_error_json(
                     HTTPStatus.BAD_REQUEST,
@@ -384,13 +384,12 @@ class Handler(BaseHTTPRequestHandler):
             self._send_error_json(HTTPStatus.NOT_FOUND, "not found")
             return
 
-        cfg = self._image_cfg(image_id)
-        if cfg is None:
-            self._send_error_json(HTTPStatus.NOT_FOUND, "unknown image_id")
-            return
 
         if tail == "flush":
-            with self._registry.request_lifecycle(image_id):
+            with self._registry.request_lifecycle(image_id) as cfg:
+                if cfg is None:
+                    self._send_error_json(HTTPStatus.NOT_FOUND, "unknown image_id")
+                    return
                 self._handle_post_flush(image_id, cfg)
             return
         self._send_error_json(HTTPStatus.NOT_FOUND, "not found")
@@ -401,12 +400,11 @@ class Handler(BaseHTTPRequestHandler):
             self._send_error_json(HTTPStatus.NOT_FOUND, "not found")
             return
 
-        cfg = self._image_cfg(image_id)
-        if cfg is None:
-            self._send_error_json(HTTPStatus.NOT_FOUND, "unknown image_id")
-            return
 
-        with self._registry.request_lifecycle(image_id):
+        with self._registry.request_lifecycle(image_id) as cfg:
+            if cfg is None:
+                self._send_error_json(HTTPStatus.NOT_FOUND, "unknown image_id")
+                return
             backend = create_backend(cfg)
             try:
                 if not backend.supports_range_write:

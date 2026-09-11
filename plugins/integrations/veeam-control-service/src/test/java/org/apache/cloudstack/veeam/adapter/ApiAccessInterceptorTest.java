@@ -154,6 +154,27 @@ public class ApiAccessInterceptorTest {
         assertEquals(BASE_ACCOUNT_ID, CallContext.current().getCallingAccountId());
     }
 
+    @Test
+    public void testUserAclDenialDoesNotExecuteAndRestoresCaller() throws Throwable {
+        registerBaseContext();
+        final TestServerAdapter adapter = new TestServerAdapter(serviceUserAccount());
+        final MethodInvocation invocation = mock(MethodInvocation.class);
+        when(invocation.getThis()).thenReturn(adapter);
+        when(invocation.getMethod()).thenReturn(TestServerAdapter.class.getMethod("classAnnotated"));
+        final com.cloud.exception.PermissionDeniedException denied = new com.cloud.exception.PermissionDeniedException("user ACL denied");
+        org.mockito.Mockito.doThrow(denied).when(accountManager).checkApiAccessForUser(adapter.getServiceAccount().first(),
+                BaseCmd.getCommandNameByClass(ListZonesCmd.class), null);
+        try {
+            interceptor.invoke(invocation);
+            org.junit.Assert.fail("Denied service user must not invoke the API");
+        } catch (com.cloud.exception.PermissionDeniedException expected) {
+            assertSame(denied, expected);
+        }
+        org.mockito.Mockito.verify(invocation, org.mockito.Mockito.never()).proceed();
+        assertEquals(BASE_USER_ID, CallContext.current().getCallingUserId());
+        assertEquals(BASE_ACCOUNT_ID, CallContext.current().getCallingAccountId());
+    }
+
     private static void registerBaseContext() {
         final User baseUser = mock(User.class);
         final Account baseAccount = mock(Account.class);

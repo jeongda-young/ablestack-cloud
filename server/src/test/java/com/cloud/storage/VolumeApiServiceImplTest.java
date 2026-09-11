@@ -2446,8 +2446,7 @@ public class VolumeApiServiceImplTest {
 // PoweredOn for some seconds. The production code must use only the
 // authoritative CloudStack State field and must NOT additionally gate on
 // PowerState.
-// =====================================================================
-
+// ==============================================================
     /**
      * Positive – validateVolumeReadyStateAndHypervisorChecks:
      * The guard must allow a VMware ROOT-volume resize when the CloudStack VM
@@ -2611,7 +2610,10 @@ public class VolumeApiServiceImplTest {
             Assert.assertTrue(
                     "Exception message must reference Stopped-state requirement, was: " + e.getMessage(),
                     e.getMessage() != null && e.getMessage().contains("VM should be in"));
-=======
+        }
+    }
+
+    @Test
     public void testIsClvmLightweightMigrationNeeded_SameVG() {
         VolumeInfo volumeInfo = Mockito.mock(VolumeInfo.class);
         VolumeVO vmExistingVolume = Mockito.mock(VolumeVO.class);

@@ -20,6 +20,7 @@ package org.apache.cloudstack.storage.motion;
 
 import static org.mockito.Mockito.when;
 
+import java.lang.reflect.Field;
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
 

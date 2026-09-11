@@ -1974,7 +1974,7 @@ public class AccountManagerImpl extends ManagerBase implements AccountManager, M
     @Override
     public void checkApiAccess(Account caller, String command) {
         List<APIChecker> apiCheckers = getEnabledApiCheckers();
-        checkApiAccess(apiCheckers, caller, command);
+        checkApiAccess(apiCheckers, caller, command, null);
     }
 
     @NotNull

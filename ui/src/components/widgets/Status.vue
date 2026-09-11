@@ -210,15 +210,6 @@ export default {
           case 'created':
             state = this.$t('state.created')
             break
-          case 'backedup':
-            state = this.$t('label.backedup')
-            break
-          case 'backingup':
-            state = this.$t('label.backingup')
-            break
-          case 'allocated':
-            state = this.$t('label.allocated')
-            break
           case 'queued':
             state = this.$t('label.queued')
             break

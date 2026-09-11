@@ -108,6 +108,7 @@ class TransferRegistry:
         self._transfers: Dict[str, Dict[str, Any]] = {}
         self._last_activity: Dict[str, float] = {}
         self._inflight: Dict[str, int] = {}
+        self._closing = set()
 
     def register(self, transfer_id: str, config: Dict[str, Any]) -> bool:
         safe_id = safe_transfer_id(transfer_id)
@@ -115,6 +116,8 @@ class TransferRegistry:
             logging.error("register rejected invalid transfer_id=%r", transfer_id)
             return False
         with self._lock:
+            if safe_id in self._closing or self._inflight.get(safe_id, 0):
+                return False
             self._transfers[safe_id] = config
             self._last_activity[safe_id] = time.monotonic()
             self._inflight.pop(safe_id, None)
@@ -129,11 +132,13 @@ class TransferRegistry:
             with self._lock:
                 return len(self._transfers)
         with self._cv:
+            self._closing.add(safe_id)
             while self._inflight.get(safe_id, 0) > 0:
                 self._cv.wait()
             self._transfers.pop(safe_id, None)
             self._last_activity.pop(safe_id, None)
             self._inflight.pop(safe_id, None)
+            self._closing.discard(safe_id)
             remaining = len(self._transfers)
             logging.info("unregistered transfer_id=%s active=%d", safe_id, remaining)
             return remaining
@@ -150,25 +155,22 @@ class TransferRegistry:
             return len(self._transfers)
 
     @contextmanager
-    def request_lifecycle(self, transfer_id: str) -> Iterator[None]:
-        """
-        Track an HTTP request for idle-timeout purposes.
+    def request_lifecycle(self, transfer_id: str) -> Iterator[Optional[Dict[str, Any]]]:
+        """Acquire a transfer configuration atomically with its in-flight reference.
 
-        Expiry is based on time since the last request *completed* (all in-flight
-        work for this transfer_id finished). Transfers with active requests are
-        never expired.
+        Teardown refuses new requests, waits for existing I/O and then removes the
+        transfer. Never yield while holding the registry lock.
         """
         safe_id = safe_transfer_id(transfer_id)
-        if safe_id is None:
-            yield
-            return
         with self._lock:
-            if safe_id not in self._transfers:
-                yield
-                return
-            self._inflight[safe_id] = self._inflight.get(safe_id, 0) + 1
+            config = None if safe_id in self._closing else self._transfers.get(safe_id)
+            if config is not None:
+                self._inflight[safe_id] = self._inflight.get(safe_id, 0) + 1
+        if config is None:
+            yield None
+            return
         try:
-            yield
+            yield config
         finally:
             now = time.monotonic()
             with self._cv:

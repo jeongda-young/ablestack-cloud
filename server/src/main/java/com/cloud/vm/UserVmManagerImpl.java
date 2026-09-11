@@ -719,8 +719,6 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
     @Inject
     private HypervisorGuruManager _hvGuruMgr;
     @Inject
-    VMSnapshotDetailsDao vmSnapshotDetailsDao;
-    @Inject
     VolumeDetailsDao volumeDetailsDao;
 
     @Inject
@@ -10819,7 +10817,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         boolean isRootAdmin = _accountService.isRootAdmin(callerId);
 
         Long hostId = cmd.getHostId();
-        getDestinationHost(hostId, isRootAdmin, true);
+        getDestinationHost(hostId, isRootAdmin, true, false);
 
         String ipAddress = cmd.getIpAddress();
         String ip6Address = cmd.getIp6Address();
@@ -11910,7 +11908,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         UserVm curVm = cmd.getTargetVM();
         // check if host is available
         Long hostId = curVm.getHostId();
-        getDestinationHost(hostId, true, false);
+        getDestinationHost(hostId, true, false, false);
         Long zoneId = curVm.getDataCenterId();
         DataCenter dataCenter = _entityMgr.findById(DataCenter.class, zoneId);
         Map<String, String> customParameters = vmInstanceDetailsDao.listDetailsKeyPairs(curVm.getId());

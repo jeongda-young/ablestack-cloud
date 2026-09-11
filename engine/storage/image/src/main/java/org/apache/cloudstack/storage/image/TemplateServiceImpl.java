@@ -325,9 +325,9 @@ public class TemplateServiceImpl implements TemplateService {
      * single method before placing another copy of a template on a secondary store in a zone, so the limit
      * is enforced consistently instead of being re-implemented per call site.
      *
-     * SYSTEM/ROUTING/BUILTIN templates and a limit of 0 mean "unlimited" (return true). The per-template,
-     * per-zone {@link GlobalLock} serializes concurrent placement decisions so racing SSVM syncs / copies
-     * cannot collectively exceed the limit.
+     * SYSTEM/ROUTING/BUILTIN templates and a limit of 0 mean "unlimited" (return true). This is a
+     * snapshot of active copies, not a reservation. Concurrent placements may temporarily exceed the
+     * cap; completion and periodic sync prune excess ready copies under a per-template/zone lock.
      */
     @Override
     public boolean canCopyTemplateToImageStore(long templateId, long zoneId) {

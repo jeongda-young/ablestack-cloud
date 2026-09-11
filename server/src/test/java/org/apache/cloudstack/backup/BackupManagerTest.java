@@ -732,7 +732,7 @@ public class BackupManagerTest {
         when(backup.getId()).thenReturn(backupId);
         when(backup.getSize()).thenReturn(newBackupSize);
         when(backupProvider.getName()).thenReturn("testbackupprovider");
-        when(backupProvider.takeBackup(vmInstanceVOMock, null, false)).thenReturn(new Pair<>(true, backup));
+        when(backupProvider.takeBackup(vmInstanceVOMock, null, false, scheduleId)).thenReturn(new Pair<>(true, backup));
         Map<String, BackupProvider> backupProvidersMap = new HashMap<>();
         backupProvidersMap.put(backupProvider.getName().toLowerCase(), backupProvider);
         ReflectionTestUtils.setField(backupManager, "backupProvidersMap", backupProvidersMap);
@@ -2927,7 +2927,7 @@ public class BackupManagerTest {
         CreateBackupOfferingCmd cmd = Mockito.mock(CreateBackupOfferingCmd.class);
         doReturn(zoneId).when(cmd).getZoneId();
         doReturn(offeringName).when(cmd).getName();
-        doReturn(backupProvider).when(backupManager).getBackupProvider(zoneId);
+        doReturn(List.of(backupProvider)).when(backupManager).getBackupProvidersForZone(zoneId);
         doReturn("dummy").when(backupProvider).getName();
 
         backupManager.createBackupOffering(cmd);
@@ -2945,7 +2945,7 @@ public class BackupManagerTest {
         CreateBackupOfferingCmd cmd = Mockito.mock(CreateBackupOfferingCmd.class);
         doReturn(zoneId).when(cmd).getZoneId();
         doReturn(offeringName).when(cmd).getName();
-        doReturn(backupProvider).when(backupManager).getBackupProvider(zoneId);
+        doReturn(List.of(backupProvider)).when(backupManager).getBackupProvidersForZone(zoneId);
         doReturn("kboss").when(backupProvider).getName();
         doReturn(false).when(backupProvider).isValidProviderOffering(zoneId, null);
 
@@ -2967,7 +2967,7 @@ public class BackupManagerTest {
         doReturn(List.of(domainId)).when(cmd).getDomainIds();
         doReturn(domainVOMock).when(domainDao).findById(domainId);
         doReturn(offeringName).when(cmd).getName();
-        doReturn(backupProvider).when(backupManager).getBackupProvider(zoneId);
+        doReturn(List.of(backupProvider)).when(backupManager).getBackupProvidersForZone(zoneId);
         doReturn(backupOfferingVOMock).when(backupOfferingDao).persist(any());
         doReturn("kboss").when(backupProvider).getName();
         doReturn(true).when(backupProvider).isValidProviderOffering(zoneId, null);
@@ -3007,7 +3007,7 @@ public class BackupManagerTest {
         CreateBackupOfferingCmd cmd = Mockito.mock(CreateBackupOfferingCmd.class);
         doReturn(zoneId).when(cmd).getZoneId();
         doReturn(offeringName).when(cmd).getName();
-        doReturn(backupProvider).when(backupManager).getBackupProvider(zoneId);
+        doReturn(List.of(backupProvider)).when(backupManager).getBackupProvidersForZone(zoneId);
         doReturn(backupOfferingVOMock).when(backupOfferingDao).persist(any());
         doReturn("kboss").when(backupProvider).getName();
         doReturn(true).when(backupProvider).isValidProviderOffering(zoneId, null);

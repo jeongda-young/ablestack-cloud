@@ -99,3 +99,25 @@ class TestRegistryIdleSweep(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestTransferAcquisition(unittest.TestCase):
+    def test_active_transfer_cannot_be_replaced(self):
+        registry = TransferRegistry()
+        original = {"backend": "file", "file": "/tmp/original", "idle_timeout_seconds": 60}
+        replacement = {"backend": "file", "file": "/tmp/replacement", "idle_timeout_seconds": 60}
+        self.assertTrue(registry.register("transfer", original))
+        with registry.request_lifecycle("transfer") as acquired:
+            self.assertIs(acquired, original)
+            self.assertFalse(registry.register("transfer", replacement))
+            self.assertIs(registry.get("transfer"), original)
+        self.assertTrue(registry.register("transfer", replacement))
+
+    def test_removed_transfer_cannot_be_acquired_from_a_stale_lookup(self):
+        registry = TransferRegistry()
+        original = {"backend": "file", "file": "/tmp/original", "idle_timeout_seconds": 60}
+        registry.register("transfer", original)
+        self.assertIs(registry.get("transfer"), original)
+        registry.unregister("transfer")
+        with registry.request_lifecycle("transfer") as acquired:
+            self.assertIsNone(acquired)

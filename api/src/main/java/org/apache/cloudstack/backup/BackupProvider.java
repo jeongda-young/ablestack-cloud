@@ -81,7 +81,11 @@ public interface BackupProvider {
      * @param isolated
      * @return the result and {code}Backup{code} {code}Object{code}
      */
-    Pair<Boolean, Backup> takeBackup(VirtualMachine vm, Boolean quiesceVM, boolean isolated);
+    Pair<Boolean, Backup> takeBackup(VirtualMachine vm, Boolean quiesceVM, boolean isolated, Long backupScheduleId);
+
+    default Pair<Boolean, Backup> takeBackup(VirtualMachine vm, Boolean quiesceVM, boolean isolated) {
+        return takeBackup(vm, quiesceVM, isolated, null);
+    }
 
     default Pair<Boolean, Backup> takeBackup(VirtualMachine vm, Boolean quiesceVM) {
         return takeBackup(vm, quiesceVM, false, null);
@@ -201,7 +205,7 @@ public interface BackupProvider {
      * sync commvault backup
      */
     default void syncBackups(VirtualMachine vm) {
-        
+
     }
 
     /**

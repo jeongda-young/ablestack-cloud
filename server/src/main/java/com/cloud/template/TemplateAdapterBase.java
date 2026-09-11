@@ -236,18 +236,15 @@ public abstract class TemplateAdapterBase extends AdapterBase implements Templat
                 continue;
             }
 
-            TemplateInfo tmpl = imageFactory.getTemplate(template.getId(), imageStore);
-
-            // persist template_store_ref entry
-            DataObject templateOnStore = imageStore.create(tmpl);
-
-            // update template_store_ref and template state
-            EndPoint ep = _epSelector.select(templateOnStore);
-            if (ep == null) {
-                String errMsg = String.format("There is no secondary storage VM for downloading template to image store %s", imageStore);
-                logger.warn(errMsg);
-                throw new CloudRuntimeException(errMsg);
+            // Select the SSVM before creating any store reference, so an unavailable candidate leaves no placeholder.
+            EndPoint ep = _epSelector.select(imageStore);
+            if (ep == null || StringUtils.isBlank(ep.getPublicAddr())) {
+                logger.info("No public SSVM endpoint for upload to image store [{}]; trying another candidate.", imageStore);
+                zoneCopyCount.computeIfPresent(zoneId_is, (id, count) -> count - 1);
+                continue;
             }
+            TemplateInfo tmpl = imageFactory.getTemplate(template.getId(), imageStore);
+            DataObject templateOnStore = imageStore.create(tmpl);
 
             TemplateOrVolumePostUploadCommand payload = new TemplateOrVolumePostUploadCommand(template.getId(),
                     template.getUuid(), tmpl.getInstallPath(), tmpl.getChecksum(), tmpl.getType().toString(),

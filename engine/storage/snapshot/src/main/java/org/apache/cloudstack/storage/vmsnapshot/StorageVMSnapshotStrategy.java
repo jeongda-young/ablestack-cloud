@@ -98,7 +98,7 @@ public class StorageVMSnapshotStrategy extends DefaultVMSnapshotStrategy {
     @Inject
     VMSnapshotDetailsDao vmSnapshotDetailsDao;
 
-    private static final String STORAGE_SNAPSHOT = "kvmStorageSnapshot";
+    public static final String STORAGE_SNAPSHOT = "kvmStorageSnapshot";
     private static final String CLONE_VM_SNAPSHOT_BACKING_PATH = "clone.vm.snapshot.backing.path.";
     @Inject
     private SnapshotDataStoreDao snapshotDataStoreDao;

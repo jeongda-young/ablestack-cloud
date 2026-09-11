@@ -444,7 +444,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             filteredDomainIds = domainHelper.filterChildSubDomains(filteredDomainIds);
         }
 
-        final BackupProvider provider = getBackupProvider(cmd.getZoneId());
+        final BackupProvider provider = getBackupProvidersForZone(cmd.getZoneId()).stream()
+                .filter(candidate -> KBOSS_BACKUP_PROVIDER.equals(candidate.getName())).findFirst()
+                .orElseThrow(() -> new InvalidParameterValueException("KBOSS backup provider is not enabled for this zone."));
         if (!KBOSS_BACKUP_PROVIDER.equals(provider.getName())) {
             throw new InvalidParameterValueException("Only KBOSS supports this API currently.");
         }
@@ -1156,7 +1158,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
              CheckedReservation backupStorageReservation = new CheckedReservation(owner,
                      Resource.ResourceType.backup_storage, backupSize, reservationDao, resourceLimitMgr)) {
 
-            Pair<Boolean, Backup> result = backupProvider.takeBackup(vm, cmd.getQuiesceVM(), cmd.isIsolated());
+            Pair<Boolean, Backup> result = backupProvider.takeBackup(vm, cmd.getQuiesceVM(), cmd.isIsolated(), backupScheduleId);
             if (!result.first()) {
                 throw new CloudRuntimeException("Failed to create Instance Backup");
             }
@@ -1880,7 +1882,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 updateVolumeState(vm, Volume.Event.RestoreSucceeded, Volume.State.Ready);
                 updateVmState(vm, VirtualMachine.Event.RestoringSuccess, VirtualMachine.State.Stopped);
                 final boolean imported = importRestoredVM(vm.getDataCenterId(), vm.getDomainId(), vm.getAccountId(), vm.getUserId(),
-                        vm.getInstanceName(), vm.getHypervisorType(), backup);
+                        vm.getInstanceName(), vm.getHypervisorType(), backup, offering);
                 if (imported) {
                     netBackupRestoreCoordinator.persistRestoreState(backup, vm, resolution.getRequestIdentifier(), RestorePhase.COMPLETED);
                     netBackupRestoreCoordinator.completeSession(vm.getId(), resolution.getRequestIdentifier());
@@ -1911,7 +1913,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 updateVolumeState(vm, Volume.Event.RestoreSucceeded, Volume.State.Ready);
                 updateVmState(vm, VirtualMachine.Event.RestoringSuccess, VirtualMachine.State.Stopped);
                 final boolean imported = importRestoredVM(vm.getDataCenterId(), vm.getDomainId(), vm.getAccountId(), vm.getUserId(),
-                        vm.getInstanceName(), vm.getHypervisorType(), backup);
+                        vm.getInstanceName(), vm.getHypervisorType(), backup, offering);
                 if (imported) {
                     netBackupRestoreCoordinator.persistRestoreState(backup, vm, resolution.getRequestIdentifier(), RestorePhase.COMPLETED);
                     netBackupRestoreCoordinator.completeSession(vm.getId(), resolution.getRequestIdentifier());

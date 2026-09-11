@@ -60,6 +60,8 @@ public class ApiAccessInterceptor implements MethodInterceptor {
 
         CallContext.register(serviceUserAccount.first(), serviceUserAccount.second());
         try {
+            // Preserve Europa user/project ACLs as well as account-level access checks.
+            accountManager.checkApiAccessForUser(serviceUserAccount.first(), apiName, null);
             return invocation.proceed();
         } finally {
             CallContext.unregister();
