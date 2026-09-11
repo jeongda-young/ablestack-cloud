@@ -38,6 +38,7 @@ import org.apache.cloudstack.annotation.dao.AnnotationDao;
 import org.apache.cloudstack.api.ApiConstants;
 import org.apache.cloudstack.api.command.user.vmsnapshot.ListVMSnapshotCmd;
 import org.apache.cloudstack.context.CallContext;
+import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreProvider;
 import org.apache.cloudstack.engine.subsystem.api.storage.StorageStrategyFactory;
 import org.apache.cloudstack.engine.subsystem.api.storage.VMSnapshotOptions;
 import org.apache.cloudstack.engine.subsystem.api.storage.VMSnapshotStrategy;
@@ -405,6 +406,15 @@ public class VMSnapshotManagerImpl extends MutualExclusiveIdsManagerBase impleme
             //Other Storage volume plugins could integrate this with their own functionality for group snapshots
             VMSnapshotStrategy snapshotStrategy = storageStrategyFactory.getVmSnapshotStrategy(userVmVo.getId(), rootVolumePool.getId(), snapshotMemory);
             if (snapshotStrategy == null) {
+                // Check if this is ONTAP managed storage with memory snapshot request - provide specific error message
+                if (snapshotMemory && rootVolumePool.isManaged() &&
+                        DataStoreProvider.ONTAP_PLUGIN_NAME.equals(rootVolumePool.getStorageProviderName())) {
+                    String message = String.format("Memory snapshots (snapshotmemory=true) are not supported for VMs on ONTAP managed storage. " +
+                            "Instance [%s] uses ONTAP storage which only supports disk-only (crash-consistent) snapshots. " +
+                            "Please use snapshotmemory=false for disk-only snapshots.", userVmVo.getUuid());
+                    logger.error(message);
+                    throw new CloudRuntimeException(message);
+                }
                 String message;
                 if (!SnapshotManager.VmStorageSnapshotKvm.value() && !snapshotMemory) {
                     message = "Creating a snapshot of a running KVM Instance without memory is not supported";
@@ -465,6 +475,12 @@ public class VMSnapshotManagerImpl extends MutualExclusiveIdsManagerBase impleme
 
         if (rootVolumePool.getPoolType() == Storage.StoragePoolType.PowerFlex) {
             vmSnapshotType = VMSnapshot.Type.Disk;
+        }
+
+        // CLVM_NG: Block VM snapshots until Phase 2 implementation is complete
+        if (rootVolumePool.getPoolType() == Storage.StoragePoolType.CLVM_NG) {
+            throw new InvalidParameterValueException("VM snapshots are not yet supported on CLVM_NG storage pools. " +
+                    "This feature will be available in a future release.");
         }
 
         try {

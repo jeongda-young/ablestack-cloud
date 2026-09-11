@@ -16,6 +16,10 @@
 // under the License.
 package com.cloud.api;
 
+import static com.cloud.user.AccountManagerImpl.apiKeyAccess;
+import static org.apache.cloudstack.api.ApiConstants.PASSWORD_CHANGE_REQUIRED;
+import static org.apache.cloudstack.user.UserPasswordResetManager.UserPasswordResetEnabled;
+
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InterruptedIOException;
@@ -192,8 +196,8 @@ import com.cloud.user.dao.UserDao;
 import com.cloud.utils.ConstantTimeComparator;
 import com.cloud.utils.DateUtil;
 import com.cloud.utils.HttpUtils;
-import com.cloud.utils.HttpUtils.ApiSessionKeySameSite;
 import com.cloud.utils.HttpUtils.ApiSessionKeyCheckOption;
+import com.cloud.utils.HttpUtils.ApiSessionKeySameSite;
 import com.cloud.utils.Pair;
 import com.cloud.utils.ReflectUtil;
 import com.cloud.utils.StringUtils;
@@ -208,10 +212,6 @@ import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.utils.exception.ExceptionProxyObject;
 import com.cloud.utils.net.NetUtils;
 import com.google.gson.reflect.TypeToken;
-
-import static com.cloud.user.AccountManagerImpl.apiKeyAccess;
-import static org.apache.cloudstack.api.ApiConstants.PASSWORD_CHANGE_REQUIRED;
-import static org.apache.cloudstack.user.UserPasswordResetManager.UserPasswordResetEnabled;
 
 @Component
 public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiServerService, Configurable {
@@ -817,85 +817,14 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
         // BaseAsyncCreateCmd: cmd params are processed and create() is called, then same workflow as BaseAsyncCmd.
         // BaseAsyncCmd: cmd is processed and submitted as an AsyncJob, job related info is serialized and returned.
         if (cmdObj instanceof BaseAsyncCmd) {
-            if (!asyncMgr.isAsyncJobsEnabled()) {
-                String msg = "Maintenance or Shutdown has been initiated on this management server. Can not accept new jobs";
-                logger.warn(msg);
-                throw new ServerApiException(ApiErrorCode.SERVICE_UNAVAILABLE, msg);
-            }
-            Long objectId = null;
-            String objectUuid;
-            if (cmdObj instanceof BaseAsyncCreateCmd) {
-                final BaseAsyncCreateCmd createCmd = (BaseAsyncCreateCmd)cmdObj;
-                dispatcher.dispatchCreateCmd(createCmd, params);
-                objectId = createCmd.getEntityId();
-                objectUuid = createCmd.getEntityUuid();
-                params.put("id", objectId.toString());
-                Class entityClass = EventTypes.getEntityClassForEvent(createCmd.getEventType());
-                if (entityClass != null)
-                    ctx.putContextParameter(entityClass, objectUuid);
-            } else {
-                // Extract the uuid before params are processed and id reflects internal db id
-                objectUuid = params.get(ApiConstants.ID);
-                dispatchChainFactory.getStandardDispatchChain().dispatch(new DispatchTask(cmdObj, params));
-            }
-
-            final BaseAsyncCmd asyncCmd = (BaseAsyncCmd)cmdObj;
-
-            if (callerUserId != null) {
-                params.put("ctxUserId", callerUserId.toString());
-            }
-            if (caller != null) {
-                params.put("ctxAccountId", String.valueOf(caller.getId()));
-            }
-            if (objectUuid != null) {
-                params.put("uuid", objectUuid);
-            }
-
-            long startEventId = ctx.getStartEventId();
-            asyncCmd.setStartEventId(startEventId);
-
-            // save the scheduled event
-            final Long eventId =
-                    ActionEventUtils.onScheduledActionEvent((callerUserId == null) ? (Long)User.UID_SYSTEM : callerUserId, asyncCmd.getEntityOwnerId(), asyncCmd.getEventType(),
-                            asyncCmd.getEventDescription(), asyncCmd.getApiResourceId(), asyncCmd.getApiResourceType().toString(), asyncCmd.isDisplay(), startEventId);
-            if (startEventId == 0) {
-                // There was no create event before, set current event id as start eventId
-                startEventId = eventId;
-            }
-
-            params.put("ctxStartEventId", String.valueOf(startEventId));
-            params.put("cmdEventType", asyncCmd.getEventType());
-            params.put("ctxDetails", ApiGsonHelper.getBuilder().create().toJson(ctx.getContextParameters()));
-            if (asyncCmd.getHttpMethod() != null) {
-                params.put(ApiConstants.HTTPMETHOD, asyncCmd.getHttpMethod().toString());
-            }
-
-            Long instanceId = (objectId == null) ? asyncCmd.getApiResourceId() : objectId;
-
-            // users can provide the job id they want to use, so log as it is a uuid and is unique
-            String injectedJobId = asyncCmd.getInjectedJobId();
-            uuidMgr.checkUuidSimple(injectedJobId, AsyncJob.class);
-
-            AsyncJobVO job = new AsyncJobVO("", callerUserId, caller.getId(), cmdObj.getClass().getName(),
-                    ApiGsonHelper.getBuilder().create().toJson(ApiSensitiveParamUtils.encryptSensitiveValues(params)), instanceId,
-                    asyncCmd.getApiResourceType() != null ? asyncCmd.getApiResourceType().toString() : null,
-                            injectedJobId);
-            job.setDispatcher(asyncDispatcher.getName());
-
-            final long jobId = asyncMgr.submitAsyncJob(job);
-
-            if (jobId == 0L) {
-                final String errorMsg = "Unable to schedule async job for command " + job.getCmd();
-                logger.warn(errorMsg);
-                throw new ServerApiException(ApiErrorCode.INTERNAL_ERROR, errorMsg);
-            }
+            AsyncCmdResult result = processAsyncCmd((BaseAsyncCmd)cmdObj, params, ctx, callerUserId, caller);
             final String response;
-            if (objectId != null) {
-                final String objUuid = (objectUuid == null) ? objectId.toString() : objectUuid;
-                response = getBaseAsyncCreateResponse(jobId, (BaseAsyncCreateCmd)asyncCmd, objUuid);
+            if (result.objectId != null) {
+                final String objUuid = (result.objectUuid == null) ? result.objectId.toString() : result.objectUuid;
+                response = getBaseAsyncCreateResponse(result.jobId, (BaseAsyncCreateCmd) result.asyncCmd, objUuid);
             } else {
                 SerializationContext.current().setUuidTranslation(true);
-                response = getBaseAsyncResponse(jobId, asyncCmd);
+                response = getBaseAsyncResponse(result.jobId, result.asyncCmd);
             }
             // Always log response for async for now, I don't think any sensitive data will be in here.
             // It might be nice to send this through scrubbing similar to how
@@ -923,6 +852,81 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
             SerializationContext.current().setUuidTranslation(true);
             return ApiResponseSerializer.toSerializedStringWithSecureLogs((ResponseObject)cmdObj.getResponseObject(), cmdObj.getResponseType(), log);
         }
+    }
+
+    @Override
+    public AsyncCmdResult processAsyncCmd(BaseAsyncCmd asyncCmd, Map<String, String> params, CallContext ctx, Long callerUserId, Account caller) throws Exception {
+        if (!asyncMgr.isAsyncJobsEnabled()) {
+            String msg = "Maintenance or Shutdown has been initiated on this management server. Can not accept new jobs";
+            logger.warn(msg);
+            throw new ServerApiException(ApiErrorCode.SERVICE_UNAVAILABLE, msg);
+        }
+        Long objectId = null;
+        String objectUuid;
+        if (asyncCmd instanceof BaseAsyncCreateCmd) {
+            final BaseAsyncCreateCmd createCmd = (BaseAsyncCreateCmd) asyncCmd;
+            dispatcher.dispatchCreateCmd(createCmd, params);
+            objectId = createCmd.getEntityId();
+            objectUuid = createCmd.getEntityUuid();
+            params.put("id", objectId.toString());
+            Class entityClass = EventTypes.getEntityClassForEvent(createCmd.getEventType());
+            if (entityClass != null)
+                ctx.putContextParameter(entityClass, objectUuid);
+        } else {
+            // Extract the uuid before params are processed and id reflects internal db id
+            objectUuid = params.get(ApiConstants.ID);
+            dispatchChainFactory.getStandardDispatchChain().dispatch(new DispatchTask(asyncCmd, params));
+        }
+
+        if (callerUserId != null) {
+            params.put("ctxUserId", callerUserId.toString());
+        }
+        if (caller != null) {
+            params.put("ctxAccountId", String.valueOf(caller.getId()));
+        }
+        if (objectUuid != null) {
+            params.put("uuid", objectUuid);
+        }
+
+        long startEventId = ctx.getStartEventId();
+        asyncCmd.setStartEventId(startEventId);
+
+        // save the scheduled event
+        final Long eventId =
+                ActionEventUtils.onScheduledActionEvent((callerUserId == null) ? (Long)User.UID_SYSTEM : callerUserId, asyncCmd.getEntityOwnerId(), asyncCmd.getEventType(),
+                        asyncCmd.getEventDescription(), asyncCmd.getApiResourceId(), asyncCmd.getApiResourceType().toString(), asyncCmd.isDisplay(), startEventId);
+        if (startEventId == 0) {
+            // There was no create event before, set current event id as start eventId
+            startEventId = eventId;
+        }
+
+        params.put("ctxStartEventId", String.valueOf(startEventId));
+        params.put("cmdEventType", asyncCmd.getEventType());
+        params.put("ctxDetails", ApiGsonHelper.getBuilder().create().toJson(ctx.getContextParameters()));
+        if (asyncCmd.getHttpMethod() != null) {
+            params.put(ApiConstants.HTTPMETHOD, asyncCmd.getHttpMethod().toString());
+        }
+
+        Long instanceId = (objectId == null) ? asyncCmd.getApiResourceId() : objectId;
+
+        // users can provide the job id they want to use, so log as it is a uuid and is unique
+        String injectedJobId = asyncCmd.getInjectedJobId();
+        uuidMgr.checkUuidSimple(injectedJobId, AsyncJob.class);
+
+        AsyncJobVO job = new AsyncJobVO("", callerUserId, caller.getId(), asyncCmd.getClass().getName(),
+                ApiGsonHelper.getBuilder().create().toJson(ApiSensitiveParamUtils.encryptSensitiveValues(params)), instanceId,
+                asyncCmd.getApiResourceType() != null ? asyncCmd.getApiResourceType().toString() : null,
+                        injectedJobId);
+        job.setDispatcher(asyncDispatcher.getName());
+
+        final long jobId = asyncMgr.submitAsyncJob(job);
+
+        if (jobId == 0L) {
+            final String errorMsg = "Unable to schedule async job for command " + job.getCmd();
+            logger.warn(errorMsg);
+            throw new ServerApiException(ApiErrorCode.INTERNAL_ERROR, errorMsg);
+        }
+        return new AsyncCmdResult(objectId, objectUuid, asyncCmd, jobId);
     }
 
     @SuppressWarnings("unchecked")
@@ -1443,7 +1447,7 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
         for (UserAuthenticator userAuthenticator : _userPasswordEncoders) {
             Pair<Boolean, ActionOnFailedAuthentication> authenticationResult = userAuthenticator.authenticate(user.getUsername(), password, userAccount.getDomainId(), null);
             if (authenticationResult == null) {
-                logger.trace(String.format("Authenticator [%s] is returning null for the authenticate mehtod.", userAuthenticator.getClass()));
+                logger.trace(String.format("Authenticator [%s] is returning null for the authenticate method.", userAuthenticator.getClass()));
                 continue;
             }
             if (BooleanUtils.toBoolean(authenticationResult.first())) {

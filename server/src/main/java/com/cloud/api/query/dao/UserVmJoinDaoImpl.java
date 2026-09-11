@@ -46,6 +46,7 @@ import org.apache.cloudstack.api.response.UserVmResponse;
 import org.apache.cloudstack.api.response.VnfNicResponse;
 import org.apache.cloudstack.backup.Backup;
 import org.apache.cloudstack.backup.dao.BackupDao;
+import org.apache.cloudstack.backup.dao.BackupOfferingDao;
 import org.apache.cloudstack.context.CallContext;
 import org.apache.cloudstack.extension.ExtensionHelper;
 import org.apache.cloudstack.framework.config.dao.ConfigurationDao;
@@ -67,6 +68,7 @@ import com.cloud.host.Host;
 import com.cloud.host.HostVO;
 import com.cloud.host.dao.HostDao;
 import com.cloud.host.dao.HostDetailsDao;
+import com.cloud.hypervisor.Hypervisor;
 import com.cloud.network.IpAddress;
 import com.cloud.network.Network;
 import com.cloud.network.vpc.VpcVO;
@@ -96,6 +98,7 @@ import com.cloud.user.UserStatisticsVO;
 import com.cloud.user.dao.UserDao;
 import com.cloud.user.dao.UserStatisticsDao;
 import com.cloud.uservm.UserVm;
+import com.cloud.utils.db.Filter;
 import com.cloud.utils.db.SearchBuilder;
 import com.cloud.utils.db.SearchCriteria;
 import com.cloud.utils.db.SearchCriteria.Op;
@@ -167,11 +170,14 @@ public class UserVmJoinDaoImpl extends GenericDaoBaseWithTagInformation<UserVmJo
     ExtensionHelper extensionHelper;
     @Inject
     BackupDao backupDao;
+    @Inject
+    private BackupOfferingDao backupOfferingDao;
 
     private final SearchBuilder<UserVmJoinVO> VmDetailSearch;
     private final SearchBuilder<UserVmJoinVO> activeVmByIsoSearch;
     private final SearchBuilder<UserVmJoinVO> leaseExpiredInstanceSearch;
     private final SearchBuilder<UserVmJoinVO> remainingLeaseInDaysSearch;
+
 
     protected UserVmJoinDaoImpl() {
 
@@ -337,6 +343,9 @@ public class UserVmJoinDaoImpl extends GenericDaoBaseWithTagInformation<UserVmJo
         if (details.contains(VMDetails.all) || details.contains(VMDetails.backoff)) {
             userVmResponse.setBackupOfferingId(userVm.getBackupOfferingUuid());
             userVmResponse.setBackupOfferingName(userVm.getBackupOfferingName());
+            if (userVm.getBackupOfferingUuid() != null) {
+                userVmResponse.setBackupProvider(backupOfferingDao.findByUuidIncludingRemoved(userVm.getBackupOfferingUuid()).getProvider());
+            }
         }
         if (details.contains(VMDetails.all) || details.contains(VMDetails.servoff) || details.contains(VMDetails.stats)) {
             userVmResponse.setCpuNumber(userVm.getCpu());
@@ -592,7 +601,7 @@ public class UserVmJoinDaoImpl extends GenericDaoBaseWithTagInformation<UserVmJo
             userVmResponse.setVbmcPort("None");
         }
         if (userVm.getUserDataId() != null) {
-            userVmResponse.setUserDataId(userVm.getUserDataUUid());
+            userVmResponse.setUserDataId(userVm.getUserDataUuid());
             userVmResponse.setUserDataName(userVm.getUserDataName());
             userVmResponse.setUserDataDetails(userVm.getUserDataDetails());
             userVmResponse.setUserDataPolicy(userVm.getUserDataPolicy());
@@ -1041,5 +1050,44 @@ public class UserVmJoinDaoImpl extends GenericDaoBaseWithTagInformation<UserVmJo
             sc.setParameters("leaseExpiryEndDate", nextDate);
         }
         return listBy(sc);
+    }
+
+    @Override
+    public List<UserVmJoinVO> listByZonesHypervisorNotTypesAndOwners(List<Long> zoneIds,
+                                                                     Hypervisor.HypervisorType hypervisorType,
+                                                                     List<String> excludeTypes, List<Long> accountIds,
+                                                                     String domainPath, Filter filter) {
+        if (CollectionUtils.isEmpty(zoneIds)) {
+            return Collections.emptyList();
+        }
+        SearchBuilder<UserVmJoinVO> sb = createSearchBuilder();
+        sb.and("dataCenterId", sb.entity().getDataCenterId(), SearchCriteria.Op.IN);
+        sb.and("hypervisorType", sb.entity().getHypervisorType(), Op.EQ);
+        if (CollectionUtils.isNotEmpty(excludeTypes)) {
+            sb.and().op("typeNull", sb.entity().getUserVmType(), Op.NULL);
+            sb.or("type", sb.entity().getUserVmType(), Op.NOTIN);
+            sb.cp();
+        }
+        boolean accountIdsNotEmpty = CollectionUtils.isNotEmpty(accountIds);
+        boolean domainPathNotBlank = StringUtils.isNotBlank(domainPath);
+        if (accountIdsNotEmpty || domainPathNotBlank) {
+            sb.and().op("account", sb.entity().getAccountId(), Op.IN);
+            sb.or("domainPath", sb.entity().getDomainPath(), Op.LIKE);
+            sb.cp();
+        }
+        sb.done();
+        SearchCriteria<UserVmJoinVO> sc = sb.create();
+        sc.setParameters("dataCenterId", zoneIds.toArray());
+        sc.setParameters("hypervisorType", hypervisorType);
+        if (CollectionUtils.isNotEmpty(excludeTypes)) {
+            sc.setParameters("type", excludeTypes.toArray());
+        }
+        if (accountIdsNotEmpty) {
+            sc.setParameters("account", accountIds.toArray());
+        }
+        if (domainPathNotBlank) {
+            sc.setParameters("domainPath", domainPath + "%");
+        }
+        return listBy(sc, filter);
     }
 }

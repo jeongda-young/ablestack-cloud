@@ -98,6 +98,7 @@ import com.cloud.upgrade.dao.Upgrade42210to42300;
 import com.cloud.upgrade.dao.EuropaSecuritySchemaUpgrade;
 import com.cloud.upgrade.dao.EuropaSchemaUpgrade;
 import com.cloud.upgrade.dao.EuropaComputeSchemaUpgrade;
+import com.cloud.upgrade.dao.EuropaStorageSchemaUpgrade;
 import com.cloud.upgrade.dao.Upgrade420to421;
 import com.cloud.upgrade.dao.Upgrade421to430;
 import com.cloud.upgrade.dao.Upgrade430to440;
@@ -506,6 +507,10 @@ public class DatabaseUpgradeChecker implements SystemIntegrityChecker {
                 });
                 runEuropaPhase(conn, EuropaSchemaUpgrade.S5A, () -> {
                     EuropaComputeSchemaUpgrade.migrate(conn);
+                    executeViewScripts();
+                });
+                runEuropaPhase(conn, EuropaSchemaUpgrade.S5B, () -> {
+                    EuropaStorageSchemaUpgrade.migrate(conn);
                     executeViewScripts();
                 });
             } catch (SQLException e) {

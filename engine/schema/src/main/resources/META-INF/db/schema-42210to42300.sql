@@ -1386,3 +1386,4 @@ WHERE NOT EXISTS (SELECT 1 FROM `cloud`.`configuration` WHERE `name` = 'kvm.cpu.
   AND `cfg`.`name` = 'vm.serviceoffering.cpu.cores.max';
 
 -- Schedule table changes are applied by the retry-safe Europa S5A named phase.
+-- Storage/backup changes are applied by the retry-safe Europa S5B named phase.

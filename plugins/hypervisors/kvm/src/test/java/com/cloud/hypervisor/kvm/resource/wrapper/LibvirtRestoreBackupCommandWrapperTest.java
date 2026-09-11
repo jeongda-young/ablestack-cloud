@@ -28,15 +28,20 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
+import java.util.Map;
 
 import org.apache.cloudstack.backup.BackupAnswer;
 import org.apache.cloudstack.backup.RestoreBackupCommand;
 import org.apache.cloudstack.storage.to.PrimaryDataStoreTO;
 import org.junit.Assert;
 import org.junit.Before;
+import org.junit.After;
 import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.mockito.MockedStatic;
+import org.mockito.MockedConstruction;
+import org.apache.cloudstack.utils.qemu.QemuImg;
+import org.apache.cloudstack.utils.qemu.QemuImgFile;
 import org.mockito.Mockito;
 import org.mockito.junit.MockitoJUnitRunner;
 
@@ -53,12 +58,20 @@ public class LibvirtRestoreBackupCommandWrapperTest {
     private LibvirtRestoreBackupCommandWrapper wrapper;
     private LibvirtComputingResource libvirtComputingResource;
     private RestoreBackupCommand command;
+    private MockedConstruction<QemuImg> qemuImages;
 
     @Before
     public void setUp() {
+        qemuImages = Mockito.mockConstruction(QemuImg.class, (mock, context) ->
+                when(mock.info(any(QemuImgFile.class))).thenReturn(Map.of()));
         wrapper = new LibvirtRestoreBackupCommandWrapper();
         libvirtComputingResource = Mockito.mock(LibvirtComputingResource.class);
         command = Mockito.mock(RestoreBackupCommand.class);
+    }
+
+    @After
+    public void tearDown() {
+        qemuImages.close();
     }
 
     @Test
@@ -418,6 +431,8 @@ public class LibvirtRestoreBackupCommandWrapperTest {
                                 return 0; // File exists
                             } else if (command.contains("check")) {
                                 return 0; // File is valid
+                            } else if (command.contains("qemu-img info") && command.contains("backing-filename")) {
+                                return 1; // No backing chain — exercise the rsync path (full backups)
                             }
                             return 0; // Other commands success
                         });

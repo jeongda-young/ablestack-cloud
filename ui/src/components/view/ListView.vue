@@ -518,6 +518,12 @@
         </a-tag>
         <span v-else>-</span>
       </template>
+      <template v-if="column.key === 'compressionstatus'">
+        <status :text="text ? text : $t('label.unknown')" displayText />
+      </template>
+      <template v-if="column.key === 'validationstatus'">
+        <status :text="text ? text : $t('label.unknown')" displayText />
+      </template>
       <template v-if="column.key === 'allocationstate'">
         <status
           :text="text ? text : ''"

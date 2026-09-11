@@ -67,6 +67,7 @@
         <module>backup/ablestack-commvault</module>
         <module>backup/ablestack-netbackup</module>
         <module>backup/bx</module>
+        <module>backup/kboss</module>
 
         <module>ca/root-ca</module>
 
@@ -105,6 +106,8 @@
         <module>integrations/automation-service</module>
         <module>integrations/disaster-recovery</module>
         <module>integrations/rack-management</module>
+        <module>integrations/veeam-control-service</module>
+
         <module>metrics</module>
 
         <module>network-elements/bigswitch</module>

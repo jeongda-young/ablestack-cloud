@@ -292,9 +292,21 @@ public class LibvirtRestoreBackupCommandWrapper extends CommandWrapper<RestoreBa
                     backupPath, timeout, createTargetVolume, size);
         }
 
+        if (hasBackingChain(backupPath, timeout)) {
+            String[] flattenCmd = {Script.getExecutableAbsolutePath("qemu-img"), "convert", "-O", "qcow2", backupPath, volumePath};
+            return Script.executeCommandForExitValue(timeout, flattenCmd) == 0;
+        }
         String[] rsyncCmd = new String[] { Script.getExecutableAbsolutePath("rsync"), "-az", backupPath, volumePath };
         int exitValue = Script.executeCommandForExitValue(timeout, rsyncCmd);
         return exitValue == 0;
+    }
+
+    private boolean hasBackingChain(String qcow2Path, int timeout) {
+        try {
+            return StringUtils.isNotBlank(new QemuImg(timeout).info(new QemuImgFile(qcow2Path)).get(QemuImg.BACKING_FILE));
+        } catch (QemuImgException | LibvirtException e) {
+            throw new CloudRuntimeException("Unable to inspect backup chain before restore", e);
+        }
     }
 
     private boolean replaceBlockDeviceWithBackup(KVMStoragePoolManager storagePoolMgr,

@@ -35,6 +35,7 @@ public final class EuropaSchemaUpgrade {
     public static final String LEGACY_HOOKS = "europa-4.23-legacy-hooks";
     public static final String S4 = "europa-4.23-s4-v1";
     public static final String S5A = "europa-4.23-s5a-v1";
+    public static final String S5B = "europa-4.23-s5b-v1";
 
     private EuropaSchemaUpgrade() {
     }
