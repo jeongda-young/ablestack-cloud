@@ -4,6 +4,57 @@
 
 mold_guest_common_die() { echo "ERROR: $*" >&2; exit 1; }
 
+# Build Mold API URL from agent.properties host= value (or an explicit URL).
+# - bare host/IP        → http://HOST:8080/client/api
+# - http://HOST         → http://HOST:8080/client/api  (inject :8080 when port missing)
+# - https://HOST        → https://HOST/client/api      (do NOT inject :8080; use 443)
+# - URL with port/path  → keep scheme/port; ensure .../client/api
+mold_guest_normalize_mold_api_url() {
+  local raw="${1:-}"
+  raw="${raw%%@*}"
+  raw="$(printf '%s' "$raw" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//;s|/*$||')"
+  [[ -n "$raw" ]] || return 1
+
+  local scheme rest hostport path
+  if [[ "$raw" =~ ^https?:// ]]; then
+    scheme="${raw%%://*}://"
+    rest="${raw#*://}"
+    hostport="${rest%%/*}"
+    if [[ "$rest" == *"/"* ]]; then
+      path="/${rest#*/}"
+    else
+      path=""
+    fi
+    path="${path%/}"
+    case "$path" in
+      ""|"/") path="/client/api" ;;
+      */client/api) ;;
+      */client) path="${path}/api" ;;
+      *) path="${path}/client/api" ;;
+    esac
+    if [[ "$scheme" == "http://" && "$hostport" != *:* ]]; then
+      hostport="${hostport}:8080"
+    fi
+    printf '%s\n' "${scheme}${hostport}${path}"
+    return 0
+  fi
+
+  printf '%s\n' "http://${raw}:8080/client/api"
+}
+
+mold_guest_discover_mold_api_url_from_agent() {
+  local props host url
+  for props in /etc/cloudstack/agent/agent.properties /etc/cloudstack/agent/agent.properties.override; do
+    [[ -f "$props" ]] || continue
+    host="$(grep -E '^[[:space:]]*host[[:space:]]*=' "$props" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d ' \r' || true)"
+    [[ -n "$host" ]] || continue
+    url="$(mold_guest_normalize_mold_api_url "$host")" || continue
+    printf '%s\n' "$url"
+    return 0
+  done
+  return 1
+}
+
 mold_guest_resolve_kvm_ip_from_env() {
   local env_file="${1:-}"
   if [[ -n "$env_file" && -f "$env_file" ]]; then

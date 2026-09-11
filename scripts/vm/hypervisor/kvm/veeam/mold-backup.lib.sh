@@ -23,15 +23,50 @@ ABLESTACK_VEEAM_ETC_DIR="${ABLESTACK_VEEAM_ETC_DIR:-/etc/ablestack/veeam}"
 MOLD_BACKUP_ETC_DIR="${MOLD_BACKUP_ETC_DIR:-${ABLESTACK_VEEAM_ETC_DIR}}"
 MOLD_BACKUP_CONF="${MOLD_BACKUP_CONF:-}"
 VEEAM_HOST_BACKUP_PATH="${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}"
-CVT_BACKUP_SCRIPT="${CVT_BACKUP_SCRIPT:-/etc/ablestack/veeam/ablestack_cvtbackup.sh}"
+# Veeam Agent SelectedFiles root. Mold stage (VEEAM_HOST_BACKUP_PATH) may hold large RBD
+# .raw/.rbdiff for restore; Agent SyncDirs must only see this payload tree (markers / qcow2).
+VEEAM_AGENT_PAYLOAD_PATH="${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}"
+CVT_BACKUP_SCRIPT="${CVT_BACKUP_SCRIPT:-}"
+# Veeam host-mode disk export (libvirt → /tmp/mold/veeam). Legacy name: ablestack_cvtbackup.sh
+HOST_EXPORT_SCRIPT="${HOST_EXPORT_SCRIPT:-${CVT_BACKUP_SCRIPT:-}}"
+
+# Strip ASCII + Unicode curly/smart quotes from conf/UI-pasted values.
+mold_backup_strip_wrapping_quotes() {
+  local v="$1"
+  v="${v//$'\u2018'/}"
+  v="${v//$'\u2019'/}"
+  v="${v//$'\u201C'/}"
+  v="${v//$'\u201D'/}"
+  while [[ "$v" == \'*\' || "$v" == \"*\" ]]; do
+    v="${v:1:${#v}-2}"
+  done
+  printf '%s' "$v"
+}
+mold_backup_normalize_job_name() {
+  mold_backup_strip_wrapping_quotes "${1:-}"
+}
+
+mold_backup_resolve_host_export_script() {
+  local cand
+  for cand in \
+    "${HOST_EXPORT_SCRIPT}" \
+    "${CVT_BACKUP_SCRIPT}" \
+    "${ABLESTACK_VEEAM_ETC_DIR}/ablestack_veeam_host_export.sh" \
+    "${ABLESTACK_VEEAM_ETC_DIR}/ablestack_cvtbackup.sh" \
+    "/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/ablestack_cvtbackup.sh"; do
+    [[ -n "$cand" && -x "$cand" ]] || continue
+    HOST_EXPORT_SCRIPT="$cand"
+    CVT_BACKUP_SCRIPT="$cand"
+    return 0
+  done
+  return 1
+}
 VEEAM_PROVIDER_NAME="${VEEAM_PROVIDER_NAME:-ablestack-veeam}"
 
-# Resolve config: MOLD_BACKUP_CONF, or /etc/ablestack/veeam/<job>.conf, or mold-backup.conf
+# Resolve config: per-job .conf (when VEEAM_JOB_NAME set) → MOLD_BACKUP_CONF → defaults.
+# Job conf must win over a previously cached MOLD_BACKUP_CONF (pre/post used to load
+# mold-backup.conf first and then stick on that path for the real job load).
 mold_backup_resolve_conf_path() {
-  if [[ -n "${MOLD_BACKUP_CONF:-}" && -f "$MOLD_BACKUP_CONF" ]]; then
-    echo "$MOLD_BACKUP_CONF"
-    return 0
-  fi
   local job="${VEEAM_JOB_NAME:-${1:-}}"
   if [[ -n "$job" ]]; then
     if [[ -f "${ABLESTACK_VEEAM_ETC_DIR}/${job}.conf" ]]; then
@@ -58,6 +93,10 @@ mold_backup_resolve_conf_path() {
       fi
     fi
   fi
+  if [[ -n "${MOLD_BACKUP_CONF:-}" && -f "$MOLD_BACKUP_CONF" ]]; then
+    echo "$MOLD_BACKUP_CONF"
+    return 0
+  fi
   for candidate in \
     "${ABLESTACK_VEEAM_ETC_DIR}/Mold_Guest_Backup.conf" \
     "${ABLESTACK_VEEAM_ETC_DIR}/mold-backup.conf" \
@@ -78,7 +117,10 @@ mold_backup_load_config() {
   local _preserve_restore_source="${RESTORE_SOURCE:-}"
   local _preserve_vm_name="${VM_NAME:-}"
   local _preserve_vm_uuid="${VM_UUID:-}"
-  local _preserve_vm_include="${VM_INCLUDE:-}"
+  # Do NOT preserve ambient VM_INCLUDE: mold-backup.env / an early default conf load
+  # (Job N-1) must not override the per-job .conf selected by VEEAM_JOB_NAME.
+  # Single-VM scope is applied later via pre-notify $4, not via env bleed.
+  VEEAM_JOB_NAME="$(mold_backup_normalize_job_name "${VEEAM_JOB_NAME:-}")"
   resolved="$(mold_backup_resolve_conf_path "${VEEAM_JOB_NAME:-}")" || {
     echo "Config not found — run veeam_config.sh or install.sh" >&2
     return 1
@@ -86,12 +128,26 @@ mold_backup_load_config() {
   MOLD_BACKUP_CONF="$resolved"
   # shellcheck source=/dev/null
   source "$MOLD_BACKUP_CONF"
-  # Caller-provided selectors must survive sourcing the job conf (which may define them).
+  # Caller-provided restore selectors must survive sourcing the job conf.
   [[ -n "${_preserve_backup_id}" ]] && BACKUP_ID="${_preserve_backup_id}"
   [[ -n "${_preserve_restore_source}" ]] && RESTORE_SOURCE="${_preserve_restore_source}"
   [[ -n "${_preserve_vm_name}" ]] && VM_NAME="${_preserve_vm_name}"
   [[ -n "${_preserve_vm_uuid}" ]] && VM_UUID="${_preserve_vm_uuid}"
-  [[ -n "${_preserve_vm_include}" && "${_preserve_vm_include}" != "*" ]] && VM_INCLUDE="${_preserve_vm_include}"
+
+  # Defense: .conf may contain KEY="'value'" from env sync with single-quoted env files.
+  MOLD_API_URL="$(mold_backup_strip_wrapping_quotes "${MOLD_API_URL:-}")"
+  MOLD_API_KEY="$(mold_backup_strip_wrapping_quotes "${MOLD_API_KEY:-}")"
+  MOLD_API_SECRET="$(mold_backup_strip_wrapping_quotes "${MOLD_API_SECRET:-}")"
+  ZONE_ID="$(mold_backup_strip_wrapping_quotes "${ZONE_ID:-}")"
+  BACKUP_OFFERING_NAME="$(mold_backup_strip_wrapping_quotes "${BACKUP_OFFERING_NAME:-}")"
+  VEEAM_SSH_HOST="$(mold_backup_strip_wrapping_quotes "${VEEAM_SSH_HOST:-}")"
+  VEEAM_SSH_USER="$(mold_backup_strip_wrapping_quotes "${VEEAM_SSH_USER:-}")"
+  VEEAM_SSH_KEY="$(mold_backup_strip_wrapping_quotes "${VEEAM_SSH_KEY:-}")"
+  VEEAM_JOB_NAME="$(mold_backup_normalize_job_name "${VEEAM_JOB_NAME:-}")"
+  JOB_NAME="$(mold_backup_normalize_job_name "${JOB_NAME:-${VEEAM_JOB_NAME:-}}")"
+  [[ -n "$JOB_NAME" && -z "${VEEAM_JOB_NAME:-}" ]] && VEEAM_JOB_NAME="$JOB_NAME"
+  MOLD_DATADISK_PATH="$(mold_backup_strip_wrapping_quotes "${MOLD_DATADISK_PATH:-}")"
+  BACKUP_REPO_ADDRESS="$(mold_backup_strip_wrapping_quotes "${BACKUP_REPO_ADDRESS:-}")"
 
   LOG_FILE="${LOG_FILE:-/var/log/mold/backup-veeam.log}"
   LOG_TAG="${LOG_TAG:-mold-veeam-backup}"
@@ -100,20 +156,24 @@ mold_backup_load_config() {
   BACKUP_MODE="${BACKUP_MODE:-host}"
   VM_INCLUDE="${VM_INCLUDE:-*}"
   VM_EXCLUDE="${VM_EXCLUDE:-}"
+  VM_AUTO_EXCLUDE="${VM_AUTO_EXCLUDE:-true}"
   ZONE_ID="${ZONE_ID:-}"
   RETENTION_PERIOD="${RETENTION_PERIOD:-}"
   VEEAM_URL="${VEEAM_URL:-}"
   VEEAM_USERNAME="${VEEAM_USERNAME:-}"
   VEEAM_PASSWORD="${VEEAM_PASSWORD:-}"
+  # Host→Veeam SSH for restore-watch / RP lookup (key missing → password/askpass).
+  VEEAM_SSH_PASSWORD="${VEEAM_SSH_PASSWORD:-${VEEAM_PASSWORD:-}}"
   VEEAM_HOST_BACKUP_PATH="${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}"
   STAGING_PATH="${STAGING_PATH:-${VEEAM_HOST_BACKUP_PATH}}"
+  VEEAM_AGENT_PAYLOAD_PATH="${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}"
   NAS_REPO_MOUNT="${NAS_REPO_MOUNT:-}"
   SOURCE_DISK_FORMAT="${SOURCE_DISK_FORMAT:-vmdk}"
   BOOTSTRAP_CHECKPOINT="${BOOTSTRAP_CHECKPOINT:-true}"
   QUIESCE_VM="${QUIESCE_VM:-false}"
   BACKUP_OPERATION="${BACKUP_OPERATION:-seed-import}"
-  CLEANUP_STAGING_AFTER_BACKUP="${CLEANUP_STAGING_AFTER_BACKUP:-true}"
-  CLEANUP_STAGING_ON_ERROR="${CLEANUP_STAGING_ON_ERROR:-true}"
+  CLEANUP_STAGING_AFTER_BACKUP="${CLEANUP_STAGING_AFTER_BACKUP:-false}"
+  CLEANUP_STAGING_ON_ERROR="${CLEANUP_STAGING_ON_ERROR:-false}"
   BACKUP_OFFERING_NAME="${BACKUP_OFFERING_NAME:-VeeamBackup}"
   BACKUP_REPO_TYPE="${BACKUP_REPO_TYPE:-local}"
   BACKUP_REPO_NAME="${BACKUP_REPO_NAME:-Ablestack Data Disk}"
@@ -125,9 +185,23 @@ mold_backup_load_config() {
   # over SSH after a Mold backup completes. Loop is broken by veeam-active/mold-active markers.
   VEEAM_TRIGGER_ENABLED="${VEEAM_TRIGGER_ENABLED:-false}"
   VEEAM_TRIGGER_TTL="${VEEAM_TRIGGER_TTL:-1800}"
+  # After Remove-from-Disk (empty Veeam Disk), normal Start fails with
+  # FileBackup.IsBackupFilesystemExist — auto Active Full (-FullBackup) once.
+  # Latch (not timed cooldown): do not restart until Disk returns (HAS_BACKUP)
+  # or an operator runs mold-backup.sh active-full (clears the latch).
+  # Default false: Veeam UI Start/Pull must run exactly once. Auto Active Full
+  # used to call Start-VBR again after pre-notify publish / catalog-sync and
+  # looked like a backup loop. Operators can still run: mold-backup.sh active-full
+  VEEAM_AUTO_ACTIVE_FULL_ON_EMPTY="${VEEAM_AUTO_ACTIVE_FULL_ON_EMPTY:-false}"
   VEEAM_SSH_HOST="${VEEAM_SSH_HOST:-}"
   VEEAM_SSH_USER="${VEEAM_SSH_USER:-administrator}"
   VEEAM_SSH_KEY="${VEEAM_SSH_KEY:-}"
+  # Drop missing key path so password/askpass auth is used (common lab setup).
+  if [[ -n "${VEEAM_SSH_KEY}" && ! -f "${VEEAM_SSH_KEY}" ]]; then
+    mold_backup_notify_log warn "VEEAM_SSH_KEY=${VEEAM_SSH_KEY} missing; using VEEAM_SSH_PASSWORD/askpass for Veeam SSH"
+    VEEAM_SSH_KEY=""
+  fi
+  VEEAM_SSH_PASSWORD="${VEEAM_SSH_PASSWORD:-${VEEAM_PASSWORD:-}}"
   # Veeam VBR native REST API (port 9419) — used by VEEAM_TRIGGER_METHOD=rest/auto (no SSH).
   VEEAM_API_URL="${VEEAM_API_URL:-}"
   VEEAM_API_HOST="${VEEAM_API_HOST:-}"
@@ -142,6 +216,14 @@ mold_backup_load_config() {
   VEEAM_UI_RESTORE_SOURCE="${VEEAM_UI_RESTORE_SOURCE:-mold-only}"
   RESTORE_LOCK_DIR="${RESTORE_LOCK_DIR:-}"
   VEEAM_RESTORE_WATCH_WINDOW_MIN="${VEEAM_RESTORE_WATCH_WINDOW_MIN:-60}"
+  VEEAM_TRIGGER_FLR_ON_MOLD_RESTORE="${VEEAM_TRIGGER_FLR_ON_MOLD_RESTORE:-true}"
+  # FLR/restore-watch must use the Veeam-selected RP/checkpoint. Latest-only fallback is opt-in.
+  RESTORE_ALLOW_LATEST_FALLBACK="${RESTORE_ALLOW_LATEST_FALLBACK:-false}"
+  # Veeam UI FLR gives an RP GUID that is often missing from Mold details (Agent jobs).
+  # Map RP CreationTime → nearest Mold checkpoint by default.
+  RESTORE_RP_TIME_MATCH="${RESTORE_RP_TIME_MATCH:-true}"
+  # Agent backup snap→RP finish can span hours; 3h keeps UI FLR time-match usable.
+  RESTORE_RP_MATCH_MAX_DELTA_SEC="${RESTORE_RP_MATCH_MAX_DELTA_SEC:-10800}"
 
   mold_backup_resolve_api_secret
   [[ -n "${MOLD_BACKUP_OPERATION:-}" ]] && BACKUP_OPERATION="${MOLD_BACKUP_OPERATION}"
@@ -254,6 +336,7 @@ mold_backup_supplement_guest_config() {
     fi
     for key in VEEAM_SSH_HOST VEEAM_SSH_USER VEEAM_SSH_KEY VEEAM_GUEST_JOB_PREFIX \
       VEEAM_TRIGGER_ENABLED VEEAM_TRIGGER_METHOD VEEAM_TRIGGER_TTL \
+      VEEAM_AUTO_ACTIVE_FULL_ON_EMPTY \
       VEEAM_USERNAME VEEAM_PASSWORD VEEAM_API_URL; do
       [[ -n "${!key:-}" ]] && continue
       val="$(mold_backup_read_env_var "$key" "$env_file" 2>/dev/null || true)"
@@ -498,10 +581,13 @@ mold_backup_get_all_disk_paths() {
 }
 
 mold_backup_has_rbd_disk() {
-  local csv="$1"
+  local csv="${1:-}"
   [[ "$csv" == rbd:* ]] && return 0
   [[ "$csv" == *",rbd:"* ]] && return 0
   [[ "$csv" == *"protocol=rbd"* ]] && return 0
+  # HCI often maps Ceph images via krbd: /dev/rbd/<pool>/<image>
+  [[ "$csv" == /dev/rbd/* ]] && return 0
+  [[ "$csv" == *"/dev/rbd/"* ]] && return 0
   return 1
 }
 
@@ -517,17 +603,19 @@ mold_backup_domain_has_raw_disk() {
 # True if domain uses RBD network disks (even when domblklist path is not rbd:...).
 mold_backup_domain_has_rbd_disk() {
   local vm="$1" csv="${2:-}"
+  [[ -z "$csv" ]] && csv="$(virsh -c qemu:///system domblklist "$vm" --details 2>/dev/null | awk '/disk/ {print $4}' | paste -sd, -)"
   mold_backup_has_rbd_disk "$csv" && return 0
   virsh -c qemu:///system dumpxml "$vm" 2>/dev/null \
-    | grep -qiE "protocol=['\"]rbd['\"]|<source[^>]*protocol=['\"]rbd" \
+    | grep -qiE "protocol=['\"]rbd['\"]|<source[^>]*protocol=['\"]rbd|/dev/rbd/" \
     && return 0
   return 1
 }
 
-# Prefer rbd: URIs from dumpxml when domblklist only shows sparse paths.
+# Prefer rbd: URIs from dumpxml / krbd device paths.
 mold_backup_domain_rbd_disk_paths() {
   local vm="$1"
-  virsh -c qemu:///system dumpxml "$vm" 2>/dev/null | python3 -c "
+  {
+    virsh -c qemu:///system dumpxml "$vm" 2>/dev/null | python3 -c "
 import sys, re
 xml = sys.stdin.read()
 # <source protocol='rbd' name='pool/image'>
@@ -535,7 +623,13 @@ for m in re.finditer(r\"protocol=['\\\"]rbd['\\\"][^>]*name=['\\\"]([^'\\\"]+)['
     print('rbd:' + m.group(1))
 for m in re.finditer(r\"name=['\\\"]([^'\\\"]+)['\\\"][^>]*protocol=['\\\"]rbd['\\\"]\", xml, re.I):
     print('rbd:' + m.group(1))
-" 2>/dev/null | awk 'NF && !seen[$0]++'
+# <source dev='/dev/rbd/pool/image'>
+for m in re.finditer(r\"dev=['\\\"](/dev/rbd/[^'\\\"]+)['\\\"]\", xml, re.I):
+    print(m.group(1))
+"
+    virsh -c qemu:///system domblklist "$vm" --details 2>/dev/null \
+      | awk '/disk/ && \$4 ~ /^\\/dev\\/rbd\\// {print \$4}'
+  } 2>/dev/null | awk 'NF && !seen[$0]++'
 }
 
 # auto | qcow2 (GFS/file) | rbd (HCI/Ceph primary)
@@ -557,6 +651,9 @@ mold_backup_parse_rbd_volume_id() {
   if [[ "$uri" == rbd:* ]]; then
     image="${uri#rbd:}"
     image="${image%%:*}"
+  elif [[ "$uri" == /dev/rbd/* ]]; then
+    # /dev/rbd/<pool>/<image>
+    image="${uri##*/}"
   elif [[ "$uri" == rbd/* ]]; then
     image="${uri##*/}"
   fi
@@ -993,6 +1090,10 @@ mold_backup_api_create_backup() {
 mold_backup_api_restore() {
   mold_backup_require_var BACKUP_ID
   local json job_id
+  # Existing-VM restore requires Stopped; FLR→Mold auto-stops unless RESTORE_AUTO_STOP=false.
+  if [[ -n "${VM_NAME:-}" ]]; then
+    mold_backup_api_ensure_vm_stopped_for_restore "$VM_NAME" || return 1
+  fi
   json=$(mold_backup_cmk_run restoreAblestackVeeamBackup "id=${BACKUP_ID}" 2>/dev/null) \
     || json=$(mold_backup_cmk_run restoreBackup "id=${BACKUP_ID}" 2>/dev/null) \
     || return 1
@@ -1016,12 +1117,31 @@ mold_backup_cmk_supports() {
 
 mold_backup_api_create_veeam_backup() {
   mold_backup_require_var VM_UUID
-  local backup_name args
+  local backup_name args interval_type
   backup_name="$(mold_backup_api_build_backup_name_for_vm "${VM_UUID}" "${VM_NAME:-}")"
   args=("virtualmachineid=${VM_UUID}" "name=${backup_name}")
   [[ "${QUIESCE_VM}" == "true" ]] && args+=("quiescevm=true")
+  # Veeam Job (server-side) → Mold UI interval type is always EXTERNAL unless overridden.
+  interval_type="$(mold_backup_resolve_veeam_interval_type "${VEEAM_SCHEDULE_NAME:-${SCHEDULE:-default}}")"
+  [[ -n "$interval_type" ]] && args+=("intervaltype=${interval_type}")
   mold_backup_cmk_run createAblestackVeeamBackup "${args[@]}" \
     || mold_backup_cmk_run createBackup "${args[@]}"
+}
+
+# Map Veeam pre-notify schedule arg / config to Mold backup intervaltype.
+# Veeam-triggered backups are not Mold schedules → UI shows EXTERNAL (not DAILY/HOURLY).
+mold_backup_resolve_veeam_interval_type() {
+  local schedule="${1:-default}"
+  local configured="${VEEAM_BACKUP_INTERVAL_TYPE:-}"
+  if [[ -n "$configured" ]]; then
+    echo "${configured^^}"
+    return 0
+  fi
+  case "${schedule,,}" in
+    external|manual|adhoc|ui|oneshot|hourly|daily|weekly|monthly|default|""|*)
+      echo "EXTERNAL"
+      ;;
+  esac
 }
 
 mold_backup_cleanup_staging() {
@@ -1041,6 +1161,18 @@ mold_backup_cleanup_staging() {
   if [[ ! -d "${STAGING_PATH}" ]]; then
     mold_backup_log info "Staging path already absent: ${STAGING_PATH}"
     return 0
+  fi
+  # STAGING_PATH is often the same as VEEAM_HOST_BACKUP_PATH (/tmp/mold/veeam).
+  # Deleting *.raw/*.meta there destroys the Mold RBD FULL base and breaks restore.
+  local host_stage="${VEEAM_HOST_BACKUP_PATH:-}"
+  if [[ -n "$host_stage" ]]; then
+    local stage_real host_real
+    stage_real="$(readlink -f "${STAGING_PATH}" 2>/dev/null || echo "${STAGING_PATH}")"
+    host_real="$(readlink -f "${host_stage}" 2>/dev/null || echo "${host_stage}")"
+    if [[ "$stage_real" == "$host_real" || "$stage_real" == "$host_real"/* || "$host_real" == "$stage_real"/* ]]; then
+      mold_backup_notify_log info "Skip staging cleanup: path is Mold durable backup store (${STAGING_PATH})"
+      return 0
+    fi
   fi
   mold_backup_log info "Cleaning staging directory: ${STAGING_PATH}"
   find "${STAGING_PATH}" -mindepth 1 -maxdepth 3 \( -name '*.vmdk' -o -name '*.flat' -o -name '*.qcow2' -o -name '*.raw' -o -name '*.meta' \) -delete 2>/dev/null || true
@@ -1176,18 +1308,59 @@ mold_backup_list_target_domains() {
   printf '%s\n' "${targets[@]}"
 }
 
+# Always skip infrastructure / system domains unless VM_AUTO_EXCLUDE=false.
+# Patterns: scvm*, CloudStack r-/s-/v-*-VM, *ablestack-template*.
+mold_backup_vm_is_auto_excluded() {
+  local vm_name="$1"
+  [[ "${VM_AUTO_EXCLUDE:-true}" == "true" ]] || return 1
+  case "$vm_name" in
+    scvm|scvm*)
+      return 0
+      ;;
+  esac
+  # DomR / SSVM / CPVM style instance names
+  if [[ "$vm_name" =~ ^[rsv]-[0-9]+-VM$ ]]; then
+    return 0
+  fi
+  case "$vm_name" in
+    *ablestack-template*|*ablestack_template*)
+      return 0
+      ;;
+  esac
+  return 1
+}
+
+# Match exclude token: exact name, or bash glob if token contains *.
+mold_backup_vm_matches_exclude_token() {
+  local vm_name="$1" token="$2"
+  [[ -z "$token" ]] && return 1
+  if [[ "$token" == *"*"* || "$token" == *"?"* || "$token" == *"["* ]]; then
+    # intentional unquoted pattern on RHS for glob match
+    # shellcheck disable=SC2254
+    [[ "$vm_name" == $token ]]
+    return $?
+  fi
+  [[ "$vm_name" == "$token" ]]
+}
+
 mold_backup_vm_in_filter() {
   local vm_name="$1"
   local include="${VM_INCLUDE:-*}"
   local exclude="${VM_EXCLUDE:-}"
   local token
 
+  if mold_backup_vm_is_auto_excluded "$vm_name"; then
+    return 1
+  fi
+
   if [[ -n "$exclude" ]]; then
     IFS=',' read -ra _ex <<< "$exclude"
     for token in "${_ex[@]}"; do
       token="$(echo "$token" | xargs)"
       [[ -z "$token" ]] && continue
-      [[ "$vm_name" == "$token" ]] && return 1
+      if mold_backup_vm_matches_exclude_token "$vm_name" "$token"; then
+        return 1
+      fi
     done
   fi
 
@@ -1250,6 +1423,31 @@ mold_backup_api_update_config_if_needed() {
     || mold_backup_notify_log warn "updateConfiguration ${name} failed (may need admin API key)"
 }
 
+# Append provider to comma-separated backup.framework.provider.plugin without replacing others.
+# Example: "dummy,nas,netbackup" + ablestack-veeam → "dummy,nas,netbackup,ablestack-veeam"
+mold_backup_api_append_provider_plugin() {
+  local provider="${1:-${VEEAM_PROVIDER_NAME:-ablestack-veeam}}"
+  local current updated
+  current="$(mold_backup_api_list_config_value "backup.framework.provider.plugin" 2>/dev/null || true)"
+  updated="$(python3 -c "
+import sys
+cur = (sys.argv[1] or '').strip()
+want = (sys.argv[2] or '').strip()
+items = [i.strip() for i in cur.split(',') if i.strip()]
+lowered = {i.lower() for i in items}
+if want and want.lower() not in lowered:
+    items.append(want)
+print(','.join(items))
+" "${current}" "${provider}" 2>/dev/null || echo "${provider}")"
+  [[ -n "$updated" ]] || updated="$provider"
+  if [[ "$updated" == "$current" ]]; then
+    mold_backup_notify_log info "backup.framework.provider.plugin already contains ${provider} (${current})"
+    return 0
+  fi
+  mold_backup_notify_log info "backup.framework.provider.plugin: '${current}' → '${updated}'"
+  mold_backup_api_update_config_if_needed "backup.framework.provider.plugin" "$updated"
+}
+
 mold_backup_api_list_cluster_config_value() {
   local name="$1" cluster_id="$2"
   local json val
@@ -1302,12 +1500,24 @@ except Exception:
 }
 
 mold_backup_api_ensure_global_settings() {
+  local chain_size
+  local stage_root
   mold_backup_api_update_config_if_needed "backup.framework.enabled" "true"
   mold_backup_api_update_config_if_needed "backup.enable.attach.detach.of.volumes" "true"
-  mold_backup_api_update_config_if_needed "backup.framework.provider.plugin" "${VEEAM_PROVIDER_NAME}"
+  # Append ablestack-veeam; do not wipe existing providers (dummy,nas,netbackup,...).
+  mold_backup_api_append_provider_plugin "${VEEAM_PROVIDER_NAME:-ablestack-veeam}"
   [[ -n "${VEEAM_URL:-}" ]] && mold_backup_api_update_config_if_needed "backup.plugin.ablestack-veeam.url" "${VEEAM_URL}"
   [[ -n "${VEEAM_USERNAME:-}" ]] && mold_backup_api_update_config_if_needed "backup.plugin.ablestack-veeam.username" "${VEEAM_USERNAME}"
   [[ -n "${VEEAM_PASSWORD:-}" ]] && mold_backup_api_update_config_if_needed "backup.plugin.ablestack-veeam.password" "${VEEAM_PASSWORD}"
+  stage_root="${VEEAM_HOST_BACKUP_PATH:-${STAGING_PATH:-/tmp/mold/veeam}}"
+  if [[ -n "$stage_root" ]]; then
+    mold_backup_api_update_config_if_needed "backup.plugin.ablestack-veeam.stage.root.path" "$stage_root"
+  fi
+  # Align Mold FULL↔incremental switch with host hook VEEAM_MAX_CHAIN when set.
+  chain_size="${BACKUP_CHAIN_SIZE:-${VEEAM_MAX_CHAIN:-}}"
+  if [[ -n "$chain_size" && "$chain_size" =~ ^[0-9]+$ && "$chain_size" -gt 0 ]]; then
+    mold_backup_api_update_config_if_needed "backup.chain.size" "$chain_size"
+  fi
   mold_backup_api_ensure_cluster_incremental_backup
 }
 
@@ -1449,8 +1659,8 @@ except Exception:
     echo "ablestack-veeam"
     return 0
   fi
-  # Force ablestack-veeam when global setting / Mold.jar module is present (list API may only show display name veeam)
-  if [[ "${FORCE_ABLESTACK_VEEAM_PROVIDER:-true}" == "true" ]]; then
+  # Force ablestack-veeam when explicitly requested (list API may only show display name veeam)
+  if [[ "${FORCE_ABLESTACK_VEEAM_PROVIDER:-false}" == "true" ]]; then
     echo "ablestack-veeam"
     return 0
   fi
@@ -1458,7 +1668,7 @@ except Exception:
     echo "veeam"
     return 0
   fi
-  echo "${VEEAM_PROVIDER_NAME:-ablestack-veeam}"
+  echo "${VEEAM_PROVIDER_NAME:-veeam}"
 }
 
 # Pick externalid for Veeam family: never use NAS repository UUID.
@@ -1857,21 +2067,30 @@ mold_backup_api_ensure_offering() {
   local offering_id json err want_ext ext_id bad_id bad_provider
   mold_backup_api_ensure_zone_id || return 1
   [[ -n "${VEEAM_PROVIDER_NAME:-}" ]] || VEEAM_PROVIDER_NAME="$(mold_backup_api_detect_veeam_provider)"
-  # Host/datadisk seed import requires ablestack-veeam (not display-name veeam / NAS hybrid).
-  if mold_backup_is_datadisk_mode || [[ "${FORCE_ABLESTACK_VEEAM_PROVIDER:-true}" == "true" ]]; then
+  # Prefer ablestack-veeam when forced; otherwise keep MS display name (often "veeam").
+  if [[ "${FORCE_ABLESTACK_VEEAM_PROVIDER:-false}" == "true" ]]; then
     VEEAM_PROVIDER_NAME=ablestack-veeam
     export VEEAM_PROVIDER_NAME
   fi
   offering_id="$(mold_backup_api_find_offering_id "${VEEAM_PROVIDER_NAME}" "$(mold_backup_offering_name)" 2>/dev/null || true)"
   [[ -n "$offering_id" ]] || offering_id="$(mold_backup_api_find_offering_id "${VEEAM_PROVIDER_NAME}" 2>/dev/null || true)"
+  # Name-only fallback (lab MS may register Ablestack plugin as provider=veeam).
+  if [[ -z "$offering_id" ]]; then
+    offering_id="$(mold_backup_api_find_offering_id veeam "$(mold_backup_offering_name)" 2>/dev/null || true)"
+    [[ -n "$offering_id" ]] && VEEAM_PROVIDER_NAME=veeam && export VEEAM_PROVIDER_NAME
+  fi
+  if [[ -z "$offering_id" ]]; then
+    offering_id="$(mold_backup_api_find_offering_id ablestack-veeam "$(mold_backup_offering_name)" 2>/dev/null || true)"
+    [[ -n "$offering_id" ]] && VEEAM_PROVIDER_NAME=ablestack-veeam && export VEEAM_PROVIDER_NAME
+  fi
   want_ext="$(mold_backup_api_pick_offering_external_id "${VEEAM_PROVIDER_NAME}")"
   OFFERING_EXTERNAL_ID="$want_ext"
   # Warn if a same-name offering exists under wrong provider=veeam (NAS hybrid).
   if [[ -z "$offering_id" ]]; then
     bad_id="$(mold_backup_api_find_offering_id veeam "$(mold_backup_offering_name)" 2>/dev/null || true)"
-    if [[ -n "$bad_id" ]]; then
-      mold_backup_notify_log err "Found '$(mold_backup_offering_name)' with provider=veeam (id=${bad_id}) — NAS hybrid; seed import needs provider=ablestack-veeam"
-      mold_backup_notify_log err "Delete that offering in Mold UI (Backup Offerings), re-assign VMs after: bash diagnose-mold-veeam-offering.sh --import"
+    if [[ -n "$bad_id" && "${VEEAM_PROVIDER_NAME}" == "ablestack-veeam" ]]; then
+      mold_backup_notify_log err "Found '$(mold_backup_offering_name)' with provider=veeam (id=${bad_id}) — use VEEAM_PROVIDER_NAME=veeam or FORCE_ABLESTACK_VEEAM_PROVIDER=false"
+      mold_backup_notify_log err "Or delete that offering and re-import as ablestack-veeam: bash diagnose-mold-veeam-offering.sh --import"
       return 1
     fi
   fi
@@ -2094,14 +2313,83 @@ mold_backup_api_wait_async_job() {
   return 1
 }
 
+# Mold rejects restore while the existing VM is Running.
+# STOP ONLY for restore (FLR→Mold / restore-notify). Backup / pre-notify / post-notify
+# must never call this — Running VMs stay Running during RBD/qcow2 host export.
+mold_backup_api_get_vm_state() {
+  local instance_name="$1" json
+  json=$(mold_backup_api_get_vm_record "$instance_name" "${ZONE_ID:-}") || return 1
+  mold_backup_api_json_field "$json" "listvirtualmachinesresponse.virtualmachine.state"
+}
+
+mold_backup_api_ensure_vm_stopped_for_restore() {
+  local vm_name="${1:-${VM_NAME:-}}"
+  local auto_stop="${RESTORE_AUTO_STOP:-true}"
+  local vm_id state json job_id elapsed max_wait=300
+  [[ -n "$vm_name" ]] || return 0
+  # Safety: refuse if caller is clearly in a backup hook path.
+  if [[ "${MOLD_BACKUP_HOOK:-}" == "pre-notify" || "${MOLD_BACKUP_HOOK:-}" == "post-notify" ]]; then
+    mold_backup_notify_log err "ensure-stopped refused: hook=${MOLD_BACKUP_HOOK} must not stop VMs (restore-only)"
+    return 1
+  fi
+  vm_id="$(mold_backup_api_get_vm_id "$vm_name" 2>/dev/null || true)"
+  [[ -n "$vm_id" ]] || {
+    mold_backup_notify_log warn "ensure-stopped: cannot resolve Mold id for ${vm_name}"
+    return 1
+  }
+  state="$(mold_backup_api_get_vm_state "$vm_name" 2>/dev/null || true)"
+  case "$state" in
+    Stopped|Destroyed|Expunging)
+      mold_backup_notify_log info "ensure-stopped: ${vm_name} already ${state}"
+      return 0
+      ;;
+  esac
+  if [[ "$auto_stop" != "true" ]]; then
+    mold_backup_notify_log err "ensure-stopped: ${vm_name} is ${state:-unknown}; stop in Mold UI or set RESTORE_AUTO_STOP=true"
+    return 1
+  fi
+  mold_backup_notify_log info "FLR→Mold: auto-stopping ${vm_name} (state=${state:-unknown}) before restore"
+  json=$(mold_backup_cmk_run stopVirtualMachine "id=${vm_id}" "forced=true" 2>/dev/null) \
+    || {
+      mold_backup_notify_log err "ensure-stopped: stopVirtualMachine failed for ${vm_name}"
+      return 1
+    }
+  job_id="$(mold_backup_api_json_field "$json" "stopvirtualmachineresponse.jobid")"
+  if [[ -n "$job_id" ]]; then
+    mold_backup_api_wait_async_job "$job_id" 600 >/dev/null || return 1
+  fi
+  elapsed=0
+  while [[ "$elapsed" -lt "$max_wait" ]]; do
+    state="$(mold_backup_api_get_vm_state "$vm_name" 2>/dev/null || true)"
+    if [[ "$state" == "Stopped" ]]; then
+      mold_backup_notify_log info "ensure-stopped: ${vm_name} is Stopped"
+      return 0
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+  mold_backup_notify_log err "ensure-stopped: timeout waiting for ${vm_name} Stopped (last=${state:-unknown})"
+  return 1
+}
+
 mold_backup_api_create_veeam_and_wait() {
   local vm_id="$1" vm_label="${2:-}"
-  local json job_id backup_id backup_type backup_name
+  local json job_id backup_id backup_type backup_name ids_before interval_type veeam_job
   backup_name="$(mold_backup_api_build_backup_name_for_vm "$vm_id" "$vm_label")"
-  mold_backup_notify_log info "createAblestackVeeamBackup vm=${vm_id} name=${backup_name} (MS→agent NAS backup)"
-  json=$(mold_backup_cmk_run createAblestackVeeamBackup "virtualmachineid=${vm_id}" "name=${backup_name}" 2>/dev/null) \
-    || json=$(mold_backup_cmk_run createBackup "virtualmachineid=${vm_id}" "name=${backup_name}" 2>/dev/null) \
-    || return 1
+  ids_before="$(mold_backup_api_list_backup_ids "$vm_id" 2>/dev/null || true)"
+  interval_type="$(mold_backup_resolve_veeam_interval_type "${VEEAM_SCHEDULE_NAME:-${SCHEDULE:-default}}")"
+  veeam_job="$(mold_backup_normalize_job_name "${VEEAM_JOB_NAME:-${JOB_NAME:-}}")"
+  mold_backup_notify_log info "createAblestackVeeamBackup vm=${vm_id} name=${backup_name} interval=${interval_type} job=${veeam_job:-n/a} (MS→agent NAS backup)"
+  if [[ -n "$veeam_job" ]]; then
+    json=$(mold_backup_cmk_run createAblestackVeeamBackup "virtualmachineid=${vm_id}" "name=${backup_name}" "intervaltype=${interval_type}" "jobname=${veeam_job}" 2>/dev/null) \
+      || json=$(mold_backup_cmk_run createAblestackVeeamBackup "virtualmachineid=${vm_id}" "name=${backup_name}" "intervaltype=${interval_type}" 2>/dev/null) \
+      || json=$(mold_backup_cmk_run createBackup "virtualmachineid=${vm_id}" "name=${backup_name}" 2>/dev/null) \
+      || return 1
+  else
+    json=$(mold_backup_cmk_run createAblestackVeeamBackup "virtualmachineid=${vm_id}" "name=${backup_name}" "intervaltype=${interval_type}" 2>/dev/null) \
+      || json=$(mold_backup_cmk_run createBackup "virtualmachineid=${vm_id}" "name=${backup_name}" 2>/dev/null) \
+      || return 1
+  fi
   job_id="$(mold_backup_api_json_field "$json" "createablestackveeambackupresponse.jobid")"
   [[ -z "$job_id" ]] && job_id="$(mold_backup_api_json_field "$json" "createbackupresponse.jobid")"
   if [[ -n "$job_id" ]]; then
@@ -2111,7 +2399,11 @@ mold_backup_api_create_veeam_and_wait() {
     backup_type="$(mold_backup_api_json_field "$json" "queryasyncjobresultresponse.jobresult.backup.type")"
     if [[ -z "$backup_id" ]]; then
       local latest
-      latest="$(mold_backup_api_find_latest_backed_up_backup_for_vm "$vm_id" 2>/dev/null || true)"
+      # Wait for a NEW backup id (not in ids_before) to reach BackedUp — do not reuse older FULL.
+      latest="$(mold_backup_api_wait_new_backup_for_vm "$vm_id" "$ids_before" 900 2>/dev/null || true)"
+      if [[ -z "$latest" ]]; then
+        latest="$(mold_backup_api_find_latest_backup_for_vm "$vm_id" "backedup" 2>/dev/null || true)"
+      fi
       if [[ -n "$latest" ]]; then
         backup_id="${latest%%|*}"
         backup_type="${latest#*|}"
@@ -2124,6 +2416,115 @@ mold_backup_api_create_veeam_and_wait() {
   backup_type="$(mold_backup_api_json_field "$json" "createablestackveeambackupresponse.backup.type")"
   [[ -n "$backup_id" ]] && { echo "${backup_id}|${backup_type:-User}"; return 0; }
   return 1
+}
+
+mold_backup_api_list_backup_ids() {
+  local vm_id="$1" json
+  json=$(mold_backup_cmk_run listAblestackVeeamBackups "virtualmachineid=${vm_id}" 2>/dev/null) || return 0
+  printf '%s\n' "$json" | python3 -c "
+import json,sys
+d=json.load(sys.stdin)
+b=d.get('listablestackveeambackupsresponse',{}).get('backup',[])
+if isinstance(b,dict): b=[b]
+print(' '.join(x.get('id','') for x in b if x.get('id')))
+" 2>/dev/null
+}
+
+# Wait until a backup id not in ids_before reaches BackedUp. Prints "id|type".
+mold_backup_api_wait_new_backup_for_vm() {
+  local vm_id="$1" ids_before="${2:-}" max_wait="${3:-900}"
+  local elapsed=0 latest bid btype st
+  while [[ "$elapsed" -le "$max_wait" ]]; do
+    latest="$(mold_backup_api_find_latest_backup_for_vm "$vm_id" "any" 2>/dev/null || true)"
+    if [[ -n "$latest" ]]; then
+      bid="${latest%%|*}"
+      btype="${latest#*|}"
+      btype="${btype%%|*}"
+      if [[ " ${ids_before} " == *" ${bid} "* ]]; then
+        :
+      else
+        st="$(mold_backup_api_backup_status "$vm_id" "$bid" 2>/dev/null || true)"
+        st="$(printf '%s' "$st" | tr '[:upper:]' '[:lower:]')"
+        if [[ "$st" == "backedup" ]]; then
+          echo "${bid}|${btype}"
+          return 0
+        fi
+        if [[ "$st" == "backingup" ]]; then
+          if [[ $((elapsed % 30)) -eq 0 ]]; then
+            mold_backup_notify_log info "Waiting for new backup ${bid} (${btype}) BackingUp→BackedUp (elapsed=${elapsed}s)"
+          fi
+        elif [[ "$st" == "failed" || "$st" == "error" ]]; then
+          mold_backup_notify_log err "New backup ${bid} ended as ${st}"
+          return 1
+        fi
+      fi
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+  return 1
+}
+
+mold_backup_api_backup_status() {
+  local vm_id="$1" backup_id="$2" json
+  json=$(mold_backup_cmk_run listAblestackVeeamBackups "virtualmachineid=${vm_id}" 2>/dev/null) || return 1
+  printf '%s\n' "$json" | BACKUP_ID="$backup_id" python3 -c "
+import json,sys,os
+bid=os.environ.get('BACKUP_ID','')
+d=json.load(sys.stdin)
+b=d.get('listablestackveeambackupsresponse',{}).get('backup',[])
+if isinstance(b,dict): b=[b]
+for x in b:
+  if x.get('id')==bid:
+    print(x.get('status') or ''); break
+" 2>/dev/null
+}
+
+mold_backup_api_backup_external_id() {
+  local vm_id="$1" backup_id="$2" json
+  json=$(mold_backup_cmk_run listAblestackVeeamBackups "virtualmachineid=${vm_id}" 2>/dev/null) || return 1
+  printf '%s\n' "$json" | BACKUP_ID="$backup_id" python3 -c "
+import json,sys,os
+bid=os.environ.get('BACKUP_ID','')
+d=json.load(sys.stdin)
+b=d.get('listablestackveeambackupsresponse',{}).get('backup',[])
+if isinstance(b,dict): b=[b]
+for x in b:
+  if x.get('id')==bid:
+    print(x.get('externalid') or x.get('path') or ''); break
+" 2>/dev/null
+}
+
+# status_filter: backedup | backingup | any
+mold_backup_api_find_latest_backup_for_vm() {
+  local vm_id="$1" status_filter="${2:-backedup}" json
+  json=$(mold_backup_cmk_run listAblestackVeeamBackups "virtualmachineid=${vm_id}" 2>/dev/null) || return 1
+  printf '%s\n' "$json" | STATUS_FILTER="$status_filter" python3 -c "
+import json, sys, os
+filt=(os.environ.get('STATUS_FILTER') or 'backedup').lower()
+try:
+    d = json.load(sys.stdin)
+    b = d.get('listablestackveeambackupsresponse', {}).get('backup', [])
+    if isinstance(b, dict):
+        b = [b]
+    if filt != 'any':
+        b = [x for x in b if str(x.get('status','')).lower() == filt]
+    if not b:
+        sys.exit(1)
+    latest = max(b, key=lambda x: x.get('created') or '')
+    bid = latest.get('id', '')
+    btype = latest.get('type', 'User')
+    if not bid:
+        sys.exit(1)
+    print(f\"{bid}|{btype}\")
+except Exception:
+    sys.exit(1)
+" 2>/dev/null
+}
+
+# Backward-compatible alias
+mold_backup_api_find_latest_backed_up_backup_for_vm() {
+  mold_backup_api_find_latest_backup_for_vm "$1" "backedup"
 }
 
 # Step 4 — environment check: target VM + incremental chain count (설계: 대상머신, Chain 수)
@@ -2145,7 +2546,7 @@ except Exception:
 mold_backup_api_check_vm_environment() {
   local vm_id="$1" vm_name="$2"
   local json chain_size max_chain offering_id
-  max_chain="${VEEAM_MAX_CHAIN:-7}"
+  max_chain="${VEEAM_MAX_CHAIN:-${BACKUP_CHAIN_SIZE:-10}}"
   json=$(mold_backup_cmk_run listAblestackVeeamBackups "virtualmachineid=${vm_id}" 2>/dev/null) || {
     mold_backup_notify_log info "env vm=${vm_name} id=${vm_id} chain=0 max=${max_chain} (no BackedUp backups)"
     return 0
@@ -2168,29 +2569,7 @@ mold_backup_api_veeam_backup_count() {
 }
 
 # createAblestackVeeamBackup async job returns SuccessResponse (no backup id in jobresult).
-mold_backup_api_find_latest_backed_up_backup_for_vm() {
-  local vm_id="$1" json
-  json=$(mold_backup_cmk_run listAblestackVeeamBackups "virtualmachineid=${vm_id}" 2>/dev/null) || return 1
-  printf '%s\n' "$json" | python3 -c "
-import json, sys
-try:
-    d = json.load(sys.stdin)
-    b = d.get('listablestackveeambackupsresponse', {}).get('backup', [])
-    if isinstance(b, dict):
-        b = [b]
-    backed = [x for x in b if str(x.get('status', '')).lower() == 'backedup']
-    if not backed:
-        sys.exit(1)
-    latest = max(backed, key=lambda x: x.get('created') or '')
-    bid = latest.get('id', '')
-    btype = latest.get('type', 'User')
-    if not bid:
-        sys.exit(1)
-    print(f\"{bid}|{btype}\")
-except Exception:
-    sys.exit(1)
-" 2>/dev/null
-}
+# (implementation: mold_backup_api_find_latest_backup_for_vm / alias above)
 
 mold_backup_collect_host_staging_paths() {
   local host_dir="$1"
@@ -2202,7 +2581,7 @@ mold_backup_collect_host_staging_paths() {
     [[ "$seen" == *"$key"* ]] && continue
     seen="${seen}${key}"
     files+=("$f")
-  done < <(find "$host_dir" -maxdepth 1 -type f \( -name 'disk-*' -o -name '*.qcow2' -o -name '*.qcow' -o -name '*.vmdk' -o -name '*.raw' \) -print0 2>/dev/null)
+  done < <(find "$host_dir" -maxdepth 1 -type f \( -name 'disk-*' -o -name '*.qcow2' -o -name '*.qcow' -o -name '*.vmdk' -o -name '*.raw' -o -name '*.rbdiff' \) -print0 2>/dev/null)
   [[ ${#files[@]} -gt 0 ]] || return 1
   (IFS=,; echo "${files[*]}")
 }
@@ -2506,14 +2885,35 @@ mold_backup_registry_get_backup_id_by_rp() {
   fi
 }
 
+mold_backup_registry_index_checkpoint_backup() {
+  local vm="$1" ckpt="$2" backup_id="$3"
+  local reg_dir safe
+  [[ -n "$vm" && -n "$ckpt" && -n "$backup_id" ]] || return 0
+  reg_dir="$(mold_backup_registry_dir)"
+  mkdir -p "$reg_dir"
+  # checkpoint names are timestamp-like; strip path separators just in case
+  safe="$(printf '%s' "$ckpt" | tr -c 'A-Za-z0-9._-' '_')"
+  [[ -n "$safe" ]] || return 0
+  echo "${backup_id}" >"${reg_dir}/${vm}.ckpt-${safe}.backup-id"
+  echo "$(date -Iseconds) vm=${vm} ckpt=${ckpt} backup_id=${backup_id}" >>"${reg_dir}/checkpoint-backup.map"
+}
+
 mold_backup_registry_get_backup_id_by_checkpoint() {
-  local vm="$1" ckpt="$2" reg_dir line bid
+  local vm="$1" ckpt="$2" reg_dir line bid safe
   [[ -n "$vm" && -n "$ckpt" ]] || return 1
   reg_dir="$(mold_backup_registry_dir)"
-  line="$(grep -hE "vm=${vm}.*backup_id=.*${ckpt}" "${reg_dir}"/*.log 2>/dev/null | tail -1 || true)"
-  bid="$(sed -n 's/.*backup_id=\([^ ]*\).*/\1/p' <<<"$line" | tail -1)"
-  [[ -n "$bid" ]] && { echo "$bid"; return 0; }
-  line="$(grep "backup_id=.*${vm}.*${ckpt}\|${vm}/${ckpt}" /var/log/mold/veeam-hook.log 2>/dev/null | tail -1 || true)"
+  safe="$(printf '%s' "$ckpt" | tr -c 'A-Za-z0-9._-' '_')"
+  if [[ -n "$safe" && -f "${reg_dir}/${vm}.ckpt-${safe}.backup-id" ]]; then
+    bid="$(tr -d '[:space:]' <"${reg_dir}/${vm}.ckpt-${safe}.backup-id" 2>/dev/null || true)"
+    [[ -n "$bid" ]] && { echo "$bid"; return 0; }
+  fi
+  if [[ -f "${reg_dir}/checkpoint-backup.map" ]]; then
+    line="$(grep -E " vm=${vm} ckpt=${ckpt} " "${reg_dir}/checkpoint-backup.map" 2>/dev/null | tail -1 || true)"
+    bid="$(sed -n 's/.*backup_id=\([^ ]*\).*/\1/p' <<<"$line" | tail -1)"
+    [[ -n "$bid" ]] && { echo "$bid"; return 0; }
+  fi
+  line="$(grep -hE "vm=${vm}.*backup_id=.*${ckpt}|backup_id=.*vm=${vm}.*${ckpt}|path=.*/${vm}/${ckpt}" \
+    "${reg_dir}"/*.log /var/log/mold/veeam-hook.log 2>/dev/null | tail -1 || true)"
   bid="$(sed -n 's/.*backup_id=\([^ ]*\).*/\1/p' <<<"$line" | tail -1)"
   [[ -n "$bid" ]] && echo "$bid"
 }
@@ -2532,32 +2932,35 @@ mold_backup_registry_get_vm_backup_id() {
   [[ -n "$bid" ]] && echo "$bid"
 }
 
-mold_backup_registry_get_backup_id_by_checkpoint() {
-  local vm="$1" ckpt="$2" reg_dir line bid
-  [[ -n "$vm" && -n "$ckpt" ]] || return 1
-  reg_dir="$(mold_backup_registry_dir)"
-  line="$(grep -hE "vm=${vm}.*backup_id=.*${ckpt}|backup_id=.*vm=${vm}.*${ckpt}" "${reg_dir}"/*.log 2>/dev/null | tail -1 || true)"
-  bid="$(sed -n 's/.*backup_id=\([^ ]*\).*/\1/p' <<<"$line" | tail -1)"
-  [[ -n "$bid" ]] && { echo "$bid"; return 0; }
-  line="$(grep -rh "path=.*${vm}/${ckpt}\|${vm}/${ckpt}" /var/log/mold/veeam-hook.log 2>/dev/null | grep backup_id | tail -1 || true)"
-  bid="$(sed -n 's/.*backup_id=\([^ ]*\).*/\1/p' <<<"$line" | tail -1)"
-  [[ -n "$bid" ]] && echo "$bid"
-}
-
 # Legacy no-op (windows.conf / PowerShell automation removed).
 mold_backup_sync_vm_backup_ids_conf() {
   return 0
 }
 
 mold_backup_registry_save_backup() {
-  local job="$1" vm_name="$2" backup_id="$3" status="${4:-success}" rp_id="${5:-}"
+  local job="$1" vm_name="$2" backup_id="$3" status="${4:-success}" rp_id="${5:-}" ckpt="${6:-}"
   local reg_dir reg_file
   reg_dir="$(mold_backup_registry_dir)"
   mkdir -p "$reg_dir"
   reg_file="${reg_dir}/$(mold_backup_safe_job_name "$job").log"
   echo "$(date -Iseconds) job=${job} vm=${vm_name} backup_id=${backup_id} status=${status}" >> "$reg_file"
   mold_backup_registry_set_vm_backup_id "$vm_name" "$backup_id" "$rp_id" "$job"
-  mold_backup_notify_log info "Saved backup registry: vm=${vm_name} backup_id=${backup_id} status=${status}"
+  if [[ -z "$ckpt" ]]; then
+    ckpt="$(sed -n 's/.*ckpt=\([^ ]*\).*/\1/p' <<<"$status" | tail -1)"
+  fi
+  if [[ -z "$ckpt" ]]; then
+    ckpt="$(sed -n "s|.*/${vm_name}/\\([0-9.]\\{10,\\}\\).*|\\1|p" <<<"$status" | tail -1)"
+  fi
+  if [[ -z "$ckpt" ]]; then
+    ckpt="$(mold_backup_api_backup_detail_field "$backup_id" "ablestack.veeam.checkpoint.name" 2>/dev/null || true)"
+  fi
+  if [[ -z "$ckpt" ]]; then
+    local ext
+    ext="$(mold_backup_api_backup_external_id "$(mold_backup_api_get_vm_id "$vm_name" 2>/dev/null || true)" "$backup_id" 2>/dev/null || true)"
+    [[ -n "$ext" ]] && ckpt="$(basename "$ext")"
+  fi
+  [[ -n "$ckpt" ]] && mold_backup_registry_index_checkpoint_backup "$vm_name" "$ckpt" "$backup_id"
+  mold_backup_notify_log info "Saved backup registry: vm=${vm_name} backup_id=${backup_id} status=${status} ckpt=${ckpt:-n/a} rp=${rp_id:-n/a}"
 }
 
 # Record a restore event in the Mold-side registry (separate file per job, suffix .restore.log).
@@ -2631,10 +3034,44 @@ mold_backup_process_vm_pre_notify() {
   local chain_count staging_paths source_format
   chain_count="$(mold_backup_api_veeam_backup_count "$vm_id")"
 
+  # Host Agent file-level:
+  #  - RBD (any chain): Mold-native createAblestackVeeamBackup (snap + export/diff for Mold
+  #    restore). Veeam Agent gets a tiny marker only — never SyncDirs sparse .raw/.rbdiff.
+  #  - qcow2 first (no BackedUp): host export → importSeed → FULL (BackedUp)
+  #  - qcow2 next: createAblestackVeeamBackup → agent TakeBackup → INCREMENTAL
+  #    Do NOT call importSeed again (always FULL) and do NOT race a second host export.
+  if [[ "${VEEAM_BACKUP_MODE:-}" == "filelevel" ]] && mold_backup_domain_has_rbd_disk "$vm_name"; then
+    if ! mold_backup_domain_exists "$vm_name" 2>/dev/null; then
+      mold_backup_notify_log err "File-level RBD: ${vm_name} is not Running in libvirt — start the VM then retry"
+      mold_backup_state_write_line "$state_file" "vm=${vm_name} id=${vm_id} status=fail reason=vm-not-running"
+      return 1
+    fi
+    mold_backup_api_validate_offering_repository "$vm_offering" || {
+      mold_backup_state_write_line "$state_file" "vm=${vm_name} id=${vm_id} status=fail reason=offering-repo-mismatch"
+      return 1
+    }
+    mold_backup_notify_log info "File-level RBD: Mold-native createAblestackVeeamBackup (snap/diff; Veeam marker only; chain=${chain_count})"
+    backup_result="$(mold_backup_api_create_veeam_and_wait "$vm_id" "$vm_name" || true)"
+    if [[ -z "$backup_result" ]]; then
+      mold_backup_notify_log err "Mold RBD backup failed for ${vm_name} (agent TakeBackup / BackedUp wait)"
+      mold_backup_state_write_line "$state_file" "vm=${vm_name} id=${vm_id} status=fail reason=create-backup"
+      return 1
+    fi
+    backup_id="${backup_result%%|*}"
+    backup_type="${backup_result#*|}"
+    host_path="$(mold_backup_api_backup_external_id "$vm_id" "$backup_id" 2>/dev/null || true)"
+    [[ -z "$host_path" ]] && host_path="${VEEAM_HOST_BACKUP_PATH}/${vm_name}"
+    mold_backup_state_write_line "$state_file" \
+      "vm=${vm_name} id=${vm_id} backup_id=${backup_id} type=${backup_type} path=${host_path} status=success"
+    mold_backup_publish_for_veeam_agent "$vm_name" "$host_path"
+    mold_backup_notify_log info "Pre-notify OK vm=${vm_name} backup_id=${backup_id} type=${backup_type} path=${host_path} (mold-native RBD)"
+    return 0
+  fi
+
   if [[ "${VEEAM_BACKUP_MODE:-}" == "filelevel" && "${chain_count:-0}" -eq 0 ]]; then
-    mold_backup_notify_log info "First file-level backup: host export → importAblestackVeeamBackupSeed (skip MS→Veeam on seed)"
+    mold_backup_notify_log info "File-level first backup: host export → importAblestackVeeamBackupSeed"
     if ! host_path=$(mold_backup_run_host_export "$vm_name" "1" 2>/dev/null); then
-      mold_backup_notify_log err "Host export failed for ${vm_name} (seed bootstrap; check /var/log/mold/veeam-hook.log and cvtbackup output)"
+      mold_backup_notify_log err "Host export failed for ${vm_name} (seed bootstrap; check /var/log/mold/veeam-hook.log and host-export output)"
       mold_backup_state_write_line "$state_file" "vm=${vm_name} id=${vm_id} status=fail reason=host-export"
       return 1
     fi
@@ -2664,7 +3101,35 @@ mold_backup_process_vm_pre_notify() {
     backup_type="${backup_result#*|}"
     mold_backup_state_write_line "$state_file" \
       "vm=${vm_name} id=${vm_id} backup_id=${backup_id} type=${backup_type} path=${host_path} status=success"
+    mold_backup_publish_for_veeam_agent "$vm_name" "$host_path"
     mold_backup_notify_log info "Pre-notify OK vm=${vm_name} backup_id=${backup_id} type=${backup_type} path=${host_path} (seed import)"
+    return 0
+  fi
+
+  if [[ "${VEEAM_BACKUP_MODE:-}" == "filelevel" && "${chain_count:-0}" -gt 0 ]]; then
+    # qcow2 INCREMENTAL needs live libvirt bitmaps (backup-running). Do not proceed if shut off —
+    # that would push the KVM agent into STOPPED/dummy mode and can disrupt the guest.
+    if ! mold_backup_domain_exists "$vm_name" 2>/dev/null; then
+      mold_backup_notify_log err "File-level incremental: ${vm_name} is not Running in libvirt — start the VM then retry (qcow2 INCREMENTAL must not use STOPPED/dummy backup)"
+      mold_backup_state_write_line "$state_file" "vm=${vm_name} id=${vm_id} status=fail reason=vm-not-running"
+      return 1
+    fi
+    mold_backup_notify_log info "File-level incremental: createAblestackVeeamBackup (agent TakeBackup; chain=${chain_count})"
+    backup_result="$(mold_backup_api_create_veeam_and_wait "$vm_id" "$vm_name" || true)"
+    if [[ -z "$backup_result" ]]; then
+      mold_backup_notify_log err "Mold incremental backup failed for ${vm_name} (agent TakeBackup / BackedUp wait)"
+      mold_backup_state_write_line "$state_file" "vm=${vm_name} id=${vm_id} status=fail reason=create-backup"
+      return 1
+    fi
+    backup_id="${backup_result%%|*}"
+    backup_type="${backup_result#*|}"
+    # Agent writes under backup externalId (/tmp/mold/veeam/<vm>/<ts>); expose for Veeam file job.
+    host_path="$(mold_backup_api_backup_external_id "$vm_id" "$backup_id" 2>/dev/null || true)"
+    [[ -z "$host_path" ]] && host_path="${VEEAM_HOST_BACKUP_PATH}/${vm_name}"
+    mold_backup_state_write_line "$state_file" \
+      "vm=${vm_name} id=${vm_id} backup_id=${backup_id} type=${backup_type} path=${host_path} status=success"
+    mold_backup_publish_for_veeam_agent "$vm_name" "$host_path"
+    mold_backup_notify_log info "Pre-notify OK vm=${vm_name} backup_id=${backup_id} type=${backup_type} path=${host_path} (agent incremental)"
     return 0
   fi
 
@@ -2717,10 +3182,10 @@ mold_backup_run_host_export() {
   }
   # Host-wide job conf has empty VM_UUID/VM_NAME; pin the target for all nested helpers.
   export VM_NAME="$vm_name"
-  [[ -x "${CVT_BACKUP_SCRIPT}" ]] || {
-    mold_backup_notify_log err "Host backup script not found: ${CVT_BACKUP_SCRIPT} (run veeam/install.sh on this KVM host)"
+  if ! mold_backup_resolve_host_export_script; then
+    mold_backup_notify_log err "Host export script not found (ablestack_veeam_host_export.sh). Run veeam/install.sh on this KVM host"
     return 1
-  }
+  fi
 
   backup_subdir="${VEEAM_HOST_BACKUP_PATH}/${vm_name}/$(date '+%Y.%m.%d.%H.%M.%S.%3N')"
   checkpoint="$(basename "$backup_subdir")"
@@ -2746,7 +3211,7 @@ mold_backup_run_host_export() {
     op="backup-rbd"
     mold_backup_notify_log info "Host export storage engine=rbd (HCI)"
   elif mold_backup_domain_has_raw_disk "$vm_name"; then
-    # libvirt checkpoint/bitmap unsupported for raw — cvtbackup FULL without checkpoint
+    # libvirt checkpoint/bitmap unsupported for raw — host-export FULL without checkpoint
     op="backup-running"
     mold_backup_notify_log info "Host export: raw disk(s) detected — FULL without checkpoint"
   fi
@@ -2798,9 +3263,9 @@ mold_backup_run_host_export() {
   fi
 
   mold_backup_notify_log info "Host export vm=${vm_name} path=${backup_subdir} type=${backup_type} op=${op}"
-  local cvt_log
-  cvt_log="$(mktemp "${TMPDIR:-/tmp}/mold-cvt.XXXXXX")"
-  if ! "${CVT_BACKUP_SCRIPT}" \
+  local export_log
+  export_log="$(mktemp "${TMPDIR:-/tmp}/mold-host-export.XXXXXX")"
+  if ! "${HOST_EXPORT_SCRIPT}" \
     -o "${op}" \
     -v "${vm_name}" \
     -p "${backup_subdir}" \
@@ -2812,28 +3277,121 @@ mold_backup_run_host_export() {
     -f "${backup_files}" \
     -d "${disk_paths}" \
     -q "${QUIESCE_VM:-false}" \
-    >"$cvt_log" 2>&1; then
-    mold_backup_notify_log err "Host export cvtbackup failed: $(tail -5 "$cvt_log" | tr '\n' ' ')"
-    rm -f "$cvt_log"
+    >"$export_log" 2>&1; then
+    mold_backup_notify_log err "Host export failed (${HOST_EXPORT_SCRIPT}): $(tail -5 "$export_log" | tr '\n' ' ')"
+    rm -f "$export_log"
     return 1
   fi
-  rm -f "$cvt_log"
+  rm -f "$export_log"
   echo "${backup_subdir}"
+}
+
+# True if host_path looks like an RBD Mold stage (must not be SyncDirs'd as sparse .raw).
+mold_backup_host_path_is_rbd() {
+  local host_path="${1:-}"
+  [[ -n "$host_path" && -d "$host_path" ]] || return 1
+  [[ -f "${host_path}/rbd-backup.meta" ]] && return 0
+  find "$host_path" -maxdepth 1 -type f \( -name '*.raw' -o -name '*.rbdiff' \) -print -quit 2>/dev/null | grep -q .
+}
+
+# Publish Mold backup artifacts for Veeam Agent SyncDirs under VEEAM_AGENT_PAYLOAD_PATH.
+# RBD: marker + tiny meta only (Mold keeps .raw/.rbdiff under VEEAM_HOST_BACKUP_PATH for restore).
+# QCOW2: hardlink/copy disk files into <vm>/current so Agent sees a stable tree.
+mold_backup_publish_for_veeam_agent() {
+  local vm_name="$1" host_path="$2"
+  local publish legacy meta_f
+  [[ "${VEEAM_BACKUP_MODE:-}" == "filelevel" ]] || return 0
+  [[ -n "$vm_name" && -n "$host_path" && -d "$host_path" ]] || return 0
+
+  publish="${VEEAM_AGENT_PAYLOAD_PATH}/${vm_name}/current"
+  mkdir -p "$publish" || return 0
+  rm -rf "${publish:?}/"* 2>/dev/null || true
+
+  # Drop legacy hardlinks under stage/.../current that used to expose RBD .raw to SyncDirs.
+  legacy="${VEEAM_HOST_BACKUP_PATH}/${vm_name}/current"
+  if [[ -d "$legacy" ]]; then
+    rm -rf "${legacy:?}/"* 2>/dev/null || true
+    rmdir "$legacy" 2>/dev/null || true
+  fi
+
+  if mold_backup_host_path_is_rbd "$host_path"; then
+    cat > "${publish}/mold-rbd-native.marker" <<EOF
+vm=${vm_name}
+mode=mold-native-rbd
+stage_path=${host_path}
+published_at=$(date -Iseconds)
+EOF
+    for meta_f in rbd-backup.meta domain-config.xml domain.xml veeam-seed.meta staging.complete; do
+      [[ -f "${host_path}/${meta_f}" ]] || continue
+      cp -a "${host_path}/${meta_f}" "${publish}/" 2>/dev/null || true
+    done
+    # FLR watch ignores agent-payload mtime changes shortly after our own publish.
+    date +%s > "${publish}/.mold-agent-publish" 2>/dev/null || true
+    chmod -R a+rX "$publish" 2>/dev/null || true
+    mold_backup_notify_log info "Published RBD native marker for Veeam Agent (no .raw/.rbdiff SyncDirs): ${host_path} -> ${publish}"
+    # Do NOT Start-VBR/Active Full here — we are already inside the Veeam job
+    # that invoked pre-notify. Auto-start caused a second backup after one UI Start.
+    return 0
+  fi
+
+  # QCOW2 / file-backed: prefer hardlinks over a full copy before Veeam SnapshotRequired.
+  if command -v cp >/dev/null 2>&1 && cp -al "${host_path}/." "$publish/" 2>/dev/null; then
+    mold_backup_notify_log info "Published staging (hardlink) for Veeam Agent: ${host_path} -> ${publish}"
+  elif command -v rsync >/dev/null 2>&1; then
+    rsync -a --delete "${host_path}/" "${publish}/" 2>/dev/null || true
+    mold_backup_notify_log info "Published staging (rsync) for Veeam Agent: ${host_path} -> ${publish}"
+  else
+    cp -a "${host_path}/." "$publish/" 2>/dev/null || true
+    mold_backup_notify_log info "Published staging (copy) for Veeam Agent: ${host_path} -> ${publish}"
+  fi
+  date +%s > "${publish}/.mold-agent-publish" 2>/dev/null || true
+  chmod -R a+rX "$publish" 2>/dev/null || true
+  # Same as RBD: never auto-start another Veeam job from publish.
 }
 
 mold_backup_cleanup_host_path() {
   [[ -d "${VEEAM_HOST_BACKUP_PATH}" ]] || return 0
-  mold_backup_notify_log info "Cleaning host backup path: ${VEEAM_HOST_BACKUP_PATH}"
-  find "${VEEAM_HOST_BACKUP_PATH}" -mindepth 1 -maxdepth 4 -type f -delete 2>/dev/null || true
-  find "${VEEAM_HOST_BACKUP_PATH}" -mindepth 1 -maxdepth 3 -type d -empty -delete 2>/dev/null || true
+  # File-level Veeam Agent jobs track /tmp/mold/veeam via SyncDirs CBT.
+  # Wiping the whole tree (or racing deletes) causes:
+  #   "Failed to delete directory [...]; Failed to backup files /tmp/mold/veeam"
+  # Default: do not clean for filelevel unless CLEANUP_STAGING_FORCE=true.
+  if [[ "${VEEAM_BACKUP_MODE:-}" == "filelevel" && "${CLEANUP_STAGING_FORCE:-false}" != "true" ]]; then
+    mold_backup_notify_log info "Skip host-path wipe (filelevel; set CLEANUP_STAGING_FORCE=true to prune)"
+    return 0
+  fi
+  # Only touch this job's VMs — never wipe sibling jobs under the same staging root.
+  local vm base d
+  base="${VEEAM_HOST_BACKUP_PATH}"
+  if [[ -n "${VM_INCLUDE:-}" && "${VM_INCLUDE}" != "*" ]]; then
+    for vm in ${VM_INCLUDE//,/ }; do
+      vm="$(echo "$vm" | xargs)"
+      [[ -n "$vm" ]] || continue
+      d="${base}/${vm}"
+      [[ -d "$d" ]] || continue
+      mold_backup_notify_log info "Cleaning host backup path (vm): ${d}"
+      # Keep newest checkpoint dir; remove older ones so Veeam SyncDirs stays consistent.
+      find "$d" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null \
+        | sort -rn | tail -n +2 | cut -d' ' -f2- \
+        | while IFS= read -r old; do
+            [[ -n "$old" ]] || continue
+            rm -rf "$old" 2>/dev/null || true
+          done
+    done
+    return 0
+  fi
+  mold_backup_notify_log info "Cleaning host backup path: ${base}"
+  find "${base}" -mindepth 1 -maxdepth 4 -type f -delete 2>/dev/null || true
+  find "${base}" -mindepth 1 -maxdepth 3 -type d -empty -delete 2>/dev/null || true
 }
 
 # --- Bidirectional Mold<->Veeam trigger loop guard ---
-# Two short-lived markers under state/triggers/ break the trigger loop:
+# Short-lived markers under state/triggers/ break the trigger loop:
 #   veeam-active-<vm> : set by pre_notify before requesting the Mold backup.
 #                       The Mold->Veeam hook skips Start-VBRJob while present.
 #   mold-active-<vm>  : set by the Mold->Veeam hook before Start-VBRJob.
 #                       pre_notify skips createBackup while present (Veeam disk-only).
+#   backup-cooldown   : set by post_notify after clearing veeam-active so restore-watch
+#                       does not treat /tmp/mold/veeam/<vm>/ backup staging as FLR.
 mold_backup_trigger_dir() {
   local d="$(mold_backup_state_dir)/triggers"
   mkdir -p "$d" 2>/dev/null || true
@@ -3014,36 +3572,326 @@ for j in items:
   return 1
 }
 
-# Run a short PowerShell script on Veeam via SSH (UTF-16LE EncodedCommand).
-mold_backup_veeam_ssh_ps() {
-  local ps_script="$1"
-  local ps_enc
-  [[ -n "${VEEAM_SSH_HOST:-}" ]] || return 1
-  ps_enc="$(printf '%s' "$ps_script" | iconv -f UTF-8 -t UTF-16LE 2>/dev/null | base64 -w0 2>/dev/null)"
-  [[ -n "$ps_enc" ]] || return 1
-  mold_backup_veeam_ssh_encoded "$ps_enc" >/dev/null
+# Latest objectRestorePoint GUID for a job/computer name via VBR REST (short timeout; safe for post-notify).
+# Prints GUID on stdout.
+mold_backup_query_veeam_latest_restore_point_rest() {
+  local name="${1:-}"
+  local api ver user pass token
+  [[ -n "$name" ]] || return 1
+  api="$(mold_backup_veeam_api_base)" || return 1
+  ver="${VEEAM_API_VERSION:-1.2-rev0}"
+  user="${VEEAM_API_USER:-${VEEAM_USERNAME:-administrator}}"
+  pass="${VEEAM_API_PASSWORD:-${VEEAM_PASSWORD:-}}"
+  [[ -n "$pass" ]] || return 1
+  token="$(curl -sk --max-time 15 -X POST "${api}/api/oauth2/token" \
+    -H "x-api-version: ${ver}" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=password&username=${user}&password=${pass}" 2>/dev/null \
+    | python3 -c "import sys,json
+try: print(json.load(sys.stdin).get('access_token',''))
+except Exception: print('')" 2>/dev/null)"
+  [[ -n "$token" ]] || return 1
+  local enc
+  enc="$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$name")"
+  curl -sk --max-time 20 \
+    "${api}/api/v1/objectRestorePoints?nameFilter=${enc}&orderColumn=CreationTime&orderAsc=false" \
+    -H "x-api-version: ${ver}" -H "Authorization: Bearer ${token}" 2>/dev/null \
+    | python3 -c "
+import sys, json, re
+want = '''${name}'''.lower()
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+items = d.get('data', d if isinstance(d, list) else [])
+for rp in items:
+    nm = str(rp.get('name') or '')
+    jn = str(rp.get('backupJobName') or rp.get('jobName') or rp.get('backupName') or '')
+    hay = (nm + ' ' + jn).lower()
+    if want and want not in hay and nm.lower() != want and jn.lower() != want:
+        continue
+    rid = str(rp.get('id') or '')
+    rid = re.sub(r'^urn:uuid:', '', rid, flags=re.I)
+    if rid:
+        print(rid)
+        sys.exit(0)
+sys.exit(1)
+" 2>/dev/null
 }
 
-# Start a Veeam job over SSH (PowerShell) — fallback when REST cannot manage agent jobs.
-mold_backup_trigger_veeam_job_ssh() {
-  local vm="$1" job="$2" job_esc ps_script
-  [[ -n "${VEEAM_SSH_HOST:-}" ]] || {
-    mold_backup_notify_log warn "Mold→Veeam(SSH): VEEAM_SSH_HOST not set"
+# Stamp Veeam RP / job onto an existing Mold backup row (catalog sync delete key).
+mold_backup_api_update_veeam_backup() {
+  local backup_id="$1" rp_id="${2:-}" job_name="${3:-}"
+  local -a args=("id=${backup_id}")
+  [[ -n "$rp_id" ]] && args+=("veeamrestorepointid=${rp_id}")
+  [[ -n "$job_name" ]] && args+=("jobname=${job_name}")
+  [[ ${#args[@]} -gt 1 ]] || return 0
+  mold_backup_cmk_run updateAblestackVeeamBackup "${args[@]}" >/dev/null 2>&1 \
+    || mold_backup_notify_log warn "updateAblestackVeeamBackup failed for backup=${backup_id}"
+}
+
+# Run a PowerShell script on Veeam via SSH.
+# Small scripts: -EncodedCommand. Large scripts: scp .ps1 + pwsh -File (Windows cmd length limit).
+mold_backup_veeam_scp() {
+  local src="$1" dst="$2"
+  local ssh_key_opt=() askpass_file=""
+  [[ -n "${VEEAM_SSH_HOST:-}" ]] || return 1
+  [[ -f "$src" ]] || return 1
+  [[ -n "${VEEAM_SSH_KEY:-}" && -f "${VEEAM_SSH_KEY}" ]] && ssh_key_opt=(-i "${VEEAM_SSH_KEY}")
+  local -a scp_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=30)
+  if [[ "${VEEAM_SSH_STRICT_HOSTKEY:-false}" == "true" ]]; then
+    scp_opts=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=30)
+  fi
+  local remote="${VEEAM_SSH_USER:-administrator}@${VEEAM_SSH_HOST}"
+  if [[ ${#ssh_key_opt[@]} -gt 0 ]]; then
+    scp "${scp_opts[@]}" "${ssh_key_opt[@]}" "$src" "${remote}:${dst}"
+    return $?
+  fi
+  if [[ -n "${VEEAM_SSH_PASSWORD:-}" ]] && command -v sshpass >/dev/null 2>&1; then
+    SSHPASS="${VEEAM_SSH_PASSWORD}" sshpass -e scp "${scp_opts[@]}" \
+      -o PreferredAuthentications=password -o PubkeyAuthentication=no "$src" "${remote}:${dst}"
+    return $?
+  fi
+  if [[ -n "${VEEAM_SSH_PASSWORD:-}" ]]; then
+    askpass_file="$(mktemp /tmp/veeam-askpass.XXXXXX)"
+    printf '%s\n' '#!/bin/bash' "printf '%s\\n' $(printf '%q' "${VEEAM_SSH_PASSWORD}")" >"$askpass_file"
+    chmod 700 "$askpass_file"
+    SSH_ASKPASS="$askpass_file" SSH_ASKPASS_REQUIRE=force DISPLAY="${DISPLAY:-:0}" \
+      setsid -w scp "${scp_opts[@]}" \
+      -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+      -o NumberOfPasswordPrompts=1 "$src" "${remote}:${dst}"
+    local rc=$?
+    rm -f "$askpass_file"
+    return $rc
+  fi
+  scp "${scp_opts[@]}" -o BatchMode=yes "$src" "${remote}:${dst}"
+}
+
+mold_backup_veeam_ssh_ps_capture() {
+  # Prints remote stdout; returns ssh/pwsh rc.
+  local ps_script="$1"
+  local ps_enc local_tmp remote_name out rc
+  [[ -n "${VEEAM_SSH_HOST:-}" ]] || return 1
+  [[ -n "$ps_script" ]] || return 1
+  # Prefer file transfer when EncodedCommand would exceed ~6k (Windows CreateProcess limit).
+  if (( ${#ps_script} > 2500 )); then
+    local_tmp="$(mktemp /tmp/mold-veeam-ps.XXXXXX.ps1)"
+    printf '%s\n' "$ps_script" >"$local_tmp"
+    remote_name="mold-veeam-$(date +%s)-$$.ps1"
+    if mold_backup_veeam_scp "$local_tmp" "C:/Windows/Temp/${remote_name}"; then
+      out="$(mold_backup_veeam_ssh_cmd "pwsh -NoProfile -File C:\\Windows\\Temp\\${remote_name}" 2>&1)" && rc=0 || rc=$?
+      if [[ $rc -ne 0 ]]; then
+        out="$(mold_backup_veeam_ssh_cmd "powershell.exe -NoProfile -File C:\\Windows\\Temp\\${remote_name}" 2>&1)" && rc=0 || rc=$?
+      fi
+      # Cleanup must not block restore-watch; auth hang previously stuck oneshot for hours.
+      VEEAM_SSH_CMD_TIMEOUT="${VEEAM_SSH_CLEANUP_TIMEOUT:-20}" \
+        mold_backup_veeam_ssh_cmd "del /f C:\\Windows\\Temp\\${remote_name}" >/dev/null 2>&1 || true
+      rm -f "$local_tmp"
+      printf '%s' "$out"
+      return $rc
+    fi
+    rm -f "$local_tmp"
+  fi
+  ps_enc="$(printf '%s' "$ps_script" | iconv -f UTF-8 -t UTF-16LE 2>/dev/null | base64 -w0 2>/dev/null)"
+  [[ -n "$ps_enc" ]] || return 1
+  mold_backup_veeam_ssh_encoded "$ps_enc"
+}
+
+mold_backup_veeam_ssh_ps() {
+  local ps_script="$1"
+  mold_backup_veeam_ssh_ps_capture "$ps_script" >/dev/null
+}
+
+# --- Active Full after Remove-from-Disk ---
+# Empty Veeam Disk + normal Start ⇒ Agent FileBackup.IsBackupFilesystemExist.
+# Auto Active Full is edge-triggered once per empty-Disk episode:
+#   - arm when Disk goes NO_BACKUP / IsBackupFilesystemExist
+#   - start at most once → set attempted latch
+#   - clear latch only when Disk is HAS_BACKUP again, or operator runs active-full
+# catalog-sync (~2m) must NOT keep restarting Active Full while Disk stays empty.
+
+mold_backup_veeam_need_active_full_file() {
+  local job="${1:-${VEEAM_JOB_NAME:-}}"
+  echo "$(mold_backup_trigger_dir)/need-active-full.$(mold_backup_safe_job_name "$job")"
+}
+
+# Latch: Active Full already requested for this empty-Disk episode.
+mold_backup_veeam_active_full_attempted_file() {
+  local job="${1:-${VEEAM_JOB_NAME:-}}"
+  echo "$(mold_backup_trigger_dir)/active-full-attempted.$(mold_backup_safe_job_name "$job")"
+}
+
+mold_backup_veeam_active_full_already_attempted() {
+  local job="${1:-${VEEAM_JOB_NAME:-}}"
+  [[ -f "$(mold_backup_veeam_active_full_attempted_file "$job")" ]]
+}
+
+mold_backup_veeam_mark_active_full_attempted() {
+  local job="${1:-${VEEAM_JOB_NAME:-}}"
+  [[ -n "$job" ]] || return 0
+  date +%s > "$(mold_backup_veeam_active_full_attempted_file "$job")" 2>/dev/null || true
+}
+
+mold_backup_veeam_clear_active_full_attempted() {
+  local job="${1:-${VEEAM_JOB_NAME:-}}"
+  rm -f "$(mold_backup_veeam_active_full_attempted_file "$job")" 2>/dev/null || true
+}
+
+# Compat alias used by older deploy snippets / docs.
+mold_backup_veeam_mark_active_full_cooldown() {
+  mold_backup_veeam_mark_active_full_attempted "$@"
+}
+
+mold_backup_veeam_active_full_in_cooldown() {
+  mold_backup_veeam_active_full_already_attempted "$@"
+}
+
+mold_backup_veeam_mark_need_active_full() {
+  local job="${1:-${VEEAM_JOB_NAME:-}}"
+  [[ -n "$job" ]] || return 0
+  if mold_backup_veeam_active_full_already_attempted "$job"; then
+    return 0
+  fi
+  date +%s > "$(mold_backup_veeam_need_active_full_file "$job")" 2>/dev/null || true
+  mold_backup_notify_log info "Marked need-active-full for job=${job} (empty Disk / broken Agent chain)"
+}
+
+mold_backup_veeam_clear_need_active_full() {
+  local job="${1:-${VEEAM_JOB_NAME:-}}"
+  rm -f "$(mold_backup_veeam_need_active_full_file "$job")" 2>/dev/null || true
+}
+
+# True when we should start Active Full now (need flag or NO_BACKUP, and not yet attempted).
+mold_backup_veeam_need_active_full() {
+  local job="${1:-${VEEAM_JOB_NAME:-}}"
+  local status f
+  [[ "${VEEAM_AUTO_ACTIVE_FULL_ON_EMPTY:-false}" == "true" ]] || return 1
+  [[ -n "$job" ]] || return 1
+  if mold_backup_veeam_active_full_already_attempted "$job"; then
     return 1
-  }
+  fi
+  f="$(mold_backup_veeam_need_active_full_file "$job")"
+  [[ -f "$f" ]] && return 0
+  status="$(mold_backup_veeam_job_disk_backup_status "$job" 2>/dev/null || true)"
+  [[ "$status" == "NO_BACKUP" ]]
+}
+
+# If Agent recently failed IsBackupFilesystemExist, arm need-active-full (once per episode).
+mold_backup_veeam_arm_active_full_from_agent_log() {
+  local job="${1:-${VEEAM_JOB_NAME:-}}"
+  local f log=/var/log/veeam/veeamsvc.log status
+  [[ "${VEEAM_AUTO_ACTIVE_FULL_ON_EMPTY:-false}" == "true" ]] || return 1
+  [[ -n "$job" && -f "$log" ]] || return 1
+  if mold_backup_veeam_active_full_already_attempted "$job"; then
+    return 1
+  fi
+  # Disk already rebuilt — clear latch/flags; do not re-arm from stale log lines.
+  status="$(mold_backup_veeam_job_disk_backup_status "$job" 2>/dev/null || true)"
+  if [[ "$status" == "HAS_BACKUP" ]]; then
+    mold_backup_veeam_clear_need_active_full "$job"
+    mold_backup_veeam_clear_active_full_attempted "$job"
+    return 1
+  fi
+  f="$(mold_backup_veeam_need_active_full_file "$job")"
+  [[ -f "$f" ]] && return 0
+  if [[ "$(find "$log" -mmin -120 -print 2>/dev/null)" == "$log" ]] \
+      && grep -q 'IsBackupFilesystemExist' "$log" 2>/dev/null; then
+    if grep 'IsBackupFilesystemExist' "$log" 2>/dev/null | tail -5 \
+        | grep -qE "$(date '+%d.%m.%Y')|$(date -u '+%d.%m.%Y')" 2>/dev/null; then
+      mold_backup_veeam_mark_need_active_full "$job"
+      return 0
+    fi
+  fi
+  return 1
+}
+
+# Start managed Agent job over SSH. full=true → Active Full (-FullBackup).
+mold_backup_start_veeam_computer_job_ssh() {
+  local job="$1" full="${2:-false}" job_esc ps_script full_switch=""
+  [[ -n "${VEEAM_SSH_HOST:-}" && -n "$job" ]] || return 1
   job_esc="${job//\'/\'\'}"
+  [[ "$full" == "true" ]] && full_switch=" -FullBackup"
   ps_script="$(cat <<PS
 \$ErrorActionPreference = 'Stop'
 Import-Module Veeam.Backup.PowerShell -WarningAction SilentlyContinue
+try { Connect-VBRServer -Server localhost -ErrorAction Stop } catch {}
 \$j = Get-VBRComputerBackupJob -Name '${job_esc}'
 if (-not \$j) { Write-Error "job not found: ${job_esc}"; exit 2 }
 if (\$j.IsRunning) { Write-Host 'already running'; exit 0 }
-Start-VBRComputerBackupJob -Job \$j -RunAsync | Out-Null
+Start-VBRComputerBackupJob -Job \$j${full_switch} -RunAsync | Out-Null
 Write-Host 'started'
 PS
 )"
   if mold_backup_veeam_ssh_ps "$ps_script"; then
+    mold_backup_notify_log info "Veeam job '${job}' start requested OK (activeFull=${full})"
+    return 0
+  fi
+  mold_backup_notify_log warn "Veeam SSH start failed for job='${job}' (activeFull=${full})"
+  return 1
+}
+
+# Local Linux Agent CLI fallback (works when Veeam SSH is down).
+mold_backup_start_veeam_computer_job_local() {
+  local job="$1" full="${2:-false}"
+  command -v veeamconfig >/dev/null 2>&1 || return 1
+  [[ -n "$job" ]] || return 1
+  if [[ "$full" == "true" ]]; then
+    veeamconfig job start --name "$job" --activefull >/dev/null 2>&1 \
+      && { mold_backup_notify_log info "Local veeamconfig Active Full started for '${job}'"; return 0; }
+  else
+    veeamconfig job start --name "$job" >/dev/null 2>&1 \
+      && { mold_backup_notify_log info "Local veeamconfig start for '${job}'"; return 0; }
+  fi
+  return 1
+}
+
+# If Disk empty / chain broken: Active Full once per episode.
+mold_backup_veeam_ensure_active_full_if_needed() {
+  local job="${1:-${VEEAM_JOB_NAME:-}}"
+  [[ -n "$job" ]] || return 0
+  [[ "${VEEAM_AUTO_ACTIVE_FULL_ON_EMPTY:-false}" == "true" ]] || return 0
+  if ! mold_backup_veeam_need_active_full "$job"; then
+    return 0
+  fi
+  mold_backup_veeam_mark_need_active_full "$job"
+  mold_backup_notify_log info "Ensuring Active Full for job=${job} (empty Disk or IsBackupFilesystemExist)"
+  # Latch BEFORE start so a slow/hanging Start cannot be retried by the next catalog-sync.
+  mold_backup_veeam_mark_active_full_attempted "$job"
+  if mold_backup_start_veeam_computer_job_ssh "$job" true; then
+    mold_backup_veeam_clear_need_active_full "$job"
+    return 0
+  fi
+  if mold_backup_start_veeam_computer_job_local "$job" true; then
+    mold_backup_veeam_clear_need_active_full "$job"
+    return 0
+  fi
+  mold_backup_notify_log warn "Active Full start failed for job=${job} — latch kept (no auto-retry until HAS_BACKUP or manual active-full)"
+  return 1
+}
+
+# Start a Veeam job over SSH (PowerShell) — fallback when REST cannot manage agent jobs.
+# Uses Active Full automatically when Disk is empty / need-active-full is set.
+mold_backup_trigger_veeam_job_ssh() {
+  local vm="$1" job="$2" full=false
+  [[ -n "${VEEAM_SSH_HOST:-}" ]] || {
+    mold_backup_notify_log warn "Mold→Veeam(SSH): VEEAM_SSH_HOST not set"
+    return 1
+  }
+  if mold_backup_veeam_need_active_full "$job"; then
+    full=true
+    mold_backup_notify_log info "Mold→Veeam(SSH): Disk empty/broken chain → Active Full for '${job}'"
+  fi
+  if mold_backup_start_veeam_computer_job_ssh "$job" "$full"; then
+    [[ "$full" == "true" ]] && {
+      mold_backup_veeam_clear_need_active_full "$job"
+      mold_backup_veeam_mark_active_full_cooldown "$job"
+    }
     mold_backup_notify_log info "Mold→Veeam(SSH): job '${job}' start requested OK"
+    return 0
+  fi
+  if [[ "$full" == "true" ]] && mold_backup_start_veeam_computer_job_local "$job" true; then
+    mold_backup_veeam_clear_need_active_full "$job"
+    mold_backup_veeam_mark_active_full_cooldown "$job"
     return 0
   fi
   mold_backup_notify_log warn "Mold→Veeam(SSH): failed to start job '${job}' (check pwsh path / VEEAM_SSH_HOST)"
@@ -3158,7 +4006,7 @@ mold_backup_query_veeam_restores() {
 Import-Module Veeam.Backup.PowerShell -WarningAction SilentlyContinue
 \$emitted = @{}
 function Emit-RestoreLine {
-  param([string]\$Sid, [string]\$Ip, [long]\$Epoch, [string]\$Result, [string]\$Name, [string]\$Backup, [string]\$RpId)
+  param([string]\$Sid, [string]\$Ip, [long]\$Epoch, [string]\$Result, [string]\$Name, [string]\$Backup, [string]\$RpId, [string]\$RpEpoch = '')
   if (-not \$Sid) { return }
   if (\$emitted.ContainsKey(\$Sid)) { return }
   \$emitted[\$Sid] = \$true
@@ -3166,20 +4014,50 @@ function Emit-RestoreLine {
   \$b = (\$Backup -replace '[\|\r\n]',' ')
   \$r = (\$Result -replace '[\|\r\n]',' ')
   \$rp = (\$RpId -replace '[\|\r\n]','').Trim()
-  "\$Sid|\$Ip|\$Epoch|\$r|\$n|\$b|\$rp"
+  \$rpe = (\$RpEpoch -replace '[\|\r\n]','').Trim()
+  "\$Sid|\$Ip|\$Epoch|\$r|\$n|\$b|\$rp|\$rpe"
 }
-function Get-RpFromSession {
+function Get-RpInfoFromSession {
   param(\$Session)
   \$rpId = ''
+  \$rpEpoch = ''
+  function Rp-ToEpoch([datetime]\$ct) {
+    if (\$null -eq \$ct) { return '' }
+    try {
+      # Prefer UTC wall-clock: Unspecified CreationTime from Veeam is often UTC-like.
+      if (\$ct.Kind -eq [DateTimeKind]::Utc) {
+        return [string]([int64]([DateTimeOffset]\$ct).ToUnixTimeSeconds())
+      }
+      if (\$ct.Kind -eq [DateTimeKind]::Local) {
+        return [string]([int64]([DateTimeOffset]\$ct).ToUnixTimeSeconds())
+      }
+      # Unspecified: interpret as UTC first (Agent RP CreationTimeUTC path), then Local.
+      \$asUtc = [DateTime]::SpecifyKind(\$ct, [DateTimeKind]::Utc)
+      return [string]([int64]([DateTimeOffset]\$asUtc).ToUnixTimeSeconds())
+    } catch { return '' }
+  }
   try {
     if (\$null -ne \$Session.RestorePoint) {
       \$x = \$Session.RestorePoint.Id
       if (\$null -ne \$x) { if (\$x -is [guid]) { \$rpId = \$x.Guid } else { \$rpId = [string]\$x } }
+      try {
+        \$ct = \$Session.RestorePoint.CreationTimeUTC
+        if (\$null -eq \$ct) { \$ct = \$Session.RestorePoint.CreationTime }
+        \$rpEpoch = Rp-ToEpoch \$ct
+      } catch {}
     }
   } catch {}
   if (-not \$rpId) {
     \$opt = [string]\$Session.Options
-    foreach (\$pat in @('RestorePointId="([^"]+)"','ObjectRestorePointId="([^"]+)"','PointId="([^"]+)"')) {
+    foreach (\$pat in @(
+      'RestorePointId="([^"]+)"',
+      'ObjectRestorePointId="([^"]+)"',
+      'ObjectRestorePointOib="([^"]+)"',
+      'PointId="([^"]+)"',
+      'restorePointId=''([^'']+)''',
+      'RestorePointUid="([^"]+)"',
+      'OibId="([^"]+)"'
+    )) {
       \$m = [regex]::Match(\$opt, \$pat)
       if (\$m.Success) { \$rpId = \$m.Groups[1].Value; break }
     }
@@ -3194,7 +4072,57 @@ function Get-RpFromSession {
       if (\$x -is [guid]) { \$rpId = \$x.Guid } else { \$rpId = [string]\$x }
     }
   } catch {}
-  return \$rpId
+  try {
+    if (-not \$rpId -and \$null -ne \$Session.Info -and \$null -ne \$Session.Info.ObjectRestorePointId) {
+      \$x = \$Session.Info.ObjectRestorePointId
+      if (\$x -is [guid]) { \$rpId = \$x.Guid } else { \$rpId = [string]\$x }
+    }
+  } catch {}
+  if (-not \$rpId) {
+    try {
+      foreach (\$p in @(\$Session.PSObject.Properties)) {
+        if (\$p.Name -match '(?i)restorepoint' -and \$null -ne \$p.Value) {
+          \$v = \$p.Value
+          if (\$v -is [guid]) { \$rpId = \$v.Guid; break }
+          if (\$v.PSObject.Properties['Id']) {
+            \$x = \$v.Id
+            if (\$x -is [guid]) { \$rpId = \$x.Guid } else { \$rpId = [string]\$x }
+            if (\$rpId) {
+              try {
+                \$ct = \$null
+                if (\$v.PSObject.Properties['CreationTimeUTC'] -and \$null -ne \$v.CreationTimeUTC) { \$ct = \$v.CreationTimeUTC }
+                elseif (\$v.PSObject.Properties['CreationTime'] -and \$null -ne \$v.CreationTime) { \$ct = \$v.CreationTime }
+                \$rpEpoch = Rp-ToEpoch \$ct
+              } catch {}
+              break
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+  if (\$rpId -and -not \$rpEpoch) {
+    try {
+      \$want = \$rpId.Trim('{}').ToLower()
+      foreach (\$b in @(Get-VBRBackup -ErrorAction SilentlyContinue)) {
+        foreach (\$cand in @(\$b | Get-VBRRestorePoint -ErrorAction SilentlyContinue)) {
+          \$id = \$cand.Id; if (\$id -is [guid]) { \$id = \$id.Guid }
+          if (([string]\$id).Trim('{}').ToLower() -eq \$want) {
+            \$ct = \$cand.CreationTimeUTC
+            if (\$null -eq \$ct) { \$ct = \$cand.CreationTime }
+            \$rpEpoch = Rp-ToEpoch \$ct
+            break
+          }
+        }
+        if (\$rpEpoch) { break }
+      }
+    } catch {}
+  }
+  return @{ Id = \$rpId; Epoch = \$rpEpoch }
+}
+function Valid-RestoreEnd([object]\$dt) {
+  if (\$null -eq \$dt) { return \$false }
+  try { return ([datetime]\$dt).Year -ge 2000 } catch { return \$false }
 }
 \$sessions = @()
 for (\$k = 0; \$k -lt 12; \$k++) {
@@ -3207,11 +4135,13 @@ for (\$k = 0; \$k -lt 12; \$k++) {
 foreach (\$r in \$sessions) {
   if (\$null -eq \$r) { continue }
   \$rs = [string]\$r.Result
-  \$hasEnd = (\$null -ne \$r.EndTime -or \$null -ne \$r.EndTimeUTC)
+  # In-progress FLR browse sessions report Result=None with EndTime=DateTime.MinValue.
+  # Emitting those made Mold stop the VM mid-session and disconnect Veeam UI/agent.
+  if (\$rs -notmatch '^(?i)(Success|Warning)\$') { continue }
+  \$hasEnd = (Valid-RestoreEnd \$r.EndTime) -or (Valid-RestoreEnd \$r.EndTimeUTC)
   \$done = \$false
   try { \$done = [bool]\$r.IsCompleted } catch { \$done = \$hasEnd }
   if (-not \$done -and -not \$hasEnd) { continue }
-  if (-not \$hasEnd -and \$rs -match '^(?i)(Failed|None)\$') { continue }
   \$opt = [string]\$r.Options
   \$ip = ''
   foreach (\$pat in @('IpOrDnsName="([^"]+)"','MachineName="([^"]+)"','DisplayName="([^"]+)"')) {
@@ -3225,17 +4155,22 @@ foreach (\$r in \$sessions) {
   \$bn = ''
   \$mb = [regex]::Match(\$opt, 'BackupName="([^"]+)"')
   if (\$mb.Success) { \$bn = \$mb.Groups[1].Value }
-  \$rpId = Get-RpFromSession -Session \$r
+  \$rpInfo = Get-RpInfoFromSession -Session \$r
+  \$rpId = [string]\$rpInfo.Id
+  \$rpEpoch = [string]\$rpInfo.Epoch
   \$nm = [string]\$r.Name
   \$epoch = 0
-  \$etObj = if (\$null -ne \$r.EndTime) { \$r.EndTime } else { \$r.EndTimeUTC }
+  \$etObj = \$null
+  if (Valid-RestoreEnd \$r.EndTime) { \$etObj = \$r.EndTime }
+  elseif (Valid-RestoreEnd \$r.EndTimeUTC) { \$etObj = \$r.EndTimeUTC }
   try { if (\$null -ne \$etObj) { \$epoch = [int64]([DateTimeOffset]\$etObj).ToUnixTimeSeconds() } } catch { \$epoch = 0 }
-  if (\$epoch -eq 0) {
-    try { if (\$null -ne \$r.CreationTimeUTC) { \$epoch = [int64]([DateTimeOffset]\$r.CreationTimeUTC).ToUnixTimeSeconds() } } catch {}
+  if (\$epoch -le 0) {
+    try { if (Valid-RestoreEnd \$r.CreationTimeUTC) { \$epoch = [int64]([DateTimeOffset]\$r.CreationTimeUTC).ToUnixTimeSeconds() } } catch {}
   }
+  if (\$epoch -le 0) { continue }
   \$sid = [string]\$r.Id
   if (\$r.Id -is [guid]) { \$sid = \$r.Id.Guid }
-  Emit-RestoreLine -Sid \$sid -Ip \$ip -Epoch \$epoch -Result \$rs -Name \$nm -Backup \$bn -RpId \$rpId
+  Emit-RestoreLine -Sid \$sid -Ip \$ip -Epoch \$epoch -Result \$rs -Name \$nm -Backup \$bn -RpId \$rpId -RpEpoch \$rpEpoch
 }
 # Agent / Backup Browser FLR often missing from Get-VBRRestoreSession over SSH — parse audit.
 try {
@@ -3269,14 +4204,19 @@ try {
           \$epoch = [int64]([DateTimeOffset]\$t).ToUnixTimeSeconds()
         } catch {}
         \$rpId = ''
+        \$rpEpoch = ''
         \$rsess = \$null
         try { \$rsess = Get-VBRRestoreSession -Id \$sid -ErrorAction SilentlyContinue } catch {}
-        if (\$rsess) { \$rpId = Get-RpFromSession -Session \$rsess }
+        if (\$rsess) {
+          \$rpInfo = Get-RpInfoFromSession -Session \$rsess
+          \$rpId = [string]\$rpInfo.Id
+          \$rpEpoch = [string]\$rpInfo.Epoch
+        }
         if (-not \$rpId) {
           \$m = [regex]::Match(\$det, "restorePointId='([^']+)'")
           if (\$m.Success) { \$rpId = \$m.Groups[1].Value }
         }
-        Emit-RestoreLine -Sid \$sid -Ip \$ip -Epoch \$epoch -Result ([string]\$_.Result) -Name \$nm -Backup '' -RpId \$rpId
+        Emit-RestoreLine -Sid \$sid -Ip \$ip -Epoch \$epoch -Result ([string]\$_.Result) -Name \$nm -Backup '' -RpId \$rpId -RpEpoch \$rpEpoch
       }
       Remove-Item \$tmp -Force -ErrorAction SilentlyContinue
     }
@@ -3287,56 +4227,34 @@ PS
   # Send the script as a base64 (UTF-16LE) -EncodedCommand: piping a multi-line
   # script to "pwsh -Command -" over stdin intermittently mis-parses and emits
   # nothing. EncodedCommand is immune to quoting/newline issues.
-  local ps_enc
-  ps_enc="$(printf '%s' "$ps_script" | iconv -f UTF-8 -t UTF-16LE 2>/dev/null | base64 -w0 2>/dev/null)"
-  [[ -n "$ps_enc" ]] || { mold_backup_notify_log warn "Veeam→Mold(restore): failed to encode PS script"; return 1; }
-  # Veeam.Backup.PowerShell needs PS 7+: full-path pwsh first (SSH often only has
-  # Windows PowerShell 5.1 "powershell", which cannot Import-Module Veeam).
-  # Also retry SSH itself: ARP/L2 to the Veeam host intermittently flaps.
-  local attempt out rc ps_launcher
-  local -a ps_launchers=(
-    '"C:\Program Files\PowerShell\7\pwsh.exe" -NoProfile -EncodedCommand'
-    'pwsh.exe -NoProfile -EncodedCommand'
-    'pwsh -NoProfile -EncodedCommand'
-  )
-  for attempt in 1 2 3; do
-    for ps_launcher in "${ps_launchers[@]}"; do
-      out="$(ssh "${ssh_key_opt[@]}" -o BatchMode=yes -o ConnectTimeout=30 "${ssh_host_opts[@]}" \
-              "${VEEAM_SSH_USER:-administrator}@${VEEAM_SSH_HOST}" \
-              "${ps_launcher} ${ps_enc}" 2>/dev/null)"
-      rc=$?
-      if [[ $rc -eq 0 ]]; then
-        # PowerShell emits CRLF; strip CR so it doesn't end up in the last field.
-        out="$(printf '%s' "$out" | tr -d '\r')"
-        if [[ -z "${out//[[:space:]]/}" ]]; then
-          mold_backup_notify_log info "Veeam→Mold(restore): SSH ok (pwsh), 0 sessions from Get-VBRRestoreSession/audit (window=${since_min}min)"
-        else
-          local _raw_n
-          _raw_n="$(printf '%s\n' "$out" | grep -c '|' 2>/dev/null || echo 0)"
-          mold_backup_notify_log info "Veeam→Mold(restore): raw session lines=${_raw_n}"
-        fi
-        # Apply the time window here (3rd field = Unix epoch seconds). Lines without a
-        # numeric epoch are kept (fail-open) so we never silently drop real sessions.
-        local now_epoch cutoff line ep
-        now_epoch=$(date +%s)
-        cutoff=$(( now_epoch - since_min * 60 ))
-        while IFS= read -r line; do
-          [[ -n "$line" ]] || continue
-          ep="$(printf '%s' "$line" | cut -d'|' -f3)"
-          if [[ "$ep" =~ ^[0-9]+$ ]]; then
-            [[ "$ep" -ge "$cutoff" ]] && printf '%s\n' "$line"
-          else
-            printf '%s\n' "$line"
-          fi
-        done <<< "$out"
-        return 0
-      fi
-    done
-    mold_backup_notify_log warn "Veeam→Mold(restore): SSH/pwsh query attempt ${attempt} failed (rc=${rc}); retrying"
-    sleep 3
-  done
-  mold_backup_notify_log warn "Veeam→Mold(restore): SSH query failed after retries (need pwsh 7+ path)"
-  return 1
+  [[ -n "$ps_script" ]] || { mold_backup_notify_log warn "Veeam→Mold(restore): empty PS script"; return 1; }
+  local out rc=0
+  # Large restore-query script → file transfer (EncodedCommand hits Windows cmdline limit).
+  out="$(mold_backup_veeam_ssh_ps_capture "$ps_script" 2>/dev/null)" && rc=0 || rc=$?
+  out="$(printf '%s' "$out" | tr -d '\r')"
+  if [[ $rc -ne 0 ]]; then
+    mold_backup_notify_log warn "Veeam→Mold(restore): SSH/pwsh query failed (rc=${rc}) — check VEEAM_SSH_PASSWORD/key and pwsh"
+    return 1
+  fi
+  if [[ -z "${out//[[:space:]]/}" ]]; then
+    mold_backup_notify_log info "Veeam→Mold(restore): SSH ok (pwsh), 0 sessions from Get-VBRRestoreSession/audit (window=${since_min}min)"
+    return 0
+  fi
+  local _raw_n
+  _raw_n="$(printf '%s\n' "$out" | grep -c '|' 2>/dev/null || echo 0)"
+  mold_backup_notify_log info "Veeam→Mold(restore): raw session lines=${_raw_n}"
+  local now_epoch cutoff line ep
+  now_epoch=$(date +%s)
+  cutoff=$(( now_epoch - since_min * 60 ))
+  while IFS= read -r line; do
+    [[ -n "$line" ]] || continue
+    ep="$(printf '%s' "$line" | cut -d'|' -f3)"
+    # Drop DateTime.MinValue / negative / nonsense epochs (in-progress FLR sessions).
+    if [[ "$ep" =~ ^-?[0-9]+$ ]] && (( ep >= 1000000000 )); then
+      [[ "$ep" -ge "$cutoff" ]] && printf '%s\n' "$line"
+    fi
+  done <<< "$out"
+  return 0
 }
 
 # Host Agent FLR restores files back under /tmp/mold/veeam/<vm>/ — detect locally when Veeam SSH returns nothing.
@@ -3352,7 +4270,7 @@ mold_backup_restore_preflight() {
     vm="$(echo "$vm" | xargs)"
     [[ -n "$vm" ]] || continue
     if mold_backup_domain_exists "$vm" 2>/dev/null; then
-      mold_backup_notify_log info "restore preflight: ${vm} libvirt=running (stop VM in Mold UI before restore)"
+      mold_backup_notify_log info "restore preflight: ${vm} libvirt=running (RESTORE_AUTO_STOP=${RESTORE_AUTO_STOP:-true} will stop before Mold restore)"
     elif mold_backup_vm_restorable_on_local_host "$vm" 2>/dev/null; then
       mold_backup_notify_log info "restore preflight: ${vm} Mold Stopped on $(mold_backup_local_kvm_name) — no libvirt domain (normal for Mold; OK to restore)"
     else
@@ -3372,10 +4290,14 @@ mold_backup_restore_preflight() {
 
 mold_backup_query_local_host_flr() {
   local since_min="${1:-${VEEAM_RESTORE_WATCH_WINDOW_MIN:-60}}"
+  # Default OFF: backup staging under /tmp/mold/veeam/<vm>/<ts>/ looks like "new files"
+  # and was falsely treated as Veeam FLR → auto-stop + Mold restore after every backup.
+  # Enable only when you rely on local FLR file drop without Veeam restore sessions.
+  [[ "${LOCAL_HOST_FLR_TRIGGER:-false}" == "true" ]] || return 0
   [[ "${BACKUP_MODE:-host}" == "host" ]] || return 0
   [[ -n "${VM_INCLUDE:-}" && "${VM_INCLUDE}" != "*" ]] || return 0
   local base="${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}"
-  local cutoff now vm d epoch newest last state_f sid kvm_ip ckpt rp_id
+  local cutoff now vm d epoch newest last state_f sid kvm_ip ckpt rp_id newest_dir
   now=$(date +%s)
   cutoff=$((now - since_min * 60))
   kvm_ip="${KVM_IP:-}"
@@ -3389,7 +4311,9 @@ mold_backup_query_local_host_flr() {
       continue
     fi
     mold_backup_trigger_active "veeam-active" "$vm" && continue
+    mold_backup_trigger_active "backup-cooldown" "$vm" && continue
     mold_backup_trigger_active "mold-restore-active" "$vm" && continue
+    mold_backup_trigger_active "mold-flr-pushed" "$vm" && continue
     newest="$(find "$d" -mindepth 1 \( -type f -o -type d \) -printf '%T@\n' 2>/dev/null | sort -rn | head -1 || true)"
     if [[ -z "$newest" ]]; then
       mold_backup_notify_log info "local FLR: ${vm} staging empty ${d}"
@@ -3400,6 +4324,15 @@ mold_backup_query_local_host_flr() {
     if [[ "$epoch" -lt "$cutoff" ]]; then
       mold_backup_notify_log info "local FLR: ${vm} files older than ${since_min}min (mtime epoch=${epoch}; widen --since-min or re-FLR)"
       continue
+    fi
+    # Skip Mold backup export trees (FULL/INCREMENTAL host/agent output).
+    newest_dir="$(find "$d" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2- || true)"
+    if [[ -n "$newest_dir" ]]; then
+      if [[ -f "${newest_dir}/domain-config.xml" || -f "${newest_dir}/rbd-backup.meta" \
+            || -f "${newest_dir}/veeam-seed.meta" || -d "${newest_dir}/checkpoints" ]]; then
+        mold_backup_notify_log info "local FLR: ${vm} skip Mold backup export dir $(basename "$newest_dir") (not FLR)"
+        continue
+      fi
     fi
     state_f="$(mold_backup_state_dir)/restore-watch/flr-${vm}.last-epoch"
     mkdir -p "$(dirname "$state_f")" 2>/dev/null || true
@@ -3427,6 +4360,201 @@ mold_backup_local_flr_mark_epoch() {
   state_f="$(mold_backup_state_dir)/restore-watch/flr-${vm}.last-epoch"
   mkdir -p "$(dirname "$state_f")" 2>/dev/null || true
   echo "$epoch" >"$state_f"
+}
+
+# Resolve which job conf owns a libvirt VM name (for agent-payload FLR watch).
+mold_backup_conf_for_vm() {
+  local vm="$1" f
+  [[ -n "$vm" ]] || return 1
+  local etc="${ABLESTACK_VEEAM_ETC_DIR:-/etc/ablestack/veeam}"
+  for f in "${etc}"/"$(hostname -s)".conf "${etc}"/*.conf; do
+    [[ -f "$f" ]] || continue
+    [[ "$(basename "$f")" == mold-backup.conf ]] && continue
+    if grep -Eq "^[[:space:]]*VM_INCLUDE=.*${vm}" "$f" 2>/dev/null; then
+      echo "$f"
+      return 0
+    fi
+  done
+  return 1
+}
+
+# Fingerprint agent payload dir (mtime+size of files, excluding publish stamp).
+mold_backup_agent_payload_fingerprint() {
+  local d="$1"
+  [[ -d "$d" ]] || { echo ""; return 0; }
+  find "$d" -type f ! -name '.mold-agent-publish' -printf '%f:%T@:%s\n' 2>/dev/null | sort | md5sum | awk '{print $1}'
+}
+
+# Immediate host FLR: Veeam UI restore rewrites /tmp/mold/veeam-agent/<vm>/current.
+# Skips our own backup publish (.mold-agent-publish) and active backup/restore markers.
+# RBD native marker-only trees are NEVER FLR — pre-notify publishes them after every backup.
+mold_backup_agent_payload_is_rbd_native_only() {
+  local publish="$1"
+  local f
+  [[ -d "$publish" && -f "${publish}/mold-rbd-native.marker" ]] || return 1
+  while IFS= read -r f; do
+    case "$(basename "$f")" in
+      .mold-agent-publish|mold-rbd-native.marker|rbd-backup.meta|domain-config.xml|domain.xml|veeam-seed.meta|staging.complete)
+        ;;
+      *)
+        return 1
+        ;;
+    esac
+  done < <(find "$publish" -type f 2>/dev/null)
+  return 0
+}
+
+mold_backup_try_agent_payload_flr_trigger() {
+  local vm="$1"
+  local base="${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}"
+  local publish="${base}/${vm}/current"
+  local quiet_sec="${FLR_WATCH_QUIET_SEC:-2}"
+  local publish_grace="${FLR_WATCH_PUBLISH_GRACE_SEC:-600}"
+  local state_dir fp_file last_fp fp now pub_ts conf job sid epoch detail backup_id
+  [[ -n "$vm" && -d "$publish" ]] || return 0
+
+  if mold_backup_trigger_active "veeam-active" "$vm" 2>/dev/null; then
+    return 0
+  fi
+  if mold_backup_trigger_active "mold-restore-active" "$vm" 2>/dev/null; then
+    return 0
+  fi
+  if mold_backup_trigger_active "mold-flr-pushed" "$vm" 60 2>/dev/null; then
+    return 0
+  fi
+
+  now=$(date +%s)
+  if [[ -f "${publish}/.mold-agent-publish" ]]; then
+    pub_ts="$(tr -d '[:space:]' <"${publish}/.mold-agent-publish" 2>/dev/null || echo 0)"
+    if [[ "$pub_ts" =~ ^[0-9]+$ ]] && (( now - pub_ts < publish_grace )); then
+      return 0
+    fi
+  fi
+
+  # Debounce: fingerprint must be stable for quiet_sec (FLR may write several files).
+  state_dir="$(mold_backup_state_dir)/flr-watch"
+  mkdir -p "$state_dir" 2>/dev/null || true
+  fp_file="${state_dir}/${vm}.fp"
+  fp="$(mold_backup_agent_payload_fingerprint "$publish")"
+  [[ -n "$fp" ]] || return 0
+
+  # Backup publish of RBD marker must not look like Veeam Guest FLR.
+  if mold_backup_agent_payload_is_rbd_native_only "$publish"; then
+    echo "$fp" >"$fp_file"
+    rm -f "${state_dir}/${vm}.pending" 2>/dev/null || true
+    return 0
+  fi
+
+  last_fp=""
+  [[ -f "$fp_file" ]] && last_fp="$(tr -d '[:space:]' <"$fp_file" 2>/dev/null || true)"
+  if [[ "$fp" == "$last_fp" ]]; then
+    return 0
+  fi
+  # First observation of change — record pending and wait for quiet.
+  local pending="${state_dir}/${vm}.pending"
+  local pending_fp pending_ts
+  if [[ -f "$pending" ]]; then
+    pending_fp="$(awk 'NR==1{print; exit}' "$pending" 2>/dev/null || true)"
+    pending_ts="$(awk 'NR==2{print; exit}' "$pending" 2>/dev/null || true)"
+  else
+    pending_fp=""
+    pending_ts=""
+  fi
+  if [[ "$fp" != "$pending_fp" ]]; then
+    printf '%s\n%s\n' "$fp" "$now" >"$pending"
+    return 0
+  fi
+  [[ "$pending_ts" =~ ^[0-9]+$ ]] || return 0
+  if (( now - pending_ts < quiet_sec )); then
+    return 0
+  fi
+
+  # Stable change after quiet window → treat as Veeam FLR onto agent payload.
+  conf="$(mold_backup_conf_for_vm "$vm" 2>/dev/null || true)"
+  if [[ -z "$conf" ]]; then
+    mold_backup_notify_log warn "flr-watch: no conf for vm=${vm}; skip"
+    echo "$fp" >"$fp_file"
+    rm -f "$pending"
+    return 0
+  fi
+  # Load VM's job conf (API keys / job name) without clobbering global forever.
+  (
+    # shellcheck disable=SC1090
+    set -a
+    # shellcheck source=/dev/null
+    source "$conf"
+    set +a
+    export MOLD_BACKUP_CONF="$conf"
+    mold_backup_load_config 2>/dev/null || true
+    mold_backup_resolve_api_secret 2>/dev/null || true
+    job="${VEEAM_JOB_NAME:-$(basename "$conf" .conf)}"
+    if ! mold_backup_vm_owned_by_local_host "$vm" 2>/dev/null; then
+      mold_backup_notify_log info "flr-watch: vm=${vm} not owned by $(mold_backup_local_kvm_name); skip"
+      exit 0
+    fi
+    epoch="$now"
+    sid="local-flr-${vm}-${epoch}"
+    if mold_backup_restore_session_seen "$sid" 2>/dev/null; then
+      exit 0
+    fi
+    # Resolve the *selected* restore point — never the registry latest.
+    # 1) Agent payload checkpoint (FLR rewrote /tmp/mold/veeam-agent/<vm>/current) — fast
+    # 2) Veeam restore session RP (UI selection) — may SSH; bounded timeout
+    # Same checkpoint as previous is still valid: user often FLR-restores the latest RP.
+    ckpt=""
+    rp_id=""
+    rp_info=""
+    prev_ckpt=""
+    payload_ckpt=""
+    ckpt_file="$(mold_backup_state_dir)/flr-watch/${vm}.ckpt"
+    [[ -f "$ckpt_file" ]] && prev_ckpt="$(tr -d '[:space:]' <"$ckpt_file" 2>/dev/null || true)"
+    payload_ckpt="$(mold_backup_agent_payload_selected_checkpoint "$vm" 2>/dev/null || true)"
+    if [[ -n "$payload_ckpt" ]]; then
+      ckpt="$payload_ckpt"
+      if [[ "$payload_ckpt" == "$prev_ckpt" ]]; then
+        mold_backup_notify_log info "flr-watch: vm=${vm} payload ckpt unchanged (${payload_ckpt}) — still restore selected point after FLR rewrite"
+      fi
+    fi
+    [[ -n "$payload_ckpt" ]] && echo "$payload_ckpt" >"$ckpt_file"
+    # RP id is optional when checkpoint is known (index only). Required when ckpt missing.
+    if [[ -z "$ckpt" ]]; then
+      rp_info="$(VEEAM_SSH_CMD_TIMEOUT="${RESTORE_VEEAM_SSH_TIMEOUT:-25}" \
+        mold_backup_query_veeam_selected_flr_rp "$job" "$vm" "${VEEAM_RESTORE_WATCH_WINDOW_MIN:-30}" 2>/dev/null || true)"
+    elif [[ "${FLR_WATCH_INDEX_RP:-true}" == "true" ]]; then
+      rp_info="$(VEEAM_SSH_CMD_TIMEOUT="${RESTORE_VEEAM_SSH_TIMEOUT:-12}" \
+        mold_backup_query_veeam_selected_flr_rp "$job" "$vm" "${VEEAM_RESTORE_WATCH_WINDOW_MIN:-30}" 2>/dev/null || true)"
+    fi
+    if [[ -n "$rp_info" ]]; then
+      rp_id="${rp_info%%|*}"
+      _sid="$(cut -d'|' -f3 <<<"$rp_info")"
+      [[ -n "$_sid" ]] && sid="$_sid"
+    fi
+    if [[ -z "$ckpt" && -z "$rp_id" ]]; then
+      mold_backup_notify_log err "flr-watch: vm=${vm} FLR detected but no selected checkpoint/RP (payload ckpt=${payload_ckpt:-n/a} prev=${prev_ckpt:-n/a}) — refuse latest fallback"
+      exit 1
+    fi
+    detail="name=agent-payload-flr;end=${epoch};result=Success;backup=${job};source=flr-watch;ckpt=${ckpt:-};rp=${rp_id:-}"
+    mold_backup_notify_log info "flr-watch: IMMEDIATE Mold restore vm=${vm} conf=$(basename "$conf") ckpt=${ckpt:-n/a} rp=${rp_id:-n/a}"
+    mold_backup_handle_veeam_restore_session "$job" "$vm" "$sid" "$detail" true "${rp_id:-}" \
+      && mold_backup_local_flr_mark_epoch "$vm" "$epoch"
+  )
+  echo "$fp" >"$fp_file"
+  rm -f "$pending"
+  return 0
+}
+
+# One scan of all VM dirs under VEEAM_AGENT_PAYLOAD_PATH.
+mold_backup_scan_agent_payload_flr() {
+  local base="${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}"
+  local vm_dir vm
+  [[ -d "$base" ]] || mkdir -p "$base" 2>/dev/null || true
+  [[ -d "$base" ]] || return 0
+  for vm_dir in "$base"/*; do
+    [[ -d "$vm_dir" ]] || continue
+    vm="$(basename "$vm_dir")"
+    [[ "$vm" == i-*-VM ]] || continue
+    mold_backup_try_agent_payload_flr_trigger "$vm" || true
+  done
 }
 
 # Pick Veeam restore point GUID whose CreationTime is closest to a Unix epoch (FLR time).
@@ -3493,26 +4621,21 @@ mold_backup_reflect_one_restore() {
 # --- Restore agent: host ownership, cluster lock, Mold API trigger ---
 
 mold_backup_local_kvm_name() {
-  if [[ -n "${KVM_HOSTNAME:-}" ]]; then
-    echo "$KVM_HOSTNAME"
-    return 0
+  # Prefer live hostname. Conf KVM_HOSTNAME is often copied from another cube and
+  # must not make restore-watch skip as not-owner on the real owner host.
+  local hn agent_props="/etc/cloudstack/agent/agent.properties" h
+  hn="$(hostname -s 2>/dev/null || hostname)"
+  hn="${hn%%.*}"
+  if [[ -n "${KVM_HOSTNAME:-}" && -n "$hn" && "${KVM_HOSTNAME}" != "$hn" ]]; then
+    mold_backup_notify_log warn "KVM_HOSTNAME=${KVM_HOSTNAME} != live hostname ${hn}; using ${hn} for ownership"
   fi
-  local agent_props="/etc/cloudstack/agent/agent.properties" h
+  [[ -n "$hn" ]] && { echo "$hn"; return 0; }
   if [[ -f "$agent_props" ]]; then
     h="$(grep -E '^host\.name=' "$agent_props" 2>/dev/null | tail -1 | cut -d= -f2-)"
     h="${h//$'\r'/}"
     [[ -n "$h" ]] && { echo "$h"; return 0; }
-    h="$(grep -E '^resource=' "$agent_props" 2>/dev/null | tail -1 | cut -d= -f2-)"
-    h="${h//$'\r'/}"
-    [[ -n "$h" ]] && { echo "$h"; return 0; }
-    h="$(grep -E '^host=' "$agent_props" 2>/dev/null | tail -1 | cut -d= -f2-)"
-    h="${h//$'\r'/}"
-    # host= is often MS resource id (e.g. 10.10.31.20@static), not hypervisor name — skip @ forms
-    if [[ -n "$h" && "$h" != *@* ]]; then
-      echo "$h"
-      return 0
-    fi
   fi
+  [[ -n "${KVM_HOSTNAME:-}" ]] && { echo "$KVM_HOSTNAME"; return 0; }
   hostname -s
 }
 
@@ -3613,9 +4736,273 @@ except Exception:
   return 1
 }
 
+# Match Mold backup by checkpoint name (detail or external path basename).
+mold_backup_api_find_backup_by_checkpoint() {
+  local vm_name="$1" ckpt="$2"
+  local vm_id json bid
+  [[ -n "$vm_name" && -n "$ckpt" ]] || return 1
+  # Reject job names accidentally passed as checkpoint
+  [[ "$ckpt" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2} ]] || return 1
+  vm_id="$(mold_backup_api_get_vm_id "$vm_name" 2>/dev/null || true)"
+  [[ -n "$vm_id" ]] || return 1
+  json="$(mold_backup_cmk_run listAblestackVeeamBackups "virtualmachineid=${vm_id}" 2>/dev/null || true)"
+  [[ -n "$json" ]] || return 1
+  bid="$(printf '%s\n' "$json" | CKPT="$ckpt" python3 -c "
+import json, sys, os
+ckpt = os.environ.get('CKPT', '')
+try:
+    d = json.load(sys.stdin)
+    b = d.get('listablestackveeambackupsresponse', {}).get('backup', [])
+    if isinstance(b, dict):
+        b = [b]
+    for x in b:
+        if str(x.get('status', '')).lower() != 'backedup':
+            continue
+        ext = str(x.get('externalid') or x.get('path') or '')
+        base = ext.rstrip('/').split('/')[-1] if ext else ''
+        if base == ckpt or ext.endswith('/' + ckpt) or ext.endswith(ckpt):
+            print(x.get('id') or '')
+            break
+except Exception:
+    pass
+" 2>/dev/null)"
+  if [[ -n "$bid" ]]; then
+    echo "$bid"
+    return 0
+  fi
+  while IFS= read -r bid; do
+    [[ -n "$bid" ]] || continue
+    local detail_ckpt
+    detail_ckpt="$(mold_backup_api_backup_detail_field "$bid" "ablestack.veeam.checkpoint.name" 2>/dev/null || true)"
+    if [[ "$detail_ckpt" == "$ckpt" ]]; then
+      echo "$bid"
+      return 0
+    fi
+  done < <(printf '%s\n' "$json" | python3 -c "
+import json, sys
+try:
+    d = json.load(sys.stdin)
+    b = d.get('listablestackveeambackupsresponse', {}).get('backup', [])
+    if isinstance(b, dict):
+        b = [b]
+    for x in b:
+        if str(x.get('status', '')).lower() == 'backedup' and x.get('id'):
+            print(x['id'])
+except Exception:
+    pass
+" 2>/dev/null)
+  return 1
+}
+
+# Nearest Mold backup whose checkpoint timestamp is within max_delta of epoch.
+mold_backup_api_find_backup_near_epoch() {
+  local vm_name="$1" epoch="$2" max_delta="${3:-${RESTORE_RP_MATCH_MAX_DELTA_SEC:-10800}}"
+  local vm_id json bid
+  [[ -n "$vm_name" && "$epoch" =~ ^[0-9]+$ ]] || return 1
+  vm_id="$(mold_backup_api_get_vm_id "$vm_name" 2>/dev/null || true)"
+  [[ -n "$vm_id" ]] || return 1
+  json="$(mold_backup_cmk_run listAblestackVeeamBackups "virtualmachineid=${vm_id}" 2>/dev/null || true)"
+  [[ -n "$json" ]] || return 1
+  bid="$(printf '%s\n' "$json" | EPOCH="$epoch" MAX_DELTA="$max_delta" python3 -c "
+import json, sys, os, re
+from datetime import datetime
+epoch = int(os.environ.get('EPOCH', '0'))
+max_delta = int(os.environ.get('MAX_DELTA', '600'))
+ckpt_re = re.compile(r'(20\\d{2})\\.(\\d{2})\\.(\\d{2})\\.(\\d{2})\\.(\\d{2})\\.(\\d{2})(?:\\.(\\d+))?')
+
+def ckpt_epoch(s):
+    m = ckpt_re.search(s or '')
+    if not m:
+        return None
+    try:
+        return int(datetime(
+            int(m.group(1)), int(m.group(2)), int(m.group(3)),
+            int(m.group(4)), int(m.group(5)), int(m.group(6))
+        ).timestamp())
+    except Exception:
+        return None
+
+try:
+    d = json.load(sys.stdin)
+    b = d.get('listablestackveeambackupsresponse', {}).get('backup', [])
+    if isinstance(b, dict):
+        b = [b]
+    best_id = ''
+    best_delta = None
+    for x in b:
+        if str(x.get('status', '')).lower() != 'backedup':
+            continue
+        ext = str(x.get('externalid') or x.get('path') or '')
+        ce = ckpt_epoch(ext)
+        if ce is None:
+            continue
+        delta = abs(ce - epoch)
+        if delta > max_delta:
+            continue
+        if best_delta is None or delta < best_delta:
+            best_delta = delta
+            best_id = x.get('id') or ''
+    if best_id:
+        print(best_id)
+except Exception:
+    pass
+" 2>/dev/null)"
+  [[ -n "$bid" ]] && echo "$bid"
+}
+
+# Query Veeam for CreationTime (unix epoch) of a restore point GUID.
+# Prefer Get-VBRBackup|Get-VBRRestorePoint (Agent/computer jobs); global Get-VBRRestorePoint often misses them.
+mold_backup_query_veeam_rp_creation_epoch() {
+  local rp_id="$1" job_hint="${2:-${VEEAM_JOB_NAME:-}}"
+  local rp_esc job_esc ps_script out
+  [[ -n "${VEEAM_SSH_HOST:-}" && -n "$rp_id" ]] || return 1
+  rp_esc="${rp_id//\'/\'\'}"
+  job_esc="${job_hint//\'/\'\'}"
+  ps_script="$(cat <<PS
+\$ErrorActionPreference = 'SilentlyContinue'
+Import-Module Veeam.Backup.PowerShell -WarningAction SilentlyContinue
+try { Connect-VBRServer -Server localhost -ErrorAction Stop } catch {}
+\$want = '${rp_esc}'.Trim('{}').ToLower()
+\$JobHint = '${job_esc}'
+function Rp-IdMatch(\$rp) {
+  if (\$null -eq \$rp) { return \$false }
+  \$id = \$rp.Id
+  if (\$id -is [guid]) { \$id = \$id.Guid }
+  return ([string]\$id).Trim('{}').ToLower() -eq \$want
+}
+function Rp-Epoch(\$rp) {
+  \$ct = \$rp.CreationTimeUTC
+  if (\$null -eq \$ct) { \$ct = \$rp.CreationTime }
+  if (\$null -eq \$ct) { return \$null }
+  if (\$ct.Kind -eq [DateTimeKind]::Unspecified) {
+    \$ct = [DateTime]::SpecifyKind(\$ct, [DateTimeKind]::Utc)
+  }
+  return [int64]([DateTimeOffset]\$ct).ToUnixTimeSeconds()
+}
+\$rp = \$null
+\$backups = @()
+if (\$JobHint) {
+  \$cj = Get-VBRComputerBackupJob -Name \$JobHint -ErrorAction SilentlyContinue
+  if (\$cj) {
+    \$backups += @(Get-VBRBackup -ErrorAction SilentlyContinue | Where-Object { \$_.JobId -eq \$cj.Id })
+  }
+  \$backups += @(Get-VBRBackup -ErrorAction SilentlyContinue | Where-Object {
+    \$_.JobName -eq \$JobHint -or \$_.Name -like "*\$JobHint*"
+  })
+}
+if (-not \$backups -or \$backups.Count -eq 0) {
+  \$backups = @(Get-VBRBackup -ErrorAction SilentlyContinue)
+}
+foreach (\$b in \$backups) {
+  foreach (\$cand in @(\$b | Get-VBRRestorePoint -ErrorAction SilentlyContinue)) {
+    if (Rp-IdMatch \$cand) { \$rp = \$cand; break }
+  }
+  if (\$rp) { break }
+}
+if (-not \$rp) {
+  \$rp = Get-VBRRestorePoint -ErrorAction SilentlyContinue | Where-Object { Rp-IdMatch \$_ } | Select-Object -First 1
+}
+if (-not \$rp) { exit 1 }
+\$ep = Rp-Epoch \$rp
+if (\$null -eq \$ep) { exit 1 }
+Write-Output \$ep
+PS
+)"
+  out="$(VEEAM_SSH_CMD_TIMEOUT="${RESTORE_VEEAM_SSH_TIMEOUT:-25}" \
+    mold_backup_veeam_ssh_ps_capture "$ps_script" 2>/dev/null | tr -d '\r' | grep -E '^[0-9]+$' | tail -1)"
+  [[ -n "$out" ]] && echo "$out"
+}
+
+# Local registry: map unix epoch → nearest ${vm}.ckpt-*.backup-id (fast, no Mold API).
+mold_backup_registry_find_backup_near_epoch() {
+  local vm_name="$1" epoch="$2" max_delta="${3:-${RESTORE_RP_MATCH_MAX_DELTA_SEC:-10800}}"
+  local reg_dir f base ckpt ce delta best_id="" best_delta=""
+  [[ -n "$vm_name" && "$epoch" =~ ^[0-9]+$ ]] || return 1
+  reg_dir="$(mold_backup_registry_dir)"
+  shopt -s nullglob
+  for f in "${reg_dir}/${vm_name}.ckpt-"*.backup-id; do
+    [[ -f "$f" ]] || continue
+    base="$(basename "$f")"
+    ckpt="${base#${vm_name}.ckpt-}"
+    ckpt="${ckpt%.backup-id}"
+    [[ "$ckpt" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2} ]] || continue
+    ce="$(python3 -c "
+from datetime import datetime
+import sys
+p=sys.argv[1].split('.')
+try:
+  print(int(datetime(int(p[0]),int(p[1]),int(p[2]),int(p[3]),int(p[4]),int(p[5])).timestamp()))
+except Exception:
+  print('')
+" "$ckpt" 2>/dev/null || true)"
+    [[ "$ce" =~ ^[0-9]+$ ]] || continue
+    delta=$(( ce > epoch ? ce - epoch : epoch - ce ))
+    if [[ "$delta" -le "$max_delta" ]]; then
+      if [[ -z "$best_delta" || "$delta" -lt "$best_delta" ]]; then
+        best_delta="$delta"
+        best_id="$(tr -d '[:space:]' <"$f" 2>/dev/null || true)"
+      fi
+    fi
+  done
+  shopt -u nullglob
+  [[ -n "$best_id" ]] && echo "$best_id"
+}
+
+# Recent Veeam FLR/restore session for this job → selected RP id (and optional creation epoch).
+# Prints: rp_id|creation_epoch|session_id
+mold_backup_query_veeam_selected_flr_rp() {
+  local job="$1" vm_name="${2:-}" since_min="${3:-${VEEAM_RESTORE_WATCH_WINDOW_MIN:-30}}"
+  local line sid sip et result nm bn rp_id epoch_rp
+  [[ -n "$job" ]] || return 1
+  while IFS='|' read -r sid sip et result nm bn rp_id epoch_rp; do
+    [[ -n "$sid" ]] || continue
+    # Prefer sessions that look like FLR and match job / host / vm name when possible.
+    if [[ -n "$vm_name" && "$nm" != *"$vm_name"* && "$bn" != *"$job"* && "$nm" != FLR_* && "$nm" != *"$job"* ]]; then
+      # still accept if RP present and job matches backup name loosely
+      [[ "$bn" == *"$job"* || "$nm" == *"$job"* ]] || continue
+    fi
+    if [[ -z "$rp_id" || "$rp_id" == "n/a" ]]; then
+      continue
+    fi
+    if [[ ! "$epoch_rp" =~ ^[0-9]+$ ]]; then
+      epoch_rp="$(mold_backup_query_veeam_rp_creation_epoch "$rp_id" "$job" 2>/dev/null || true)"
+    fi
+    echo "${rp_id}|${epoch_rp:-}|${sid}"
+    return 0
+  done < <(mold_backup_query_veeam_restores "$since_min" 2>/dev/null || true)
+  return 1
+}
+
+# Read selected checkpoint from Veeam Agent payload after FLR rewrite.
+mold_backup_agent_payload_selected_checkpoint() {
+  local vm="$1"
+  local base="${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}"
+  local publish="${base}/${vm}/current" ckpt=""
+  [[ -n "$vm" && -d "$publish" ]] || return 1
+  if [[ -f "${publish}/rbd-backup.meta" ]]; then
+    ckpt="$(mold_backup_meta_field "${publish}/rbd-backup.meta" checkpoint_name 2>/dev/null || true)"
+  fi
+  if [[ -z "$ckpt" && -f "${publish}/veeam-seed.meta" ]]; then
+    ckpt="$(mold_backup_meta_field "${publish}/veeam-seed.meta" checkpoint_name 2>/dev/null || true)"
+  fi
+  if [[ -z "$ckpt" && -f "${publish}/mold-rbd-native.marker" ]]; then
+    ckpt="$(sed -n 's/.*checkpoint[^=]*=\([0-9.]\{10,\}\).*/\1/p' "${publish}/mold-rbd-native.marker" 2>/dev/null | head -1 || true)"
+    [[ -z "$ckpt" ]] && ckpt="$(grep -Eo '20[0-9]{2}(\.[0-9]{2}){5}(\.[0-9]+)?' "${publish}/mold-rbd-native.marker" 2>/dev/null | head -1 || true)"
+  fi
+  [[ -n "$ckpt" && "$ckpt" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}\. ]] || return 1
+  echo "$ckpt"
+}
+
 mold_backup_resolve_backup_id_for_vm() {
-  local vm_name="$1" job="${2:-${VEEAM_JOB_NAME:-}}" rp_id="${3:-}" ckpt="${4:-}"
-  local line backup_id vm_id json
+  local vm_name="$1" job="${2:-${VEEAM_JOB_NAME:-}}" rp_id="${3:-}" ckpt="${4:-}" rp_epoch="${5:-}"
+  local backup_id vm_id json selected=false
+  # Job name must never be treated as a checkpoint.
+  if [[ -n "$ckpt" && ! "$ckpt" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}\.[0-9]{2}\. ]]; then
+    mold_backup_notify_log warn "restore-watch: ignoring non-checkpoint token as ckpt='${ckpt}'"
+    ckpt=""
+  fi
+  [[ -n "$ckpt" || -n "$rp_id" ]] && selected=true
+
   if [[ -n "$ckpt" ]]; then
     backup_id="$(mold_backup_registry_get_backup_id_by_checkpoint "$vm_name" "$ckpt" 2>/dev/null || true)"
     if [[ -n "$backup_id" ]]; then
@@ -3623,7 +5010,16 @@ mold_backup_resolve_backup_id_for_vm() {
       echo "$backup_id"
       return 0
     fi
+    backup_id="$(mold_backup_api_find_backup_by_checkpoint "$vm_name" "$ckpt" 2>/dev/null || true)"
+    if [[ -n "$backup_id" ]]; then
+      mold_backup_notify_log info "restore-watch: vm=${vm_name} ckpt=${ckpt} → backup_id=${backup_id} (Mold API checkpoint)"
+      mold_backup_registry_index_checkpoint_backup "$vm_name" "$ckpt" "$backup_id"
+      echo "$backup_id"
+      return 0
+    fi
+    mold_backup_notify_log warn "restore-watch: no Mold backup for checkpoint ${ckpt} vm=${vm_name}"
   fi
+
   if [[ -n "$rp_id" ]]; then
     backup_id="$(mold_backup_registry_get_backup_id_by_rp "$vm_name" "$rp_id" 2>/dev/null || true)"
     if [[ -n "$backup_id" ]]; then
@@ -3638,15 +5034,74 @@ mold_backup_resolve_backup_id_for_vm() {
       echo "$backup_id"
       return 0
     fi
-    mold_backup_notify_log warn "restore-watch: no Mold backup for Veeam restore point ${rp_id} vm=${vm_name}; using latest"
+    # Map RP → Mold backup by RP CreationTime ≈ checkpoint timestamp.
+    # Prefer epoch already extracted from the FLR session (avoids extra SSH).
+    if [[ "${RESTORE_RP_TIME_MATCH:-true}" == "true" ]]; then
+      if [[ ! "$rp_epoch" =~ ^[0-9]+$ ]]; then
+        rp_epoch="$(VEEAM_SSH_CMD_TIMEOUT="${RESTORE_VEEAM_SSH_TIMEOUT:-25}" \
+          mold_backup_query_veeam_rp_creation_epoch "$rp_id" "$job" 2>/dev/null || true)"
+      fi
+      if [[ -n "$rp_epoch" ]]; then
+        local _ep_cand _tz
+        # Try reported epoch, then common TZ mis-interpretations (±8h/±9h).
+        for _tz in 0 32400 -32400 28800 -28800; do
+          _ep_cand=$((rp_epoch + _tz))
+          [[ "$_ep_cand" =~ ^[0-9]+$ ]] || continue
+          backup_id="$(mold_backup_registry_find_backup_near_epoch "$vm_name" "$_ep_cand" 2>/dev/null || true)"
+          if [[ -z "$backup_id" ]]; then
+            backup_id="$(mold_backup_api_find_backup_near_epoch "$vm_name" "$_ep_cand" 2>/dev/null || true)"
+          fi
+          if [[ -n "$backup_id" ]]; then
+            mold_backup_notify_log info "restore-watch: vm=${vm_name} rp=${rp_id} epoch=${rp_epoch} (tz_adj=${_tz}) → backup_id=${backup_id} (nearest checkpoint)"
+            mold_backup_registry_index_rp_backup "$vm_name" "$rp_id" "$backup_id" "$job"
+            echo "$backup_id"
+            return 0
+          fi
+        done
+        mold_backup_notify_log warn "restore-watch: rp=${rp_id} epoch=${rp_epoch} but no Mold checkpoint within ${RESTORE_RP_MATCH_MAX_DELTA_SEC:-10800}s for ${vm_name}"
+      else
+        mold_backup_notify_log warn "restore-watch: could not resolve CreationTime for rp=${rp_id} (job=${job})"
+      fi
+    fi
+    # Last resort for UI FLR: agent payload still carries the selected Mold checkpoint.
+    local payload_ckpt=""
+    payload_ckpt="$(mold_backup_agent_payload_selected_checkpoint "$vm_name" 2>/dev/null || true)"
+    if [[ -n "$payload_ckpt" ]]; then
+      backup_id="$(mold_backup_registry_get_backup_id_by_checkpoint "$vm_name" "$payload_ckpt" 2>/dev/null || true)"
+      if [[ -z "$backup_id" ]]; then
+        backup_id="$(mold_backup_api_find_backup_by_checkpoint "$vm_name" "$payload_ckpt" 2>/dev/null || true)"
+      fi
+      if [[ -n "$backup_id" ]]; then
+        mold_backup_notify_log info "restore-watch: vm=${vm_name} rp=${rp_id} → backup_id=${backup_id} (agent-payload ckpt=${payload_ckpt})"
+        mold_backup_registry_index_rp_backup "$vm_name" "$rp_id" "$backup_id" "$job"
+        mold_backup_registry_index_checkpoint_backup "$vm_name" "$payload_ckpt" "$backup_id"
+        echo "$backup_id"
+        return 0
+      fi
+    fi
+    mold_backup_notify_log warn "restore-watch: no Mold backup for Veeam restore point ${rp_id} vm=${vm_name}"
   fi
+
+  if [[ "$selected" == "true" && "${RESTORE_ALLOW_LATEST_FALLBACK:-false}" != "true" ]]; then
+    mold_backup_notify_log err "restore-watch: refusing latest fallback for selected rp/ckpt vm=${vm_name} rp=${rp_id:-n/a} ckpt=${ckpt:-n/a}"
+    return 1
+  fi
+
   if [[ -n "${BACKUP_ID:-}" ]]; then
     echo "$BACKUP_ID"
     return 0
   fi
   backup_id="$(mold_backup_registry_get_vm_backup_id "$vm_name" 2>/dev/null || true)"
-  [[ -n "$backup_id" ]] && { echo "$backup_id"; return 0; }
-  local reg_dir
+  if [[ -n "$backup_id" ]]; then
+    if [[ "$selected" == "true" ]]; then
+      mold_backup_notify_log warn "restore-watch: using latest backup_id=${backup_id} (RESTORE_ALLOW_LATEST_FALLBACK=true)"
+    else
+      mold_backup_notify_log warn "restore-watch: no selected rp/ckpt; using latest backup_id=${backup_id} vm=${vm_name}"
+    fi
+    echo "$backup_id"
+    return 0
+  fi
+  local line reg_dir
   reg_dir="$(mold_backup_registry_dir)"
   if [[ -d "$reg_dir" ]]; then
     line="$(grep -h "vm=${vm_name}.*backup_id=" "${reg_dir}"/*.log 2>/dev/null | tail -1 || true)"
@@ -3674,15 +5129,31 @@ except Exception:
 # Handle one Veeam restore session: dedup, host check, flock, optional Mold restore API.
 mold_backup_handle_veeam_restore_session() {
   local job="$1" vm="$2" sid="$3" detail="$4" trigger_mold="${5:-false}" rp_id="${6:-}"
+  local ckpt=""
+  # Prefer explicit ckpt=/checkpoint= — never treat backup=<job name> as checkpoint.
+  ckpt="$(sed -n 's/.*ckpt=\([^;]*\).*/\1/p' <<<"$detail" | tail -1)"
+  [[ -z "$ckpt" ]] && ckpt="$(sed -n 's/.*checkpoint=\([^;]*\).*/\1/p' <<<"$detail" | tail -1)"
+  ckpt="${ckpt// /}"
+  [[ "$ckpt" == "n/a" ]] && ckpt=""
   if [[ -z "$rp_id" && "$detail" == *"rp="* ]]; then
     rp_id="$(sed -n 's/.*rp=\([^;]*\).*/\1/p' <<<"$detail" | tail -1)"
     rp_id="${rp_id// /}"
+    [[ "$rp_id" == "n/a" ]] && rp_id=""
   fi
-  if [[ -z "$rp_id" && "$detail" == *"end="* ]]; then
+  local rp_epoch=""
+  if [[ "$detail" == *"rp_epoch="* ]]; then
+    rp_epoch="$(sed -n 's/.*rp_epoch=\([^;]*\).*/\1/p' <<<"$detail" | tail -1)"
+    rp_epoch="${rp_epoch// /}"
+    [[ "$rp_epoch" =~ ^[0-9]+$ ]] || rp_epoch=""
+  fi
+  # Do not invent an RP from FLR end-time when a checkpoint was already selected —
+  # near-epoch matching tends to pick the newest RP, not the UI selection.
+  if [[ -z "$rp_id" && -z "$ckpt" && "$detail" == *"end="* ]]; then
     local _ep
     _ep="$(sed -n 's/.*end=\([^;]*\).*/\1/p' <<<"$detail" | tail -1)"
     if [[ "$_ep" =~ ^[0-9]+$ ]]; then
-      rp_id="$(mold_backup_query_veeam_rp_near_epoch "$job" "$_ep" 2>/dev/null || true)"
+      rp_id="$(VEEAM_SSH_CMD_TIMEOUT="${RESTORE_VEEAM_SSH_TIMEOUT:-20}" \
+        mold_backup_query_veeam_rp_near_epoch "$job" "$_ep" 2>/dev/null || true)"
     fi
   fi
   if mold_backup_restore_session_seen "$sid"; then
@@ -3711,31 +5182,36 @@ mold_backup_handle_veeam_restore_session() {
     mold_backup_emit_restore_event "mold.restore.skipped.locked" "$vm" "session=${sid}"
     return 0
   fi
-  local backup_id rc=0 ckpt=""
-  ckpt="$(sed -n 's/.*backup=\([^;]*\).*/\1/p' <<<"$detail" | tail -1)"
-  ckpt="${ckpt// /}"
-  backup_id="$(mold_backup_resolve_backup_id_for_vm "$vm" "$job" "$rp_id" "$ckpt" 2>/dev/null || true)"
+  local backup_id rc=0
+  backup_id="$(mold_backup_resolve_backup_id_for_vm "$vm" "$job" "$rp_id" "$ckpt" "$rp_epoch" 2>/dev/null || true)"
   if [[ -z "$backup_id" ]]; then
-    mold_backup_emit_restore_event "mold.restore.failed" "$vm" "session=${sid};reason=no-backup-id;rp=${rp_id:-n/a}"
+    mold_backup_emit_restore_event "mold.restore.failed" "$vm" "session=${sid};reason=no-backup-id;rp=${rp_id:-n/a};ckpt=${ckpt:-n/a};rp_epoch=${rp_epoch:-n/a}"
     mold_backup_restore_lock_release
     return 1
   fi
   export BACKUP_ID="$backup_id" VM_NAME="$vm"
   [[ -n "$rp_id" ]] && export VEEAM_RESTORE_POINT_ID="$rp_id"
   export RESTORE_SOURCE="${RESTORE_SOURCE:-${VEEAM_UI_RESTORE_SOURCE:-mold-only}}"
-  mold_backup_notify_log info "Veeam UI restore session=${sid} vm=${vm} rp=${rp_id:-n/a} → Mold datadisk restore backup_id=${backup_id} (RESTORE_SOURCE=${RESTORE_SOURCE})"
-  mold_backup_emit_restore_event "veeam.restore.completed" "$vm" "session=${sid};rp=${rp_id:-n/a};backup_id=${backup_id};${detail}"
-  mold_backup_emit_restore_event "mold.restore.requested" "$vm" "session=${sid};rp=${rp_id:-n/a};backup_id=${backup_id};source=${RESTORE_SOURCE}"
+  mold_backup_notify_log info "Veeam UI restore session=${sid} vm=${vm} rp=${rp_id:-n/a} ckpt=${ckpt:-n/a} → Mold datadisk restore backup_id=${backup_id} (RESTORE_SOURCE=${RESTORE_SOURCE})"
+  mold_backup_emit_restore_event "veeam.restore.completed" "$vm" "session=${sid};rp=${rp_id:-n/a};ckpt=${ckpt:-n/a};backup_id=${backup_id};${detail}"
+  mold_backup_emit_restore_event "mold.restore.requested" "$vm" "session=${sid};rp=${rp_id:-n/a};ckpt=${ckpt:-n/a};backup_id=${backup_id};source=${RESTORE_SOURCE}"
   mold_backup_trigger_mark "mold-restore-active" "$vm"
+  mold_backup_trigger_mark "veeam-restore-active" "$vm"
   if mold_backup_restore_notify "$(hostname -s)" "$job"; then
     mold_backup_registry_save_restore "$job" "$vm" "veeam" "$sid" "${detail};backup_id=${backup_id}" "mold-restored"
     mold_backup_restore_session_mark_seen "$sid"
     mold_backup_emit_restore_event "mold.restore.completed" "$vm" "session=${sid};backup_id=${backup_id}"
   else
+    # Always mark seen on failure so restore-watch does not re-stop the same VM every 3min.
+    # Set RESTORE_WATCH_RETRY_FAILED=true to allow retries of failed sessions.
+    if [[ "${RESTORE_WATCH_RETRY_FAILED:-false}" != "true" ]]; then
+      mold_backup_restore_session_mark_seen "$sid"
+    fi
     mold_backup_emit_restore_event "mold.restore.failed" "$vm" "session=${sid};backup_id=${backup_id}"
     rc=1
   fi
   mold_backup_trigger_clear "mold-restore-active" "$vm"
+  mold_backup_trigger_clear "veeam-restore-active" "$vm"
   mold_backup_restore_lock_release
   return "$rc"
 }
@@ -3748,12 +5224,13 @@ mold_backup_watch_veeam_restores() {
   local trigger_mold="${3:-${RESTORE_WATCH_TRIGGER_MOLD:-false}}"
   if [[ -z "${VM_TARGETS:-}" && "${BACKUP_MODE:-host}" == "host" && -n "${VM_INCLUDE:-}" && "${VM_INCLUDE}" != "*" ]]; then
   # Host mode: build name:ip pairs from libvirt when VM_TARGETS unset.
+  # Stopped VMs have no libvirt domain — virsh fails; keep going with name-only targets.
     local _vm _ip
     VM_TARGETS=""
     for _vm in ${VM_INCLUDE//,/ }; do
       _vm="$(echo "$_vm" | xargs)"
       [[ -n "$_vm" ]] || continue
-      _ip="$(virsh -c qemu:///system domifaddr "$_vm" 2>/dev/null | awk '/ipv4/ {print $4; exit}' | cut -d/ -f1)"
+      _ip="$(virsh -c qemu:///system domifaddr "$_vm" 2>/dev/null | awk '/ipv4/ {print $4; exit}' | cut -d/ -f1 || true)"
       VM_TARGETS+="${VM_TARGETS:+,}${_vm}:${_ip:-${_vm}}"
     done
   fi
@@ -3763,10 +5240,64 @@ mold_backup_watch_veeam_restores() {
   }
   [[ "${trigger_mold}" == "true" ]] && mold_backup_restore_preflight
   mold_backup_notify_log info "=== restore-watch job=${job} window=${since_min}min trigger_mold=${trigger_mold} host=$(mold_backup_local_kvm_name) ==="
-  local sid sip et result nm bn rp_id matched_ip vm
+  local sid sip et result nm bn rp_id rp_epoch matched_ip vm
   local processed=0 handled=0
-  while IFS='|' read -r sid sip et result nm bn rp_id; do
+  while IFS='|' read -r sid sip et result nm bn rp_id rp_epoch; do
     [[ -n "$sid" ]] || continue
+    rp_epoch="${rp_epoch// /}"
+    [[ "$rp_epoch" == "n/a" ]] && rp_epoch=""
+    [[ "$rp_epoch" =~ ^[0-9]+$ ]] || rp_epoch=""
+    # Drop SSH/pwsh noise mistaken for sessions (must not trigger stopVirtualMachine).
+    if [[ "$sid" == Warning:* || "$sid" == *Permanently\ added* || "$sid" == *known\ hosts* ]]; then
+      mold_backup_notify_log info "restore-watch: ignore non-session noise sid='${sid:0:80}'"
+      continue
+    fi
+    # Accept GUID / local-flr-* only (real Veeam or local FLR markers).
+    if [[ ! "$sid" =~ ^[0-9a-fA-F-]{8,} && "$sid" != local-flr-* ]]; then
+      mold_backup_notify_log info "restore-watch: ignore invalid session id='${sid:0:80}'"
+      continue
+    fi
+    # Never Mold-restore on in-progress FLR (Result=None) — stops VM and drops Veeam session.
+    if [[ -n "$result" && ! "$result" =~ ^(Success|Warning)$ ]]; then
+      mold_backup_notify_log info "restore-watch: skip session ${sid} result='${result}' (need Success/Warning)"
+      continue
+    fi
+    # Invalid/MinValue end time (e.g. -2208960000) must not trigger restore.
+    if [[ -n "$et" ]] && { [[ "$et" =~ ^- ]] || [[ ! "$et" =~ ^[0-9]+$ ]] || (( et < 1000000000 )); }; then
+      mold_backup_notify_log info "restore-watch: skip session ${sid} bad end='${et}'"
+      continue
+    fi
+    # Same KVM host can run Job 2 + Job 6 + ablecubeN. FLR sessions must only be
+    # handled by the watch whose --job matches the session backup / FLR name.
+    # Examples: bn=ablecube2, nm=FLR__ablecube2_, bn=Agent Backup Job 6
+    local _flr_job=""
+    if [[ "$nm" =~ [Ff][Ll][Rr]_+([^_|]+) ]]; then
+      _flr_job="${BASH_REMATCH[1]}"
+    elif [[ "$nm" =~ [Ff][Ll][Rr].*_([^_|]+)_*$ ]]; then
+      _flr_job="${BASH_REMATCH[1]}"
+    fi
+    if [[ -n "$job" ]]; then
+      local _owns=false
+      if [[ -n "$bn" && ( "$bn" == "$job" || "$bn" == *"$job"* ) ]]; then
+        _owns=true
+      elif [[ -n "$_flr_job" && ( "$_flr_job" == "$job" || "$job" == *"$_flr_job"* ) ]]; then
+        _owns=true
+      elif [[ -n "$nm" && "$nm" == *"$job"* ]]; then
+        _owns=true
+      elif [[ -z "$bn" && -z "$_flr_job" ]]; then
+        # No job identity in session — only allow if this conf is the host-named job.
+        if [[ "$job" == "$(hostname -s)" || "$job" == ablecube* ]]; then
+          _owns=true
+        fi
+      fi
+      # Explicit other-job identity → skip (prevents Agent Job 3 claiming ablecube2 FLR).
+      if [[ "$_owns" != "true" ]]; then
+        if [[ -n "$bn" || -n "$_flr_job" || "$nm" == FLR_* || "$nm" == *FLR* ]]; then
+          mold_backup_notify_log info "restore-watch: session ${sid} backup='${bn}' flr_job='${_flr_job:-}' name='${nm}' ≠ job='${job}' (skip; owned by other job)"
+          continue
+        fi
+      fi
+    fi
     processed=$((processed+1))
     if mold_backup_restore_session_seen "$sid"; then
       mold_backup_notify_log info "restore-watch: session ${sid} already processed (skip duplicate)"
@@ -3775,6 +5306,7 @@ mold_backup_watch_veeam_restores() {
     # Match: prefer the IP parsed from the session Options; fall back to scanning
     # VM_TARGETS IPs (dots or dashes form) against the session name / backup name.
     matched_ip=""
+    local host_hit=false
     if [[ -n "$sip" ]] && mold_backup_vm_name_for_ip "$sip" >/dev/null 2>&1; then
       matched_ip="$sip"
     else
@@ -3802,10 +5334,11 @@ mold_backup_watch_veeam_restores() {
       [[ -z "$kvm_ip" && -n "${KVM_HOST:-}" && "$KVM_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && kvm_ip="${KVM_HOST}"
       [[ -z "$kvm_ip" ]] && kvm_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
       local kvm_hn="${KVM_HOSTNAME:-$(hostname -s)}"
-      local host_hit=false
+      # Require hypervisor identity in session — do NOT match on job name alone
+      # (that falsely treated backup sessions as FLR and auto-stopped VMs).
       if [[ -n "$kvm_ip" && ( "$sip" == "$kvm_ip" || "$nm" == *"$kvm_ip"* || "$bn" == *"$kvm_ip"* ) ]]; then
         host_hit=true
-      elif [[ -n "$kvm_hn" && ( "$nm" == *"$kvm_hn"* || "$bn" == *"$kvm_hn"* || "$bn" == *"$job"* ) ]]; then
+      elif [[ -n "$kvm_hn" && ( "$nm" == *"$kvm_hn"* || "$bn" == *"$kvm_hn"* || "$nm" == FLR_* ) ]]; then
         host_hit=true
       fi
       if [[ "$host_hit" == "true" ]]; then
@@ -3842,8 +5375,8 @@ mold_backup_watch_veeam_restores() {
         fi
       fi
     fi
-    # Agent FLR to hypervisor: audit/session metadata often lacks libvirt VM name — use explicit target.
-    if [[ -z "$matched_ip" && "${BACKUP_MODE:-host}" == "host" && -n "${VEEAM_RESTORE_VM:-}" ]]; then
+    # Agent FLR to hypervisor: only when session already identified as host FLR.
+    if [[ -z "$matched_ip" && "$host_hit" == "true" && "${BACKUP_MODE:-host}" == "host" && -n "${VEEAM_RESTORE_VM:-}" ]]; then
       local _pair _vmn _ip
       IFS=',' read -ra _pairs <<<"${VM_TARGETS}"
       for _pair in "${_pairs[@]}"; do
@@ -3871,9 +5404,9 @@ mold_backup_watch_veeam_restores() {
     if ! mold_backup_domain_exists "$vm" 2>/dev/null; then
       mold_backup_notify_log info "restore-watch: vm=${vm} Mold Stopped (no libvirt) — triggering Mold restoreBackup via API"
     fi
-    [[ -n "$rp_id" ]] && mold_backup_notify_log info "restore-watch: session ${sid} vm=${vm} veeam_rp=${rp_id}"
+    [[ -n "$rp_id" ]] && mold_backup_notify_log info "restore-watch: session ${sid} vm=${vm} veeam_rp=${rp_id} rp_epoch=${rp_epoch:-n/a}"
     mold_backup_handle_veeam_restore_session "$job" "$vm" "$sid" \
-      "name=${nm};end=${et};result=${result};backup=${bn};ip=${matched_ip};rp=${rp_id}" "$trigger_mold" "$rp_id" \
+      "name=${nm};end=${et};result=${result};backup=${bn};ip=${matched_ip};rp=${rp_id};rp_epoch=${rp_epoch:-}" "$trigger_mold" "$rp_id" \
       && {
         handled=$((handled+1))
         [[ "$sid" == local-flr-* ]] && mold_backup_local_flr_mark_epoch "$vm" "$et"
@@ -3917,17 +5450,56 @@ mold_backup_backup_session_mark_seen() {
 
 # Run PowerShell on Veeam B&R via SSH (UTF-16LE base64 -EncodedCommand).
 # Tries pwsh full path, then pwsh.exe, then powershell.exe (Windows OpenSSH PATH quirks).
+# Auth: VEEAM_SSH_KEY, else sshpass+VEEAM_SSH_PASSWORD, else SSH_ASKPASS+password, else BatchMode.
+mold_backup_veeam_ssh_cmd() {
+  # Usage: mold_backup_veeam_ssh_cmd <remote-command...>
+  # Runs ssh with the same auth policy as mold_backup_veeam_ssh_encoded.
+  # Always hard-capped: ConnectTimeout alone does not stop hung password prompts.
+  local ssh_key_opt=() askpass_file="" ssh_rc=0
+  local ssh_timeout="${VEEAM_SSH_CMD_TIMEOUT:-60}"
+  [[ -n "${VEEAM_SSH_HOST:-}" ]] || return 1
+  [[ -n "${VEEAM_SSH_KEY:-}" && -f "${VEEAM_SSH_KEY}" ]] && ssh_key_opt=(-i "${VEEAM_SSH_KEY}")
+  local -a ssh_host_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null
+    -o ConnectTimeout=15 -o ServerAliveInterval=5 -o ServerAliveCountMax=3)
+  if [[ "${VEEAM_SSH_STRICT_HOSTKEY:-false}" == "true" ]]; then
+    ssh_host_opts=(-o StrictHostKeyChecking=accept-new -o ConnectTimeout=15
+      -o ServerAliveInterval=5 -o ServerAliveCountMax=3)
+  fi
+  local remote="${VEEAM_SSH_USER:-administrator}@${VEEAM_SSH_HOST}"
+  local -a prefix=()
+  if command -v timeout >/dev/null 2>&1; then
+    prefix=(timeout "$ssh_timeout")
+  fi
+  if [[ ${#ssh_key_opt[@]} -gt 0 ]]; then
+    "${prefix[@]}" ssh -n "${ssh_key_opt[@]}" -o BatchMode=yes "${ssh_host_opts[@]}" "$remote" "$@"
+    return $?
+  fi
+  if [[ -n "${VEEAM_SSH_PASSWORD:-}" ]] && command -v sshpass >/dev/null 2>&1; then
+    SSHPASS="${VEEAM_SSH_PASSWORD}" "${prefix[@]}" sshpass -e ssh -n "${ssh_host_opts[@]}" \
+      -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+      -o NumberOfPasswordPrompts=1 "$remote" "$@"
+    return $?
+  fi
+  if [[ -n "${VEEAM_SSH_PASSWORD:-}" ]]; then
+    askpass_file="$(mktemp /tmp/veeam-askpass.XXXXXX)"
+    printf '%s\n' '#!/bin/bash' "printf '%s\\n' $(printf '%q' "${VEEAM_SSH_PASSWORD}")" >"$askpass_file"
+    chmod 700 "$askpass_file"
+    SSH_ASKPASS="$askpass_file" SSH_ASKPASS_REQUIRE=force DISPLAY="${DISPLAY:-:0}" \
+      setsid -w "${prefix[@]}" ssh -n "${ssh_host_opts[@]}" \
+      -o PreferredAuthentications=password -o PubkeyAuthentication=no \
+      -o NumberOfPasswordPrompts=1 "$remote" "$@"
+    ssh_rc=$?
+    rm -f "$askpass_file"
+    return $ssh_rc
+  fi
+  "${prefix[@]}" ssh -n -o BatchMode=yes "${ssh_host_opts[@]}" "$remote" "$@"
+}
+
 mold_backup_veeam_ssh_encoded() {
   local ps_enc="$1"
   local attempt out rc last_err="" ps_launcher
   [[ -n "${VEEAM_SSH_HOST:-}" ]] || return 1
   [[ -n "$ps_enc" ]] || return 1
-  local ssh_key_opt=()
-  [[ -n "${VEEAM_SSH_KEY:-}" && -f "${VEEAM_SSH_KEY}" ]] && ssh_key_opt=(-i "${VEEAM_SSH_KEY}")
-  local -a ssh_host_opts=(-o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null)
-  if [[ "${VEEAM_SSH_STRICT_HOSTKEY:-false}" == "true" ]]; then
-    ssh_host_opts=(-o StrictHostKeyChecking=accept-new)
-  fi
   local -a ps_launchers=(
     '"C:\Program Files\PowerShell\7\pwsh.exe" -NoProfile -EncodedCommand'
     'pwsh.exe -NoProfile -EncodedCommand'
@@ -3936,9 +5508,7 @@ mold_backup_veeam_ssh_encoded() {
   )
   for attempt in 1 2 3; do
     for ps_launcher in "${ps_launchers[@]}"; do
-      out="$(ssh -n "${ssh_key_opt[@]}" -o BatchMode=yes -o ConnectTimeout=30 "${ssh_host_opts[@]}" \
-              "${VEEAM_SSH_USER:-administrator}@${VEEAM_SSH_HOST}" \
-              "${ps_launcher} ${ps_enc}" 2>&1)" && rc=0 || rc=$?
+      out="$(mold_backup_veeam_ssh_cmd "${ps_launcher} ${ps_enc}" 2>&1)" && rc=0 || rc=$?
       if [[ $rc -eq 0 ]]; then
         printf '%s' "$out"
         return 0
@@ -4296,7 +5866,7 @@ mold_backup_guest_post_notify_vm() {
     # Seed NAS from live KVM disks (same as host file-level first backup), tag Veeam RP id.
     mold_backup_notify_log info "guest post: first backup — host export + importSeed (SelectedFiles; skip MS→Veeam disk export)"
     if ! host_path=$(mold_backup_run_host_export "$vm_name" "1" 2>/dev/null); then
-      mold_backup_notify_log err "guest post: host export failed for ${vm_name} (check ${CVT_BACKUP_SCRIPT} and /var/log/mold/veeam-hook.log)"
+      mold_backup_notify_log err "guest post: host export failed for ${vm_name} (check ${HOST_EXPORT_SCRIPT:-ablestack_veeam_host_export.sh} and /var/log/mold/veeam-hook.log)"
       return 1
     fi
     if [[ ! -d "$host_path" ]]; then
@@ -4331,13 +5901,15 @@ mold_backup_guest_post_notify_vm() {
 
 mold_backup_pre_notify() {
   local client="${1:-$(hostname -s)}"
-  local job="${2:-${VEEAM_JOB_NAME:-}}"
+  local job="$(mold_backup_normalize_job_name "${2:-${VEEAM_JOB_NAME:-}}")"
   local schedule="${3:-${VEEAM_SCHEDULE_NAME:-default}}"
   local single_vm="${4:-}"
   local saved_include=""
   [[ -n "$job" ]] || mold_backup_die "VEEAM_JOB_NAME is required for pre-notify"
   VEEAM_JOB_NAME="$job"
   mold_backup_load_config || exit 1
+  VEEAM_JOB_NAME="$(mold_backup_normalize_job_name "${VEEAM_JOB_NAME:-$job}")"
+  job="$VEEAM_JOB_NAME"
 
   if [[ -n "$single_vm" ]]; then
     saved_include="${VM_INCLUDE:-*}"
@@ -4346,7 +5918,10 @@ mold_backup_pre_notify() {
   fi
 
   mold_backup_notify_log info "=== pre-notify (설계4: Pre-script + Mold API 백업요청) client=${client} job=${job} schedule=${schedule} ==="
-  mkdir -p "$(mold_backup_state_dir)" "${VEEAM_HOST_BACKUP_PATH}"
+  export MOLD_BACKUP_HOOK="pre-notify"
+  export VEEAM_SCHEDULE_NAME="$schedule"
+  SCHEDULE="$schedule"
+  mkdir -p "$(mold_backup_state_dir)" "${VEEAM_HOST_BACKUP_PATH}" "${VEEAM_AGENT_PAYLOAD_PATH}"
 
   local offering_id="" vm_name
   local success=0 fail=0 skip=0
@@ -4442,20 +6017,51 @@ mold_backup_pre_notify() {
 
 mold_backup_post_notify() {
   local client="${1:-$(hostname -s)}"
-  local job="${2:-${VEEAM_JOB_NAME:-}}"
+  local job="$(mold_backup_normalize_job_name "${2:-${VEEAM_JOB_NAME:-}}")"
   local schedule="${3:-${VEEAM_SCHEDULE_NAME:-default}}"
   [[ -n "$job" ]] || mold_backup_die "VEEAM_JOB_NAME is required for post-notify"
   VEEAM_JOB_NAME="$job"
   mold_backup_load_config || exit 1
+  VEEAM_JOB_NAME="$(mold_backup_normalize_job_name "${VEEAM_JOB_NAME:-$job}")"
+  job="$VEEAM_JOB_NAME"
 
+  export MOLD_BACKUP_HOOK="post-notify"
   mold_backup_notify_log info "=== post-notify (설계4: Post-script + 백업ID 저장) client=${client} job=${job} ==="
   local state_file line vm_name backup_id status guest_handled=0 guest_fail=0 vm_id reason rc=0
   local host_rp_id=""
   state_file="$(mold_backup_latest_state_file "$job" || true)"
 
+  # Host/filelevel: stamp RP onto Mold backup so BackupSync keeps rows while Veeam RP exists.
+  # Agent file-level RPs are usually named by hypervisor IP/hostname (not guest i-*-VM).
   if [[ "${BACKUP_MODE:-host}" == "host" || "${BACKUP_MODE:-host}" == "policy" ]]; then
-    host_rp_id="$(mold_backup_query_veeam_latest_restore_point "$job" "" "" 6 2>/dev/null || true)"
-    [[ -n "$host_rp_id" ]] && mold_backup_notify_log info "post-notify: host job Veeam restore point=${host_rp_id}"
+    local rp_probe
+    if [[ "${SKIP_VEEAM_RP_QUERY:-false}" == "true" ]]; then
+      mold_backup_notify_log info "post-notify: skip Veeam restore-point query (SKIP_VEEAM_RP_QUERY=true)"
+    else
+      for rp_probe in \
+          "$job" \
+          "${KVM_HOSTNAME:-}" \
+          "$(hostname -s 2>/dev/null || true)" \
+          "${KVM_IP:-}" \
+          "$(hostname -I 2>/dev/null | awk '{print $1}')"; do
+        [[ -n "$rp_probe" ]] || continue
+        host_rp_id="$(mold_backup_query_veeam_latest_restore_point_rest "$rp_probe" 2>/dev/null || true)"
+        [[ -n "$host_rp_id" ]] && break
+      done
+      if [[ -z "$host_rp_id" ]]; then
+        # REST objectRestorePoints often misses Agent jobs — PowerShell Get-VBRRestorePoint works.
+        for rp_probe in "$job" "${KVM_HOSTNAME:-}" "$(hostname -s 2>/dev/null || true)" "${KVM_IP:-}"; do
+          [[ -n "$rp_probe" ]] || continue
+          host_rp_id="$(mold_backup_query_veeam_latest_restore_point "$rp_probe" "" "" 1 2>/dev/null || true)"
+          [[ -n "$host_rp_id" ]] && break
+        done
+      fi
+      if [[ -n "$host_rp_id" ]]; then
+        mold_backup_notify_log info "post-notify: host job Veeam restore point=${host_rp_id}"
+      else
+        mold_backup_notify_log warn "post-notify: no Veeam restore point found for job=${job} (catalog sync may delete Mold rows after grace)"
+      fi
+    fi
   fi
 
   if [[ -f "$state_file" ]]; then
@@ -4470,7 +6076,11 @@ mold_backup_post_notify() {
       if [[ "$status" == "success" && "$reason" == "mold-triggered" ]]; then
         mold_backup_notify_log info "guest post: skip for ${vm_name} (Mold backup already done; no duplicate import)"
         guest_handled=1
-        [[ -n "$vm_name" ]] && mold_backup_trigger_clear "veeam-active" "$vm_name"
+        if [[ -n "$vm_name" ]]; then
+          mold_backup_trigger_clear "veeam-active" "$vm_name"
+          # Keep restore-watch from treating fresh staging as FLR after veeam-active clears.
+          mold_backup_trigger_mark "backup-cooldown" "$vm_name"
+        fi
         continue
       fi
       if [[ "$status" == "pending" && "${BACKUP_MODE}" =~ ^(guest|veeam-guest)$ ]]; then
@@ -4480,16 +6090,25 @@ mold_backup_post_notify() {
         else
           guest_fail=$((guest_fail + 1))
         fi
-        [[ -n "$vm_name" ]] && mold_backup_trigger_clear "veeam-active" "$vm_name"
+        if [[ -n "$vm_name" ]]; then
+          mold_backup_trigger_clear "veeam-active" "$vm_name"
+          mold_backup_trigger_mark "backup-cooldown" "$vm_name"
+        fi
         continue
       fi
       # Veeam job for this VM finished — clear the loop-guard marker.
-      [[ -n "$vm_name" ]] && mold_backup_trigger_clear "veeam-active" "$vm_name"
+      if [[ -n "$vm_name" ]]; then
+        mold_backup_trigger_clear "veeam-active" "$vm_name"
+        mold_backup_trigger_mark "backup-cooldown" "$vm_name"
+      fi
       if [[ "$status" == "pending" ]]; then
         mold_backup_notify_log warn "post-notify: pending vm=${vm_name} but BACKUP_MODE=${BACKUP_MODE:-host} (expected guest)"
       fi
       [[ "$status" == "success" && -n "$backup_id" ]] || continue
       mold_backup_registry_save_backup "$job" "$vm_name" "$backup_id" "veeam-backed-up rp=${host_rp_id:-n/a}" "$host_rp_id"
+      if [[ -n "$host_rp_id" || -n "$job" ]]; then
+        mold_backup_api_update_veeam_backup "$backup_id" "$host_rp_id" "$job"
+      fi
     done < "$state_file"
   else
     mold_backup_notify_log warn "No state file for job ${job}"
@@ -4503,6 +6122,7 @@ mold_backup_post_notify() {
           guest_fail=$((guest_fail + 1))
         fi
         mold_backup_trigger_clear "veeam-active" "$vm_name"
+        mold_backup_trigger_mark "backup-cooldown" "$vm_name"
       fi
     fi
   fi
@@ -4517,6 +6137,7 @@ mold_backup_post_notify() {
         guest_fail=$((guest_fail + 1))
       fi
       mold_backup_trigger_clear "veeam-active" "$vm_name"
+      mold_backup_trigger_mark "backup-cooldown" "$vm_name"
     fi
   fi
 
@@ -4531,8 +6152,12 @@ mold_backup_post_notify() {
     mold_backup_notify_log warn "post-notify: no guest VM processed for job=${job} (re-run pre-notify before post, or check state dir)"
   fi
 
-  mold_backup_cleanup_host_path
-  mold_backup_cleanup_staging
+  if [[ "${CLEANUP_STAGING_AFTER_BACKUP}" == "true" ]]; then
+    mold_backup_cleanup_host_path
+    mold_backup_cleanup_staging
+  else
+    mold_backup_notify_log info "Skip staging cleanup (CLEANUP_STAGING_AFTER_BACKUP=${CLEANUP_STAGING_AFTER_BACKUP})"
+  fi
   [[ -f "$state_file" ]] && rm -f "$state_file"
   mold_backup_notify_log info "=== post-notify done (guest_fail=${guest_fail}) ==="
   return "$rc"
@@ -4548,7 +6173,11 @@ mold_backup_api_verify_backup_for_vm() {
   local backup_id="$1" vm_id="$2"
   local owner
   owner="$(mold_backup_api_backup_vm_id "$backup_id" 2>/dev/null || true)"
-  [[ -n "$owner" ]] || return 0
+  # Fail closed: removed/unknown backups previously returned 0 and called restore with a stale id.
+  [[ -n "$owner" ]] || {
+    mold_backup_notify_log err "Backup ${backup_id} not found or removed; refusing restore for VM ${vm_id}"
+    return 1
+  }
   [[ "$owner" == "$vm_id" ]] || {
     mold_backup_notify_log err "Backup ${backup_id} belongs to VM ${owner}, not ${vm_id}"
     return 1
@@ -4559,6 +6188,7 @@ mold_backup_api_verify_backup_for_vm() {
 mold_backup_restore_notify() {
   local client="${1:-$(hostname -s)}"
   local job="${2:-${VEEAM_JOB_NAME:-}}"
+  export MOLD_BACKUP_HOOK="restore-notify"
   mold_backup_load_config || exit 1
   mold_backup_apply_datadisk_profile
   local restore_source="${RESTORE_SOURCE:-auto}"
@@ -4580,13 +6210,543 @@ mold_backup_restore_notify() {
 
   if mold_backup_api_is_full_backup "$BACKUP_ID"; then
     mold_backup_notify_log info "Restore type=FULL → Mold restoreBackup (datadisk ${BACKUP_REPO_ADDRESS:-/data/backup})"
-    mold_backup_api_restore
+    mold_backup_api_restore || return 1
   else
     mold_backup_notify_log info "Restore type=INCREMENTAL → datadisk only (qcow2/raw/rbdiff on ${BACKUP_REPO_ADDRESS:-/data/backup}, no NAS)"
     if [[ "$restore_source" != "mold-only" ]]; then
       mold_backup_veeam_restore_chain_to_host "$BACKUP_ID"
     fi
-    mold_backup_api_restore
+    mold_backup_api_restore || return 1
   fi
+
+  # Mold → Veeam Guest Files (FLR): when Mold restored (not reflecting an existing FLR).
+  if [[ -n "${VM_NAME:-}" ]] \
+    && [[ "${VEEAM_TRIGGER_FLR_ON_MOLD_RESTORE:-true}" == "true" ]] \
+    && ! mold_backup_trigger_active "veeam-restore-active" "$VM_NAME"; then
+    mold_backup_trigger_veeam_flr "$VM_NAME" "${VEEAM_RESTORE_POINT_ID:-}" || \
+      mold_backup_notify_log warn "Mold→Veeam FLR trigger failed for ${VM_NAME} (Mold restore already done)"
+  fi
+
   mold_backup_notify_log info "=== restore-notify done ==="
+}
+
+# Start Veeam Guest Files (FLR) for the restore point mapped to this VM/backup.
+# Used after Mold-initiated restore so Veeam UI FLR runs automatically (bidirectional).
+mold_backup_trigger_veeam_flr() {
+  local vm="$1" rp_id="${2:-}" dest job_esc rp_esc dest_esc ps_script
+  [[ -n "$vm" ]] || return 1
+  [[ -n "${VEEAM_SSH_HOST:-}" ]] || {
+    mold_backup_notify_log warn "Mold→Veeam FLR: VEEAM_SSH_HOST not set"
+    return 1
+  }
+  if [[ -z "$rp_id" ]]; then
+    rp_id="$(tr -d '[:space:]' <"$(mold_backup_registry_dir)/${vm}.latest-rp-id" 2>/dev/null || true)"
+  fi
+  if [[ -z "$rp_id" && -n "${BACKUP_ID:-}" ]]; then
+    rp_id="$(grep -F "${BACKUP_ID}" "$(mold_backup_registry_rp_map_file)" 2>/dev/null | head -1 | cut -d= -f1 || true)"
+  fi
+  [[ -n "$rp_id" ]] || {
+    mold_backup_notify_log warn "Mold→Veeam FLR: no restore point id for ${vm} (registry ${vm}.latest-rp-id)"
+    return 1
+  }
+  dest="${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}/${vm}"
+  job_esc="${VEEAM_JOB_NAME:-}"
+  job_esc="${job_esc//\'/\'\'}"
+  rp_esc="${rp_id//\'/\'\'}"
+  dest_esc="${dest//\'/\'\'}"
+  mold_backup_notify_log info "Mold→Veeam FLR: vm=${vm} rp=${rp_id} dest=${dest}"
+  mold_backup_trigger_mark "mold-flr-pushed" "$vm"
+  mold_backup_local_flr_mark_epoch "$vm" "$(date +%s)"
+  ps_script="$(cat <<PS
+\$ErrorActionPreference = 'Stop'
+Import-Module Veeam.Backup.PowerShell -WarningAction SilentlyContinue
+\$rp = Get-VBRRestorePoint | Where-Object { \$_.Id -eq '${rp_esc}' -or \$_.Id.Guid -eq '${rp_esc}' } | Select-Object -First 1
+if (-not \$rp) { Write-Error "restore point not found: ${rp_esc}"; exit 2 }
+\$session = \$null
+try {
+  \$session = Start-VBRFLRSession -RestorePoint \$rp
+  \$items = @(Get-VBRFLRItem -Session \$session -ErrorAction SilentlyContinue)
+  \$copied = 0
+  foreach (\$item in \$items) {
+    if (\$item.Type -eq 'HardDisk' -or \$item.Type -eq 'Directory' -or \$item.Type -eq 'File') {
+      try {
+        Copy-VBRFLRItem -FLRSession \$session -Item \$item -Destination '${dest_esc}' -ErrorAction SilentlyContinue | Out-Null
+        \$copied++
+      } catch {}
+    }
+  }
+  Write-Host ("flr-ok rp=${rp_esc} items=" + \$items.Count + " copied=" + \$copied)
+} finally {
+  if (\$session) { try { Stop-VBRFLRSession -Session \$session } catch {} }
+}
+PS
+)"
+  if mold_backup_veeam_ssh_ps "$ps_script"; then
+    mold_backup_emit_restore_event "veeam.flr.triggered" "$vm" "rp=${rp_id};dest=${dest}"
+    mold_backup_notify_log info "Mold→Veeam FLR: started OK for ${vm}"
+    return 0
+  fi
+  mold_backup_notify_log warn "Mold→Veeam FLR: SSH/PowerShell failed for ${vm}"
+  return 1
+}
+
+# ---------------------------------------------------------------------------
+# Veeam Remove-from-Disk → Mold catalog sync (NetBackup parity)
+# Detect missing RPs for VM_INCLUDE, then call syncAblestackVeeamBackups
+# (MS deletes Mold rows + artifacts). Mold UI/API deleteBackup is disabled.
+# ---------------------------------------------------------------------------
+
+# List live restore points for a computer/host Agent job.
+# Prints: rpId|unixEpoch  (one per line)
+mold_backup_list_veeam_job_restore_points() {
+  local job="${1:-${VEEAM_JOB_NAME:-}}"
+  local job_esc ps_script out
+  [[ -n "${VEEAM_SSH_HOST:-}" && -n "$job" ]] || return 1
+  job_esc="${job//\'/\'\'}"
+  ps_script="$(cat <<PS
+\$ErrorActionPreference = 'SilentlyContinue'
+Import-Module Veeam.Backup.PowerShell -WarningAction SilentlyContinue
+try { Connect-VBRServer -Server localhost -ErrorAction Stop } catch {}
+\$JobName = '${job_esc}'
+\$backs = @()
+\$cj = Get-VBRComputerBackupJob -Name \$JobName -ErrorAction SilentlyContinue
+if (\$cj) {
+  \$backs += @(Get-VBRBackup -ErrorAction SilentlyContinue | Where-Object { \$_.JobId -eq \$cj.Id })
+}
+\$backs += @(Get-VBRBackup -ErrorAction SilentlyContinue | Where-Object {
+  \$_.JobName -eq \$JobName -or \$_.Name -eq \$JobName -or \$_.Name -like "*\$JobName*"
+})
+# Fallback: any restore point whose name/job mentions the host job (Agent host backups).
+if (-not \$backs -or \$backs.Count -eq 0) {
+  \$backs = @(Get-VBRBackup -ErrorAction SilentlyContinue | Where-Object {
+    ([string]\$_.Name + ' ' + [string]\$_.JobName) -match [regex]::Escape(\$JobName)
+  })
+}
+\$backs = @(\$backs | Select-Object -Unique)
+if (-not \$backs -or \$backs.Count -eq 0) {
+  # Last resort: emit RPs from global list filtered by job-ish name (may be slow).
+  foreach (\$rp in @(Get-VBRRestorePoint -ErrorAction SilentlyContinue)) {
+    \$nm = [string]\$rp.Name
+    \$jn = ''
+    try { \$jn = [string]\$rp.JobName } catch {}
+    if (\$nm -notmatch [regex]::Escape(\$JobName) -and \$jn -ne \$JobName) { continue }
+    \$id = \$rp.Id
+    if (\$id -is [guid]) { \$id = \$id.Guid }
+    \$id = ([string]\$id).Trim('{}').ToLower()
+    if (-not \$id) { continue }
+    \$ct = \$rp.CreationTimeUTC
+    if (\$null -eq \$ct) { \$ct = \$rp.CreationTime }
+    \$ep = 0
+    if (\$null -ne \$ct) {
+      if (\$ct.Kind -eq [DateTimeKind]::Unspecified) { \$ct = [DateTime]::SpecifyKind(\$ct, [DateTimeKind]::Utc) }
+      try { \$ep = [int64]([DateTimeOffset]\$ct).ToUnixTimeSeconds() } catch { \$ep = 0 }
+    }
+    Write-Output ("\$id|\$ep")
+  }
+  exit 0
+}
+\$seen = @{}
+foreach (\$b in \$backs) {
+  foreach (\$rp in @(\$b | Get-VBRRestorePoint -ErrorAction SilentlyContinue)) {
+    \$id = \$rp.Id
+    if (\$id -is [guid]) { \$id = \$id.Guid }
+    \$id = ([string]\$id).Trim('{}').ToLower()
+    if (-not \$id -or \$seen.ContainsKey(\$id)) { continue }
+    \$seen[\$id] = \$true
+    \$ct = \$rp.CreationTimeUTC
+    if (\$null -eq \$ct) { \$ct = \$rp.CreationTime }
+    \$ep = 0
+    if (\$null -ne \$ct) {
+      if (\$ct.Kind -eq [DateTimeKind]::Unspecified) {
+        \$ct = [DateTime]::SpecifyKind(\$ct, [DateTimeKind]::Utc)
+      }
+      try { \$ep = [int64]([DateTimeOffset]\$ct).ToUnixTimeSeconds() } catch { \$ep = 0 }
+    }
+    Write-Output ("\$id|\$ep")
+  }
+}
+PS
+)"
+  out="$(VEEAM_SSH_CMD_TIMEOUT="${VEEAM_CATALOG_SYNC_SSH_TIMEOUT:-45}" \
+    mold_backup_veeam_ssh_ps_capture "$ps_script" 2>/dev/null | tr -d '\r')" || out=""
+  local lines
+  lines="$(printf '%s\n' "$out" | grep -E '^[0-9a-fA-F-]{8,}\|[0-9]+$' || true)"
+  if [[ -z "$lines" ]]; then
+    lines="$(mold_backup_list_veeam_job_restore_points_rest "$job" 2>/dev/null || true)"
+  fi
+  printf '%s\n' "$lines"
+}
+
+# Prints HAS_BACKUP | NO_BACKUP (or nothing on probe failure).
+mold_backup_veeam_job_disk_backup_status() {
+  local job="${1:-${VEEAM_JOB_NAME:-}}"
+  local job_esc ps_script
+  [[ -n "${VEEAM_SSH_HOST:-}" && -n "$job" ]] || return 1
+  job_esc="${job//\'/\'\'}"
+  ps_script="$(cat <<PS
+\$ErrorActionPreference = 'SilentlyContinue'
+Import-Module Veeam.Backup.PowerShell -WarningAction SilentlyContinue
+try { Connect-VBRServer -Server localhost -ErrorAction Stop } catch {}
+\$JobName = '${job_esc}'
+\$backs = @()
+\$cj = Get-VBRComputerBackupJob -Name \$JobName -ErrorAction SilentlyContinue
+if (\$cj) {
+  \$backs += @(Get-VBRBackup -ErrorAction SilentlyContinue | Where-Object { \$_.JobId -eq \$cj.Id })
+}
+\$backs += @(Get-VBRBackup -ErrorAction SilentlyContinue | Where-Object {
+  \$_.JobName -eq \$JobName -or \$_.Name -eq \$JobName -or \$_.Name -like ("*" + \$JobName + "*")
+})
+\$backs = @(\$backs | Select-Object -Unique)
+if (\$backs -and \$backs.Count -gt 0) { Write-Output 'HAS_BACKUP' } else { Write-Output 'NO_BACKUP' }
+PS
+)"
+  VEEAM_SSH_CMD_TIMEOUT="${VEEAM_CATALOG_SYNC_SSH_TIMEOUT:-30}" \
+    mold_backup_veeam_ssh_ps_capture "$ps_script" 2>/dev/null | tr -d '\r' | grep -E '^(HAS_BACKUP|NO_BACKUP)$' | tail -1
+}
+
+# True when Veeam still has a Disk backup object for this job/host name.
+mold_backup_veeam_job_disk_backup_exists() {
+  [[ "$(mold_backup_veeam_job_disk_backup_status "$1")" == "HAS_BACKUP" ]]
+}
+
+# REST fallback: objectRestorePoints filtered by job/host name.
+# Exit 0 on successful API response (including zero RPs). Exit 1 on auth/HTTP/parse failure.
+mold_backup_list_veeam_job_restore_points_rest() {
+  local name="${1:-}"
+  local api ver user pass token enc http body
+  [[ -n "$name" ]] || return 1
+  api="$(mold_backup_veeam_api_base)" || return 1
+  ver="${VEEAM_API_VERSION:-1.2-rev0}"
+  user="${VEEAM_API_USER:-${VEEAM_USERNAME:-administrator}}"
+  pass="${VEEAM_API_PASSWORD:-${VEEAM_PASSWORD:-}}"
+  [[ -n "$pass" ]] || return 1
+  token="$(curl -sk --max-time 15 -X POST "${api}/api/oauth2/token" \
+    -H "x-api-version: ${ver}" \
+    -H "Content-Type: application/x-www-form-urlencoded" \
+    -d "grant_type=password&username=${user}&password=${pass}" 2>/dev/null \
+    | python3 -c "import sys,json
+try: print(json.load(sys.stdin).get('access_token',''))
+except Exception: print('')" 2>/dev/null)"
+  [[ -n "$token" ]] || return 1
+  enc="$(python3 -c "import urllib.parse,sys; print(urllib.parse.quote(sys.argv[1]))" "$name")"
+  body="$(mktemp)"
+  http="$(curl -sk --max-time 30 -o "$body" -w '%{http_code}' \
+    "${api}/api/v1/objectRestorePoints?nameFilter=${enc}&orderColumn=CreationTime&orderAsc=false" \
+    -H "x-api-version: ${ver}" -H "Authorization: Bearer ${token}" 2>/dev/null || echo 000)"
+  if [[ "$http" != "200" ]]; then
+    rm -f "$body"
+    return 1
+  fi
+  python3 -c "
+import sys, json
+from datetime import datetime, timezone
+want = '''${name}'''.lower()
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(2)
+items = d.get('data', d if isinstance(d, list) else [])
+for rp in items:
+    nm = str(rp.get('name') or '')
+    jn = str(rp.get('backupJobName') or rp.get('jobName') or rp.get('backupName') or '')
+    hay = (nm + ' ' + jn).lower()
+    if want and want not in hay and nm.lower() != want and jn.lower() != want:
+        continue
+    rid = str(rp.get('id') or rp.get('objectRestorePointId') or '').strip('{}').lower()
+    if not rid:
+        continue
+    ep = 0
+    for key in ('creationTimeUtc', 'creationTime', 'CreationTimeUTC', 'CreationTime'):
+        raw = rp.get(key)
+        if not raw:
+            continue
+        try:
+            s = str(raw).replace('Z', '+00:00')
+            dt = datetime.fromisoformat(s)
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            ep = int(dt.timestamp())
+            break
+        except Exception:
+            pass
+    print(f'{rid}|{ep}')
+" "$body"
+  local rc=$?
+  rm -f "$body"
+  [[ $rc -eq 0 ]] || return 1
+  return 0
+}
+
+# True if Veeam still has this restore point GUID.
+mold_backup_veeam_rp_exists() {
+  local rp_id="$1" job="${2:-${VEEAM_JOB_NAME:-}}"
+  local rp_esc job_esc ps_script out
+  [[ -n "${VEEAM_SSH_HOST:-}" && -n "$rp_id" ]] || return 1
+  rp_esc="${rp_id//\'/\'\'}"
+  job_esc="${job//\'/\'\'}"
+  ps_script="$(cat <<PS
+\$ErrorActionPreference = 'SilentlyContinue'
+Import-Module Veeam.Backup.PowerShell -WarningAction SilentlyContinue
+try { Connect-VBRServer -Server localhost -ErrorAction Stop } catch {}
+\$want = '${rp_esc}'.Trim('{}').ToLower()
+\$JobHint = '${job_esc}'
+function Rp-IdMatch(\$rp) {
+  if (\$null -eq \$rp) { return \$false }
+  \$id = \$rp.Id
+  if (\$id -is [guid]) { \$id = \$id.Guid }
+  return ([string]\$id).Trim('{}').ToLower() -eq \$want
+}
+\$found = \$false
+\$backs = @()
+if (\$JobHint) {
+  \$cj = Get-VBRComputerBackupJob -Name \$JobHint -ErrorAction SilentlyContinue
+  if (\$cj) { \$backs += @(Get-VBRBackup | Where-Object { \$_.JobId -eq \$cj.Id }) }
+  \$backs += @(Get-VBRBackup | Where-Object { \$_.JobName -eq \$JobHint -or \$_.Name -like "*\$JobHint*" })
+}
+foreach (\$b in \$backs) {
+  foreach (\$cand in @(\$b | Get-VBRRestorePoint -ErrorAction SilentlyContinue)) {
+    if (Rp-IdMatch \$cand) { \$found = \$true; break }
+  }
+  if (\$found) { break }
+}
+if (-not \$found) {
+  \$rp = Get-VBRRestorePoint -ErrorAction SilentlyContinue | Where-Object { Rp-IdMatch \$_ } | Select-Object -First 1
+  if (\$rp) { \$found = \$true }
+}
+if (\$found) { Write-Output 'EXISTS' } else { Write-Output 'MISSING' }
+PS
+)"
+  out="$(VEEAM_SSH_CMD_TIMEOUT="${VEEAM_CATALOG_SYNC_SSH_TIMEOUT:-25}" \
+    mold_backup_veeam_ssh_ps_capture "$ps_script" 2>/dev/null | tr -d '\r' | grep -E '^(EXISTS|MISSING)$' | tail -1)"
+  [[ "$out" == "EXISTS" ]]
+}
+
+# Trigger MS catalog sync for one VM (deleteMoldBackupsMissingFromVeeamCatalog).
+mold_backup_api_sync_veeam_backups() {
+  local vm="$1" vm_id json
+  [[ -n "$vm" ]] || return 1
+  vm_id="$(mold_backup_api_get_vm_id "$vm" 2>/dev/null || true)"
+  [[ -n "$vm_id" ]] || {
+    mold_backup_notify_log warn "catalog-sync: cannot resolve Mold VM id for ${vm}"
+    return 1
+  }
+  mold_backup_notify_log info "Mold syncAblestackVeeamBackups vm=${vm} id=${vm_id}"
+  json="$(mold_backup_cmk_run syncAblestackVeeamBackups "virtualmachineid=${vm_id}" 2>/dev/null || true)"
+  if printf '%s' "$json" | grep -qiE 'success|true|"jobid"'; then
+    return 0
+  fi
+  if [[ -n "$json" ]] && ! printf '%s' "$json" | grep -qiE 'error|exception|Failed to sync'; then
+    return 0
+  fi
+  mold_backup_notify_log warn "syncAblestackVeeamBackups failed vm=${vm}: ${json:0:240}"
+  return 1
+}
+
+mold_backup_registry_cleanup_for_backup() {
+  local vm="$1" backup_id="$2"
+  local reg_dir f
+  [[ -n "$vm" && -n "$backup_id" ]] || return 0
+  reg_dir="$(mold_backup_registry_dir)"
+  [[ -d "$reg_dir" ]] || return 0
+  shopt -s nullglob
+  for f in "${reg_dir}/${vm}".*.backup-id "${reg_dir}/${vm}".rp-*.backup-id "${reg_dir}/${vm}".ckpt-*.backup-id; do
+    [[ -f "$f" ]] || continue
+    if [[ "$(tr -d '[:space:]' <"$f" 2>/dev/null)" == "$backup_id" ]]; then
+      rm -f "$f" 2>/dev/null || true
+    fi
+  done
+  shopt -u nullglob
+}
+
+# Detect Veeam Remove-from-Disk for VM_INCLUDE, then trigger MS syncAblestackVeeamBackups
+# (NetBackup-style catalog delete). Never calls deleteBackup from the host.
+mold_backup_catalog_delete_sync() {
+  local job="${1:-${VEEAM_JOB_NAME:-}}"
+  local enable="${VEEAM_CATALOG_DELETE_SYNC:-true}"
+  local state_dir state_f live_file prev_file live_ids deleted_id vm bid epoch
+  local -a vms=()
+  local -A sync_vms=()
+  [[ "$enable" == "true" ]] || {
+    mold_backup_notify_log info "catalog-sync: disabled (VEEAM_CATALOG_DELETE_SYNC=false)"
+    return 0
+  }
+  [[ -n "$job" ]] || return 0
+  mold_backup_load_config 2>/dev/null || true
+  mold_backup_resolve_api_secret 2>/dev/null || true
+
+  if [[ -n "${VEEAM_RESTORE_VM:-}" && "${VEEAM_RESTORE_VM}" != "*" ]]; then
+    IFS=',' read -ra vms <<<"${VEEAM_RESTORE_VM// /}"
+  elif [[ -n "${VM_INCLUDE:-}" && "${VM_INCLUDE}" != "*" ]]; then
+    IFS=',' read -ra vms <<<"${VM_INCLUDE// /}"
+  else
+    mold_backup_notify_log warn "catalog-sync: VM_INCLUDE/VEEAM_RESTORE_VM empty — skip (refuse host-wide sync trigger)"
+    return 0
+  fi
+
+  state_dir="$(mold_backup_state_dir)/veeam-rp-catalog"
+  mkdir -p "$state_dir" 2>/dev/null || true
+  state_f="${state_dir}/$(mold_backup_safe_job_name "$job").rps"
+  live_file="${state_f}.live"
+  prev_file="${state_f}.prev"
+
+  mold_backup_notify_log info "catalog-sync: job=${job} vms=${vms[*]} querying Veeam restore points"
+  local list_ok=0 disk_gone=0 disk_probe
+  : >"$live_file"
+  # Fast trusted path: Disk backup object gone ⇒ full Remove-from-Disk.
+  disk_probe="$(mold_backup_veeam_job_disk_backup_status "$job" 2>/dev/null || true)"
+  if [[ "$disk_probe" == "NO_BACKUP" ]]; then
+    disk_gone=1
+    list_ok=1
+    : >"$live_file"
+    mold_backup_notify_log info "catalog-sync: Veeam Disk backup object gone for job=${job}"
+    # Arm flag only — do not Start-VBR here. UI Start/Pull must remain one-shot;
+    # empty Disk → operator runs Active Full once (mold-backup.sh active-full) or
+    # enables VEEAM_AUTO_ACTIVE_FULL_ON_EMPTY=true intentionally.
+    mold_backup_veeam_mark_need_active_full "$job"
+    if [[ "${VEEAM_AUTO_ACTIVE_FULL_ON_EMPTY:-false}" == "true" ]]; then
+      mold_backup_veeam_ensure_active_full_if_needed "$job" || true
+    else
+      mold_backup_notify_log info "catalog-sync: need-active-full armed (auto-start disabled)"
+    fi
+  elif [[ "$disk_probe" == "HAS_BACKUP" ]]; then
+    mold_backup_veeam_clear_need_active_full "$job"
+    mold_backup_veeam_clear_active_full_attempted "$job"
+    if mold_backup_list_veeam_job_restore_points "$job" >"${live_file}.tmp" 2>/dev/null \
+        && grep -qE '^[0-9a-fA-F-]{8,}\|[0-9]+$' "${live_file}.tmp" 2>/dev/null; then
+      mv -f "${live_file}.tmp" "$live_file" 2>/dev/null || cp -f "${live_file}.tmp" "$live_file"
+      list_ok=1
+    elif mold_backup_list_veeam_job_restore_points_rest "$job" >"${live_file}.tmp" 2>/dev/null \
+        && grep -qE '^[0-9a-fA-F-]{8,}\|[0-9]+$' "${live_file}.tmp" 2>/dev/null; then
+      mv -f "${live_file}.tmp" "$live_file" 2>/dev/null || cp -f "${live_file}.tmp" "$live_file"
+      list_ok=1
+    else
+      mold_backup_notify_log warn "catalog-sync: Disk backup exists but RP list empty/untrusted — skip list-diff"
+      list_ok=0
+    fi
+    rm -f "${live_file}.tmp" 2>/dev/null || true
+    if mold_backup_veeam_arm_active_full_from_agent_log "$job"; then
+      if [[ "${VEEAM_AUTO_ACTIVE_FULL_ON_EMPTY:-false}" == "true" ]]; then
+        mold_backup_veeam_ensure_active_full_if_needed "$job" || true
+      else
+        mold_backup_notify_log info "catalog-sync: Agent chain broken flag armed (auto-start disabled)"
+      fi
+    fi
+  else
+    mold_backup_notify_log warn "catalog-sync: Disk backup probe failed — skip list-diff this run"
+    list_ok=0
+    if mold_backup_veeam_arm_active_full_from_agent_log "$job"; then
+      if [[ "${VEEAM_AUTO_ACTIVE_FULL_ON_EMPTY:-false}" == "true" ]]; then
+        mold_backup_veeam_ensure_active_full_if_needed "$job" || true
+      else
+        mold_backup_notify_log info "catalog-sync: Agent log armed need-active-full (auto-start disabled)"
+      fi
+    fi
+  fi
+  live_ids="$(cut -d'|' -f1 "$live_file" 2>/dev/null | tr '[:upper:]' '[:lower:]' | sort -u)"
+  local live_n prev_n
+  live_n="$(printf '%s\n' "$live_ids" | grep -c . || true)"
+  live_n="${live_n:-0}"
+  prev_n="$(cut -d'|' -f1 "$state_f" 2>/dev/null | grep -c . || true)"
+  prev_n="${prev_n:-0}"
+
+  # Always probe registry-known RPs for VM_INCLUDE (works even when list APIs return empty).
+  local map_file norm_rp
+  map_file="$(mold_backup_registry_rp_map_file)"
+  for vm in "${vms[@]}"; do
+    vm="$(echo "$vm" | xargs)"
+    [[ -n "$vm" && "$vm" != "*" ]] || continue
+    shopt -s nullglob
+    for f in "$(mold_backup_registry_dir)/${vm}".rp-*.backup-id; do
+      [[ -f "$f" ]] || continue
+      norm_rp="$(basename "$f")"
+      norm_rp="${norm_rp#${vm}.rp-}"
+      norm_rp="${norm_rp%.backup-id}"
+      bid="$(tr -d '[:space:]' <"$f" 2>/dev/null || true)"
+      [[ -n "$norm_rp" && -n "$bid" ]] || continue
+      if echo "$live_ids" | grep -qx "$norm_rp"; then
+        continue
+      fi
+      if mold_backup_veeam_rp_exists "$norm_rp" "$job" 2>/dev/null; then
+        continue
+      fi
+      mold_backup_notify_log info "catalog-sync: registry RP missing on Veeam rp=${norm_rp} vm=${vm} → queue MS sync"
+      sync_vms["$vm"]=1
+      mold_backup_emit_restore_event "mold.backup.catalog-sync.pending" "$vm" "rp=${norm_rp};job=${job};source=registry-probe"
+    done
+    shopt -u nullglob
+    if [[ -f "$map_file" ]]; then
+      while read -r _line; do
+        [[ "$_line" == *" vm=${vm} "* ]] || continue
+        norm_rp="$(sed -n 's/.* rp=\([^ ]*\).*/\1/p' <<<"$_line" | tail -1)"
+        bid="$(sed -n 's/.*backup_id=\([^ ]*\).*/\1/p' <<<"$_line" | tail -1)"
+        [[ -n "$norm_rp" && -n "$bid" ]] || continue
+        if echo "$live_ids" | grep -qx "$norm_rp"; then
+          continue
+        fi
+        if mold_backup_veeam_rp_exists "$norm_rp" "$job" 2>/dev/null; then
+          continue
+        fi
+        mold_backup_notify_log info "catalog-sync: map RP missing on Veeam rp=${norm_rp} vm=${vm} → queue MS sync"
+        sync_vms["$vm"]=1
+        mold_backup_emit_restore_event "mold.backup.catalog-sync.pending" "$vm" "rp=${norm_rp};job=${job};source=map-probe"
+      done <"$map_file"
+    fi
+  done
+
+  if [[ ! -f "$state_f" ]]; then
+    cp -f "$live_file" "$state_f" 2>/dev/null || true
+    mold_backup_notify_log info "catalog-sync: seeded RP catalog (${live_n} points) — list-diff sync armed next run"
+    # Still flush any registry-probe syncs found above.
+  elif [[ "$list_ok" != "1" ]]; then
+    mold_backup_notify_log warn "catalog-sync: untrusted empty/failed RP list — skip list-diff (registry-probe already ran)"
+  elif [[ "$disk_gone" == "1" || ( "${live_n}" == "0" && "${prev_n}" != "0" ) ]]; then
+    # Full Remove-from-Disk: Disk backup object gone, or trusted-empty live vs non-empty prev catalog.
+    cp -f "$state_f" "$prev_file" 2>/dev/null || true
+    mold_backup_notify_log info "catalog-sync: Veeam disk/job RPs all gone (was ${prev_n}, disk_gone=${disk_gone}) → queue MS sync for VM_INCLUDE"
+    for vm in "${vms[@]}"; do
+      vm="$(echo "$vm" | xargs)"
+      [[ -n "$vm" && "$vm" != "*" ]] || continue
+      sync_vms["$vm"]=1
+      mold_backup_emit_restore_event "mold.backup.catalog-sync.pending" "$vm" "job=${job};source=full-disk-delete"
+    done
+    : >"$state_f"
+  else
+    cp -f "$state_f" "$prev_file" 2>/dev/null || true
+    while IFS= read -r deleted_id; do
+      [[ -n "$deleted_id" ]] || continue
+      echo "$live_ids" | grep -qx "$deleted_id" && continue
+      epoch="$(awk -F'|' -v id="$deleted_id" 'tolower($1)==id {print $2; exit}' "$prev_file" 2>/dev/null || true)"
+      mold_backup_notify_log info "catalog-sync: Veeam RP removed id=${deleted_id} epoch=${epoch:-n/a} → queue MS sync for VM_INCLUDE"
+      for vm in "${vms[@]}"; do
+        vm="$(echo "$vm" | xargs)"
+        [[ -n "$vm" && "$vm" != "*" ]] || continue
+        sync_vms["$vm"]=1
+        mold_backup_emit_restore_event "mold.backup.catalog-sync.pending" "$vm" "rp=${deleted_id};job=${job};source=list-diff"
+      done
+    done < <(cut -d'|' -f1 "$prev_file" 2>/dev/null | tr '[:upper:]' '[:lower:]' | sort -u)
+    cp -f "$live_file" "$state_f" 2>/dev/null || true
+  fi
+
+  local synced=0
+  for vm in "${!sync_vms[@]}"; do
+    if mold_backup_api_sync_veeam_backups "$vm"; then
+      synced=$((synced + 1))
+      # Drop stale host registry maps for RPs that are no longer on Veeam.
+      shopt -s nullglob
+      for f in "$(mold_backup_registry_dir)/${vm}".rp-*.backup-id; do
+        [[ -f "$f" ]] || continue
+        norm_rp="$(basename "$f")"
+        norm_rp="${norm_rp#${vm}.rp-}"
+        norm_rp="${norm_rp%.backup-id}"
+        echo "$live_ids" | grep -qx "$norm_rp" && continue
+        mold_backup_veeam_rp_exists "$norm_rp" "$job" 2>/dev/null && continue
+        bid="$(tr -d '[:space:]' <"$f" 2>/dev/null || true)"
+        [[ -n "$bid" ]] && mold_backup_registry_cleanup_for_backup "$vm" "$bid"
+      done
+      shopt -u nullglob
+      mold_backup_emit_restore_event "mold.backup.catalog-synced" "$vm" "job=${job}"
+      mold_backup_notify_log info "catalog-sync: MS sync OK vm=${vm}"
+    fi
+  done
+  mold_backup_notify_log info "catalog-sync: done job=${job} live_rps=${live_n} synced_vms=${synced}"
 }

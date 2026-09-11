@@ -31,7 +31,7 @@ JOB_NAME=""
 BACKUP_OFFERING_NAME="VeeamBackup"
 VM_INCLUDE=""
 VM_EXCLUDE=""
-MAX_CHAIN="7"
+MAX_CHAIN="10"
 MOLD_API_URL=""
 MOLD_API_KEY=""
 MOLD_API_SECRET=""
@@ -91,7 +91,7 @@ Auto-filled (when omitted) from, in order:
 
 Common optional overrides:
   --offering-name NAME    Mold backup offering name (default: VeeamBackup)
-  --mold-url URL          Mold API URL (http://<ccvm>:8080/client/api)
+  --mold-url URL          Mold API URL (http://<ms>:8080/client/api or https://<ms>/client/api)
   --api-key KEY           Mold API key
   --api-secret SECRET     Mold API secret
   --zone-id UUID          Zone for importBackupOffering
@@ -100,12 +100,15 @@ Common optional overrides:
 
 Other optional:
   --vm-include LIST       Comma-separated libvirt names (* = all running, default)
-  --vm-exclude LIST       Comma-separated libvirt names to skip
+  --vm-exclude LIST       Extra libvirt names/globs to skip (auto-exclude still applies)
   --vm-name NAME          libvirt name (mold-backup.sh status 등)
   --vm-uuid UUID          Mold VM UUID
-  --max-chain N           Max incremental chain (default: 7)
+  --max-chain N           Max incremental chain (default: 10; also sets Mold backup.chain.size)
+  --backup-chain-size N   Alias of --max-chain (Mold Global backup.chain.size)
   --retention PERIOD      Backup offering retention (default: P7D)
   --backup-mode MODE      host|api|local|auto (default: host = NetBackup-style /tmp/mold/veeam)
+  --host-backup-path PATH KVM stage root (default: /tmp/mold/veeam); also sets Mold backup.plugin.ablestack-veeam.stage.root.path
+  --stage-root-path PATH  Alias of --host-backup-path
   --backup-target MODE    host only (guest mode removed)
   --veeam-url URL         Mold zone setting backup.plugin.ablestack-veeam.url
   --veeam-user USER       Mold zone setting backup.plugin.ablestack-veeam.username
@@ -135,7 +138,7 @@ Example (explicit):
     --api-key KEY --api-secret 'SECRET' \
     --zone-id <zone-uuid> \
     --vm-include "i-2-3-VM,i-2-7-VM" \
-    --max-chain 7 \
+    --max-chain 10 \
     --veeam-url https://veeam:9398/api/ \
     --kvm-host 10.10.31.30 \
     --install
@@ -191,9 +194,12 @@ veeam_config_import_env_file() {
       BACKUP_OFFERING_NAME) veeam_set_if_empty BACKUP_OFFERING_NAME "$val" ;;
       VM_INCLUDE) veeam_set_if_empty VM_INCLUDE "$val" ;;
       VM_EXCLUDE) veeam_set_if_empty VM_EXCLUDE "$val" ;;
+      VM_AUTO_EXCLUDE) [[ -n "$val" ]] && VM_AUTO_EXCLUDE="$val" ;;
       VM_NAME) veeam_set_if_empty VM_NAME_CFG "$val" ;;
       VM_UUID) veeam_set_if_empty VM_UUID_CFG "$val" ;;
       MAX_CHAIN) [[ -n "$val" ]] && MAX_CHAIN="$val" ;;
+      VEEAM_MAX_CHAIN) [[ -n "$val" ]] && MAX_CHAIN="$val" ;;
+      BACKUP_CHAIN_SIZE) [[ -n "$val" ]] && MAX_CHAIN="$val" ;;
       RETENTION_PERIOD) [[ -n "$val" ]] && RETENTION_PERIOD="$val" ;;
       BACKUP_MODE) veeam_set_if_empty BACKUP_MODE "$val" ;;
       IMPORT_MODE) [[ -n "$val" ]] && IMPORT_MODE="$val" ;;
@@ -250,21 +256,21 @@ veeam_config_load_from_conf() {
 }
 
 veeam_config_auto_mold_url() {
-  local props host
-  [[ -n "$MOLD_API_URL" ]] && return 0
-  for props in /etc/cloudstack/agent/agent.properties /etc/cloudstack/agent/agent.properties.override; do
-    [[ -f "$props" ]] || continue
-    host="$(grep -E '^[[:space:]]*host[[:space:]]*=' "$props" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d ' \r')"
-    [[ -n "$host" ]] || continue
-    # agent.properties often uses host=192.168.1.30@static
-    host="${host%%@*}"
-    if [[ "$host" == http* ]]; then
-      MOLD_API_URL="${host%/}/client/api"
-    else
-      MOLD_API_URL="http://${host}:8080/client/api"
+  local url
+  [[ -n "$MOLD_API_URL" ]] && {
+    if [[ "$MOLD_API_URL" != *"/client/api" ]]; then
+      # shellcheck source=mold-guest-common.sh
+      source "${SCRIPT_DIR}/mold-guest-common.sh"
+      MOLD_API_URL="$(mold_guest_normalize_mold_api_url "$MOLD_API_URL")"
     fi
     return 0
-  done
+  }
+  # shellcheck source=mold-guest-common.sh
+  source "${SCRIPT_DIR}/mold-guest-common.sh"
+  url="$(mold_guest_discover_mold_api_url_from_agent || true)"
+  [[ -n "$url" ]] || return 1
+  MOLD_API_URL="$url"
+  return 0
 }
 
 veeam_config_resolve_api_secret() {
@@ -344,13 +350,14 @@ while [[ $# -gt 0 ]]; do
     --vm-exclude) VM_EXCLUDE="$2"; shift 2 ;;
     --vm-name) VM_NAME_CFG="$2"; shift 2 ;;
     --vm-uuid) VM_UUID_CFG="$2"; shift 2 ;;
-    --max-chain) MAX_CHAIN="$2"; shift 2 ;;
+    --max-chain|--backup-chain-size) MAX_CHAIN="$2"; shift 2 ;;
     --mold-url) MOLD_API_URL="$2"; shift 2 ;;
     --api-key) MOLD_API_KEY="$2"; shift 2 ;;
     --api-secret) MOLD_API_SECRET="$2"; shift 2 ;;
     --zone-id) ZONE_ID="$2"; shift 2 ;;
     --retention) RETENTION_PERIOD="$2"; shift 2 ;;
     --backup-mode) BACKUP_MODE="$2"; shift 2 ;;
+    --host-backup-path|--stage-root-path) VEEAM_HOST_BACKUP_PATH="$2"; shift 2 ;;
     --backup-target) VEEAM_BACKUP_TARGET="$2"; shift 2 ;;
     --vm-targets) die "Guest-mode --vm-targets removed. Use --vm-include with host/datadisk mode." ;;
     --guest-job-prefix) die "Guest-mode --guest-job-prefix removed." ;;
@@ -454,12 +461,14 @@ ${MOLD_SECRET_KEY_FILE_LINE}
 VEEAM_JOB_NAME="${JOB_NAME}"
 BACKUP_OFFERING_NAME="${BACKUP_OFFERING_NAME}"
 VEEAM_SCHEDULE_NAME="default"
+VEEAM_BACKUP_INTERVAL_TYPE="EXTERNAL"
 VEEAM_MAX_CHAIN="${MAX_CHAIN}"
 ZONE_ID="${ZONE_ID}"
 RETENTION_PERIOD="${RETENTION_PERIOD}"
 
 VM_INCLUDE="${VM_INCLUDE:-*}"
 VM_EXCLUDE="${VM_EXCLUDE}"
+VM_AUTO_EXCLUDE="${VM_AUTO_EXCLUDE:-true}"
 
 VEEAM_URL="${VEEAM_URL}"
 VEEAM_USERNAME="${VEEAM_USERNAME}"
@@ -485,8 +494,9 @@ VEEAM_API_PASSWORD="${VEEAM_API_PASSWORD:-${VEEAM_PASSWORD:-}}"
 VM_TARGETS="${VM_TARGETS:-}"
 VEEAM_GUEST_JOB_PREFIX="${VEEAM_GUEST_JOB_PREFIX:-Mold VM}"
 
-VEEAM_HOST_BACKUP_PATH="/tmp/mold/veeam"
-STAGING_PATH="/tmp/mold/veeam"
+VEEAM_HOST_BACKUP_PATH="${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}"
+STAGING_PATH="${VEEAM_HOST_BACKUP_PATH}"
+VEEAM_AGENT_PAYLOAD_PATH="${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}"
 VEEAM_BACKUP_MODE="filelevel"
 BACKUP_MODE="${BACKUP_MODE}"
 IMPORT_MODE="${IMPORT_MODE}"
@@ -504,11 +514,12 @@ BACKUP_ID=""
 VM_UUID="${VM_UUID_CFG}"
 VM_NAME="${VM_NAME_CFG}"
 
-CLEANUP_STAGING_AFTER_BACKUP="true"
+CLEANUP_STAGING_AFTER_BACKUP="false"
 CLEANUP_STAGING_ON_ERROR="true"
 
 NAS_BACKUP_SCRIPT="/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/ablestack_nasbackup.sh"
-CVT_BACKUP_SCRIPT="/etc/ablestack/veeam/ablestack_cvtbackup.sh"
+HOST_EXPORT_SCRIPT="/etc/ablestack/veeam/ablestack_veeam_host_export.sh"
+CVT_BACKUP_SCRIPT="${HOST_EXPORT_SCRIPT}"
 LOG_FILE="/var/log/mold/veeam-hook.log"
 LOG_TAG="mold-veeam-hook"
 EOF
@@ -532,8 +543,26 @@ exec "${ETC_DIR}/ablestack_veeam_restore_event.sh" "\$@"
 EOF
 chmod 0755 "$target"
 
-WIN_CONF=""
-# PowerShell / windows.conf automation removed — register Pre/Post in Veeam UI.
+# Windows UI wrappers (copy to C:\ablestack\veeam on Veeam server, select in Guest Processing).
+# Same pattern as ablecube2-pre/post-notify.sh — SSH from Veeam into this KVM.
+kvm_ssh_host="${KVM_HOST:-}"
+[[ -n "$kvm_ssh_host" ]] || kvm_ssh_host="$(hostname -I 2>/dev/null | awk '{print $1}')"
+[[ -n "$kvm_ssh_host" ]] || kvm_ssh_host="$(hostname -s)"
+for hook in pre post; do
+  win_wrap="${ETC_DIR}/${safe_job}-${hook}-notify.sh"
+  cat > "$win_wrap" <<EOF
+#!/usr/bin/bash
+# Veeam UI ${hook}-job wrapper — place on Veeam as C:\\\\ablestack\\\\veeam\\\\${safe_job}-${hook}-notify.sh
+# Args from Veeam: CLIENT JOB [SCHEDULE] [TYPE]
+CLIENT="\${1:-\$(hostname -s 2>/dev/null || hostname)}"
+JOB="${JOB_NAME}"
+SCHEDULE="\${3:-default}"
+TYPE="\${4:-}"
+exec ssh -o StrictHostKeyChecking=no root@${kvm_ssh_host} \\
+  '${ETC_DIR}/ablestack_veeam_${hook}_notify.sh' "\$CLIENT" "\$JOB" "\$SCHEDULE" "\$TYPE"
+EOF
+  chmod 0755 "$win_wrap"
+done
 
 MANIFEST="${ETC_DIR}/${safe_job}.manifest"
 cat > "$MANIFEST" <<EOF
@@ -541,21 +570,27 @@ cat > "$MANIFEST" <<EOF
 job_name=${JOB_NAME}
 vm_include=${VM_INCLUDE}
 vm_exclude=${VM_EXCLUDE}
-host_backup_path=/tmp/mold/veeam
+host_backup_path=${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}
+agent_payload_path=${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}
 backup_mode=${BACKUP_MODE}
 kvm_host=${KVM_HOST}
+host_export_script=${ETC_DIR}/ablestack_veeam_host_export.sh
 
-# Veeam Agent Job: backup path must include /tmp/mold/veeam (file-level)
-# Guest Processing → Pre-job / Post-job (configure in Veeam UI):
-#   Pre : ssh root@<kvm> '${ETC_DIR}/ablestack_veeam_pre_notify.sh' \$(hostname) '${JOB_NAME}'
-#   Post: ssh root@<kvm> '${ETC_DIR}/ablestack_veeam_post_notify.sh' \$(hostname) '${JOB_NAME}'
+# Veeam Agent Job SelectedFiles MUST be ${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}
+# (not the Mold stage root). RBD sparse .raw/.rbdiff stay under host_backup_path for Mold restore.
+# Guest Processing → Pre/Post: copy Windows wrappers to Veeam C:\\ablestack\\veeam\\ then select:
+#   ${ETC_DIR}/${safe_job}-pre-notify.sh
+#   ${ETC_DIR}/${safe_job}-post-notify.sh
 EOF
-
 if [[ "$CONFIGURE_MOLD" == "true" ]]; then
   # shellcheck source=mold-backup.lib.sh
   source "${SCRIPT_DIR}/mold-backup.lib.sh"
   export MOLD_BACKUP_CONF="$CONF"
   export VEEAM_JOB_NAME="$JOB_NAME"
+  export VEEAM_MAX_CHAIN="$MAX_CHAIN"
+  export BACKUP_CHAIN_SIZE="$MAX_CHAIN"
+  export VEEAM_HOST_BACKUP_PATH="${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}"
+  export STAGING_PATH="${VEEAM_HOST_BACKUP_PATH}"
   mold_backup_load_config || true
   if mold_backup_cmk_bin >/dev/null 2>&1 || command -v curl >/dev/null 2>&1; then
     mold_backup_api_ensure_global_settings || true
@@ -572,12 +607,15 @@ echo "Created:"
 echo "  ${CONF}"
 echo "  ${MANIFEST}"
 echo "  ${HOOKS_DIR}/pre-notify.${safe_job}"
+echo "  ${ETC_DIR}/${safe_job}-pre-notify.sh   (copy → Veeam C:\\ablestack\\veeam\\)"
+echo "  ${ETC_DIR}/${safe_job}-post-notify.sh  (copy → Veeam C:\\ablestack\\veeam\\)"
 echo ""
 if [[ "${VEEAM_BACKUP_TARGET:-host}" == "guest" ]]; then
   die "Guest-mode Veeam jobs were removed. Use --backup-target host (datadisk) instead."
 else
-  echo "Veeam job backup selections: ${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}/"
-  echo "Next: create Veeam Agent job in UI; Pre/Post → ${ETC_DIR}/ablestack_veeam_*_notify.sh"
+  echo "Veeam job SelectedFiles (Agent payload): ${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}/"
+  echo "Mold stage root (restore artifacts, not for SyncDirs): ${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}/"
+  echo "Next: copy ${safe_job}-pre/post-notify.sh to Veeam C:\\ablestack\\veeam\\ and select in Guest Processing"
   echo "FLR→Mold: bash ${ETC_DIR}/enable-veeam-mold-restore.sh"
 fi
 

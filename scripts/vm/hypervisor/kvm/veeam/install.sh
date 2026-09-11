@@ -44,27 +44,33 @@ for f in install.sh install-ablestack-secret-key.sh mold-backup.lib.sh mold-back
   install -m 0755 "${SCRIPT_DIR}/${f}" "${SHARE_DIR}/${f}" 2>/dev/null || true
 done
 
-CVT_SRC=""
-for _cvt_candidate in \
+EXPORT_SRC=""
+for _export_candidate in \
+  "${ABLESTACK_HOST_EXPORT_SRC:-}" \
   "${ABLESTACK_CVT_BACKUP_SRC:-}" \
+  "${SCRIPT_DIR}/ablestack_veeam_host_export.sh" \
   "${SCRIPT_DIR}/ablestack_cvtbackup.sh" \
   "${SCRIPT_DIR}/../ablestack_cvtbackup.sh" \
   "/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/ablestack_cvtbackup.sh"; do
-  [[ -n "${_cvt_candidate}" && -f "${_cvt_candidate}" ]] || continue
-  CVT_SRC="${_cvt_candidate}"
+  [[ -n "${_export_candidate}" && -f "${_export_candidate}" ]] || continue
+  EXPORT_SRC="${_export_candidate}"
   break
 done
-if [[ -n "${CVT_SRC}" ]]; then
-  install -m 0755 "${CVT_SRC}" "${ETC_DIR}/ablestack_cvtbackup.sh"
-  install -m 0755 "${CVT_SRC}" "${SHARE_DIR}/ablestack_cvtbackup.sh"
+if [[ -n "${EXPORT_SRC}" ]]; then
+  # Primary Veeam name + legacy Commvault filename (agent/Commvault still use cvtbackup).
+  install -m 0755 "${EXPORT_SRC}" "${ETC_DIR}/ablestack_veeam_host_export.sh"
+  install -m 0755 "${EXPORT_SRC}" "${ETC_DIR}/ablestack_cvtbackup.sh"
+  install -m 0755 "${EXPORT_SRC}" "${SHARE_DIR}/ablestack_veeam_host_export.sh"
+  install -m 0755 "${EXPORT_SRC}" "${SHARE_DIR}/ablestack_cvtbackup.sh"
   CS_CVT_DIR="/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm"
   if [[ -d "${CS_CVT_DIR}" ]]; then
-    install -m 0755 "${CVT_SRC}" "${CS_CVT_DIR}/ablestack_cvtbackup.sh"
+    install -m 0755 "${EXPORT_SRC}" "${CS_CVT_DIR}/ablestack_cvtbackup.sh"
+    install -m 0755 "${EXPORT_SRC}" "${CS_CVT_DIR}/ablestack_veeam_host_export.sh"
   fi
-  echo "Installed host export script: ${ETC_DIR}/ablestack_cvtbackup.sh (from ${CVT_SRC})"
+  echo "Installed host export script: ${ETC_DIR}/ablestack_veeam_host_export.sh (from ${EXPORT_SRC})"
 else
-  echo "ERROR: ablestack_cvtbackup.sh not found." >&2
-  echo "  Copy scripts/vm/hypervisor/kvm/veeam/ (includes ablestack_cvtbackup.sh) or set ABLESTACK_CVT_BACKUP_SRC=/path/to/ablestack_cvtbackup.sh" >&2
+  echo "ERROR: host export script not found (ablestack_veeam_host_export.sh / ablestack_cvtbackup.sh)." >&2
+  echo "  Copy scripts/vm/hypervisor/kvm/veeam/ or set ABLESTACK_HOST_EXPORT_SRC=/path/to/script" >&2
   exit 1
 fi
 

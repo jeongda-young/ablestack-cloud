@@ -19,7 +19,8 @@
 
 set -eo pipefail
 
-# CloudStack B&R Veeam and Recovery Tool for KVM
+# Ablestack Veeam host-mode disk export (libvirt FULL/INCREMENTAL → staging).
+# Same implementation as scripts/vm/hypervisor/kvm/ablestack_cvtbackup.sh (Commvault agent path).
 
 # TODO: do libvirt/logging etc checks
 
@@ -38,14 +39,12 @@ PARENT_CHECKPOINT_PATH=""
 BACKUP_FILES=""
 FORCED="false"
 CLEANUP_CHECKPOINT_NAMES=""
-STAGING_DISK_PATHS=""
-SOURCE_FORMAT="vmdk"
-VEEAM_RESTORE_POINT_ID=""
-BOOTSTRAP_CHECKPOINT="true"
 logFile="/var/log/cloudstack/agent/agent.log"
 CREATED_RBD_SNAPSHOTS=()
 
 EXIT_CLEANUP_FAILED=20
+STAGING_IN_PROGRESS_MARKER=".staging.inprogress"
+STAGING_COMPLETE_MARKER=".staging.complete"
 
 log() {
   [[ "$verb" -eq 1 ]] && builtin echo "$@"
@@ -152,7 +151,13 @@ redefine_checkpoint_if_needed() {
   if [[ -z "$PARENT_CHECKPOINT_NAME" || -z "$checkpoint_file" || ! -f "$checkpoint_file" ]]; then
     return
   fi
-  redefine_checkpoint_chain_if_needed "$vm_name" "$checkpoint_file" ""
+  if virsh -c qemu:///system checkpoint-info --domain "$vm_name" --checkpointname "$PARENT_CHECKPOINT_NAME" > /dev/null 2>&1; then
+    return
+  fi
+  if ! virsh -c qemu:///system checkpoint-create --domain "$vm_name" --xmlfile "$checkpoint_file" --redefine > /dev/null 2>&1; then
+    echo "Failed to redefine checkpoint $PARENT_CHECKPOINT_NAME on domain $vm_name"
+    exit 1
+  fi
 }
 
 parent_qcow2_bitmap_exists_on_all_disks() {
@@ -224,71 +229,6 @@ for dev in data.get("return", []) or []:
   fi
 }
 
-get_checkpoint_name_from_file() {
-  local checkpoint_file="$1"
-  basename "$checkpoint_file" .xml
-}
-
-get_parent_checkpoint_name_from_file() {
-  local checkpoint_file="$1"
-  awk '
-    /<parent>/ { in_parent=1 }
-    in_parent && /<name>/ {
-      value=$0
-      sub(/^.*<name>/, "", value)
-      sub(/<\/name>.*$/, "", value)
-      print value
-      exit
-    }
-    /<\/parent>/ { in_parent=0 }
-  ' "$checkpoint_file"
-}
-
-find_checkpoint_file() {
-  local checkpoint_dir="$1"
-  local checkpoint_name="$2"
-  find "$checkpoint_dir" -maxdepth 1 -type f -name "${checkpoint_name}.xml" -print -quit
-}
-
-redefine_checkpoint_chain_if_needed() {
-  local vm_name="$1"
-  local checkpoint_file="$2"
-  local visited="$3"
-  local checkpoint_name
-  local parent_checkpoint_name
-  local parent_checkpoint_file
-
-  if [[ -z "$checkpoint_file" || ! -f "$checkpoint_file" ]]; then
-    return
-  fi
-
-  checkpoint_name="$(get_checkpoint_name_from_file "$checkpoint_file")"
-  if [[ ",$visited," == *",$checkpoint_name,"* ]]; then
-    return
-  fi
-  visited="${visited:+$visited,}$checkpoint_name"
-
-  parent_checkpoint_name="$(get_parent_checkpoint_name_from_file "$checkpoint_file")"
-  if [[ -n "$parent_checkpoint_name" ]]; then
-    parent_checkpoint_file="$(find_checkpoint_file "$(dirname "$checkpoint_file")" "$parent_checkpoint_name")"
-    if [[ -z "$parent_checkpoint_file" ]]; then
-      echo "Missing parent checkpoint file $parent_checkpoint_name for checkpoint $checkpoint_name"
-      cleanup
-      exit 1
-    fi
-    redefine_checkpoint_chain_if_needed "$vm_name" "$parent_checkpoint_file" "$visited"
-  fi
-
-  if virsh -c qemu:///system checkpoint-info --domain "$vm_name" --checkpointname "$checkpoint_name" > /dev/null 2>&1; then
-    return
-  fi
-  if ! virsh -c qemu:///system checkpoint-create --domain "$vm_name" --xmlfile "$checkpoint_file" --redefine > /dev/null 2>&1; then
-    echo "Failed to redefine checkpoint $checkpoint_name on domain $vm_name"
-    cleanup
-    exit 1
-  fi
-}
-
 
 parse_rbd_uri() {
   local uri="$1"
@@ -301,14 +241,10 @@ parse_rbd_uri() {
 
   if [[ "$uri" == rbd:* ]]; then
     local payload="${uri#rbd:}"
-    # mon_host uses escaped separators (scvm1\:6789\;scvm2\:6789). Do NOT use
-    # :mon_host=([^:]*) — that stops at the first ':' inside scvm1\:6789 → MON=scvm1\
     if [[ "$payload" == *":mon_host="* ]]; then
       RBD_IMAGE="${payload%%:mon_host=*}"
       local mon_part="${payload#*:mon_host=}"
       RBD_MON_HOST="${mon_part%%:auth_supported=*}"
-      RBD_MON_HOST="${RBD_MON_HOST%%:id=*}"
-      RBD_MON_HOST="${RBD_MON_HOST%%:key=*}"
       RBD_MON_HOST="${RBD_MON_HOST//\\;/,}"
       RBD_MON_HOST="${RBD_MON_HOST//\\:/:}"
     else
@@ -379,8 +315,7 @@ cleanup_created_rbd_snapshots() {
 }
 
 cleanup_parent_rbd_snapshot_after_success() {
-  # Keep parent RBD snapshots. Mold restore uses snap rollback (and re-export-diff needs the parent).
-  # Deleting parents after INC left only the tip snap and broke FULL/.raw-missing restores.
+  # Keep parent RBD snapshots for Mold snap-rollback restore / re-export-diff.
   [[ "$BACKUP_TYPE" != "INCREMENTAL" || -z "$PARENT_CHECKPOINT_NAME" ]] && return
   [[ "$PARENT_CHECKPOINT_NAME" == "$CHECKPOINT_NAME" ]] && return
   log -ne "Keeping RBD parent snapshot [${PARENT_CHECKPOINT_NAME}] for Mold restore (skip delete after INC)"
@@ -448,6 +383,7 @@ EOF
 
 backup_running_vm() {
   mkdir -p "$dest/checkpoints" || { echo "Failed to create backup directory $dest"; exit 1; }
+  mark_staging_in_progress
   local parent_checkpoint_file=""
   if [[ "$BACKUP_TYPE" == "INCREMENTAL" && -n "$PARENT_CHECKPOINT_PATH" ]]; then
     parent_checkpoint_file="$PARENT_CHECKPOINT_PATH"
@@ -516,7 +452,7 @@ backup_running_vm() {
       Completed) break ;;
       Failed)
         log -ne "FAILED libvirt backup job vm=[$VM] checkpoint=[$CHECKPOINT_NAME]"
-        echo "Virsh backup job failed"; cleanup ;;
+        echo "Virsh backup job failed"; cleanup; exit 1 ;;
     esac
     wait_count=$((wait_count + 1))
     if (( wait_count % 12 == 0 )); then
@@ -529,10 +465,12 @@ backup_running_vm() {
   dump_checkpoint_xml "$VM"
   rm -f "$dest/backup.xml" "$dest/checkpoint.xml"
   sync
+  mark_staging_complete
 }
 
 backup_rbd_volumes() {
   mkdir -p "$dest/checkpoints" || { echo "Failed to create backup directory $dest"; exit 1; }
+  mark_staging_in_progress
   backup_domain_information "$VM"
   trap 'log -ne "FAILED RBD backup unexpected error line=[$LINENO] op=[$OP] vm=[$VM] checkpoint=[$CHECKPOINT_NAME]"; cleanup_created_rbd_snapshots' ERR
   trap 'log -ne "FAILED RBD backup interrupted op=[$OP] vm=[$VM] checkpoint=[$CHECKPOINT_NAME]"; cleanup_created_rbd_snapshots; exit 1' INT TERM
@@ -601,12 +539,23 @@ backup_rbd_volumes() {
   trap - ERR
   trap - INT TERM
   CREATED_RBD_SNAPSHOTS=()
+  sync
+  mark_staging_complete
 }
 
 has_child_backup() {
   local checkpoint_name="$1"
   [[ -z "$checkpoint_name" ]] && return 1
   grep -R -q "^parent_checkpoint_name=$checkpoint_name$" "$(dirname "$dest")"/*/rbd-backup.meta 2>/dev/null
+}
+
+has_child_checkpoint() {
+  local checkpoint_name="$1"
+  [[ -z "$checkpoint_name" ]] && return 1
+  find "$(dirname "$dest")" -path "$(dirname "$dest")/$(basename "$dest")" -prune -o -type f -name "*.xml" -print 2>/dev/null \
+    | xargs grep -F -l "<parent>" 2>/dev/null \
+    | xargs grep -F -l "<name>$checkpoint_name</name>" 2>/dev/null \
+    | grep -q .
 }
 
 delete_rbd_snapshot_if_unreferenced() {
@@ -630,15 +579,6 @@ delete_rbd_snapshot_if_unreferenced() {
       "${RBD_CMD[@]}" snap rm "${RBD_IMAGE}@${checkpoint_name}" >> "$logFile" 2>&1 || true
     fi
   done < <(split_csv "$disk_paths")
-}
-
-has_child_checkpoint() {
-  local checkpoint_name="$1"
-  [[ -z "$checkpoint_name" ]] && return 1
-  find "$(dirname "$dest")" -path "$(dirname "$dest")/$(basename "$dest")" -prune -o -type f -name "*.xml" -print 2>/dev/null \
-    | xargs grep -F -l "<parent>" 2>/dev/null \
-    | xargs grep -F -l "<name>$checkpoint_name</name>" 2>/dev/null \
-    | grep -q .
 }
 
 delete_libvirt_checkpoint_if_unreferenced() {
@@ -727,279 +667,18 @@ cleanup_unreferenced_qcow2_bitmaps() {
   done < <(split_csv "$CLEANUP_CHECKPOINT_NAMES")
 }
 
-strip_checkpoint_parent_from_xml() {
-  local xml_file="$1"
-  [[ -f "$xml_file" ]] || return 0
-  python3 - "$xml_file" <<'PY' 2>/dev/null || true
-import sys
-import xml.etree.ElementTree as ET
-
-path = sys.argv[1]
-tree = ET.parse(path)
-root = tree.getroot()
-for parent in list(root.findall('parent')):
-    root.remove(parent)
-tree.write(path, encoding='unicode', xml_declaration=True)
-PY
+mark_staging_in_progress() {
+  rm -f "$dest/$STAGING_COMPLETE_MARKER"
+  printf 'started_at=%s\nvm=%s\ncheckpoint=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$VM" "$CHECKPOINT_NAME" > "$dest/$STAGING_IN_PROGRESS_MARKER"
+  sync "$dest/$STAGING_IN_PROGRESS_MARKER" 2>/dev/null || true
 }
 
-write_veeam_seed_metadata() {
-  local backup_engine="$1"
-  cat > "$dest/veeam-seed.meta" <<EOF
-source_provider=ablestack-veeam
-veeam_restore_point_id=$VEEAM_RESTORE_POINT_ID
-vm_name=$VM
-backup_type=FULL
-backup_engine=$backup_engine
-checkpoint_name=$CHECKPOINT_NAME
-parent_checkpoint_name=
-disk_paths=$DISK_PATHS
-backup_files=$BACKUP_FILES
-backup_dir=$BACKUP_DIR
-source_format=$SOURCE_FORMAT
-bootstrap_checkpoint=$BOOTSTRAP_CHECKPOINT
-imported_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-EOF
-  log -ne "Wrote Veeam seed metadata to [$dest/veeam-seed.meta]"
-}
-
-convert_staging_disk_to_backup() {
-  local staging_path="$1"
-  local output="$2"
-
-  if [[ ! -f "$staging_path" ]]; then
-    echo "Staging disk file not found: $staging_path"
-    cleanup
-  fi
-
-  case "$SOURCE_FORMAT" in
-    qcow2)
-      if ! cp -f "$staging_path" "$output"; then
-        echo "Failed to copy qcow2 staging disk $staging_path to $output"
-        cleanup
-      fi
-      ;;
-    vmdk|flat|raw)
-      if ! qemu-img convert -p -O qcow2 "$staging_path" "$output" >> "$logFile" 2>&1; then
-        echo "Failed to convert staging disk $staging_path to $output"
-        cleanup
-      fi
-      ;;
-    *)
-      echo "Unsupported source format: $SOURCE_FORMAT"
-      cleanup
-      ;;
-  esac
-}
-
-import_rbd_seed_disk() {
-  local staging_path="$1"
-  local output="$2"
-  local disk_uri="$3"
-
-  if ! qemu-img convert -p -O raw "$staging_path" "$output" >> "$logFile" 2>&1; then
-    echo "Failed to convert staging disk $staging_path to $output"
-    cleanup
-  fi
-
-  parse_rbd_uri "$disk_uri"
-  build_rbd_cmd
-  if [[ -z "$RBD_IMAGE" ]]; then
-    echo "Unable to parse RBD disk path for seed import: $disk_uri"
-    cleanup
-  fi
-
-  if ! timeout 30s "${RBD_CMD[@]}" snap ls "$RBD_IMAGE" 2>>"$logFile" | awk 'NR>1 {print $2}' | grep -Fxq "$CHECKPOINT_NAME"; then
-    if ! timeout 30s "${RBD_CMD[@]}" snap create "${RBD_IMAGE}@${CHECKPOINT_NAME}" >> "$logFile" 2>&1; then
-      echo "Failed to create RBD baseline snapshot ${RBD_IMAGE}@${CHECKPOINT_NAME}"
-      cleanup
-    fi
-  fi
-}
-
-qcow2_checkpoint_bitmap_exists_on_disks() {
-  local name="$1"
-  local disk_count bitmap_count
-  [[ -z "$name" || -z "$VM" ]] && return 1
-  disk_count=$(virsh -c qemu:///system domblklist "$VM" --details 2>/dev/null | awk '/disk/ {c++} END{print c+0}')
-  [[ "$disk_count" -gt 0 ]] || return 1
-  bitmap_count=$(virsh -c qemu:///system qemu-monitor-command "$VM" '{"execute":"query-block"}' 2>/dev/null | python3 -c '
-import json,sys
-name=sys.argv[1]
-try:
-  data=json.load(sys.stdin)
-except Exception:
-  print(0); raise SystemExit
-count=0
-for b in data.get("return", []):
-  inserted=b.get("inserted") or {}
-  for bm in inserted.get("dirty-bitmaps") or []:
-    if bm.get("name")==name:
-      count += 1
-      break
-print(count)
-' "$name" 2>/dev/null || echo 0)
-  [[ "$bitmap_count" -ge "$disk_count" ]]
-}
-
-copy_staging_checkpoint_xml_if_present() {
-  local staging_disk staging_dir staging_xml
-  staging_disk="$(echo "$STAGING_DISK_PATHS" | awk -F',' '{print $1}' | tr -d '[:space:]')"
-  [[ -n "$staging_disk" ]] || return 1
-  staging_dir="$(dirname "$staging_disk")"
-  staging_xml="${staging_dir}/checkpoints/${CHECKPOINT_NAME}.xml"
-  if [[ -f "$staging_xml" ]]; then
-    mkdir -p "$dest/checkpoints"
-    cp -a "$staging_xml" "$dest/checkpoints/$CHECKPOINT_NAME.xml"
-    strip_checkpoint_parent_from_xml "$dest/checkpoints/$CHECKPOINT_NAME.xml"
-    log -ne "Reused host-export checkpoint XML [$staging_xml] as seed checkpoint [$CHECKPOINT_NAME]"
-    return 0
-  fi
-  return 1
-}
-
-bootstrap_qcow2_checkpoint_seed() {
-  local vm_name="$1"
-  local -a diskspec_args=()
-  local disk
-
-  if [[ -z "$vm_name" ]]; then
-    log -ne "Skip checkpoint bootstrap: VM name not set"
-    return 0
-  fi
-
-  if ! virsh -c qemu:///system dominfo "$vm_name" > /dev/null 2>&1; then
-    log -ne "Skip checkpoint bootstrap: VM [$vm_name] not found in libvirt"
-    return 0
-  fi
-
-  if [[ -z "$CHECKPOINT_NAME" ]]; then
-    echo "Checkpoint name is required for QCOW2 seed bootstrap"
-    return 1
-  fi
-
-  # Prefer the live libvirt checkpoint from host-export (same name as dirty bitmap).
-  if virsh -c qemu:///system checkpoint-info --domain "$vm_name" --checkpointname "$CHECKPOINT_NAME" > /dev/null 2>&1; then
-    dump_checkpoint_xml "$vm_name"
-    strip_checkpoint_parent_from_xml "$dest/checkpoints/$CHECKPOINT_NAME.xml"
-    log -ne "Reused existing libvirt checkpoint (seed) [$CHECKPOINT_NAME] on VM [$vm_name]"
-    return 0
-  fi
-
-  # Host-export already wrote checkpoints/<ts>.xml next to staging disks — reuse it.
-  if copy_staging_checkpoint_xml_if_present; then
-    return 0
-  fi
-
-  while IFS='|' read -r disk _target; do
-    [[ -z "$disk" ]] && continue
-    diskspec_args+=(--diskspec "${disk},bitmap=${CHECKPOINT_NAME}")
-  done < <(virsh -c qemu:///system domblklist "$vm_name" --details 2>/dev/null | awk '/disk/ {print $3 "|" $4}')
-
-  if [[ ${#diskspec_args[@]} -eq 0 ]]; then
-    echo "No disks found for checkpoint bootstrap on VM $vm_name"
-    return 1
-  fi
-
-  if virsh -c qemu:///system checkpoint-create-as "$vm_name" "$CHECKPOINT_NAME" \
-      "${diskspec_args[@]}" >> "$logFile" 2>&1; then
-    dump_checkpoint_xml "$vm_name"
-    strip_checkpoint_parent_from_xml "$dest/checkpoints/$CHECKPOINT_NAME.xml"
-    log -ne "Bootstrapped libvirt checkpoint (seed) [$CHECKPOINT_NAME] on VM [$vm_name]"
-    return 0
-  fi
-
-  # create-as often fails when host-export already created the dirty bitmap under this name.
-  # If the bitmap is present, keep Mold INCREMENTAL-capable by requiring XML from staging or dump.
-  if qcow2_checkpoint_bitmap_exists_on_disks "$CHECKPOINT_NAME"; then
-    if copy_staging_checkpoint_xml_if_present; then
-      return 0
-    fi
-    if virsh -c qemu:///system checkpoint-info --domain "$vm_name" --checkpointname "$CHECKPOINT_NAME" > /dev/null 2>&1; then
-      dump_checkpoint_xml "$vm_name"
-      strip_checkpoint_parent_from_xml "$dest/checkpoints/$CHECKPOINT_NAME.xml"
-      return 0
-    fi
-    echo "QCOW2 seed bitmap [$CHECKPOINT_NAME] exists on disks but checkpoint XML is missing; cannot stamp INCREMENTAL parent"
-    return 1
-  fi
-
-  echo "Failed to bootstrap QCOW2 checkpoint [$CHECKPOINT_NAME] on VM [$vm_name] (create-as failed and bitmap missing)"
-  return 1
-}
-
-import_veeam_seed() {
-  log -ne "Entered import_veeam_seed staging=[$STAGING_DISK_PATHS] backupDir=[$BACKUP_DIR]"
-  mkdir -p "$dest" "$dest/checkpoints" || { echo "Failed to create backup directory $dest"; exit 1; }
-
-  if [[ -z "$STAGING_DISK_PATHS" ]]; then
-    echo "Staging disk paths are required for import-seed"
-    cleanup
-  fi
-
-  local use_rbd=0
-  if [[ -n "$DISK_PATHS" ]]; then
-    while IFS= read -r disk_path; do
-      [[ -z "$disk_path" ]] && continue
-      if is_rbd_disk_path "$disk_path"; then
-        use_rbd=1
-        break
-      fi
-    done < <(split_csv "$DISK_PATHS")
-  fi
-
-  local backup_engine="QCOW2"
-  [[ $use_rbd -eq 1 ]] && backup_engine="RBD_DIFF"
-
-  local index=0
-  local staging_index=0
-  while IFS= read -r staging_disk; do
-    [[ -z "$staging_disk" ]] && continue
-    local backup_file live_disk=""
-    if [[ -n "$DISK_PATHS" ]]; then
-      live_disk=$(split_csv "$DISK_PATHS" | sed -n "$((staging_index + 1))p")
-    fi
-    if [[ $use_rbd -eq 1 && -n "$live_disk" ]]; then
-      backup_file=$(get_backup_file_by_index "$index" "${live_disk##*/}.raw")
-    else
-      backup_file=$(get_backup_file_by_index "$index" "disk-${index}.qcow2")
-    fi
-    local output="$dest/$backup_file"
-    if [[ $use_rbd -eq 1 ]]; then
-      import_rbd_seed_disk "$staging_disk" "$output" "$live_disk"
-    else
-      convert_staging_disk_to_backup "$staging_disk" "$output"
-    fi
-    stat -c %s "$output"
-    index=$((index + 1))
-    staging_index=$((staging_index + 1))
-  done < <(split_csv "$STAGING_DISK_PATHS")
-
-  backup_domain_information "$VM"
-
-  if [[ "$backup_engine" == "RBD_DIFF" ]]; then
-    write_rbd_backup_metadata "FULL" "$CHECKPOINT_NAME" ""
-    cat > "$dest/checkpoints/${CHECKPOINT_NAME}.meta" <<EOF
-checkpoint_name=$CHECKPOINT_NAME
-backup_type=FULL
-vm_name=$VM
-disk_paths=$DISK_PATHS
-backup_files=$BACKUP_FILES
-source_provider=ablestack-veeam
-EOF
-  else
-    write_veeam_seed_metadata "$backup_engine"
-    if [[ "$BOOTSTRAP_CHECKPOINT" == "true" ]]; then
-      if ! bootstrap_qcow2_checkpoint_seed "$VM"; then
-        echo "Failed to bootstrap QCOW2 checkpoint [$CHECKPOINT_NAME] for import-seed"
-        cleanup
-      fi
-    else
-      dump_checkpoint_xml "$VM"
-    fi
-  fi
-
-  sync
+mark_staging_complete() {
+  local tmp_marker="$dest/$STAGING_COMPLETE_MARKER.tmp"
+  printf 'completed_at=%s\nvm=%s\ncheckpoint=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$VM" "$CHECKPOINT_NAME" > "$tmp_marker"
+  mv -f "$tmp_marker" "$dest/$STAGING_COMPLETE_MARKER"
+  rm -f "$dest/$STAGING_IN_PROGRESS_MARKER"
+  sync "$dest/$STAGING_COMPLETE_MARKER" 2>/dev/null || true
 }
 
 delete_backup() {
@@ -1049,10 +728,6 @@ while [[ $# -gt 0 ]]; do
     -d|--diskpaths) DISK_PATHS="$2"; shift; shift ;;
     -C|--cleanupcheckpoints) CLEANUP_CHECKPOINT_NAMES="$2"; shift; shift ;;
     -x|--forced) FORCED="$2"; shift; shift ;;
-    --staging-disks) STAGING_DISK_PATHS="$2"; shift; shift ;;
-    --source-format) SOURCE_FORMAT="$2"; shift; shift ;;
-    --veeam-restore-point) VEEAM_RESTORE_POINT_ID="$2"; shift; shift ;;
-    --bootstrap-checkpoint) BOOTSTRAP_CHECKPOINT="$2"; shift; shift ;;
     -h|--help) usage ;;
     *) echo "Invalid option: $1"; usage ;;
   esac
@@ -1066,7 +741,7 @@ fi
 dest="$BACKUP_DIR"
 sanity_checks
 
-log -ne "ablestack_veeam.sh start op=[$OP] vm=[$VM] backupDir=[$BACKUP_DIR] backupType=[$BACKUP_TYPE] checkpoint=[$CHECKPOINT_NAME] parentBackup=[$PARENT_BACKUP_DIR] parentCheckpoint=[$PARENT_CHECKPOINT_NAME] diskPaths=[$DISK_PATHS] backupFiles=[$BACKUP_FILES]"
+log -ne "ablestack_veeam_host_export.sh start op=[$OP] vm=[$VM] backupDir=[$BACKUP_DIR] backupType=[$BACKUP_TYPE] checkpoint=[$CHECKPOINT_NAME] parentBackup=[$PARENT_BACKUP_DIR] parentCheckpoint=[$PARENT_CHECKPOINT_NAME] diskPaths=[$DISK_PATHS] backupFiles=[$BACKUP_FILES]"
 
 if [[ "$OP" == "backup-running" ]]; then
   backup_running_vm
@@ -1074,8 +749,6 @@ elif [[ "$OP" == "backup-rbd" ]]; then
   backup_rbd_volumes
 elif [[ "$OP" == "delete" ]]; then
   delete_backup
-elif [[ "$OP" == "import-seed" ]]; then
-  import_veeam_seed
 else
   echo "Unsupported operation: $OP"
   exit 1

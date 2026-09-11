@@ -58,6 +58,8 @@ Commands:
   restore-watch     Veeam UI 복원 감지 → (옵션) Mold datadisk restoreBackup 호출
   restore-event     복원 이벤트 수동 주입 (veeam.restore.completed | mold.restore.manual)
   backup-watch      Veeam UI에서 직접 백업한 세션을 감지해 Mold 상태에 반영
+  catalog-sync      Veeam Remove-from-Disk 감지 → VM_INCLUDE VM에 대해 MS catalog sync 트리거
+  active-full       Disk 비어 있거나 체인 깨짐 시 Veeam Agent Active Full 강제 시작
   status            한 VM 백업 + registry
 
 Options:
@@ -100,6 +102,9 @@ Examples:
 
   # Veeam UI에서 직접 백업한 내역을 Mold에 반영 (cron/systemd timer로 주기 실행 권장)
   mold-backup.sh backup-watch --job VeeamBackup --since-min 60
+
+  # Veeam Remove from Disk → Mold catalog sync (NetBackup parity; VM_INCLUDE only)
+  mold-backup.sh catalog-sync --job ablecube2
 EOF
 }
 
@@ -293,6 +298,34 @@ except Exception as e:
   fi
 }
 
+run_catalog_sync() {
+  if [[ -z "${VEEAM_SSH_HOST:-}" ]]; then
+    die "catalog-sync needs VEEAM_SSH_HOST in job conf"
+  fi
+  echo "=== catalog-sync job=${JOB_NAME} host=$(hostname -s) ==="
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo "[DRY-RUN] mold_backup_catalog_delete_sync ${JOB_NAME}"
+    return 0
+  fi
+  export VEEAM_CATALOG_DELETE_SYNC="${VEEAM_CATALOG_DELETE_SYNC:-true}"
+  mold_backup_catalog_delete_sync "$JOB_NAME"
+}
+
+# Force Active Full when Disk empty / Agent chain broken (IsBackupFilesystemExist).
+# Clears the auto-attempt latch so this manual run is allowed even after a failed auto try.
+run_active_full() {
+  echo "=== active-full job=${JOB_NAME} host=$(hostname -s) ==="
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo "[DRY-RUN] mold_backup_veeam_ensure_active_full_if_needed ${JOB_NAME}"
+    return 0
+  fi
+  mold_backup_load_config 2>/dev/null || true
+  VEEAM_JOB_NAME="$(mold_backup_normalize_job_name "${JOB_NAME}")"
+  mold_backup_veeam_clear_active_full_attempted "$VEEAM_JOB_NAME"
+  mold_backup_veeam_mark_need_active_full "$VEEAM_JOB_NAME"
+  mold_backup_veeam_ensure_active_full_if_needed "$VEEAM_JOB_NAME"
+}
+
 run_status() {
   mold_backup_require_var MOLD_API_URL
   mold_backup_require_var MOLD_API_KEY
@@ -336,6 +369,8 @@ case "$CMD" in
   restore-watch|watch-restore) run_restore_watch ;;
   restore-event) run_restore_event "${RESTORE_EVENT_ARGS[@]}" ;;
   backup-watch|watch-backup) run_backup_watch ;;
+  catalog-sync|sync-catalog|rp-sync) run_catalog_sync ;;
+  active-full|activefull|force-full) run_active_full ;;
   list-backups|list) run_list_backups ;;
   status) run_status ;;
   -h|--help|help) usage ;;

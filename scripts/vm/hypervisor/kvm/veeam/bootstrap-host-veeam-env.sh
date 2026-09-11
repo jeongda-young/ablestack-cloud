@@ -7,7 +7,8 @@
 #     --api-key KEY --api-secret 'SECRET' \
 #     --job-name 'Agent Backup Job 1' \
 #     --veeam-host 192.168.1.240 \
-#     --veeam-password 'Ablecloud1!'
+#     --veeam-password 'Ablecloud1!' \
+#     --backup-chain-size 10
 #
 set -euo pipefail
 # Passwords often contain '!'; disable history expansion for this script.
@@ -29,13 +30,19 @@ VEEAM_HOST="${VEEAM_HOST:-${VEEAM_SSH_HOST:-}}"
 VEEAM_USER="${VEEAM_USER:-administrator}"
 VEEAM_PASSWORD="${VEEAM_PASSWORD:-}"
 VEEAM_SSH_USER="${VEEAM_SSH_USER:-administrator}"
-# Host-wide (*): skip storage/cluster domains by default
-VM_EXCLUDE="${VM_EXCLUDE:-scvm}"
+# Extra excludes (comma-separated). Auto-exclude always skips scvm*, r/s/v-*-VM, *ablestack-template*
+# unless VM_AUTO_EXCLUDE=false. --vm-exclude adds to that list (exact or glob, e.g. scvm*).
+VM_EXCLUDE="${VM_EXCLUDE:-}"
+VM_AUTO_EXCLUDE="${VM_AUTO_EXCLUDE:-true}"
+# Mold Global backup.chain.size (+ host hook VEEAM_MAX_CHAIN). Mold default is 10.
+BACKUP_CHAIN_SIZE="${BACKUP_CHAIN_SIZE:-10}"
+VEEAM_HOST_BACKUP_PATH="${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}"
+VEEAM_AGENT_PAYLOAD_PATH="${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 usage() {
-  sed -n '2,14p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 while [[ $# -gt 0 ]]; do
@@ -53,29 +60,32 @@ while [[ $# -gt 0 ]]; do
     --veeam-password) VEEAM_PASSWORD="$2"; shift 2 ;;
     --veeam-ssh-user) VEEAM_SSH_USER="$2"; shift 2 ;;
     --vm-exclude) VM_EXCLUDE="$2"; shift 2 ;;
+    --no-auto-exclude) VM_AUTO_EXCLUDE=false; shift ;;
+    --backup-chain-size|--max-chain)
+      BACKUP_CHAIN_SIZE="$2"
+      shift 2
+      ;;
+    --host-backup-path|--stage-root-path) VEEAM_HOST_BACKUP_PATH="$2"; shift 2 ;;
+    --agent-payload-path) VEEAM_AGENT_PAYLOAD_PATH="$2"; shift 2 ;;
     --env-out) ENV_OUT="$2"; shift 2 ;;
     -h|--help) usage; exit 0 ;;
     *) die "Unknown option: $1" ;;
   esac
 done
 
+[[ "$BACKUP_CHAIN_SIZE" =~ ^[0-9]+$ && "$BACKUP_CHAIN_SIZE" -gt 0 ]] \
+  || die "--backup-chain-size must be a positive integer (got: ${BACKUP_CHAIN_SIZE})"
+
 [[ -n "$MOLD_API_KEY" && -n "$MOLD_API_SECRET" ]] \
   || die "Need --api-key and --api-secret (Mold UI → Accounts → API keys for THIS MS)"
 
 # --- discover MS URL from agent.properties ---
+# shellcheck source=mold-guest-common.sh
+source "${SCRIPT_DIR}/mold-guest-common.sh"
 if [[ -z "$MOLD_API_URL" ]]; then
-  for props in /etc/cloudstack/agent/agent.properties /etc/cloudstack/agent/agent.properties.override; do
-    [[ -f "$props" ]] || continue
-    host="$(grep -E '^[[:space:]]*host[[:space:]]*=' "$props" 2>/dev/null | tail -1 | cut -d= -f2- | tr -d ' \r' || true)"
-    [[ -n "$host" ]] || continue
-    host="${host%%@*}"
-    if [[ "$host" == http* ]]; then
-      MOLD_API_URL="${host%/}/client/api"
-    else
-      MOLD_API_URL="http://${host}:8080/client/api"
-    fi
-    break
-  done
+  MOLD_API_URL="$(mold_guest_discover_mold_api_url_from_agent || true)"
+elif [[ "$MOLD_API_URL" != *"/client/api" ]]; then
+  MOLD_API_URL="$(mold_guest_normalize_mold_api_url "$MOLD_API_URL")"
 fi
 [[ -n "$MOLD_API_URL" ]] || die "Cannot discover Mold API URL (set --mold-url)"
 
@@ -97,7 +107,7 @@ fi
 [[ -n "$VEEAM_HOST" ]] || VEEAM_HOST="192.168.1.240"
 
 install -d -m 0755 "$ETC_DIR" "${ETC_DIR}/secrets" "${ETC_DIR}/state"
-mkdir -p /tmp/mold/veeam
+mkdir -p "${VEEAM_HOST_BACKUP_PATH}" "${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}"
 
 # Quote every value so `source` is safe (spaces, !, etc.)
 _q() { printf '%s' "$1" | sed "s/'/'\\\\''/g"; }
@@ -120,14 +130,21 @@ KVM_HOSTNAME='$(_q "${KVM_HOSTNAME}")'
 KVM_IP='$(_q "${KVM_IP}")'
 KVM_SSH_USER='root'
 VEEAM_BACKUP_TARGET='host'
-VEEAM_HOST_BACKUP_PATH='/tmp/mold/veeam'
+VEEAM_HOST_BACKUP_PATH='$(_q "${VEEAM_HOST_BACKUP_PATH}")'
+VEEAM_AGENT_PAYLOAD_PATH='$(_q "${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}")'
 BACKUP_MODE='host'
 
 # Host-wide: every running domain on this hypervisor (no guest name list)
 VM_INCLUDE='*'
 VM_EXCLUDE='$(_q "${VM_EXCLUDE}")'
+VM_AUTO_EXCLUDE='$(_q "${VM_AUTO_EXCLUDE:-true}")'
 VM_NAME=''
 VM_UUID=''
+
+# Mold Global backup.chain.size + Job conf VEEAM_MAX_CHAIN (same value)
+BACKUP_CHAIN_SIZE='$(_q "${BACKUP_CHAIN_SIZE}")'
+VEEAM_MAX_CHAIN='$(_q "${BACKUP_CHAIN_SIZE}")'
+MAX_CHAIN='$(_q "${BACKUP_CHAIN_SIZE}")'
 
 VEEAM_API_URL='$(_q "https://${VEEAM_HOST}:9419")'
 VEEAM_API_VERSION='1.2-rev0'
@@ -182,7 +199,8 @@ echo "  ZONE_ID=${ZONE_ID}"
 echo "  KVM_HOSTNAME=${KVM_HOSTNAME} KVM_IP=${KVM_IP}"
 echo "  JOB_NAME=${JOB_NAME}"
 echo "  VM_INCLUDE=* (host-wide running domains)"
-echo "  VM_EXCLUDE=${VM_EXCLUDE:-"(none)"}"
+echo "  VM_EXCLUDE=${VM_EXCLUDE:-"(none extra)"} (auto-exclude scvm*/systemVM/router/ablestack-template: ${VM_AUTO_EXCLUDE:-true})"
+echo "  BACKUP_CHAIN_SIZE=${BACKUP_CHAIN_SIZE} (Mold backup.chain.size + VEEAM_MAX_CHAIN)"
 echo "  VEEAM=${VEEAM_HOST}"
 echo "  env → ${ENV_OUT}"
 
@@ -195,6 +213,11 @@ for f in "${ETC_DIR}/${safe_job}.conf" "${ETC_DIR}/mold-backup.conf"; do
     sed -i "s|^VM_EXCLUDE=.*|VM_EXCLUDE=\"${VM_EXCLUDE}\"|" "$f" || true
   else
     echo "VM_EXCLUDE=\"${VM_EXCLUDE}\"" >> "$f"
+  fi
+  if grep -q '^VM_AUTO_EXCLUDE=' "$f" 2>/dev/null; then
+    sed -i "s|^VM_AUTO_EXCLUDE=.*|VM_AUTO_EXCLUDE=\"${VM_AUTO_EXCLUDE:-true}\"|" "$f" || true
+  else
+    echo "VM_AUTO_EXCLUDE=\"${VM_AUTO_EXCLUDE:-true}\"" >> "$f"
   fi
   sed -i 's/^VM_NAME=.*/VM_NAME=""/' "$f" || true
 done
@@ -210,6 +233,7 @@ cfg_args=(
   --zone-id "$ZONE_ID"
   --vm-include '*'
   --vm-exclude "$VM_EXCLUDE"
+  --backup-chain-size "$BACKUP_CHAIN_SIZE"
   --kvm-host "$KVM_IP"
   --backup-mode host
   --install
@@ -221,16 +245,20 @@ cfg_args=(
 bash "${SCRIPT_DIR}/veeam_config.sh" "${cfg_args[@]}"
 
 echo ""
-echo "=== Running domains (pre-notify targets; exclude=${VM_EXCLUDE}) ==="
+echo "=== Running domains (pre-notify targets; auto-exclude=${VM_AUTO_EXCLUDE:-true} extra-exclude=${VM_EXCLUDE}) ==="
+export VM_INCLUDE='*' VM_EXCLUDE VM_AUTO_EXCLUDE
+# shellcheck source=mold-backup.lib.sh
+source "${SCRIPT_DIR}/mold-backup.lib.sh"
 virsh -c qemu:///system list --name --state-running 2>/dev/null | sed '/^$/d' \
   | while read -r d; do
-      skip=0
-      for ex in ${VM_EXCLUDE//,/ }; do
-        [[ "$d" == "$ex" ]] && skip=1 && break
-      done
-      [[ "$skip" -eq 1 ]] && echo "  skip  $d" || echo "  export $d"
+      if mold_backup_vm_in_filter "$d"; then
+        echo "  export $d"
+      else
+        echo "  skip  $d"
+      fi
     done || true
 echo ""
 echo "Done. Test:"
 echo "  bash ${ETC_DIR}/ablestack_veeam_pre_notify.sh ${KVM_HOSTNAME} '${JOB_NAME}' default"
-echo "  ls -la /tmp/mold/veeam/"
+echo "  ls -la ${VEEAM_HOST_BACKUP_PATH}/"
+echo "  ls -la ${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}/"
