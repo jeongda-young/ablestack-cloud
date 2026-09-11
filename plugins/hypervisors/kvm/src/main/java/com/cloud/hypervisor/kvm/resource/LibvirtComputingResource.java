@@ -3928,7 +3928,7 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
 
             // UEFI Legacy 실행 파일 포맷 설정
             String exeFormat = getExecutableFormat();
-            guest.setUefiLegacyFormat("format='" + exeFormat + "'"); // 예: qcow2 또는 raw
+            guest.setUefiLagacyFormat("format='" + exeFormat + "'"); // 예: qcow2 또는 raw
         }
     }
 
