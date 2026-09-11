@@ -132,4 +132,3 @@ public interface KVMStoragePool {
     default void customizeLibvirtDiskDef(LibvirtVMDef.DiskDef disk) {
     }
 }
-

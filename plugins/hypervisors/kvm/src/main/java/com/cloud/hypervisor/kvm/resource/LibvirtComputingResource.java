@@ -3926,9 +3926,9 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
         } else if (isUefiPropertyNotNull(GuestDef.GUEST_NVRAM_TEMPLATE_LEGACY)) {
             guest.setNvramTemplate(uefiProperties.getProperty(GuestDef.GUEST_NVRAM_TEMPLATE_LEGACY));
 
-            // UEFI Lagacy 실행 파일 포맷 설정
+            // UEFI Legacy 실행 파일 포맷 설정
             String exeFormat = getExecutableFormat();
-            guest.setUefiLagacyFormat("format='" + exeFormat + "'"); // 예: qcow2 또는 raw
+            guest.setUefiLegacyFormat("format='" + exeFormat + "'"); // 예: qcow2 또는 raw
         }
     }
 

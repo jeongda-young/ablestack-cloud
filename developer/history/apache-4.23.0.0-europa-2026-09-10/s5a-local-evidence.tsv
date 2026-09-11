@@ -1,0 +1,33 @@
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
+#
+#   http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing,
+# software distributed under the License is distributed on an
+# "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+# KIND, either express or implied.  See the License for the
+# specific language governing permissions and limitations
+# under the License.
+artifact	sha256	bytes	purpose
+fresh-db-init.log	2549c7ef652638a48e94566f1d1728d004e37389b30dc71176dd8f7dd65ef80a	1791	Actual JDBC fresh installation
+upgrade-db-init.log	51d6ef2c591c19b0defcff22b8f465df6f49aba8ff6c7daf3de173f64225b1a6	281	Whole 014 baseline clone upgrade
+s4-baseline-init.log	75c45177991fce3cc0929cf80d1a24de80150e5570f9d78bd15db4e0e591fcfb	376	Official S4 artifact baseline
+s4-to-s5a.log	51d6ef2c591c19b0defcff22b8f465df6f49aba8ff6c7daf3de173f64225b1a6	281	Official S4 to S5A upgrade
+ddl-replay.log	0f0dc31f310fffd6b60a25f0dabb1f2481cde6a0f4949a2e1feda06ffc41759f	360	All 21 DDL commit failure boundaries
+s5a-permission-failure.log	ccdea58c7bff24f48373d8c3c66fb493a7627a0ee8ed596372590ac845976d08	1998	ALTER denied: expected failure/Pending
+s5a-concurrent-retry-0.log	51d6ef2c591c19b0defcff22b8f465df6f49aba8ff6c7daf3de173f64225b1a6	281	Concurrent JVM retry 1
+s5a-concurrent-retry-1.log	51d6ef2c591c19b0defcff22b8f465df6f49aba8ff6c7daf3de173f64225b1a6	281	Concurrent JVM retry 2
+db-schema-parity.json	6578e30e32839475fdab82e4218590ce7b16e716aa6b622050628349ebc19568	215	Fresh/upgrade schema contract parity
+fresh-after.json	edf90f80678ea3367852e6c9703b16f01140d669b148c32c2d409df5ecfe9ddc	2068400	Fresh snapshot
+fresh-repeated.json	edf90f80678ea3367852e6c9703b16f01140d669b148c32c2d409df5ecfe9ddc	2068400	Fresh snapshot after two repeats
+management-invariants-result.json	034866f8786cc04544cb56e8692b094974f24945e3a4db5f5ba778b2bfad0414	114	Three management starts preserve version/journal
+compute-api-3.json	6f6a67b475274e9da446a87fdf70072a090ce3d3bcaa0253d2c3cefb6996fdef	119	Legacy/generic schedule CRUD
+ui-final.log	d4dccf08ccb89c3b35457b4fce91a84178122a21e824bf75a640e79eabb8eee0	52632	UI 351 tests
+kvm-focused5.log	2bf15e3a1a2327fff425a1ac25d3794862e58616c9e39f87b0335c9079a08afa	42617	KVM focused 21 tests
+server-focused3.log	47b6874f7377fdb816a3125c37d28a01770767f48f889590274873421a612ebc	28645	Server focused 345 tests

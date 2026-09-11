@@ -56,3 +56,5 @@ java --add-opens=java.base/java.lang=ALL-UNNAMED --add-opens=java.base/java.lang
 각 시작 전후에 version51행 전체, migration journal 전체(timestamp 포함), 합성 API key pair/OAuth provider 행, role4 DENY, 기존 credit, Usage volume 복합 unique index를 비교한다. 정상 초기화가 생성하는 시스템 설정·SSH 키 등의 변경과 이를 구분한다. API 응답의 세션 토큰과 raw secret은 로그나 추적표에 공개하지 않는다. 시험 후 이 helper가 소유한 JVM만 종료한다.
 
 빈 네트워크 DB의 LB health-check, systemd 없는 컨테이너, 클러스터 IP/인증서와 설치 경로 경고는 남는다. 이 결과는 실제 관리 서버의 시작·로그인·Quota 조회·migration 재시작 검증이며, 운영 규모/클러스터/물리 하이퍼바이저의 최종 검증은 #999에서 수행한다.
+
+Standalone Java 실행기는 `.java.fixture` 확장자로 보관한다. developer 모듈의 소스 루트가 이력 디렉터리까지 포함하므로 직접 컴파일 대상에 섞이지 않도록 분리한 것이다. 실행 시 `/tmp`의 동일 이름 `.java`로 복사하여 javac로 컴파일한다.

@@ -613,7 +613,7 @@ public final class HAManagerImpl extends ManagerBase implements HAManager, Clust
         Entry<Long, Long> minEntry = Collections.min(hostMemMap.entrySet(), comparator);
 
         logger.info("===2-2.host max/min memoryUsed===");
-        logger.info("maxEntry : " + maxEntry.getValue() + ", minEntry : " + minEntry.getValue() + ", persent : " + (maxEntry.getValue() - minEntry.getValue()));
+        logger.info("maxEntry : " + maxEntry.getValue() + ", minEntry : " + minEntry.getValue() + ", present : " + (maxEntry.getValue() - minEntry.getValue()));
 
         //메모리used 값이 10% 이상 차이나면 메모리used가 가장 작은 호스트로 vm migration
         if ((maxEntry.getValue() - minEntry.getValue()) > 10 ) {

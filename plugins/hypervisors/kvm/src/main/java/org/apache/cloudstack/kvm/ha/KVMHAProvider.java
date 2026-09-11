@@ -77,7 +77,7 @@ public final class KVMHAProvider extends HAAbstractHostProvider implements HAPro
         logger.debug("Recover the host {}", r);
         try {
             if (outOfBandManagementService.isOutOfBandManagementEnabled(r)){
-                logger.warn("OOBM recover operation skiped for the host " + r.getName());
+                logger.warn("OOBM recover operation skipped for the host " + r.getName());
                 return false;
             } else {
                 logger.warn("OOBM recover operation failed for the host {}", r);
