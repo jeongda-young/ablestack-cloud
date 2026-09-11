@@ -23,7 +23,9 @@ under the License.
 
 ## 현재 판정
 
-직접 S5A 원본28개와 S2 연관 원본4개의 소스를 통합했다. 원본별 의도·Europa 적응 내용은 `s5a-review.tsv`에 기록한다. 2026-09-11 사용자 확정에 따라 기능 작업은 코드 통합·자동 검증·정상 병합으로 완료한다. PR은 Ready for review이며 실물 테스트를 병합 선행 조건으로 삼지 않는다. 실물 KVM/Ceph·FTCTL·migration/import/HA/다중 ISO 및 VMware 시나리오는 [#1025](https://github.com/ablecloud-team/ablestack-cloud/issues/1025)에 이관하여 모든 코드 병합 후 S8에서 실행한다. 미실행 실물 시험을 PASS로 표시하지 않는다.
+직접 S5A 원본28개, S2 연관 일반 원본4개 및 공유 merge1개를 판정했다. 33개는 Applied11 / Adapted17 / Already Satisfied5이다. 전체299개는 Applied50 / Adapted66 / Already Satisfied42 / Excluded28 / Pending113이다. S2는54개 확정·23개 Pending으로 유지한다. 원본별 의도·Europa 적응 내용은 `s5a-review.tsv`에 기록한다. 2026-09-11 사용자 확정에 따라 기능 작업은 코드 통합·자동 검증·정상 병합으로 완료한다. 코드 검토·자동 검증 후 정상 병합하며 실물 테스트를 병합 선행 조건으로 삼지 않는다. 실물 KVM/Ceph·FTCTL·migration/import/HA/다중 ISO 및 VMware 시나리오는 [#1025](https://github.com/ablecloud-team/ablestack-cloud/issues/1025)에 이관하여 모든 코드 병합 후 S8에서 실행한다. 미실행 실물 시험을 PASS로 표시하지 않는다.
+
+검증 소스: `8a4f0b5fec734cbe5d8c28cbffc1a599cfb0b19d`. 최종 권한 보완의 backend 소스는 `a112afe76f33a4d944f0a12da5dc13702668ee6f`이며 이후 변경은 빈 UI computed 선언2줄 제거다. 최종 UI351 tests 및 변경 UI 전체 ESLint를 다시 통과했다.
 
 ## 동일 버전 DB 전환
 
@@ -49,7 +51,7 @@ under the License.
 | 신규 설치와 업그레이드 schema parity | 열·인덱스·FK 차이0 |
 | 신규 설치 후2회 반복 checker 실행 | 전체 데이터·DDL·journal timestamp snapshot 동일 |
 
-DB 구조 전환을 검증한 소스는 `0906ef2deb`이다. 이후 소스 보완은 권한 검사와 테스트이며 S5A DB 구현은 같다. 전체014 fixture의 retention 행은 초기 UPDATE 당시 존재하지 않았으므로 그 fixture에서 retention23을 검증했다고 주장하지 않는다. retention 보존은 별도 공식 S4 fixture에서 INSERT 후 확인했다.
+DB 구조 전환을 검증한 소스는 `0906ef2deb`이다. 이후 소스 보완과 관계없이 S5A DB 구현은 동일함을 git diff로 확인했다. 전체014 fixture의 retention 행은 초기 UPDATE 당시 존재하지 않았으므로 그 fixture에서 retention23을 검증했다고 주장하지 않는다. retention 보존은 별도 공식 S4 fixture에서 INSERT 후 확인했다.
 
 합성 fixture의 cron 문자열을 그대로 보존하는 시험과 API cron 유효성 검사는 구분한다. 실제 API CRUD에는 유효한5필드 cron을 사용했다. 이 시험은 사용자 운영 데이터 dump나 운영 규모 upgrade 시간 검증이 아니다.
 
@@ -59,7 +61,7 @@ DB 구조 전환을 검증한 소스는 `0906ef2deb`이다. 이후 소스 보완
 
 VM schedule의 일반 API 권한만 확인하면 기존 `createVMSchedule` 등의 거부 규칙을 우회할 수 있어 추가 검사했다. VM 대상의 신규4개 API는 기존 VM API 권한도 요구한다. update는 저장된 schedule의 resource type을 사용하며 API 키를 동일하게 전달한다. AutoScaleVmGroup은 VM 전용 거부 규칙을 상속하지 않는다. 프로젝트 역할은 사용자 기준 ACL로 확인하고 추가 권한 검사에서 rate-limit 카운터를 다시 차감하지 않는다. 소유자 검사도 유지한다. 관리자 정상 CRUD와 권한 거부 시험은 서로 다른 검증이다.
 
-관리 서버 fixture는 실제 KVM agent가 없는 환경이다. 초기 네트워크/LB, systemd Usage, 클러스터 주소·인증서 관련 백그라운드 경고는 남으며 운영 클러스터 전체 정상화를 뜻하지 않는다. 최종 권한 보완 이후 JAR의 API 결과는 검사 완료 시 이 문서에 추가한다.
+관리 서버 fixture는 실제 KVM agent가 없는 환경이다. 초기 네트워크/LB, systemd Usage, 클러스터 주소·인증서 관련 백그라운드 경고는 남으며 운영 클러스터 전체 정상화를 뜻하지 않는다. 최종 noredist 조립 JAR에서도 로그인·기존/신규 API CRUD를 다시 통과했고 version51행 및 journal2행의 모든 값과 timestamp가 유지됐다. 최종 JAR SHA256은 `12b27efab9c073d4b760ec8ac3c54fdeffde2f615cd791e776a95263719e42ce`이다. 권한 거부는 별도의 코드 회귀 테스트로 검증했으며 관리자 정상 CRUD를 권한 거부 시험으로 대신하지 않는다.
 
 ## VM·HA·스토리지 계약
 
@@ -76,9 +78,15 @@ VM schedule의 일반 API 권한만 확인하면 기존 `createVMSchedule` 등�
 
 Rocky Linux9.8 linux/amd64, JDK17, Maven3.9.10, Node14.21.3/npm6, Python3.10을 사용한다. 소스·의존성·테스트는 Docker 내부에서 수행했다. NonOSS 의존성은 공식 Actions와 같은 고정 SHA `f94b5cfcd12e7ce50f9e732ff0e12affa9030640`을 사용했다.
 
-현재 확인된 결과: UI30 suites/351 tests PASS, KVM HA/cleanup/import 집중21 tests PASS, server migration/allocator/template/API dispatcher 집중345 tests PASS. 최종 noredist+simulator clean install과 공식 Actions는 진행 중이며 최종 결과를 후속 반영한다. 사용자/프로젝트/API key ACL 및 rate-limit 이중 차감 방지 보완17개 테스트도 별도 컴파일/JUnit 실행으로 통과했다. 중간 실행에서 발견한 미사용 import·Mockito fixture 오류를 수정했다. UI 집중 시험의 초기 exit137은 전체 coverage 수집 중 메모리 부족이며 최종 UI 전체 시험은 coverage=false로 성공했다.
+로컬 누적 검증은1,084개 test class / 12,725 tests / failures0 / errors0 / skipped15이다. 초기 전체 reactor에서 발견한 컴파일·fixture 오류를 수정하고 해당 구간을 재실행했다. `java-final3`의 앞쪽 모듈, 최종 서버 집중24개, `java-final4`의 남은108개 모듈을 합산한 결과이며 단일 최종 SHA의 clean 전체 실행으로 표시하지 않는다. 클래스별 실행 범위는 `s5a-local-tests.tsv`에 명시했다. 최종 조립 JAR은 noredist/VMware plugin을 포함하며 실제 API를 위와 같이 확인했다.
 
-`codecov`/Sonar 등 skip은 PASS가 아니다. PR conflict triage는 다른 PR #1022에 label을 쓰는 단계에서 integration 권한 오류로 실패했다. 이를 제품 빌드 성공이나 이번 PR의 실제 충돌로 해석하지 않는다. 워크플로를 비활성화하거나 관리자 우회 merge를 사용하지 않는다.
+최종 UI30 suites/351 tests와 변경된 UI 전체 ESLint는 통과했다. 앞선 KVM HA/cleanup/import 집중21개, server migration/allocator/template/dispatcher 집중345개 및 사용자/프로젝트/API key ACL 집중17개 결과도 별도로 보존한다. UI 배포 빌드가 발견한 빈 computed 중복 선언은 제거했다. 초기 UI 집중 시험의 exit137은 전체 coverage 수집 중 메모리 부족이며 최종 전체 UI 시험은 coverage=false로 성공했다.
+
+최종 전체 backend/UI/RAT 및 Rocky9.8/9.7 Actions 결과와 산출물은 [PR #1024 Checks](https://github.com/ablecloud-team/ablestack-cloud/pull/1024/checks) 및 [#993 완료 기록](https://github.com/ablecloud-team/ablestack-cloud/issues/993)에 연결한다. 코드 PR 병합은 해당 최종 검사를 확인한 뒤 수행한다. 로컬의 구간 실행을 공식 최종 전체 실행의 대체 증거로 삼지 않는다.
+
+전체 pre-commit에는 기존13개 실패 범주가 남아 있다. 소스 `a112afe76f`의 Actions Lint `34545945103`을 S4 기준과 비교했으며 이번 변경 경로 진단은0개다. 변경 파일의 codespell·Markdown·Python·diff 검사는 별도로 통과했다. 기존 전체 lint 부채는 #990에서 관리하며 전체 lint 성공으로 계산하지 않는다.
+
+`codecov`/Sonar 등 skip은 PASS가 아니다. 초기 PR conflict triage는 다른 PR #1022의 label 권한 문제로 실패했지만 후속 실행은 정상 통과했다. 취소된 중간 실행을 최종 결과로 계산하지 않는다. 워크플로를 비활성화하거나 관리자 우회 merge를 사용하지 않는다.
 
 ## 남은 게이트와 인수
 
@@ -89,4 +97,4 @@ Rocky Linux9.8 linux/amd64, JDK17, Maven3.9.10, Node14.21.3/npm6, Python3.10을 
 - 이후 같은4.23 DB 변경은 별도의 checkpoint를 사용한다. 이미 Complete인 S5A v1 SQL만 바꾸면 기존 설치에서는 다시 실행되지 않는다.
 - 실제 운영 업그레이드 전 전체 DB 백업을 검증한다. DDL은 transaction rollback만으로 원복되지 않으므로 코드/DB 백업의 일치하는 조합으로 복구한다.
 
-재현 도구와 환경 경계는 [s5a-fixtures](s5a-fixtures/README.ko.md), 원본별 검토는 [s5a-review.tsv](s5a-review.tsv)에 기록한다. 개발 DB와 기존 볼륨은 초기화하지 않았다.
+재현 도구와 환경 경계는 [s5a-fixtures](s5a-fixtures/README.ko.md), 원본별 검토는 [s5a-review.tsv](s5a-review.tsv), 공유 merge는 [s5a-merge-review.tsv](s5a-merge-review.tsv), 후속 의존성은 [s5a-dependencies.tsv](s5a-dependencies.tsv)에 기록한다. 개발 DB와 기존 볼륨은 초기화하지 않았다.
