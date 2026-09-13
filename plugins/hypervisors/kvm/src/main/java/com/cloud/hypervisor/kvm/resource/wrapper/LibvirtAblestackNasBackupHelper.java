@@ -24,6 +24,7 @@ import com.cloud.hypervisor.kvm.resource.LibvirtConnection;
 import com.cloud.hypervisor.kvm.resource.LibvirtComputingResource;
 import com.cloud.storage.Storage;
 import com.cloud.utils.Pair;
+import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.utils.script.Script;
 import org.apache.cloudstack.backup.AblestackBackupFrameworkUtils;
 import org.apache.cloudstack.backup.AblestackNasTakeBackupCommand;
@@ -308,19 +309,22 @@ class LibvirtAblestackNasBackupHelper {
 
     private Path mountRepository(AblestackNasTakeBackupCommand command) throws IOException {
         Path mountPoint = Files.createTempDirectory("csbackup.");
+        final String mount;
+        try {
+            mount = LibvirtBackupRepositoryMountHelper.buildMountCommand(
+                    command.getBackupRepoAddress(),
+                    command.getBackupRepoType(),
+                    command.getMountOptions(),
+                    mountPoint.toString());
+        } catch (CloudRuntimeException e) {
+            throw new IOException(e.getMessage(), e);
+        }
         final int mountTimeoutMillis = command.getMountTimeout() > 0
                 ? Math.toIntExact(TimeUnit.SECONDS.toMillis(command.getMountTimeout()))
                 : resource.getCmdsTimeout();
-        StringBuilder mount = new StringBuilder()
-                .append("mount -t ").append(shellQuote(command.getBackupRepoType()))
-                .append(" ").append(shellQuote(command.getBackupRepoAddress()))
-                .append(" ").append(shellQuote(mountPoint.toString()));
-        if (command.getMountOptions() != null && !command.getMountOptions().isEmpty()) {
-            mount.append(" -o ").append(shellQuote(command.getMountOptions()));
-        }
         LOGGER.info("{} phase=[MOUNT_START], vm=[{}], repository=[{}], mountPoint=[{}], mountTimeoutSeconds=[{}]",
                 BACKUP_TRACE, command.getVmName(), command.getBackupRepoAddress(), mountPoint, command.getMountTimeout());
-        if (Script.runSimpleBashScriptForExitValue(mount.toString(), mountTimeoutMillis, false) != 0) {
+        if (Script.runSimpleBashScriptForExitValue(mount, mountTimeoutMillis, false) != 0) {
             try {
                 Files.deleteIfExists(mountPoint);
             } catch (IOException e) {
