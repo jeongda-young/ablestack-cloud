@@ -29,7 +29,7 @@
 
     <groupId>org.apache.cloudstack</groupId>
     <artifactId>cloudstack</artifactId>
-    <version>4.23.0.0-SNAPSHOT</version>
+    <version>4.23.0.0</version>
     <packaging>pom</packaging>
     <name>Apache CloudStack</name>
     <description>Apache CloudStack is an IaaS ("Infrastructure as a Service") cloud orchestration platform.</description>
@@ -1071,6 +1071,8 @@
                             <exclude>**/*.crt</exclude>
                             <exclude>**/*.csr</exclude>
                             <exclude>**/*.key</exclude>
+                            <!-- Raw key data uses the same license-scan treatment as *.key files. -->
+                            <exclude>scripts/vm/hypervisor/kvm/veeam/ablestack.key.default</exclude>
                             <exclude>**/authorized_keys</exclude>
                             <exclude>**/*.war</exclude>
                             <exclude>**/*.mar</exclude>

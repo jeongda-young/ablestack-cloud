@@ -21,7 +21,7 @@ under the License.
 
 부모: [Epic #987](https://github.com/ablecloud-team/ablestack-cloud/issues/987). 기준일: 2026-09-10.
 
-S1에서 확정한 범위를 유지하고 후속 통합 결과를 갱신하는 추적표다. **현재 S5B까지 최종 판정240개, Pending59개이며 전체 통합·릴리즈 완료가 아니다.** 초기 사전분류는 아래에 보존한다.
+S1에서 확정한 범위를 유지하고 후속 통합 결과를 갱신하는 추적표다. **S8 코드 판정299개, Pending0개다. 최종 자동 검증/병합 상태는 [S8 보고](s8-verification.ko.md)를 따른다. 실물/정식 릴리즈 승인은 #1025로 분리한다.** 초기 사전분류는 아래에 보존한다.
 
 ## 고정 기준
 
@@ -190,3 +190,10 @@ PR [#1037](https://github.com/ablecloud-team/ablestack-cloud/pull/1037), 기능 
 [DB](s6-db-results.tsv), [후속 계약](s6-dependencies.tsv), [재현 fixture](s6-fixtures/README.ko.md)를 참조한다.
 새 DB 단계 europa-4.23-s6-v1을 사용하며 이전 Complete 단계와 Europa Storage Service·KMS·FTCTL/DR를 보존한다.
 실물 검증은 #1025에 NOT_RUN으로 누적했고 코드 병합의 선행 조건이 아니다. 다음 기능 작업은 #998이다.
+
+## S7 UI·테마·한국어·릴리즈 문서
+
+S7 #998 / PR #1039: 직접8개와 공유 merge2개를 확정했다. 전체299개는 Applied101 / Adapted106 / Already Satisfied62 / Excluded28 / Pending2다.
+[검증 보고](s7-verification.ko.md) · [원본10행](s7-review.tsv) · [merge 해결](s7-merge-review.tsv) · [DB 결과](s7-db-results.tsv) · [후속 계약](s7-dependencies.tsv) · [릴리즈 노트](europa-release-notes.ko.md).
+독립 S7 DB 단계와 pre-S7 view를 추가하고, 삭제·계정 링크·로그인/OAuth·브랜딩·한국어 계약을 보존했다.
+다음은 S8 #999이며, S2의 realhostip 제거와 최종 버전2개를 함께 마무리한다. 실물 시험은 #1025에 NOT_RUN으로 인수한다.

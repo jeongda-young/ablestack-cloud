@@ -517,6 +517,12 @@
             </div>
             <br v-if="currentAction.paramFields.length > 0" />
           </span>
+          <div v-if="requiresNameConfirmation" style="margin-bottom: 5px">
+            <a-form-item>
+              <a-input v-model:value="actionConfirmText" :placeholder="resource.name" />
+            </a-form-item>
+            <a-alert type="info" :message="$t('label.delete.confirmation')" />
+          </div>
           <a-form
             :ref="formRef"
             :model="form"
@@ -780,6 +786,7 @@
               <a-button
                 type="primary"
                 @click="handleSubmit"
+                :disabled="isSubmitDisabled"
                 ref="submit"
               >{{ $t('label.ok') }}</a-button>
             </div>
@@ -799,6 +806,7 @@
         ></slot>
         <resource-view
           v-else
+          :key="$route.path"
           :resource="resource"
           :loading="loading"
           :tabs="$route.meta.tabs"
@@ -946,6 +954,7 @@ export default {
       confirmDirty: false,
       firstIndex: 0,
       modalWidth: '30vw',
+      actionConfirmText: '',
       promises: [],
       detailActionsVisible: false,
       autoRefreshTimer: null,
@@ -1100,7 +1109,7 @@ export default {
   },
   watch: {
     '$route' (to, from) {
-      if (to.fullPath !== from.fullPath && !to.fullPath.includes('action/') && to?.query?.tab !== 'browser') {
+      if (to.fullPath !== from.fullPath && !to.path.startsWith('/action/') && to?.query?.tab !== 'browser') {
         this.resetSelection()
         if ('page' in to.query) {
           this.page = Number(to.query.page)
@@ -1242,6 +1251,14 @@ export default {
           ('groupShow' in action ? action.groupShow(this.selectedItems, this.$store.getters) : true)
         return showOnList || showOnGroup
       })
+    },
+    requiresNameConfirmation () {
+      return !!this.currentAction?.requireNameConfirmation &&
+        !(this.currentAction.invokedAsGroupAction && this.selectedRowKeys.length > 0)
+    },
+    isSubmitDisabled () {
+      return this.requiresNameConfirmation &&
+        (!this.resource?.name || this.actionConfirmText.trim() !== this.resource.name.trim())
     }
   },
   methods: {
@@ -1796,6 +1813,7 @@ export default {
       this.actionLoading = false
       this.showAction = false
       this.currentAction = {}
+      this.actionConfirmText = ''
     },
     cancelAction () {
       eventBus.emit('action-closing', { action: this.currentAction })
@@ -1860,7 +1878,13 @@ export default {
         ...action,
         invokedAsGroupAction: !!isGroupAction
       }
-      this.currentAction.params = store.getters.apis[this.currentAction.api].params
+      const apiParams = store.getters.apis[this.currentAction.api]?.params
+      if (!Array.isArray(apiParams)) {
+        this.rejectActionSchema(action.api, ['*'])
+        return
+      }
+      this.currentAction.params = apiParams
+      this.actionConfirmText = ''
       this.resource = action.resource
       this.$emit('change-resource', this.resource)
       var paramFields = this.currentAction.params
@@ -1881,7 +1905,11 @@ export default {
         }
         this.currentAction.message = Array.isArray(message) ? this.$t(...message) : this.$t(message)
       }
-      this.getArgs(action, isGroupAction, paramFields)
+      const missingArgs = this.getArgs(action, isGroupAction, paramFields)
+      if (missingArgs.length > 0) {
+        this.rejectActionSchema(action.api, missingArgs)
+        return
+      }
       this.getFilters(action, isGroupAction, paramFields)
       this.getFirstIndexFocus()
 
@@ -1901,8 +1929,13 @@ export default {
         this.fillEditFormFieldValues()
       }
     },
+    rejectActionSchema (api, missingArgs) {
+      this.closeAction()
+      this.$message.error(this.$t('message.api.schema.mismatch', { api, parameters: missingArgs.join(', ') }))
+    },
     getArgs (action, isGroupAction, paramFields) {
       const self = this
+      const missingArgs = []
       if ('args' in action) {
         var args = action.args
         if (typeof action.args === 'function') {
@@ -1926,12 +1959,17 @@ export default {
                 description: self.$t('label.select.guest.os.type')
               }
             }
-            return paramFields.filter(function (param) {
+            const field = paramFields.find(function (param) {
               return param.name.toLowerCase() === arg.toLowerCase()
-            })[0]
+            })
+            if (!field) {
+              missingArgs.push(arg)
+            }
+            return field
           })
         }
       }
+      return missingArgs
     },
     getFilters (action, isGroupAction, paramFields) {
       if ('filters' in action) {
@@ -2163,7 +2201,7 @@ export default {
       this.message = {}
     },
     handleSubmit (e) {
-      if (this.actionLoading) return
+      if (this.actionLoading || this.isSubmitDisabled) return
       this.promises = []
       if (!this.dataView && this.currentAction.invokedAsGroupAction && this.selectedRowKeys.length > 0) {
         if (this.selectedRowKeys.length > 0) {

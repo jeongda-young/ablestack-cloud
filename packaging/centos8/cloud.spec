@@ -51,6 +51,7 @@ CloudStack is a highly-scalable elastic, open source,
 intelligent IaaS cloud implementation.
 
 %package management
+Requires: sshpass
 Summary:   CloudStack management server UI
 Requires: java-17-openjdk
 Requires: (tzdata-java or timezone-java)
@@ -96,6 +97,7 @@ The Apache CloudStack files shared between agent and management server
 %global __requires_exclude ^(libuuid\\.so\\.1|/usr/bin/python)$
 
 %package agent
+Requires: cloudstack-network-runtime >= 1.0.0
 Summary: CloudStack Agent for KVM hypervisors
 Requires: (openssh-clients or openssh)
 Requires: java-17-openjdk
@@ -328,6 +330,11 @@ install -D plugins/integrations/kubernetes-service/src/main/resources/conf/k8s-n
 mkdir -p ${RPM_BUILD_ROOT}%{_datadir}/%{name}-management/templates/systemvm
 cp -r engine/schema/dist/systemvm-templates/* ${RPM_BUILD_ROOT}%{_datadir}/%{name}-management/templates/systemvm
 rm -rf ${RPM_BUILD_ROOT}%{_datadir}/%{name}-management/templates/systemvm/md5sum.txt
+
+# Sample Extensions: Rocky 9 uses this spec, not the CentOS 7 spec.
+mkdir -p ${RPM_BUILD_ROOT}%{_sysconfdir}/%{name}/extensions
+cp -r extensions/* ${RPM_BUILD_ROOT}%{_sysconfdir}/%{name}/extensions
+ln -sf %{_sysconfdir}/%{name}/extensions ${RPM_BUILD_ROOT}%{_datadir}/%{name}-management/extensions
 
 # UI
 mkdir -p ${RPM_BUILD_ROOT}%{_sysconfdir}/%{name}/ui
@@ -653,6 +660,7 @@ pip3 install --upgrade /usr/share/cloudstack-marvin/[Mm]arvin-*.tar.gz
 %{_datadir}/%{name}-management/lib/*.jar
 %{_datadir}/%{name}-management/logs
 %{_datadir}/%{name}-management/templates
+%{_datadir}/%{name}-management/extensions
 %attr(0755,root,root) %{_bindir}/%{name}-setup-databases
 %attr(0755,root,root) %{_bindir}/%{name}-migrate-databases
 %attr(0755,root,root) %{_bindir}/%{name}-set-guest-password
@@ -674,6 +682,9 @@ pip3 install --upgrade /usr/share/cloudstack-marvin/[Mm]arvin-*.tar.gz
 %{_defaultdocdir}/%{name}-management-%{version}/LICENSE
 %{_defaultdocdir}/%{name}-management-%{version}/NOTICE
 %{_datadir}/%{name}-management/setup/wheel/*.whl
+%dir %attr(0755,cloud,cloud) %{_sysconfdir}/%{name}/extensions
+%attr(0755,cloud,cloud) %{_sysconfdir}/%{name}/extensions/*
+%exclude %{_sysconfdir}/%{name}/extensions/network-namespace/network-namespace-wrapper.sh
 
 %files agent
 %attr(0755,root,root) %{_bindir}/%{name}-setup-agent
