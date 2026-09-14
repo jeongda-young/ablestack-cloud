@@ -375,7 +375,10 @@ export default {
           message: 'message.backup.create',
           docHelp: 'adminguide/virtual_machines.html#creating-vm-backups',
           dataView: true,
-          show: (record) => { return record.backupofferingid },
+          show: (record) => {
+            const provider = (record.backupprovider || '').toLowerCase()
+            return record.backupofferingid && !['netbackup', 'ablestack-netbackup', 'veeam', 'ablestack-veeam'].includes(provider)
+          },
           disabled: (record, store, selectedItems) => { return record.hostcontrolstate === 'Offline' || disableDuringFastCloneFlatten(record, store, selectedItems) },
           tooltip: (record, store, selectedItems) => getFastCloneOperationTooltip(record, store, selectedItems, 'label.create.backup'),
           popup: true,

@@ -949,7 +949,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
 
         final BackupOffering offering = backupOfferingDao.findById(vm.getBackupOfferingId());
-        if (offering == null || !offering.isUserDrivenBackupAllowed()) {
+        if (offering == null || !allowsUserDefinedBackupSchedule(offering)) {
             throw new CloudRuntimeException("The selected backup offering does not allow user-defined backup schedule");
         }
 
@@ -1163,7 +1163,14 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             throw new CloudRuntimeException("Instance backup provider not found for the Offering");
         }
 
-        if (!offering.isUserDrivenBackupAllowed()) {
+        Long backupScheduleId = getBackupScheduleId(job);
+        boolean isScheduledBackup = backupScheduleId != null;
+
+        if (!isScheduledBackup && isExternalPolicyScheduledProvider(offering.getProvider())) {
+            throw new CloudRuntimeException(String.format("Ad-hoc user backup is not supported for %s backup provider", offering.getProvider()));
+        }
+
+        if (!offering.isUserDrivenBackupAllowed() && !allowsScheduledBackupExecution(offering, isScheduledBackup)) {
             throw new CloudRuntimeException("The assigned backup offering does not allow ad-hoc user backup");
         }
 
@@ -1175,8 +1182,6 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             throw new InvalidParameterValueException("Quiesce VM option is supported only for NAS, Commvault, Ablestack Veeam, and KBOSS backup providers");
         }
 
-        Long backupScheduleId = getBackupScheduleId(job);
-        boolean isScheduledBackup = backupScheduleId != null;
         logger.info("Starting VM backup request [vmId: {}, vmUuid: {}, vmName: {}, provider: {}, offeringId: {}, scheduleId: {}, scheduled: {}]",
                 vm.getId(), vm.getUuid(), vm.getInstanceName(), offering.getProvider(), offering.getId(), backupScheduleId, isScheduledBackup);
         checkNoActiveFastCloneFlattenForBackup(vmId);
@@ -3727,15 +3732,14 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             }
 
             final BackupOffering offering = backupOfferingDao.findById(vm.getBackupOfferingId());
-            if (offering == null || !offering.isUserDrivenBackupAllowed()) {
+            if (offering == null || !allowsUserDefinedBackupSchedule(offering)) {
                 continue;
             }
-            if (BackupProviderNameUtils.isNetBackupFamily(offering.getProvider())) {
-                logger.debug("Skipping Mold-driven backup schedule [id: {}, uuid: {}, vmId: {}] because NetBackup schedules are claimed by host-policy bpstart.",
-                        backupSchedule.getId(), backupSchedule.getUuid(), vmId);
+            if (isExternalPolicyScheduledProvider(offering.getProvider())) {
+                logger.debug("Skipping Mold-driven backup schedule [id: {}, uuid: {}, vmId: {}, provider: {}] because schedules for this provider are executed by provider-side hooks.",
+                        backupSchedule.getId(), backupSchedule.getUuid(), vmId, offering.getProvider());
                 continue;
             }
-
             if (isDisabled(vm.getDataCenterId())) {
                 continue;
             }
@@ -3801,6 +3805,18 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 }
             }
         }
+    }
+
+    private boolean allowsUserDefinedBackupSchedule(final BackupOffering offering) {
+        return offering != null && (offering.isUserDrivenBackupAllowed() || isExternalPolicyScheduledProvider(offering.getProvider()));
+    }
+
+    private boolean allowsScheduledBackupExecution(final BackupOffering offering, final boolean isScheduledBackup) {
+        return offering != null && isScheduledBackup && isExternalPolicyScheduledProvider(offering.getProvider());
+    }
+
+    private boolean isExternalPolicyScheduledProvider(final String provider) {
+        return BackupProviderNameUtils.isNetBackupFamily(provider) || BackupProviderNameUtils.isVeeamFamily(provider);
     }
 
     @Override
