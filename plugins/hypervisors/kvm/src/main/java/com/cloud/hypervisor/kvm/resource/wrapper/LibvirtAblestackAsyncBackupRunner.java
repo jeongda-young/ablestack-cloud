@@ -276,6 +276,10 @@ final class LibvirtAblestackAsyncBackupRunner {
         final String backupType = properties.getProperty("backupType");
         final String operation = properties.getProperty("operation", AblestackBackupFrameworkUtils.resolveJobOperation(backupType));
         final String unitName = properties.getProperty("unitName");
+        final String state = getJobState(jobId, logger);
+        if (STATE_COMPLETED.equals(state) || STATE_FAILED.equals(state) || STATE_CANCELED.equals(state)) {
+            return new StopBackupAnswer(command, false, operation + " job is already " + state);
+        }
         properties.setProperty("cancelRequested", Boolean.TRUE.toString());
         storeJobProperties(logger, jobId, properties);
         if (!safeValue(unitName).isBlank()) {

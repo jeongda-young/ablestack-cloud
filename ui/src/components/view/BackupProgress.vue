@@ -19,7 +19,7 @@
 <template>
   <div class="backup-progress">
     <status :text="displayStatus" displayText :styles="{ 'min-width': '80px' }">
-      <template #tooltip>
+      <template v-if="showJobDetails" #tooltip>
         <div class="backup-progress-tooltip">
           <div class="backup-progress-tooltip-title">{{ displayStatus }}</div>
           <div v-if="hasProgress" class="backup-progress-tooltip-row">
@@ -106,6 +106,9 @@ export default {
     },
     hasProgress () {
       return this.progress !== null
+    },
+    showJobDetails () {
+      return this.isActive && (this.hasProgress || !!this.jobState || !!this.step || !!this.logPath)
     }
   },
   watch: {
@@ -154,6 +157,12 @@ export default {
       this.jobState = this.record?.restorejobstate || this.record?.backupjobstate || this.jobState
       this.step = this.record?.backupjobstep || this.step
       this.logPath = this.record?.restorejoblogpath || this.record?.backupjoblogpath || this.logPath
+      if (!this.isActive) {
+        this.progress = null
+        this.jobState = ''
+        this.step = ''
+        this.logPath = ''
+      }
     },
     fetchStatus () {
       if (!this.shouldPoll()) {

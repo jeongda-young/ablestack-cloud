@@ -39,6 +39,12 @@ const isQcow2Backup = (record) => {
   return String(record?.backupengine || '').toUpperCase() === 'QCOW2'
 }
 
+const hasKbossBackupProvider = (getters) => {
+  return String(getters?.features?.backupProviderPlugins || '').split(',')
+    .map(provider => provider.trim().toLowerCase())
+    .includes('kboss')
+}
+
 export default {
   name: 'storage',
   title: 'label.storage',
@@ -550,7 +556,13 @@ export default {
       icon: 'cloud-upload-outlined',
       permission: ['listBackups'],
       params: { listvmdetails: 'true' },
-      columns: ['name', 'status', 'compressionstatus', 'validationstatus', 'size', 'virtualsize', 'virtualmachinename', 'backupofferingname', 'intervaltype', 'type', 'created', 'account', 'domain', 'zone'],
+      columns: (getters) => {
+        const columns = ['name', 'status', 'size', 'virtualsize', 'virtualmachinename', 'backupofferingname', 'intervaltype', 'type', 'created', 'account', 'domain', 'zone']
+        if (hasKbossBackupProvider(getters)) {
+          columns.splice(2, 0, 'compressionstatus', 'validationstatus')
+        }
+        return columns
+      },
       details: ['name', 'description', 'virtualmachinename', 'id', 'intervaltype', 'type', 'externalid', 'size', 'virtualsize', 'volumes', 'backupofferingname', 'restorejobid', 'restorejobstate', 'restorejoblogpath', 'zone', 'account', 'domain', 'created'],
       searchFilters: () => {
         var filters = ['name', 'zoneid', 'domainid', 'account', 'backupofferingname', 'status']
