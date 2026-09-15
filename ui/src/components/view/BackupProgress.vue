@@ -30,9 +30,9 @@
             <span>{{ $t('label.state') }} :</span>
             <span>{{ jobState }}</span>
           </div>
-          <div v-if="step" class="backup-progress-tooltip-row">
+          <div v-if="displayStep" class="backup-progress-tooltip-row">
             <span>{{ $t('label.step') }} :</span>
-            <span>{{ step }}</span>
+            <span>{{ displayStep }}</span>
           </div>
         </div>
       </template>
@@ -103,8 +103,19 @@ export default {
     hasProgress () {
       return this.progress !== null
     },
+    isAwaitingBackupFinalization () {
+      return String(this.localStatus || this.record?.status || '').toLowerCase() === 'backingup' &&
+        this.isTerminalJobState(this.jobState) &&
+        this.normalizeProgress(this.progress) === 100
+    },
+    displayStep () {
+      if (this.isAwaitingBackupFinalization) {
+        return this.$t('label.backup.finalizing')
+      }
+      return this.step
+    },
     showJobDetails () {
-      return this.isActive && (this.hasProgress || !!this.jobState || !!this.step || !!this.logPath)
+      return this.isActive && (this.hasProgress || !!this.jobState || !!this.displayStep || !!this.logPath)
     }
   },
   watch: {
