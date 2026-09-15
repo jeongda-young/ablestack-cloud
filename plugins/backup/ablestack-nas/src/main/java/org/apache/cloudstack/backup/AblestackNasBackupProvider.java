@@ -494,7 +494,9 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         }
         backup.setDetails(details);
 
-        return backupDao.persist(backup);
+        final BackupVO persistedBackup = backupDao.persist(backup);
+        persistBackupJobHostDetails(persistedBackup, details);
+        return persistedBackup;
     }
 
     private void addBackupJobHostDetails(final Map<String, String> details, final Long hostId) {
@@ -506,6 +508,24 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         if (host != null) {
             details.put(AblestackBackupFrameworkUtils.BACKUP_HOST_NAME_DETAIL, host.getName());
         }
+    }
+
+    private void persistBackupJobHostDetails(final BackupVO backup, final Map<String, String> details) {
+        if (backup == null || details == null) {
+            return;
+        }
+        persistBackupDetail(backup.getId(), AblestackBackupFrameworkUtils.BACKUP_HOST_ID_DETAIL,
+                details.get(AblestackBackupFrameworkUtils.BACKUP_HOST_ID_DETAIL));
+        persistBackupDetail(backup.getId(), AblestackBackupFrameworkUtils.BACKUP_HOST_NAME_DETAIL,
+                details.get(AblestackBackupFrameworkUtils.BACKUP_HOST_NAME_DETAIL));
+    }
+
+    private void persistBackupDetail(final Long backupId, final String key, final String value) {
+        if (backupId == null || StringUtils.isBlank(key) || StringUtils.isBlank(value)) {
+            return;
+        }
+        backupDetailsDao.removeDetail(backupId, key);
+        backupDetailsDao.addDetail(backupId, key, value, false);
     }
 
     private String getCheckpointPath(String backupPath, String checkpointName, String backupEngine) {
