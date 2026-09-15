@@ -4044,7 +4044,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
 
         private void reconcileInterruptedRestoreJob(final BackupProvider backupProvider, final DataCenter dataCenter, final Long backupId) {
             final BackupVO backup = backupDao.findById(backupId);
-            if (backup == null || !dataCenter.getId().equals(backup.getZoneId())) {
+            if (backup == null || dataCenter.getId() != backup.getZoneId()) {
                 return;
             }
             final BackupOfferingVO offering = backupOfferingDao.findById(backup.getBackupOfferingId());
