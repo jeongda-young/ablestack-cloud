@@ -614,9 +614,21 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         backup.setDomainId(vm.getDomainId());
         backup.setZoneId(vm.getDataCenterId());
         backup.setName(backupManager.getBackupNameFromVM(vm));
+        addBackupJobHostDetails(details, hostId);
         backup.setDetails(details);
 
         return backupDao.persist(backup);
+    }
+
+    private void addBackupJobHostDetails(final Map<String, String> details, final Long hostId) {
+        if (details == null || hostId == null) {
+            return;
+        }
+        details.put(AblestackBackupFrameworkUtils.BACKUP_HOST_ID_DETAIL, String.valueOf(hostId));
+        final HostVO host = hostDao.findById(hostId);
+        if (host != null) {
+            details.put(AblestackBackupFrameworkUtils.BACKUP_HOST_NAME_DETAIL, host.getName());
+        }
     }
 
     private Map<String, String> getBackupDetails(VirtualMachine vm, String backupPath, String checkpointName, String backupEngine, Backup latestBackup,
@@ -2395,6 +2407,23 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         }
     }
 
+    private Long getBackupJobHostId(final Backup backup) {
+        if (backup == null) {
+            return null;
+        }
+        loadBackupDetailsIfNeeded(backup);
+        final String backupJobHostId = getBackupDetail(backup, AblestackBackupFrameworkUtils.BACKUP_HOST_ID_DETAIL);
+        if (StringUtils.isNotBlank(backupJobHostId)) {
+            try {
+                return Long.parseLong(backupJobHostId.trim());
+            } catch (NumberFormatException e) {
+                LOG.debug("Ignoring invalid Commvault backup job host id detail [{}] for backup [{}]",
+                        backupJobHostId, backup.getUuid());
+            }
+        }
+        return backup.getHostId();
+    }
+
     @Override
     public boolean cancelBackup(final VirtualMachine vm, final Backup backup) {
         final Host host = getVMHypervisorHostForBackup(vm);
@@ -2465,7 +2494,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                     createVolumeInfoFromVolumes(vmVolumes, backupFiles));
             backupDao.update(backupVO.getId(), backupVO);
             cleanupBackupStagingPathFromDetails(backupVO);
-            cleanupBackupJobFiles(backupVO.getHostId(), backupVO.getUuid());
+            cleanupBackupJobFiles(getBackupJobHostId(backupVO), backupVO.getUuid());
             LOG.info("Recovered Commvault backup [{}] for VM [{}] from BackingUp to BackedUp using job [{}]",
                     backupVO.getUuid(), vm.getInstanceName(), jobId);
             return true;
@@ -2525,7 +2554,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                     createVolumeInfoFromVolumes(vmVolumes, backupFiles));
             if (backupDao.update(backupVO.getId(), backupVO)) {
                 cleanupBackupStagingPathFromDetails(backupVO);
-                cleanupBackupJobFiles(backupVO.getHostId(), backupVO.getUuid());
+                cleanupBackupJobFiles(getBackupJobHostId(backupVO), backupVO.getUuid());
                 LOG.info("Recovered Commvault backup [{}] for VM [{}] from Error to BackedUp using completed job [{}]",
                         backupVO.getUuid(), vm.getInstanceName(), jobId);
                 return true;

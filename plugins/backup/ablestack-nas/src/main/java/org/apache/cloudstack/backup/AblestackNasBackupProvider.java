@@ -479,6 +479,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         if (backupDetails != null) {
             details.putAll(backupDetails);
         }
+        addBackupJobHostDetails(details, hostId);
         details.put(DETAIL_CHECKPOINT_NAME, checkpointName);
         details.put(DETAIL_CHECKPOINT_PATH, getCheckpointPath(backupPath, checkpointName, backupEngine));
         details.put(DETAIL_BACKUP_ENGINE, backupEngine);
@@ -494,6 +495,17 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         backup.setDetails(details);
 
         return backupDao.persist(backup);
+    }
+
+    private void addBackupJobHostDetails(final Map<String, String> details, final Long hostId) {
+        if (details == null || hostId == null) {
+            return;
+        }
+        details.put(AblestackBackupFrameworkUtils.BACKUP_HOST_ID_DETAIL, String.valueOf(hostId));
+        final HostVO host = hostDao.findById(hostId);
+        if (host != null) {
+            details.put(AblestackBackupFrameworkUtils.BACKUP_HOST_NAME_DETAIL, host.getName());
+        }
     }
 
     private String getCheckpointPath(String backupPath, String checkpointName, String backupEngine) {
@@ -1632,8 +1644,9 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
     }
 
     private Host findBackupJobHost(final Backup backup, final VirtualMachine vm) {
-        if (backup != null && backup.getHostId() != null) {
-            final HostVO host = hostDao.findById(backup.getHostId());
+        final Long backupJobHostId = getBackupJobHostId(backup);
+        if (backupJobHostId != null) {
+            final HostVO host = hostDao.findById(backupJobHostId);
             if (host != null) {
                 return host;
             }
@@ -1643,6 +1656,23 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         } catch (CloudRuntimeException e) {
             return null;
         }
+    }
+
+    private Long getBackupJobHostId(final Backup backup) {
+        if (backup == null) {
+            return null;
+        }
+        loadBackupDetailsIfNeeded(backup);
+        final String backupJobHostId = getBackupDetail(backup, AblestackBackupFrameworkUtils.BACKUP_HOST_ID_DETAIL);
+        if (StringUtils.isNotBlank(backupJobHostId)) {
+            try {
+                return Long.parseLong(backupJobHostId.trim());
+            } catch (NumberFormatException e) {
+                LOG.debug("Ignoring invalid NAS backup job host id detail [{}] for backup [{}]",
+                        backupJobHostId, backup.getUuid());
+            }
+        }
+        return backup.getHostId();
     }
 
     private void cleanupBackupJobFiles(final Long hostId, final String backupJobId) {

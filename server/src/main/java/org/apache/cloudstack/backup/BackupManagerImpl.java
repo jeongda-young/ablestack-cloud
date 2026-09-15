@@ -1758,7 +1758,8 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         accountManager.checkAccess(caller, null, true, vm);
         final BackupVO backup = netBackupRestoreCoordinator.updateBackupMetadata(cmd, vm);
         if (backup != null && Backup.Status.BackedUp.equals(backup.getStatus())) {
-            cleanupBackupJobFiles(backup.getHostId(), backup.getUuid(), "NetBackup");
+            final HostVO backupJobHost = findBackupJobHost(backup, vm);
+            cleanupBackupJobFiles(backupJobHost != null ? backupJobHost.getId() : null, backup.getUuid(), "NetBackup");
         }
         return true;
     }
@@ -4526,8 +4527,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     }
 
     private HostVO findBackupJobHost(final BackupVO backup, final VMInstanceVO vm) {
-        if (backup.getHostId() != null) {
-            final HostVO host = hostDao.findById(backup.getHostId());
+        final Long backupJobHostId = getBackupJobHostId(backup);
+        if (backupJobHostId != null) {
+            final HostVO host = hostDao.findById(backupJobHostId);
             if (host != null) {
                 return host;
             }
@@ -4538,6 +4540,18 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
         final Long hostId = vm.getHostId() != null ? vm.getHostId() : vm.getLastHostId();
         return hostId != null ? hostDao.findById(hostId) : null;
+    }
+
+    private Long getBackupJobHostId(final BackupVO backup) {
+        if (backup == null) {
+            return null;
+        }
+        backupDao.loadDetails(backup);
+        final String backupJobHostId = backup.getDetail(AblestackBackupFrameworkUtils.BACKUP_HOST_ID_DETAIL);
+        if (NumberUtils.isDigits(backupJobHostId)) {
+            return Long.parseLong(backupJobHostId);
+        }
+        return backup.getHostId();
     }
 
     private void cleanupBackupJobFiles(final Long hostId, final String backupJobId, final String provider) {
