@@ -634,7 +634,7 @@ final class LibvirtAblestackAsyncBackupRunner {
             case "VALIDATE_CHAIN":
                 return 30;
             case "RESTORE_DATA":
-                return 65;
+                return 45;
             case "ATTACH_VOLUME":
                 return 85;
             case "CLEANUP_SOURCE":
