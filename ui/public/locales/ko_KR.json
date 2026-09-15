@@ -462,6 +462,7 @@
   "label.backup.attach.restore": "백업 볼륨 복원 및 연결",
   "label.backup.configure.schedule": "백업 스케줄 구성",
   "label.backup.finalizing": "완료 처리 대기",
+  "label.restore.finalizing": "복원 완료 처리 대기",
   "label.backup.offering.assign": "백업 오퍼링 할당",
   "label.backup.offering.remove": "백업 오퍼링 제거",
   "label.backup.offerings": "백업 오퍼링",

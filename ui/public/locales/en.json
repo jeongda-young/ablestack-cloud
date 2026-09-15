@@ -500,6 +500,7 @@
   "label.backup.attach.restore": "Restore and attach backup volume",
   "label.backup.configure.schedule": "Configure Backup Schedule",
   "label.backup.finalizing": "Finalizing",
+  "label.restore.finalizing": "Finalizing restore",
   "label.backup.offering.assign": "Assign Instance to backup offering",
   "label.backup.offering.remove": "Remove Instance from backup offering",
   "label.backup.offerings": "Backup offerings",

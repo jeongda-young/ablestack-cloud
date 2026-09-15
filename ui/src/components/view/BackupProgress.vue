@@ -108,7 +108,15 @@ export default {
         this.isTerminalJobState(this.jobState) &&
         this.normalizeProgress(this.progress) === 100
     },
+    isAwaitingRestoreFinalization () {
+      return this.isRestoring &&
+        this.isTerminalJobState(this.jobState) &&
+        this.normalizeProgress(this.progress) === 100
+    },
     displayStep () {
+      if (this.isAwaitingRestoreFinalization) {
+        return this.$t('label.restore.finalizing')
+      }
       if (this.isAwaitingBackupFinalization) {
         return this.$t('label.backup.finalizing')
       }

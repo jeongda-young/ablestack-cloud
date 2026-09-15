@@ -2622,6 +2622,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 throw new CloudRuntimeException("Error restoring Instance from Backup with uuid " + backup.getUuid());
             }
             runPostRestoreMaintenance(backupProvider, vm, backup, false);
+            cleanupTrackedRestoreJobFiles(backup, vm, backupProvider.getName());
         // The restore process is executed by a backup provider outside of ACS, I am using the catch-all (Exception) to
         // ensure that no provider-side exception is missed. Therefore, we have a proper handling of exceptions, and rollbacks if needed.
         } catch (Exception e) {
@@ -4001,6 +4002,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                     List<BackupProvider> providers = getBackupProvidersForZone(dataCenter.getId());
                     for (BackupProvider backupProvider : providers) {
                         try {
+                            reconcileInterruptedRestoreJobs(backupProvider, dataCenter);
                             reconcileBackingUpBackups(backupProvider, dataCenter);
                             if (backupProvider.supportsBackgroundSync()) {
                                 backupProvider.syncBackupStorageStats(dataCenter.getId());
@@ -4018,6 +4020,129 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             } catch (final Throwable t) {
                 logger.error(String.format("Error trying to run backup-sync background task due to: [%s].", t.getMessage()), t);
             }
+        }
+
+        private void reconcileInterruptedRestoreJobs(final BackupProvider backupProvider, final DataCenter dataCenter) {
+            final List<BackupDetailVO> restoreJobDetails = backupDetailsDao.findDetails(AblestackBackupFrameworkUtils.RESTORE_JOB_ID_DETAIL);
+            if (CollectionUtils.isEmpty(restoreJobDetails)) {
+                return;
+            }
+            final Set<Long> checkedBackupIds = new HashSet<>();
+            for (final BackupDetailVO restoreJobDetail : restoreJobDetails) {
+                final Long backupId = restoreJobDetail.getResourceId();
+                if (backupId == null || !checkedBackupIds.add(backupId)) {
+                    continue;
+                }
+                try {
+                    reconcileInterruptedRestoreJob(backupProvider, dataCenter, backupId);
+                } catch (Exception e) {
+                    logger.warn("Failed to reconcile restore job for backup [{}] and provider [{}] in zone [{}]: {}",
+                            backupId, backupProvider.getName(), dataCenter.getId(), e.getMessage(), e);
+                }
+            }
+        }
+
+        private void reconcileInterruptedRestoreJob(final BackupProvider backupProvider, final DataCenter dataCenter, final Long backupId) {
+            final BackupVO backup = backupDao.findById(backupId);
+            if (backup == null || !dataCenter.getId().equals(backup.getZoneId())) {
+                return;
+            }
+            final BackupOfferingVO offering = backupOfferingDao.findById(backup.getBackupOfferingId());
+            if (offering == null || !isMatchingBackupProvider(backupProvider.getName(), offering.getProvider())) {
+                return;
+            }
+            if (!BackupProviderNameUtils.isNasFamily(offering.getProvider()) && !BackupProviderNameUtils.isCommvaultFamily(offering.getProvider())) {
+                logger.debug("Skipping interrupted restore reconciliation for backup [{}] and provider [{}] because external-provider restore completion needs provider-specific verification.",
+                        backup.getUuid(), offering.getProvider());
+                return;
+            }
+            backupDao.loadDetails(backup);
+            final String restoreJobId = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_ID_DETAIL);
+            if (StringUtils.isBlank(restoreJobId)) {
+                return;
+            }
+            final VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(backup.getVmId());
+            if (vm == null || !isRestoreStatePending(vm)) {
+                return;
+            }
+            final HostVO restoreHost = findRestoreJobHost(backup, vm);
+            if (restoreHost == null) {
+                logger.debug("Skipping restore job reconciliation for backup [{}] because restore host was not found. restoreJobId=[{}]",
+                        backup.getUuid(), restoreJobId);
+                return;
+            }
+
+            final Answer answer;
+            try {
+                answer = agentManager.send(restoreHost.getId(), new AblestackRestoreJobStatusCommand(restoreJobId, null, 5));
+            } catch (Exception e) {
+                logger.warn("Failed to query restore job [{}] on host [{}] for backup [{}]: {}",
+                        restoreJobId, restoreHost.getName(), backup.getUuid(), e.getMessage(), e);
+                return;
+            }
+            if (!(answer instanceof BackupAnswer)) {
+                logger.warn("Unexpected restore job status response for backup [{}] from host [{}]. restoreJobId=[{}]",
+                        backup.getUuid(), restoreHost.getName(), restoreJobId);
+                return;
+            }
+
+            final BackupAnswer restoreAnswer = (BackupAnswer) answer;
+            final String restoreState = StringUtils.defaultIfBlank(restoreAnswer.getState(), restoreAnswer.getDetails());
+            logger.info("Reconciling restore job [{}] for backup [{}], VM [{}] using provider [{}]. state=[{}], step=[{}], progress=[{}]",
+                    restoreJobId, backup.getUuid(), vm.getInstanceName(), backupProvider.getName(), restoreState,
+                    restoreAnswer.getStep(), restoreAnswer.getProgress());
+            if ("COMPLETED".equalsIgnoreCase(restoreState)) {
+                runPostRestoreMaintenance(backupProvider, vm, backup, false);
+                completeInterruptedRestoreStates(vm);
+                cleanupBackupJobFiles(restoreHost.getId(), restoreJobId, backupProvider.getName() + " restore");
+                logger.info("Reconciled completed restore job [{}] for backup [{}], VM [{}].",
+                        restoreJobId, backup.getUuid(), vm.getInstanceName());
+            } else if (isTerminalRestoreFailureState(restoreState)) {
+                failInterruptedRestoreStates(vm);
+                logger.warn("Reconciled failed restore job [{}] for backup [{}], VM [{}]. state=[{}]",
+                        restoreJobId, backup.getUuid(), vm.getInstanceName(), restoreState);
+            }
+        }
+
+        private boolean isTerminalRestoreFailureState(final String restoreState) {
+            return "FAILED".equalsIgnoreCase(restoreState)
+                    || "CANCELED".equalsIgnoreCase(restoreState)
+                    || "CANCELLED".equalsIgnoreCase(restoreState)
+                    || "INTERRUPTED".equalsIgnoreCase(restoreState);
+        }
+
+        private boolean isRestoreStatePending(final VMInstanceVO vm) {
+            return VirtualMachine.State.Restoring.equals(vm.getState()) || hasRestoringVolumes(vm);
+        }
+
+        private boolean hasRestoringVolumes(final VMInstanceVO vm) {
+            return volumeDao.findIncludingRemovedByInstanceAndType(vm.getId(), null).stream()
+                    .anyMatch(volume -> Volume.State.Restoring.equals(volume.getState()));
+        }
+
+        private void completeInterruptedRestoreStates(final VMInstanceVO vm) {
+            updateRestoringVolumeStates(vm, Volume.Event.RestoreSucceeded, Volume.State.Ready);
+            if (VirtualMachine.State.Restoring.equals(vm.getState())) {
+                updateVmState(vm, VirtualMachine.Event.RestoringSuccess, VirtualMachine.State.Stopped);
+            }
+        }
+
+        private void failInterruptedRestoreStates(final VMInstanceVO vm) {
+            updateRestoringVolumeStates(vm, Volume.Event.RestoreFailed, Volume.State.Ready);
+            if (VirtualMachine.State.Restoring.equals(vm.getState())) {
+                updateVmState(vm, VirtualMachine.Event.RestoringFailed, VirtualMachine.State.Stopped);
+            }
+        }
+
+        private void updateRestoringVolumeStates(final VMInstanceVO vm, final Volume.Event event, final Volume.State next) {
+            Transaction.execute(TransactionLegacy.CLOUD_DB, (TransactionCallback<VolumeVO>) status -> {
+                for (final VolumeVO volume : volumeDao.findIncludingRemovedByInstanceAndType(vm.getId(), null)) {
+                    if (Volume.State.Restoring.equals(volume.getState())) {
+                        tryToUpdateStateOfSpecifiedVolume(volume, event, next);
+                    }
+                }
+                return null;
+            });
         }
 
         private void processPostRestoreMaintenanceTasks() {
@@ -4574,6 +4699,21 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             logger.warn("Failed to send {} backup job cleanup command [jobId: {}, hostId: {}]",
                     provider, backupJobId, hostId, e);
         }
+    }
+
+    private void cleanupTrackedRestoreJobFiles(final BackupVO backup, final VMInstanceVO vm, final String provider) {
+        backupDao.loadDetails(backup);
+        final String restoreJobId = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_ID_DETAIL);
+        if (StringUtils.isBlank(restoreJobId)) {
+            return;
+        }
+        final HostVO restoreHost = findRestoreJobHost(backup, vm);
+        if (restoreHost == null) {
+            logger.debug("Skipping {} restore job cleanup because restore host was not found [jobId: {}, backup: {}]",
+                    provider, restoreJobId, backup.getUuid());
+            return;
+        }
+        cleanupBackupJobFiles(restoreHost.getId(), restoreJobId, provider + " restore");
     }
 
     @Override
