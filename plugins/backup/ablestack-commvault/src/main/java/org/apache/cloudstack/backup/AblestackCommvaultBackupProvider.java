@@ -618,6 +618,9 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         backup.setDetails(details);
 
         final BackupVO persistedBackup = backupDao.persist(backup);
+        persistedBackup.setHostId(hostId);
+        backupDao.update(persistedBackup.getId(), persistedBackup);
+        backupDao.saveDetails(persistedBackup);
         persistBackupJobHostDetails(persistedBackup, details);
         return persistedBackup;
     }

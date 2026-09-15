@@ -606,6 +606,9 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         addBackupJobHostDetails(details, hostId);
         backup.setDetails(details);
         final BackupVO persistedBackup = backupDao.persist(backup);
+        persistedBackup.setHostId(hostId);
+        backupDao.update(persistedBackup.getId(), persistedBackup);
+        backupDao.saveDetails(persistedBackup);
         persistBackupJobHostDetails(persistedBackup, details);
         return persistedBackup;
     }

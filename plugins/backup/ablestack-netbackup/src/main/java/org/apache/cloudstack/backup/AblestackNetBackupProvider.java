@@ -552,6 +552,9 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         addBackupJobHostDetails(details, hostId);
         backup.setDetails(details);
         final BackupVO persistedBackup = backupDao.persist(backup);
+        persistedBackup.setHostId(hostId);
+        backupDao.update(persistedBackup.getId(), persistedBackup);
+        backupDao.saveDetails(persistedBackup);
         persistBackupJobHostDetails(persistedBackup, details);
         return persistedBackup;
     }
