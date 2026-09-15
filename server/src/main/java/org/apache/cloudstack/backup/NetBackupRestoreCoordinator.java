@@ -169,7 +169,7 @@ public class NetBackupRestoreCoordinator extends ManagerBase {
         }
     }
 
-    public void updateBackupMetadata(final UpdateNetBackupCmd cmd, final VMInstanceVO vm) {
+    public BackupVO updateBackupMetadata(final UpdateNetBackupCmd cmd, final VMInstanceVO vm) {
         final BackupVO backup = backupDao.listByVmId(vm.getDataCenterId(), vm.getId()).stream()
                 .filter(BackupVO.class::isInstance)
                 .map(BackupVO.class::cast)
@@ -197,6 +197,7 @@ public class NetBackupRestoreCoordinator extends ManagerBase {
             upsertBackupDetail(backup.getId(), DETAIL_NETBACKUP_MEMBER_COUNT, String.valueOf(cmd.getMemberCount()));
         }
         backupDao.loadDetails(backup);
+        return backup;
     }
 
     public String acquireRestoreGuard(final VMInstanceVO vm, final String requestIdentifier) {

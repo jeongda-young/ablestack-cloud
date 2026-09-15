@@ -138,6 +138,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
     private static final String BACKUP_TRACE = AblestackBackupFrameworkUtils.buildTracePrefix("commvault", AblestackBackupFrameworkUtils.OPERATION_BACKUP);
     private static final String RESTORE_TRACE = AblestackBackupFrameworkUtils.buildTracePrefix("commvault", AblestackBackupFrameworkUtils.OPERATION_RESTORE);
     private static final String DETAIL_STAGE_HOST = "commvault.stage.host";
+    private static final String DETAIL_BACKUPSET_HOST = "commvault.backupset.host";
     private static final String DETAIL_CHAIN_SEALED = "commvault.chain.sealed";
     private static final String DETAIL_CHAIN_SEAL_REASON = "commvault.chain.seal.reason";
     private static final String DETAIL_FALLBACK_VOLUME_UUIDS = "commvault.fallback.volume.uuids";
@@ -593,9 +594,10 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         }
     }
 
-    private BackupVO createBackupObject(VirtualMachine vm, String backupPath, String backupType, Map<String, String> details) {
+    private BackupVO createBackupObject(VirtualMachine vm, Long hostId, String backupPath, String backupType, Map<String, String> details) {
         BackupVO backup = new BackupVO();
         backup.setVmId(vm.getId());
+        backup.setHostId(hostId);
         backup.setExternalId(backupPath);
         backup.setType(backupType);
         backup.setDate(new Date());
@@ -688,7 +690,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         final Map<String, String> backupDetails = getBackupDetails(vm, backupPath, checkpointName, backupEngine, latestBackup,
                 BACKUP_TYPE_INCREMENTAL.equalsIgnoreCase(requestedBackupType), vmHost.getName());
 
-        BackupVO backupVO = createBackupObject(vm, backupPath, requestedBackupType, backupDetails);
+        BackupVO backupVO = createBackupObject(vm, vmHost.getId(), backupPath, requestedBackupType, backupDetails);
         AblestackCommvaultTakeBackupCommand command = new AblestackCommvaultTakeBackupCommand(vm.getInstanceName(), backupPath);
         command.setBackupJobId(backupVO.getUuid());
         final int commandTimeout = BackupCommandTimeout.value();
@@ -2313,6 +2315,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         String subclientName = String.valueOf(jsonObject.get("subclientName"));
         String csGUID = String.valueOf(jsonObject.get("csGUID"));
         String backupContentPath = Path.of(backupPath).getParent().toString();
+        addBackupSetHostDetailsIfDifferent(backupDetails, stageHost.getName(), clientName);
 
         if (!client.updateBackupSet(backupContentPath, subclientId, clientId, planId, applicationId, backupsetId, instanceId, subclientName, backupsetName)) {
             markBackupFailure(backupVO, "commvault-update-backupset", "Failed to update Commvault backupset content path");
@@ -2337,6 +2340,15 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         LOG.info("{} phase=[JOB_SUBMITTED], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupPath=[{}], externalId=[{}], jobId=[{}]",
                 BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), backupPath, externalId, jobId);
         return true;
+    }
+
+    private void addBackupSetHostDetailsIfDifferent(final Map<String, String> backupDetails, final String stageHostName, final String clientName) {
+        if (backupDetails == null || StringUtils.isBlank(clientName) || StringUtils.equalsIgnoreCase(stageHostName, clientName)) {
+            return;
+        }
+        backupDetails.put(DETAIL_BACKUPSET_HOST, clientName);
+        LOG.info("Commvault backupset host differs from staging host. stageHost=[{}], backupsetClientName=[{}]",
+                stageHostName, clientName);
     }
 
     private void sealParentBackupChainIfIncremental(final Backup backup, final String reason) {
@@ -2364,6 +2376,22 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         } catch (AgentUnavailableException | OperationTimedoutException e) {
             LOG.debug("Failed to query Commvault backup job state for job [{}] on host [{}]", backupJobId, hostId, e);
             return null;
+        }
+    }
+
+    private void cleanupBackupJobFiles(final Long hostId, final String backupJobId) {
+        if (hostId == null) {
+            LOG.debug("Skipping Commvault backup job cleanup because stage host id is missing [jobId: {}]", backupJobId);
+            return;
+        }
+        try {
+            final Answer answer = agentManager.send(hostId, new AblestackBackupJobCleanupCommand(backupJobId));
+            if (answer == null || !answer.getResult()) {
+                LOG.warn("Failed to cleanup Commvault backup job files [jobId: {}, hostId: {}]: {}",
+                        backupJobId, hostId, answer != null ? answer.getDetails() : null);
+            }
+        } catch (AgentUnavailableException | OperationTimedoutException e) {
+            LOG.warn("Failed to send Commvault backup job cleanup command [jobId: {}, hostId: {}]", backupJobId, hostId, e);
         }
     }
 
@@ -2437,6 +2465,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                     createVolumeInfoFromVolumes(vmVolumes, backupFiles));
             backupDao.update(backupVO.getId(), backupVO);
             cleanupBackupStagingPathFromDetails(backupVO);
+            cleanupBackupJobFiles(backupVO.getHostId(), backupVO.getUuid());
             LOG.info("Recovered Commvault backup [{}] for VM [{}] from BackingUp to BackedUp using job [{}]",
                     backupVO.getUuid(), vm.getInstanceName(), jobId);
             return true;
@@ -2496,6 +2525,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                     createVolumeInfoFromVolumes(vmVolumes, backupFiles));
             if (backupDao.update(backupVO.getId(), backupVO)) {
                 cleanupBackupStagingPathFromDetails(backupVO);
+                cleanupBackupJobFiles(backupVO.getHostId(), backupVO.getUuid());
                 LOG.info("Recovered Commvault backup [{}] for VM [{}] from Error to BackedUp using completed job [{}]",
                         backupVO.getUuid(), vm.getInstanceName(), jobId);
                 return true;

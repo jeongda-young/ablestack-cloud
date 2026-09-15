@@ -332,7 +332,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             backupDetails.put(DETAIL_SOURCE_HOST, vmHost.getName());
         }
 
-        final BackupVO backupVO = createBackupObject(vm, backupPath, requestedBackupType, backupDetails);
+        final BackupVO backupVO = createBackupObject(vm, vmHost.getId(), backupPath, requestedBackupType, backupDetails);
         LOG.info("{} phase=[BEGIN], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], backupPath=[{}], host=[{}]",
                 BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
                 backupPath, vmHost != null ? vmHost.getName() : null);
@@ -583,9 +583,10 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         }
     }
 
-    private BackupVO createBackupObject(final VirtualMachine vm, final String backupPath, final String backupType, final Map<String, String> details) {
+    private BackupVO createBackupObject(final VirtualMachine vm, final Long hostId, final String backupPath, final String backupType, final Map<String, String> details) {
         final BackupVO backup = new BackupVO();
         backup.setVmId(vm.getId());
+        backup.setHostId(hostId);
         backup.setExternalId(backupPath);
         backup.setType(backupType);
         backup.setDate(new Date());
@@ -2083,12 +2084,10 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         if (!(backup instanceof BackupVO)) {
             return false;
         }
-        final Host host;
-        try {
-            host = getVMHypervisorHostForBackup(vm);
-        } catch (CloudRuntimeException e) {
-            LOG.debug("Skipping Veeam async completion check for backup [{}] because host is unavailable: {}",
-                    backup.getUuid(), e.getMessage());
+        final Host host = findBackupJobHost(backup, vm);
+        if (host == null) {
+            LOG.debug("Skipping Veeam async completion check for backup [{}] because backup job host is unavailable",
+                    backup.getUuid());
             return false;
         }
         final String jobState = getHostBackupJobState(host.getId(), backup.getUuid());
@@ -2142,6 +2141,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         backupVO.setBackedUpVolumes(createVolumeInfoFromVolumes(vmVolumes, backupFiles));
         backupVO.setStatus(Backup.Status.BackedUp);
         backupDao.update(backupVO.getId(), backupVO);
+        cleanupBackupJobFiles(host.getId(), backupVO.getUuid());
         LOG.info("{} phase=[STAGING_DONE], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupPath=[{}], size=[{}]",
                 BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), backupVO.getExternalId(), backupVO.getSize());
         return true;
@@ -2157,6 +2157,32 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             LOG.warn("Failed to query Veeam backup job status [jobId: {}, hostId: {}]: {}", backupJobId, hostId, e.getMessage());
         }
         return "UNKNOWN";
+    }
+
+    private Host findBackupJobHost(final Backup backup, final VirtualMachine vm) {
+        if (backup != null && backup.getHostId() != null) {
+            final HostVO host = hostDao.findById(backup.getHostId());
+            if (host != null) {
+                return host;
+            }
+        }
+        try {
+            return getVMHypervisorHostForBackup(vm);
+        } catch (CloudRuntimeException e) {
+            return null;
+        }
+    }
+
+    private void cleanupBackupJobFiles(final Long hostId, final String backupJobId) {
+        try {
+            final Answer answer = agentManager.send(hostId, new AblestackBackupJobCleanupCommand(backupJobId));
+            if (answer == null || !answer.getResult()) {
+                LOG.warn("Failed to cleanup Veeam backup job files [jobId: {}, hostId: {}]: {}",
+                        backupJobId, hostId, answer != null ? answer.getDetails() : null);
+            }
+        } catch (AgentUnavailableException | OperationTimedoutException e) {
+            LOG.warn("Failed to send Veeam backup job cleanup command [jobId: {}, hostId: {}]", backupJobId, hostId, e);
+        }
     }
 
     private void removeStaleBackingUpBackups(final VirtualMachine vm) {
@@ -2651,7 +2677,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             details.put(DETAIL_SOURCE_HOST, host.getName());
         }
 
-        final BackupVO backupVO = createBackupObject(vm, backupPath, BACKUP_TYPE_FULL, details);
+        final BackupVO backupVO = createBackupObject(vm, host.getId(), backupPath, BACKUP_TYPE_FULL, details);
         final AblestackVeeamImportSeedCommand command = new AblestackVeeamImportSeedCommand(vm.getInstanceName(), backupPath);
         command.setCheckpointName(checkpointName);
         command.setBackupFiles(backupFiles);

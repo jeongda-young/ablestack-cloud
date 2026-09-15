@@ -288,7 +288,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         final Map<String, String> backupDetails = getBackupDetails(vm, backupPath, checkpointName, backupEngine, latestBackup,
                 incrementalBackup, policyName);
 
-        final BackupVO backupVO = createBackupObject(vm, backupPath, requestedBackupType, backupDetails);
+        final BackupVO backupVO = createBackupObject(vm, vmHost.getId(), backupPath, requestedBackupType, backupDetails);
         AblestackNetBackupTakeBackupCommand command = new AblestackNetBackupTakeBackupCommand(vm.getInstanceName(), backupPath);
         command.setBackupJobId(backupVO.getUuid());
         final int commandTimeout = BackupCommandTimeout.value();
@@ -529,9 +529,10 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         }
     }
 
-    private BackupVO createBackupObject(final VirtualMachine vm, final String backupPath, final String backupType, final Map<String, String> details) {
+    private BackupVO createBackupObject(final VirtualMachine vm, final Long hostId, final String backupPath, final String backupType, final Map<String, String> details) {
         final BackupVO backup = new BackupVO();
         backup.setVmId(vm.getId());
+        backup.setHostId(hostId);
         backup.setExternalId(backupPath);
         backup.setType(backupType);
         backup.setDate(new Date());
@@ -2083,12 +2084,10 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         if (!Backup.Status.BackingUp.equals(backup.getStatus()) || Boolean.parseBoolean(getBackupDetail(backup, DETAIL_STAGING_METADATA_SYNCED))) {
             return false;
         }
-        final Host host;
-        try {
-            host = getVMHypervisorHostForBackup(vm);
-        } catch (CloudRuntimeException e) {
-            LOG.debug("Skipping NetBackup staging metadata sync for backup [{}] because host is unavailable: {}",
-                    backup.getUuid(), e.getMessage());
+        final Host host = findBackupJobHost(backup, vm);
+        if (host == null) {
+            LOG.debug("Skipping NetBackup staging metadata sync for backup [{}] because backup job host is unavailable",
+                    backup.getUuid());
             return false;
         }
         final String jobState = getHostBackupJobState(host.getId(), backup.getUuid());
@@ -2174,6 +2173,20 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
             return answer != null && answer.getResult() ? answer.getDetails() : null;
         } catch (final AgentUnavailableException | OperationTimedoutException e) {
             LOG.debug("Failed to query NetBackup backup job state for job [{}] on host [{}]", backupJobId, hostId, e);
+            return null;
+        }
+    }
+
+    private Host findBackupJobHost(final Backup backup, final VirtualMachine vm) {
+        if (backup != null && backup.getHostId() != null) {
+            final HostVO host = hostDao.findById(backup.getHostId());
+            if (host != null) {
+                return host;
+            }
+        }
+        try {
+            return getVMHypervisorHostForBackup(vm);
+        } catch (CloudRuntimeException e) {
             return null;
         }
     }

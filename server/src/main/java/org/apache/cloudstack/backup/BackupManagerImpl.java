@@ -1756,7 +1756,10 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         final VMInstanceVO vm = findVmById(vmId);
         validateBackupForZone(vm.getDataCenterId());
         accountManager.checkAccess(caller, null, true, vm);
-        netBackupRestoreCoordinator.updateBackupMetadata(cmd, vm);
+        final BackupVO backup = netBackupRestoreCoordinator.updateBackupMetadata(cmd, vm);
+        if (backup != null && Backup.Status.BackedUp.equals(backup.getStatus())) {
+            cleanupBackupJobFiles(backup.getHostId(), backup.getUuid(), "NetBackup");
+        }
         return true;
     }
 
@@ -4447,13 +4450,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
         accountManager.checkAccess(CallContext.current().getCallingAccount(), null, true, vm);
 
-        final Long hostId = vm.getHostId() != null ? vm.getHostId() : vm.getLastHostId();
-        if (hostId == null) {
-            throw new CloudRuntimeException("Unable to find host for running backup " + backup.getUuid());
-        }
-        final HostVO host = hostDao.findById(hostId);
+        final HostVO host = findBackupJobHost(backup, vm);
         if (host == null) {
-            throw new CloudRuntimeException("Unable to find host " + hostId + " for running backup " + backup.getUuid());
+            throw new CloudRuntimeException("Unable to find host for running backup " + backup.getUuid());
         }
 
         try {
@@ -4496,13 +4495,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         if (vm == null) {
             throw new CloudRuntimeException("Instance " + backup.getVmId() + " does not exist");
         }
-        final Long hostId = vm.getHostId() != null ? vm.getHostId() : vm.getLastHostId();
-        if (hostId == null) {
-            throw new CloudRuntimeException("Unable to find host for running backup " + backup.getUuid());
-        }
-        final HostVO host = hostDao.findById(hostId);
+        final HostVO host = findBackupJobHost(backup, vm);
         if (host == null) {
-            throw new CloudRuntimeException("Unable to find host " + hostId + " for running backup " + backup.getUuid());
+            throw new CloudRuntimeException("Unable to find host for running backup " + backup.getUuid());
         }
 
         try {
@@ -4527,6 +4522,38 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         } catch (final Exception e) {
             throw new CloudRuntimeException(String.format("Failed to query backup job status for backup [%s] on host [%s]: %s",
                     backup.getUuid(), host.getName(), e.getMessage()), e);
+        }
+    }
+
+    private HostVO findBackupJobHost(final BackupVO backup, final VMInstanceVO vm) {
+        if (backup.getHostId() != null) {
+            final HostVO host = hostDao.findById(backup.getHostId());
+            if (host != null) {
+                return host;
+            }
+        }
+
+        if (vm == null) {
+            return null;
+        }
+        final Long hostId = vm.getHostId() != null ? vm.getHostId() : vm.getLastHostId();
+        return hostId != null ? hostDao.findById(hostId) : null;
+    }
+
+    private void cleanupBackupJobFiles(final Long hostId, final String backupJobId, final String provider) {
+        if (hostId == null) {
+            logger.debug("Skipping {} backup job cleanup because host id is missing [jobId: {}]", provider, backupJobId);
+            return;
+        }
+        try {
+            final Answer answer = agentManager.send(hostId, new AblestackBackupJobCleanupCommand(backupJobId));
+            if (answer == null || !answer.getResult()) {
+                logger.warn("Failed to cleanup {} backup job files [jobId: {}, hostId: {}]: {}",
+                        provider, backupJobId, hostId, answer != null ? answer.getDetails() : null);
+            }
+        } catch (Exception e) {
+            logger.warn("Failed to send {} backup job cleanup command [jobId: {}, hostId: {}]",
+                    provider, backupJobId, hostId, e);
         }
     }
 

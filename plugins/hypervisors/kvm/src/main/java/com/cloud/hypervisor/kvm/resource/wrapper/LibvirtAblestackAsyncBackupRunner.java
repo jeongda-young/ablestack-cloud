@@ -17,6 +17,7 @@
 
 package com.cloud.hypervisor.kvm.resource.wrapper;
 
+import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.Command;
 import com.cloud.utils.Pair;
 
@@ -29,6 +30,7 @@ import org.apache.logging.log4j.Logger;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.io.UncheckedIOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -37,11 +39,13 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.function.Supplier;
+import java.util.stream.Stream;
 
 final class LibvirtAblestackAsyncBackupRunner {
     static final String STATE_STARTED = "STARTED";
@@ -329,6 +333,36 @@ final class LibvirtAblestackAsyncBackupRunner {
                 properties.getProperty("backupType"), STATE_RUNNING, details, properties);
         return new BackupAnswer(command, result.first() == 0,
                 result.first() == 0 ? details : "Failed to update backup bandwidth: " + result.second());
+    }
+
+    static Answer cleanupJob(final Command command, final String jobId, final Logger logger) {
+        if (jobId == null || jobId.isBlank()) {
+            return new Answer(command, false, "backup job id is required");
+        }
+        final Path jobDirectory = getJobDirectory(jobId);
+        final Path jobProperties = getJobPath(jobId);
+        try {
+            if (Files.exists(jobDirectory)) {
+                try (Stream<Path> paths = Files.walk(jobDirectory)) {
+                    paths.sorted(Comparator.reverseOrder()).forEach(path -> {
+                        try {
+                            Files.deleteIfExists(path);
+                        } catch (IOException e) {
+                            throw new UncheckedIOException(e);
+                        }
+                    });
+                }
+            }
+            Files.deleteIfExists(jobProperties);
+            ACTIVE_JOBS.remove(jobId);
+            logger.info("Cleaned ABLESTACK backup job files. jobId=[{}], jobDir=[{}], properties=[{}]",
+                    jobId, jobDirectory, jobProperties);
+            return new Answer(command, true, "Backup job files cleaned");
+        } catch (IOException | UncheckedIOException e) {
+            logger.warn("Failed to clean ABLESTACK backup job files. jobId=[{}], jobDir=[{}], properties=[{}]",
+                    jobId, jobDirectory, jobProperties, e);
+            return new Answer(command, false, "Failed to clean backup job files: " + e.getMessage());
+        }
     }
 
     private static String resolveDetachedState(final String jobId, final Properties properties, final Logger logger) {
