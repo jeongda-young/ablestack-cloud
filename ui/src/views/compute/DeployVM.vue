@@ -16,11 +16,14 @@
 // under the License.
 
 <template>
-  <div>
+  <div ref="deployLayout" class="deploy-vm-layout" :class="{ 'deploy-vm-layout--bounded': deployViewportHeight }" :style="{ '--deploy-viewport-height': deployViewportHeight }">
     <a-row :gutter="12">
-      <a-col :md="24" :lg="17">
+      <a-col :md="24" :lg="17" class="deploy-vm-form-column">
         <a-card :bordered="true" :title="$t('label.newinstance')">
           <a-form
+            class="deploy-vm-form-scroll"
+            tabindex="0"
+            :aria-label="$t('label.newinstance')"
             v-ctrl-enter="handleSubmit"
             :ref="formRef"
             :model="form"
@@ -949,8 +952,8 @@
           </a-form>
         </a-card>
       </a-col>
-      <a-col :md="24" :lg="7" v-if="!isMobile()">
-        <a-affix :offsetTop="75" class="vm-info-card">
+      <a-col :md="24" :lg="7" v-if="!isMobile()" class="deploy-vm-summary-column">
+        <div class="vm-info-card">
           <info-card :footerVisible="true" :resource="vm" :title="$t('label.yourinstance')" @change-resource="(data) => resource = data">
             <template #footer-content>
               <deploy-buttons
@@ -962,7 +965,7 @@
                 @handle-deploy-menu="(index, e) => handleSubmitAndStay(e)" />
             </template>
           </info-card>
-        </a-affix>
+        </div>
       </a-col>
     </a-row>
   </div>
@@ -1041,6 +1044,7 @@ export default {
   mixins: [mixin, mixinDevice],
   data () {
     return {
+      deployViewportHeight: '',
       zoneId: '',
       podId: null,
       clusterId: null,
@@ -1820,7 +1824,31 @@ export default {
       vmFetchNetworks: this.fetchNetwork
     }
   },
+  mounted () {
+    this.deployResizeObserver = new ResizeObserver(this.updateDeployViewportHeight)
+    const layout = this.$refs.deployLayout
+    const content = layout.closest('.layout-content')
+    if (content) {
+      this.deployResizeObserver.observe(content)
+      this.deployResizeObserver.observe(layout)
+    }
+    this.updateDeployViewportHeight()
+  },
+  beforeUnmount () {
+    if (this.deployResizeObserver) this.deployResizeObserver.disconnect()
+  },
   methods: {
+    updateDeployViewportHeight () {
+      const layout = this.$refs.deployLayout
+      const content = layout?.closest('.layout-content')
+      if (!content || !layout.getClientRects().length) return
+      // Measure the actual workspace, including header/banner and page padding.
+      // Adding scrollTop keeps this offset stable when an outer scroll is restored.
+      const top = layout.getBoundingClientRect().top - content.getBoundingClientRect().top + content.scrollTop - content.clientTop
+      const bottom = parseFloat(getComputedStyle(content).paddingBottom) || 0
+      const height = Math.max(0, Math.floor(content.clientHeight - top - bottom))
+      this.deployViewportHeight = height ? `${height}px` : ''
+    },
     updateTemplateKey () {
       this.templateKey += 1
     },
@@ -2805,7 +2833,7 @@ export default {
           this.loading.deploy = false
         }
       }).catch(err => {
-        this.formRef.value.scrollToField(err.errorFields[0].name)
+        this.formRef.value.scrollToField(err.errorFields[0].name, { block: 'center' })
         if (err) {
           if (err.licensesaccepted) {
             this.$notification.error({
@@ -3846,6 +3874,80 @@ export default {
 </script>
 
 <style lang="less" scoped>
+  @media (min-width: 992px) {
+    .deploy-vm-layout--bounded {
+      height: var(--deploy-viewport-height);
+      min-height: 0;
+
+      > .ant-row,
+      .deploy-vm-form-column,
+      .deploy-vm-summary-column,
+      .vm-info-card {
+        height: 100%;
+        min-height: 0;
+      }
+
+      .deploy-vm-form-column > .ant-card,
+      .vm-info-card :deep(.spin-content) {
+        display: flex;
+        flex-direction: column;
+        height: 100%;
+        min-height: 0;
+      }
+
+      .deploy-vm-form-column > .ant-card > :deep(.ant-card-head),
+      .vm-info-card :deep(.spin-content > .ant-card-head) {
+        flex-shrink: 0;
+      }
+
+      .deploy-vm-form-column > .ant-card > :deep(.ant-card-body),
+      .vm-info-card :deep(.spin-content > .ant-card-body) {
+        flex: 1;
+        min-height: 0;
+      }
+
+      .deploy-vm-form-column > .ant-card > :deep(.ant-card-body) {
+        display: flex;
+        flex-direction: column;
+      }
+
+      .deploy-vm-form-scroll {
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        overscroll-behavior-y: contain;
+        scrollbar-width: none;
+
+        &::-webkit-scrollbar {
+          display: none;
+        }
+      }
+
+      .vm-info-card {
+        > :deep(.ant-spin-nested-loading),
+        > :deep(.ant-spin-nested-loading > .ant-spin-container) {
+          height: 100%;
+          min-height: 0;
+        }
+
+        :deep(.ant-card-body) {
+          overflow: hidden;
+        }
+
+        :deep(.card-content) {
+          flex: 1;
+          min-height: 0;
+          overflow-y: auto;
+          overscroll-behavior-y: contain;
+        }
+
+        :deep(.card-footer) {
+          flex-shrink: 0;
+        }
+      }
+    }
+  }
+
   .card-footer {
     text-align: right;
     margin-top: 2rem;
@@ -3877,23 +3979,6 @@ export default {
   }
 
   .vm-info-card {
-    .ant-card-body {
-      min-height: 250px;
-      max-height: calc(100vh - 140px);
-      overflow: hidden; // Prevent the entire card from scrolling
-    }
-
-    .card-content {
-      max-height: calc(100vh - 240px); // Reserve space for footer and card header/padding
-      overflow-y: auto;
-      scroll-behavior: smooth;
-    }
-
-    .card-footer {
-      border-top: 1px solid #f0f0f0;
-      flex-shrink: 0; // Ensure footer doesn't shrink
-    }
-
     .resource-detail-item__label {
       font-weight: normal;
     }
@@ -3904,6 +3989,18 @@ export default {
         cursor: default;
         pointer-events: none;
       }
+    }
+  }
+
+  // Keep invalid input text on the same dark surface as valid inputs.
+  .dark-mode .deploy-vm-layout .ant-form-item-has-error {
+    .ant-input,
+    .ant-input:hover,
+    .ant-input-affix-wrapper,
+    .ant-input-affix-wrapper:hover,
+    .ant-select:not(.ant-select-customize-input) .ant-select-selector {
+      // Override the shared dark theme error background.
+      background-color: transparent !important;
     }
   }
 

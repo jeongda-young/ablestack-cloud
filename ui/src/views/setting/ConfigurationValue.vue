@@ -16,7 +16,7 @@
 // under the License.
 
 <template>
-  <a-list>
+  <a-list :data-list-editing="editableValueKey ? 'true' : null">
     <a-list-item>
       <span v-if="configrecord.type ==='Boolean'">
         <a-tooltip :title="editableValue?'true':'false'">

@@ -22,7 +22,7 @@
       :loading="loading"
       :columns="isOrderUpdatable() ? columns : columns.filter(x => x.dataIndex !== 'order')"
       :dataSource="items"
-      :rowKey="(record, idx) => record.uid || (record.metadata && record.metadata.rule_uid) || record.id || record.name || record.usageType || (idx + '-' + Math.random())"
+      :rowKey="listRowKey"
       :pagination="false"
       :rowSelection="explicitlyAllowRowSelection || enableGroupAction() || $route.name === 'event' ? {selectedRowKeys: selectedRowKeys, onChange: onSelectChange, columnWidth: 30} : null"
       :rowClassName="getRowClassName"
@@ -1192,6 +1192,7 @@
 </template>
 
 <script>
+import { listRowKey } from '@/utils/listRefresh'
 import { getAPI, postAPI } from '@/api'
 import BackupProgress from '@/components/view/BackupProgress'
 import OsLogo from '@/components/widgets/OsLogo'
@@ -1324,6 +1325,9 @@ export default {
       deep: true,
       handler (newData, oldData) {
         if (newData === oldData) return
+        const selected = new Set(this.selectedRowKeys)
+        const rows = this.items.filter(record => selected.has(listRowKey(record)))
+        if (selected.size) this.onSelectChange(rows.map(listRowKey), rows)
         this.items.forEach(record => {
           this.resourceIdToValidLinksMap[record.id] = validateLinks(this.$router, false, record)
         })
@@ -1402,6 +1406,7 @@ export default {
     }
   },
   methods: {
+    listRowKey,
     translateEventType (type) {
       if (!type || typeof type !== 'string') {
         return type
@@ -1531,7 +1536,7 @@ export default {
       return 'dark-row'
     },
     setSelection (selection) {
-      this.selectedRowKeys = selection
+      if (JSON.stringify(this.selectedRowKeys) !== JSON.stringify(selection)) this.selectedRowKeys = selection
       this.$emit('selection-change', this.selectedRowKeys)
     },
     resetSelection () {

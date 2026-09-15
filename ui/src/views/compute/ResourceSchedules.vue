@@ -17,6 +17,7 @@
 
 <template>
   <div>
+    <p v-if="listRefreshFailed" role="status">{{ $t('message.list.refresh.stale') }}</p>
     <a-button
       type="dashed"
       style="width: 100%; margin-bottom: 10px"
@@ -310,6 +311,7 @@
 </template>
 
 <script>
+import { listRefreshMixin } from '@/utils/listRefreshMixin'
 
 import { reactive, ref, toRaw } from 'vue'
 import { getAPI, postAPI } from '@/api'
@@ -330,7 +332,7 @@ dayjs.extend(timezone)
 
 export default {
   name: 'ResourceSchedules',
-  mixins: [mixinForm],
+  mixins: [listRefreshMixin(['fetchSchedules']), mixinForm],
   components: {
     Status,
     ListView,
@@ -565,7 +567,8 @@ export default {
       this.fetchSchedules()
     },
     fetchSchedules () {
-      this.schedules = []
+      const listRequest = this.listRequestToken('fetchSchedules')
+
       if (!this.resource.id) {
         return
       }
@@ -576,8 +579,9 @@ export default {
         resourcetype: this.resourceType,
         listall: true
       }
-      this.tabLoading = true
-      getAPI('listResourceSchedule', params).then(json => {
+      this.tabLoading = !listRequest.loaded
+      return getAPI('listResourceSchedule', params).then(json => {
+        if (!this.isListRequestCurrent('fetchSchedules', listRequest)) return
         this.schedules = []
         this.totalCount = json?.listresourcescheduleresponse?.count || 0
         const rawSchedules = json?.listresourcescheduleresponse?.resourceschedule || []
@@ -587,9 +591,19 @@ export default {
           maxmembers: s.details?.maxmembers
         }))
       }).catch(error => {
+        if (!this.isListRequestCurrent('fetchSchedules', listRequest)) return
+        listRequest.failed = true
+        this.listRefreshFailed = true
+        if (listRequest.loaded) return
+
         console.error(error)
         this.$notifyError(error)
       }).finally(() => {
+        if (!this.isListRequestCurrent('fetchSchedules', listRequest)) return
+
+        this.tabLoading = false
+      }).finally(() => {
+        if (!this.isListRequestCurrent('fetchSchedules', listRequest)) return
         this.tabLoading = false
       })
     },

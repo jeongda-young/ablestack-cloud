@@ -17,6 +17,7 @@
 
 <template>
   <div>
+    <p v-if="listRefreshFailed" role="status">{{ $t('message.list.refresh.stale') }}</p>
     <a-spin :spinning="fetchLoading">
       <a-button
         v-if="'registerUserKeys' in $store.getters.apis"
@@ -136,6 +137,8 @@
   </div>
 </template>
 <script>
+import { listRefreshMixin } from '@/utils/listRefreshMixin'
+
 import { getAPI, postAPI } from '@/api'
 import TooltipButton from '@/components/widgets/TooltipButton'
 import BulkActionView from '@/components/view/BulkActionView.vue'
@@ -143,6 +146,7 @@ import eventBus from '@/config/eventBus'
 import GenerateApiKeyPair from '@/views/iam/GenerateApiKeyPair.vue'
 
 export default {
+  mixins: [listRefreshMixin(['fetchData'])],
   name: 'ApiKeyPairsTab',
   components: {
     TooltipButton,
@@ -228,17 +232,30 @@ export default {
   inject: ['parentFetchData'],
   methods: {
     fetchData () {
+      const listRequest = this.listRequestToken('fetchData')
       const params = {
         listall: true,
         page: this.page,
         pagesize: this.pageSize,
         userid: this.resource.id
       }
-      this.fetchLoading = true
-      getAPI('listUserKeys', params).then(json => {
+      this.fetchLoading = !listRequest.loaded
+      return getAPI('listUserKeys', params).then(json => {
+        if (!this.isListRequestCurrent('fetchData', listRequest)) return
+
         this.totalKeypairs = json.listuserkeysresponse.count || 0
         this.keypairs = json.listuserkeysresponse.userapikey || []
       }).finally(() => {
+        if (!this.isListRequestCurrent('fetchData', listRequest)) return
+
+        this.fetchLoading = false
+      }).catch(error => {
+        if (!this.isListRequestCurrent('fetchData', listRequest)) return
+        listRequest.failed = true
+        this.listRefreshFailed = true
+        if (!listRequest.loaded) this.$notifyError(error)
+      }).finally(() => {
+        if (!this.isListRequestCurrent('fetchData', listRequest)) return
         this.fetchLoading = false
       })
     },

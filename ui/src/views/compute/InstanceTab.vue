@@ -17,6 +17,7 @@
 
 <template>
   <a-spin :spinning="loading">
+    <p v-if="listRefreshFailed" role="status">{{ $t('message.list.refresh.stale') }}</p>
     <a-alert v-if="vm.qemuagentversion === 'Not Installed'" :message="$t('message.alert.qemuagentversion')" type="error" show-icon />
     <br/>
     <a-tabs
@@ -242,6 +243,7 @@
 
 <script>
 
+import { listRefreshMixin } from '@/utils/listRefreshMixin'
 import { getAPI, postAPI } from '@/api'
 import { h } from 'vue'
 import { mixinDevice } from '@/utils/mixin.js'
@@ -284,7 +286,7 @@ export default {
     AnnotationsTab,
     VolumesTab
   },
-  mixins: [mixinDevice],
+  mixins: [listRefreshMixin(['loadDevicesFromDb'], { active: vm => !!vm.vm?.id && vm.currentTab === 'hostdevices' }), mixinDevice],
   props: {
     resource: {
       type: Object,
@@ -529,14 +531,13 @@ export default {
       return tab || 'details'
     },
     async fetchData () {
-      this.annotations = []
       if (!this.vm || !this.vm.id) {
         return
       }
-      getAPI('listAnnotations', { entityid: this.dataResource.id, entitytype: 'VM', annotationfilter: 'all' }).then(json => {
-        if (json.listannotationsresponse && json.listannotationsresponse.annotation) {
-          this.annotations = json.listannotationsresponse.annotation
-        }
+      const annotationEntityId = this.dataResource.id
+      getAPI('listAnnotations', { entityid: annotationEntityId, entitytype: 'VM', annotationfilter: 'all' }).then(json => {
+        if (this.listRefreshDisposed || annotationEntityId !== this.dataResource.id) return
+        this.annotations = json.listannotationsresponse?.annotation || []
       })
       getAPI('listNetworks', { supportedservices: 'SecurityGroup' }).then(json => {
         if (json.listnetworksresponse && json.listnetworksresponse.network) {
@@ -654,17 +655,16 @@ export default {
       this.scsiDevices = []
     },
     async loadDevicesFromDb () {
-      if (this.deviceAssignmentsPromise) {
-        return this.deviceAssignmentsPromise
-      }
+      const request = this.listRequestToken('loadDevicesFromDb')
 
       const deviceTypes = ['pci', 'usb', 'lun', 'hba', 'vhba', 'scsi']
       this.deviceAssignmentsPromise = (async () => {
-        this.deviceLoadingStates.fetching = true
-        deviceTypes.forEach(type => { this.deviceLoadingStates[type] = true })
+        this.deviceLoadingStates.fetching = !request.loaded
+        deviceTypes.forEach(type => { this.deviceLoadingStates[type] = !request.loaded })
 
         try {
           const response = await getAPI('listVmDeviceAssignments', { virtualmachineid: this.vm.id })
+          if (!this.isListRequestCurrent('loadDevicesFromDb', request)) return
           const assignments = response?.listvmdeviceassignmentsresponse?.vmdeviceassignment
           const assignmentList = Array.isArray(assignments)
             ? assignments
@@ -729,7 +729,7 @@ export default {
 
           const hostId = this.vm?.hostid || categorized.lun?.[0]?.hostId
           if (hostId && categorized.lun.length > 0) {
-            const lunDetailMap = await this.fetchLunDetailMap(hostId)
+            const lunDetailMap = (request.loaded ? Object.fromEntries(this.lunDevices.map(device => [device.hostDevicesName, device.hostDevicesText])) : await this.fetchLunDetailMap(hostId))
             categorized.lun = categorized.lun.map(device => {
               if (device.hostDevicesText && String(device.hostDevicesText).trim().length > 0) {
                 return device
@@ -742,6 +742,7 @@ export default {
             })
           }
 
+          if (!this.isListRequestCurrent('loadDevicesFromDb', request)) return
           this.pciDevices = categorized.pci
           this.usbDevices = categorized.usb
           this.lunDevices = categorized.lun
@@ -749,6 +750,10 @@ export default {
           this.vhbaDevices = categorized.vhba
           this.scsiDevices = categorized.scsi
         } catch (error) {
+          if (!this.isListRequestCurrent('loadDevicesFromDb', request)) return
+          request.failed = true
+          this.listRefreshFailed = true
+          if (request.loaded) return
           console.error('Failed to load VM device assignments', error)
           this.pciDevices = []
           this.usbDevices = []
@@ -757,9 +762,11 @@ export default {
           this.vhbaDevices = []
           this.scsiDevices = []
         } finally {
-          deviceTypes.forEach(type => { this.deviceLoadingStates[type] = false })
-          this.deviceLoadingStates.fetching = false
-          this.deviceAssignmentsPromise = null
+          if (this.isListRequestCurrent('loadDevicesFromDb', request)) {
+            deviceTypes.forEach(type => { this.deviceLoadingStates[type] = false })
+            this.deviceLoadingStates.fetching = false
+            this.deviceAssignmentsPromise = null
+          }
         }
       })()
 

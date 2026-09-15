@@ -16,7 +16,7 @@
 // under the License.
 
 <template>
-  <a-spin :spinning="loading">
+  <a-spin :spinning="loading" :data-list-editing="details.some(item => item.edit) ? 'true' : null">
     <a-alert
       v-if="disableSettings"
       banner

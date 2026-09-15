@@ -169,6 +169,8 @@
 </template>
 
 <script>
+import { listRefreshMixin } from '@/utils/listRefreshMixin'
+
 import { getAPI } from '@/api'
 import draggable from 'vuedraggable'
 import PermissionEditable from './PermissionEditable'
@@ -176,6 +178,7 @@ import TooltipButton from '@/components/widgets/TooltipButton'
 import { genericCompare } from '@/utils/sort'
 
 export default {
+  mixins: [listRefreshMixin(['fetchKeyData'])],
   name: 'ApiKeyPairPermissionTable',
   components: {
     PermissionEditable,
@@ -263,11 +266,17 @@ export default {
       return option.value.toUpperCase().indexOf(input.toUpperCase()) >= 0
     },
     async fetchKeyData () {
+      const listRequest = this.listRequestToken('fetchKeyData')
       try {
         const response = await getAPI('listUserKeyRules', { keypairid: this.resource.id })
+        if (!this.isListRequestCurrent('fetchKeyData', listRequest)) return
         this.rules = response?.listuserkeyrulesresponse?.keypermission ?? []
-      } catch (e) {
-        this.$notifyError(e)
+        this.currRules = new Set(this.rules.map(item => item.rule))
+      } catch (error) {
+        if (!this.isListRequestCurrent('fetchKeyData', listRequest)) return
+        listRequest.failed = true
+        this.listRefreshFailed = true
+        if (!listRequest.loaded) this.$notifyError(error)
       }
     },
     getApis () {

@@ -17,6 +17,7 @@
 
 <template>
   <div>
+    <p v-if="listRefreshFailed" role="status">{{ $t('message.list.refresh.stale') }}</p>
     <a-spin :spinning="fetchLoading">
       <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
         <a-input-search
@@ -83,11 +84,14 @@
 </template>
 
 <script>
+import { listRefreshMixin } from '@/utils/listRefreshMixin'
+
 import { getAPI, postAPI } from '@/api'
 import TooltipButton from '@/components/widgets/TooltipButton'
 import CreateDnsRecord from '@/views/network/dns/CreateDnsRecord'
 
 export default {
+  mixins: [listRefreshMixin(['fetchData'])],
   name: 'DnsRecordsTab',
   components: {
     TooltipButton,
@@ -165,18 +169,31 @@ export default {
   },
   methods: {
     fetchData () {
+      const listRequest = this.listRequestToken('fetchData')
       if (this.fetchLoading) return
 
       const params = {
         dnszoneid: this.resource.id
       }
-      this.fetchLoading = true
-      getAPI('listDnsRecords', params).then(json => {
+      this.fetchLoading = !listRequest.loaded
+      return getAPI('listDnsRecords', params).then(json => {
+        if (!this.isListRequestCurrent('fetchData', listRequest)) return
+
         const response = json.listdnsrecordsresponse || {}
         this.records = response.dnsrecord || []
       }).catch(error => {
+        if (!this.isListRequestCurrent('fetchData', listRequest)) return
+        listRequest.failed = true
+        this.listRefreshFailed = true
+        if (listRequest.loaded) return
+
         this.$notifyError(error)
       }).finally(() => {
+        if (!this.isListRequestCurrent('fetchData', listRequest)) return
+
+        this.fetchLoading = false
+      }).finally(() => {
+        if (!this.isListRequestCurrent('fetchData', listRequest)) return
         this.fetchLoading = false
       })
     },

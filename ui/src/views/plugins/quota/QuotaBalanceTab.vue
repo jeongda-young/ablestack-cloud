@@ -17,6 +17,7 @@
 
 <template>
   <div>
+    <p v-if="listRefreshFailed" role="status">{{ $t('message.list.refresh.stale') }}</p>
     <filter-quota-data-by-period-view @fetchData="fetchData"/>
 
     <div v-if="dataSource.length > 0">
@@ -48,6 +49,7 @@
 </template>
 
 <script>
+import { listRefreshMixin } from '@/utils/listRefreshMixin'
 import { getAPI } from '@/api'
 import BarChart from '@/components/view/charts/BarChart.vue'
 import * as dateUtils from '@/utils/date'
@@ -57,6 +59,7 @@ import ExportToCsvButton from '@/components/view/buttons/ExportToCsvButton.vue'
 import * as chartUtils from '@/utils/chart'
 
 export default {
+  mixins: [listRefreshMixin(['fetchData'], { interval: 60000, reuseArgs: true, active: vm => !!vm.startDate && !!vm.endDate })],
   name: 'QuotaBalance',
   components: {
     FilterQuotaDataByPeriodView,
@@ -103,19 +106,23 @@ export default {
   },
   methods: {
     async fetchData (startDate, endDate) {
-      if (this.loading) return
-
       this.startDate = dateUtils.parseDayJsObject({ value: startDate })
       this.endDate = dateUtils.parseDayJsObject({ value: endDate })
-      this.dataSource = []
-      this.loading = true
+      const request = this.listRequestToken('fetchData')
+      this.loading = !request.loaded
 
       try {
         const data = await this.getQuotaBalance() || {}
+        if (!this.isListRequestCurrent('fetchData', request)) return
         this.currency = data.currency
         this.dataSource = this.getLastBalanceOfEachDate(data.balances)
+      } catch (error) {
+        if (!this.isListRequestCurrent('fetchData', request)) return
+        request.failed = true
+        this.listRefreshFailed = true
+        if (!request.loaded) this.$notifyError(error)
       } finally {
-        this.loading = false
+        if (this.isListRequestCurrent('fetchData', request)) this.loading = false
       }
     },
     async getQuotaBalance () {

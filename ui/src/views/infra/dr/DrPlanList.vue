@@ -18,6 +18,7 @@
 -->
 <template>
   <div class="cross-dr-page cross-dr-standard-page">
+    <p v-if="listRefreshFailed" role="status">{{ $t('message.list.refresh.stale') }}</p>
     <a-affix
       :key="'affix-' + showSearchFilters"
       :offsetTop="this.$store.getters.maintenanceInitiated || this.$store.getters.shutdownTriggered ? 103 : 78">
@@ -1186,6 +1187,7 @@
 </template>
 
 <script>
+import { listRefreshMixin } from '@/utils/listRefreshMixin'
 import DrCheckpointManager from '@/components/dr/DrCheckpointManager.vue'
 import { h } from 'vue'
 import { Checkbox, notification } from 'ant-design-vue'
@@ -1238,7 +1240,7 @@ export default {
     Status,
     TooltipLabel
   },
-  mixins: [mixinDevice],
+  mixins: [mixinDevice, listRefreshMixin(['fetchList'], { active: vm => !vm.detailId })],
   data () {
     return {
       loading: false,
@@ -2528,19 +2530,27 @@ export default {
       }))
     },
     fetchList (options = {}) {
-      this.loading = true
-      this.fetchSites().catch(error => {
-        this.listLoadWarning = this.errorMessage(error)
-      })
+      const listRequest = this.listRequestToken('fetchList')
+      this.loading = !listRequest.loaded
+      if (!listRequest.loaded) {
+        this.fetchSites().catch(error => {
+          this.listLoadWarning = this.errorMessage(error)
+        })
+      }
       return listDrPlans(this.listQueryParams()).then(result => {
+        if (!this.isListRequestCurrent('fetchList', listRequest)) return
         this.plans = this.reconcilePlanList(result.items || [], options.retain || [])
         this.listTotal = Math.max(Number(result.count) || 0, this.plans.length)
         this.listLoadWarning = ''
         return this.plans
       }).catch(error => {
+        if (!this.isListRequestCurrent('fetchList', listRequest)) return
+        listRequest.failed = true
+        this.listRefreshFailed = true
         this.listLoadWarning = this.errorMessage(error)
         return this.plans
       }).finally(() => {
+        if (!this.isListRequestCurrent('fetchList', listRequest)) return
         this.loading = false
       })
     },

@@ -17,6 +17,7 @@
 
 <template>
   <div>
+    <p v-if="listRefreshFailed" role="status">{{ $t('message.list.refresh.stale') }}</p>
     <div class="add-row">
       <p>{{ $t('message.webhook.filter.add') }}</p>
       <a-form
@@ -123,6 +124,8 @@
 </template>
 
 <script>
+import { listRefreshMixin } from '@/utils/listRefreshMixin'
+
 import { ref, reactive, toRaw } from 'vue'
 import { getAPI, postAPI } from '@/api'
 import { mixinForm } from '@/utils/mixin'
@@ -132,7 +135,7 @@ import ListView from '@/components/view/ListView'
 
 export default {
   name: 'WebhookFiltersTab',
-  mixins: [mixinForm],
+  mixins: [listRefreshMixin(['fetchFilters']), mixinForm],
   components: {
     TooltipLabel,
     ListView
@@ -206,7 +209,8 @@ export default {
       this.fetchFilters()
     },
     fetchFilters () {
-      this.filters = []
+      const listRequest = this.listRequestToken('fetchFilters')
+
       if (!this.resource.id) {
         return
       }
@@ -216,11 +220,20 @@ export default {
         webhookid: this.resource.id,
         listall: true
       }
-      this.tabLoading = true
-      getAPI('listWebhookFilters', params).then(json => {
+      this.tabLoading = !listRequest.loaded
+      return getAPI('listWebhookFilters', params).then(json => {
+        if (!this.isListRequestCurrent('fetchFilters', listRequest)) return
         this.filters = []
         this.totalCount = json?.listwebhookfiltersresponse?.count || 0
         this.filters = json?.listwebhookfiltersresponse?.webhookfilter || []
+        this.tabLoading = false
+      }).catch(error => {
+        if (!this.isListRequestCurrent('fetchFilters', listRequest)) return
+        listRequest.failed = true
+        this.listRefreshFailed = true
+        if (!listRequest.loaded) this.$notifyError(error)
+      }).finally(() => {
+        if (!this.isListRequestCurrent('fetchFilters', listRequest)) return
         this.tabLoading = false
       })
     },
