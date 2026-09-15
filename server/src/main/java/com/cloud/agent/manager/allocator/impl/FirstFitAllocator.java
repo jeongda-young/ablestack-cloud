@@ -205,7 +205,7 @@ public class FirstFitAllocator extends BaseAllocator {
 
     protected void filterHostsWithTpmEnabled(Type type, VirtualMachineProfile vmProfile, Long clusterId, Long podId, long dcId, List<HostVO> clusterHosts) {
         VMInstanceDetailVO detail = vmInstanceDetailsDao.findDetail(vmProfile.getId(), "tpmversion");
-        if (detail != null && StringUtils.isNotBlank(detail.getValue())) {
+        if (detail != null && StringUtils.isNotBlank(detail.getValue()) && !StringUtils.equalsIgnoreCase(detail.getValue(), ApiConstants.TpmVersion.NONE.toString())) {
             clusterHosts.retainAll(hostDao.listByHostCapability(type, clusterId, podId, dcId, Host.HOST_TPM_ENABLE));
         }
     }

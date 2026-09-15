@@ -656,4 +656,17 @@ public class FirstFitAllocatorTest {
     }
   }
 
+  @Test
+  public void tpmVersionNoneDoesNotFilterHostsByTpmCapability() {
+    List<HostVO> candidates = new ArrayList<>(Arrays.asList(host1, host2));
+    Mockito.doReturn(new ArrayList<>(Arrays.asList(host1, host2))).when(resourceManagerMock)
+        .listAllUpAndEnabledNonHAHosts(type, clusterId, podId, dcId);
+    when(userVmDetailsDaoMock.findDetail(virtualMachineProfile.getId(), "tpmversion"))
+        .thenReturn(new VMInstanceDetailVO(0L, "tpmversion", ApiConstants.TpmVersion.NONE.toString(), true));
+
+    Assert.assertEquals(Arrays.asList(host1, host2), firstFitAllocatorSpy.retrieveHosts(virtualMachineProfile, type,
+        candidates, vmTemplateVO, clusterId, podId, dcId, null, null));
+    Mockito.verify(hostDaoMock, Mockito.never()).listByHostCapability(type, clusterId, podId, dcId, Host.HOST_TPM_ENABLE);
+  }
+
 }
