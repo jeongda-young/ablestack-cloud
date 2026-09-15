@@ -1699,7 +1699,12 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
 
     @Override
     public boolean cancelBackup(final VirtualMachine vm, final Backup backup) {
-        final Host host = getVMHypervisorHostForBackup(vm);
+        final Host host = findBackupJobHost(backup, vm);
+        if (host == null) {
+            LOG.warn("Failed to cancel NAS backup [{}] for VM [{}]: backup job host was not found",
+                    backup.getUuid(), vm.getInstanceName());
+            return false;
+        }
         try {
             final StopBackupAnswer answer = (StopBackupAnswer) agentManager.send(host.getId(),
                     new AblestackStopBackupCommand(vm.getInstanceName(), vm.getId(), backup.getId(), backup.getUuid()));

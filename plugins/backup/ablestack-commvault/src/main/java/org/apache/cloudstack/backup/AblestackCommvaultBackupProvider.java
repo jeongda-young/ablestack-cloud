@@ -2406,9 +2406,29 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         return backup.getHostId();
     }
 
+    private Host findBackupJobHost(final Backup backup, final VirtualMachine vm) {
+        final Long backupJobHostId = getBackupJobHostId(backup);
+        if (backupJobHostId != null) {
+            final HostVO host = hostDao.findById(backupJobHostId);
+            if (host != null) {
+                return host;
+            }
+        }
+        try {
+            return getVMHypervisorHostForBackup(vm);
+        } catch (CloudRuntimeException e) {
+            return null;
+        }
+    }
+
     @Override
     public boolean cancelBackup(final VirtualMachine vm, final Backup backup) {
-        final Host host = getVMHypervisorHostForBackup(vm);
+        final Host host = findBackupJobHost(backup, vm);
+        if (host == null) {
+            LOG.warn("Failed to cancel Commvault backup [{}] for VM [{}]: backup job host was not found",
+                    backup.getUuid(), vm.getInstanceName());
+            return false;
+        }
         try {
             final StopBackupAnswer answer = (StopBackupAnswer) agentManager.send(host.getId(),
                     new AblestackStopBackupCommand(vm.getInstanceName(), vm.getId(), backup.getId(), backup.getUuid()));
