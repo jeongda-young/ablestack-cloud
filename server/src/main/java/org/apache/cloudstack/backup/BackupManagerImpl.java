@@ -3505,7 +3505,11 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         if (StringUtils.isEmpty(name)) {
             throw new CloudRuntimeException("Invalid backup provider name provided");
         }
-        // Prefer exact registered name first (stock plugin registers as "veeam";
+        if (BackupProviderNameUtils.isNasFamily(name)
+                && backupProvidersMap.containsKey(BackupProviderNameUtils.ABLESTACK_NAS)) {
+            return backupProvidersMap.get(BackupProviderNameUtils.ABLESTACK_NAS);
+        }
+        // Prefer exact registered name first for Veeam (stock plugin registers as "veeam";
         // ablestack-veeam registers as "ablestack-veeam"). Canonicalize is only a fallback.
         if (backupProvidersMap.containsKey(name)) {
             return backupProvidersMap.get(name);
