@@ -34,10 +34,6 @@
             <span>{{ $t('label.step') }} :</span>
             <span>{{ step }}</span>
           </div>
-          <div v-if="logPath" class="backup-progress-tooltip-row">
-            <span>{{ $t('label.path') }} :</span>
-            <span>{{ logPath }}</span>
-          </div>
         </div>
       </template>
     </status>
