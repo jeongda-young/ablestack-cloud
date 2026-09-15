@@ -35,6 +35,7 @@ import java.util.Timer;
 import java.util.TimerTask;
 import java.util.Iterator;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -313,6 +314,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     private static final String RETENTION_CLEANUP_FAILED_AT = "retention.cleanup.failed.at";
     private static final String RETENTION_CLEANUP_SCHEDULE_ID = "retention.cleanup.schedule.id";
     private static final String RETENTION_CLEANUP_REASON = "retention.cleanup.reason";
+    private static final long MIN_ACTIVE_JOB_SYNC_INTERVAL_SECONDS = 5L;
 
     private static Map<String, BackupProvider> backupProvidersMap = new HashMap<>();
     private static final String ABLESTACK_NETBACKUP_PROVIDER_NAME = "ablestack-netbackup";
@@ -320,6 +322,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     private static final int NETBACKUP_PREPARE_RESTORE_PATH_DISCOVERY_WINDOW_SECONDS = 120;
     private List<BackupProvider> backupProviders;
     private final List<PostRestoreMaintenanceTask> postRestoreMaintenanceTasks = Collections.synchronizedList(new ArrayList<>());
+    private final AtomicBoolean activeBackupJobReconcileRunning = new AtomicBoolean(false);
 
     private static final List<Backup.Status> INVALID_BACKUP_STATUS = List.of(Backup.Status.Expunged, Backup.Status.Removed);
 
@@ -3427,6 +3430,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     public boolean configure(String name, Map<String, Object> params) throws ConfigurationException {
         super.configure(name, params);
         backgroundPollManager.submitTask(new BackupSyncTask(this));
+        backgroundPollManager.submitTask(new ActiveBackupJobSyncTask(this));
         return true;
     }
 
@@ -3613,6 +3617,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 BackupFrameworkEnabled,
                 BackupProviderPlugin,
                 BackupSyncPollingInterval,
+                BackupActiveJobSyncPollingInterval,
                 BackupCommandTimeout,
                 BackupRestoreTimeout,
                 BackupQosBandwidthLimitMbps,
@@ -3978,7 +3983,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
      * This background task syncs backups from providers side in CloudStack db
      * along with creation of usage records
      */
-    protected final class BackupSyncTask extends ManagedContextRunnable implements BackgroundPollTask {
+    protected class BackupSyncTask extends ManagedContextRunnable implements BackgroundPollTask {
         private BackupManager backupManager;
 
         public BackupSyncTask(final BackupManager backupManager) {
@@ -3991,19 +3996,16 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 if (logger.isTraceEnabled()) {
                     logger.trace("Backup sync background task is running...");
                 }
-                processPostRestoreMaintenanceTasks();
+                reconcileActiveBackupAndRestoreJobs("backup-sync");
                 for (final DataCenter dataCenter : dataCenterDao.listAllZones()) {
                     if (dataCenter == null || isDisabled(dataCenter.getId())) {
                         logger.debug("Backup Sync Task is not enabled in zone [{}]. Skipping this zone!", dataCenter == null ? "NULL Zone!" : dataCenter);
                         continue;
                     }
 
-                    netBackupRestoreCoordinator.reconcileActiveRestoreStates(dataCenter.getId());
                     List<BackupProvider> providers = getBackupProvidersForZone(dataCenter.getId());
                     for (BackupProvider backupProvider : providers) {
                         try {
-                            reconcileInterruptedRestoreJobs(backupProvider, dataCenter);
-                            reconcileBackingUpBackups(backupProvider, dataCenter);
                             if (backupProvider.supportsBackgroundSync()) {
                                 backupProvider.syncBackupStorageStats(dataCenter.getId());
                                 syncOutOfBandBackups(backupProvider, dataCenter);
@@ -4022,7 +4024,38 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             }
         }
 
-        private void reconcileInterruptedRestoreJobs(final BackupProvider backupProvider, final DataCenter dataCenter) {
+        protected void reconcileActiveBackupAndRestoreJobs(final String source) {
+            if (!activeBackupJobReconcileRunning.compareAndSet(false, true)) {
+                logger.trace("Skipping active backup job reconciliation from [{}] because another reconciliation is already running.", source);
+                return;
+            }
+            try {
+                processPostRestoreMaintenanceTasks();
+                for (final DataCenter dataCenter : dataCenterDao.listAllZones()) {
+                    if (dataCenter == null || isDisabled(dataCenter.getId())) {
+                        logger.trace("Active Backup Job Sync Task is not enabled in zone [{}]. Skipping this zone!",
+                                dataCenter == null ? "NULL Zone!" : dataCenter);
+                        continue;
+                    }
+
+                    netBackupRestoreCoordinator.reconcileActiveRestoreStates(dataCenter.getId());
+                    final List<BackupProvider> providers = getBackupProvidersForZone(dataCenter.getId());
+                    for (BackupProvider backupProvider : providers) {
+                        try {
+                            reconcileInterruptedRestoreJobs(backupProvider, dataCenter);
+                            reconcileBackingUpBackups(backupProvider, dataCenter);
+                        } catch (Exception e) {
+                            logger.error("Failed to reconcile active backup/restore jobs for provider {} in zone {} from [{}]: {}",
+                                    backupProvider.getName(), dataCenter.getId(), source, e.getMessage(), e);
+                        }
+                    }
+                }
+            } finally {
+                activeBackupJobReconcileRunning.set(false);
+            }
+        }
+
+        protected void reconcileInterruptedRestoreJobs(final BackupProvider backupProvider, final DataCenter dataCenter) {
             final List<BackupDetailVO> restoreJobDetails = backupDetailsDao.findDetails(AblestackBackupFrameworkUtils.RESTORE_JOB_ID_DETAIL);
             if (CollectionUtils.isEmpty(restoreJobDetails)) {
                 return;
@@ -4042,7 +4075,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             }
         }
 
-        private void reconcileInterruptedRestoreJob(final BackupProvider backupProvider, final DataCenter dataCenter, final Long backupId) {
+        protected void reconcileInterruptedRestoreJob(final BackupProvider backupProvider, final DataCenter dataCenter, final Long backupId) {
             final BackupVO backup = backupDao.findById(backupId);
             if (backup == null || dataCenter.getId() != backup.getZoneId()) {
                 return;
@@ -4088,7 +4121,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
 
             final BackupAnswer restoreAnswer = (BackupAnswer) answer;
             final String restoreState = StringUtils.defaultIfBlank(restoreAnswer.getState(), restoreAnswer.getDetails());
-            logger.info("Reconciling restore job [{}] for backup [{}], VM [{}] using provider [{}]. state=[{}], step=[{}], progress=[{}]",
+            logger.trace("Reconciling restore job [{}] for backup [{}], VM [{}] using provider [{}]. state=[{}], step=[{}], progress=[{}]",
                     restoreJobId, backup.getUuid(), vm.getInstanceName(), backupProvider.getName(), restoreState,
                     restoreAnswer.getStep(), restoreAnswer.getProgress());
             if ("COMPLETED".equalsIgnoreCase(restoreState)) {
@@ -4104,37 +4137,37 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             }
         }
 
-        private boolean isTerminalRestoreFailureState(final String restoreState) {
+        protected boolean isTerminalRestoreFailureState(final String restoreState) {
             return "FAILED".equalsIgnoreCase(restoreState)
                     || "CANCELED".equalsIgnoreCase(restoreState)
                     || "CANCELLED".equalsIgnoreCase(restoreState)
                     || "INTERRUPTED".equalsIgnoreCase(restoreState);
         }
 
-        private boolean isRestoreStatePending(final VMInstanceVO vm) {
+        protected boolean isRestoreStatePending(final VMInstanceVO vm) {
             return VirtualMachine.State.Restoring.equals(vm.getState()) || hasRestoringVolumes(vm);
         }
 
-        private boolean hasRestoringVolumes(final VMInstanceVO vm) {
+        protected boolean hasRestoringVolumes(final VMInstanceVO vm) {
             return volumeDao.findIncludingRemovedByInstanceAndType(vm.getId(), null).stream()
                     .anyMatch(volume -> Volume.State.Restoring.equals(volume.getState()));
         }
 
-        private void completeInterruptedRestoreStates(final VMInstanceVO vm) {
+        protected void completeInterruptedRestoreStates(final VMInstanceVO vm) {
             updateRestoringVolumeStates(vm, Volume.Event.RestoreSucceeded, Volume.State.Ready);
             if (VirtualMachine.State.Restoring.equals(vm.getState())) {
                 updateVmState(vm, VirtualMachine.Event.RestoringSuccess, VirtualMachine.State.Stopped);
             }
         }
 
-        private void failInterruptedRestoreStates(final VMInstanceVO vm) {
+        protected void failInterruptedRestoreStates(final VMInstanceVO vm) {
             updateRestoringVolumeStates(vm, Volume.Event.RestoreFailed, Volume.State.Ready);
             if (VirtualMachine.State.Restoring.equals(vm.getState())) {
                 updateVmState(vm, VirtualMachine.Event.RestoringFailed, VirtualMachine.State.Stopped);
             }
         }
 
-        private void updateRestoringVolumeStates(final VMInstanceVO vm, final Volume.Event event, final Volume.State next) {
+        protected void updateRestoringVolumeStates(final VMInstanceVO vm, final Volume.Event event, final Volume.State next) {
             Transaction.execute(TransactionLegacy.CLOUD_DB, (TransactionCallback<VolumeVO>) status -> {
                 for (final VolumeVO volume : volumeDao.findIncludingRemovedByInstanceAndType(vm.getId(), null)) {
                     if (Volume.State.Restoring.equals(volume.getState())) {
@@ -4145,7 +4178,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             });
         }
 
-        private void processPostRestoreMaintenanceTasks() {
+        protected void processPostRestoreMaintenanceTasks() {
             synchronized (postRestoreMaintenanceTasks) {
                 if (postRestoreMaintenanceTasks.isEmpty()) {
                     return;
@@ -4183,12 +4216,12 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             }
         }
 
-        private void reconcileBackingUpBackups(final BackupProvider backupProvider, final DataCenter dataCenter) {
+        protected void reconcileBackingUpBackups(final BackupProvider backupProvider, final DataCenter dataCenter) {
             final List<BackupVO> backingUpBackups = backupDao.listByZoneAndStatus(dataCenter.getId(), Backup.Status.BackingUp);
             if (backingUpBackups == null || backingUpBackups.isEmpty()) {
                 return;
             }
-            logger.info("Checking [{}] BackingUp backup records for provider [{}] in zone [{}].",
+            logger.trace("Checking [{}] BackingUp backup records for provider [{}] in zone [{}].",
                     backingUpBackups.size(), backupProvider.getName(), dataCenter.getId());
 
             for (final BackupVO backup : backingUpBackups) {
@@ -4204,7 +4237,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                         continue;
                     }
                     backupDao.loadDetails(backup);
-                    logger.info("Reconciling BackingUp backup [{}] for VM [{}] using backup provider [{}]. "
+                    logger.trace("Reconciling BackingUp backup [{}] for VM [{}] using backup provider [{}]. "
                                     + "backupId=[{}], vmId=[{}], externalId=[{}], date=[{}]",
                             backup.getUuid(), vm.getInstanceName(), backupProvider.getName(), backup.getId(), backup.getVmId(),
                             backup.getExternalId(), backup.getDate());
@@ -4220,13 +4253,13 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             }
         }
 
-        private boolean isMatchingBackupProvider(final String activeProviderName, final String offeringProviderName) {
+        protected boolean isMatchingBackupProvider(final String activeProviderName, final String offeringProviderName) {
             return StringUtils.equalsIgnoreCase(activeProviderName, offeringProviderName)
                     || StringUtils.equalsIgnoreCase(BackupProviderNameUtils.canonicalize(activeProviderName),
                     BackupProviderNameUtils.canonicalize(offeringProviderName));
         }
 
-        private void incrementResourceCountsIfBackupFinalized(final BackupVO originalBackup, final VirtualMachine vm) {
+        protected void incrementResourceCountsIfBackupFinalized(final BackupVO originalBackup, final VirtualMachine vm) {
             final BackupVO updatedBackup = backupDao.findById(originalBackup.getId());
             if (updatedBackup == null || !Backup.Status.BackedUp.equals(updatedBackup.getStatus())) {
                 return;
@@ -4436,6 +4469,29 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         @Override
         public Long getDelay() {
             return BackupSyncPollingInterval.value() * 1000L;
+        }
+    }
+
+    protected final class ActiveBackupJobSyncTask extends BackupSyncTask {
+        public ActiveBackupJobSyncTask(final BackupManager backupManager) {
+            super(backupManager);
+        }
+
+        @Override
+        protected void runInContext() {
+            try {
+                if (logger.isTraceEnabled()) {
+                    logger.trace("Active backup job sync background task is running...");
+                }
+                reconcileActiveBackupAndRestoreJobs("active-job-sync");
+            } catch (final Throwable t) {
+                logger.error(String.format("Error trying to run active backup job sync background task due to: [%s].", t.getMessage()), t);
+            }
+        }
+
+        @Override
+        public Long getDelay() {
+            return Math.max(MIN_ACTIVE_JOB_SYNC_INTERVAL_SECONDS, BackupActiveJobSyncPollingInterval.value()) * 1000L;
         }
     }
 

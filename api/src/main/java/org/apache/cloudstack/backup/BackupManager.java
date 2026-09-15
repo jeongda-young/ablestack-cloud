@@ -79,6 +79,11 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
             "300",
             "The backup and recovery background sync task polling interval in seconds.", true, BackupFrameworkEnabled.key());
 
+    ConfigKey<Long> BackupActiveJobSyncPollingInterval = new ConfigKey<>("Advanced", Long.class,
+            "backup.framework.active.job.sync.interval",
+            "10",
+            "The backup and recovery active backup/restore job status reconciliation interval in seconds.", true, BackupFrameworkEnabled.key());
+
     ConfigKey<Integer> BackupCommandTimeout = new ConfigKey<>("Advanced", Integer.class,
             "backup.command.timeout",
             "7200",
