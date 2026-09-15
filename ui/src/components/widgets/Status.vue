@@ -100,6 +100,9 @@ export default {
           case 'error':
             state = this.$t('state.error')
             break
+          case 'failed':
+            state = this.$t('state.failed')
+            break
           case 'readonly':
             state = this.$t('state.readonly')
             break
@@ -214,6 +217,12 @@ export default {
           case 'created':
             state = this.$t('state.created')
             break
+          case 'queued':
+            state = this.$t('label.queued')
+            break
+          case 'restoring':
+            state = this.$t('label.restoring')
+            break
         }
         return state.charAt(0).toUpperCase() + state.slice(1)
       }
@@ -248,6 +257,8 @@ export default {
         case 'ok':
         case 'redundant':
         case 'goodinuse':
+        case 'compressed':
+        case 'valid':
           status = 'success'
           break
         case 'alert':
@@ -266,6 +277,9 @@ export default {
         case 'unmanaged':
         case 'no':
         case 'critical':
+        case 'notvalid':
+        case 'unabletovalidate':
+        case 'compressionerror':
           status = 'error'
           break
         case 'migrating':
@@ -279,6 +293,8 @@ export default {
         case 'snapshotting':
         case 'backingup':
         case 'destroying':
+        case 'validating':
+        case 'compressing':
           status = 'processing'
           break
         case 'allocated':
@@ -298,6 +314,7 @@ export default {
         case 'scheduled':
         case 'partiallyallocated':
         case 'notredundant':
+        case 'uncompressed':
           status = 'warning'
           break
       }

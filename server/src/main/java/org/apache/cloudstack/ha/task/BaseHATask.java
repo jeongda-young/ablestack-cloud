@@ -25,6 +25,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import com.cloud.utils.concurrency.NamedThreadFactory;
+import com.cloud.utils.db.TransactionLegacy;
 
 import org.apache.cloudstack.ha.HAConfig;
 import org.apache.cloudstack.ha.HAResource;
@@ -81,13 +82,23 @@ public abstract class BaseHATask implements Callable<Boolean> {
 
     @Override
     public Boolean call() {
+        // HA tasks run outside ManagedContextRunnable. Own a DB context on each
+        // executor thread, including result processing and exceptional exits.
+        try (TransactionLegacy txn = TransactionLegacy.open("HA-task-" + getTaskType())) {
+            return callWithDatabaseContext();
+        }
+    }
+
+    private Boolean callWithDatabaseContext() {
         if (new DateTime().minusHours(1).isAfter(getCreated())) {
             return false;
         }
         final Future<Boolean> future = innerExecutor.submit(new Callable<Boolean>() {
             @Override
             public Boolean call() throws HACheckerException, HAFenceException, HARecoveryException {
-                return performAction();
+                try (TransactionLegacy txn = TransactionLegacy.open("HA-action-" + getTaskType())) {
+                    return performAction();
+                }
             }
         });
 
@@ -100,7 +111,7 @@ public abstract class BaseHATask implements Callable<Boolean> {
                 result = future.get(timeout, TimeUnit.SECONDS);
             }
         } catch (InterruptedException | ExecutionException e) {
-            logger.warn("Exception occurred while running " + getTaskType() + " on a resource: " + e.getMessage(), e.getCause());
+            logger.warn("Exception occurred while running {} on a resource: {}", getTaskType(), e.getMessage(), e.getCause());
             throwable = e.getCause();
         } catch (TimeoutException e) {
             logger.trace("{} operation timed out for resource: {}", getTaskType(), resource);
