@@ -603,43 +603,12 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         backup.setDomainId(vm.getDomainId());
         backup.setZoneId(vm.getDataCenterId());
         backup.setName(backupManager.getBackupNameFromVM(vm));
-        addBackupJobHostDetails(details, hostId);
         backup.setDetails(details);
         final BackupVO persistedBackup = backupDao.persist(backup);
         persistedBackup.setHostId(hostId);
         backupDao.update(persistedBackup.getId(), persistedBackup);
         backupDao.saveDetails(persistedBackup);
-        persistBackupJobHostDetails(persistedBackup, details);
         return persistedBackup;
-    }
-
-    private void addBackupJobHostDetails(final Map<String, String> details, final Long hostId) {
-        if (details == null || hostId == null) {
-            return;
-        }
-        details.put(AblestackBackupFrameworkUtils.BACKUP_HOST_ID_DETAIL, String.valueOf(hostId));
-        final HostVO host = hostDao.findById(hostId);
-        if (host != null) {
-            details.put(AblestackBackupFrameworkUtils.BACKUP_HOST_NAME_DETAIL, host.getName());
-        }
-    }
-
-    private void persistBackupJobHostDetails(final BackupVO backup, final Map<String, String> details) {
-        if (backup == null || details == null) {
-            return;
-        }
-        persistBackupDetail(backup.getId(), AblestackBackupFrameworkUtils.BACKUP_HOST_ID_DETAIL,
-                details.get(AblestackBackupFrameworkUtils.BACKUP_HOST_ID_DETAIL));
-        persistBackupDetail(backup.getId(), AblestackBackupFrameworkUtils.BACKUP_HOST_NAME_DETAIL,
-                details.get(AblestackBackupFrameworkUtils.BACKUP_HOST_NAME_DETAIL));
-    }
-
-    private void persistBackupDetail(final Long backupId, final String key, final String value) {
-        if (backupId == null || StringUtils.isBlank(key) || StringUtils.isBlank(value)) {
-            return;
-        }
-        backupDetailsDao.removeDetail(backupId, key);
-        backupDetailsDao.addDetail(backupId, key, value, false);
     }
 
     private Map<String, String> getBackupDetails(final VirtualMachine vm, final String backupPath, final String checkpointName, final String backupEngine,
@@ -2212,16 +2181,6 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     private Long getBackupJobHostId(final Backup backup) {
         if (backup == null) {
             return null;
-        }
-        loadBackupDetailsIfNeeded(backup);
-        final String backupJobHostId = getBackupDetail(backup, AblestackBackupFrameworkUtils.BACKUP_HOST_ID_DETAIL);
-        if (StringUtils.isNotBlank(backupJobHostId)) {
-            try {
-                return Long.parseLong(backupJobHostId.trim());
-            } catch (NumberFormatException e) {
-                LOG.debug("Ignoring invalid Veeam backup job host id detail [{}] for backup [{}]",
-                        backupJobHostId, backup.getUuid());
-            }
         }
         return backup.getHostId();
     }

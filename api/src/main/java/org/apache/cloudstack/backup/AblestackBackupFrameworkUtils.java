@@ -45,8 +45,6 @@ public final class AblestackBackupFrameworkUtils {
     public static final String CAPABILITY_PROGRESS = "progress";
     public static final String CAPABILITY_RESTORE_PROGRESS = "restore-progress";
     public static final String CAPABILITY_LIVE_BANDWIDTH = "live-bandwidth";
-    public static final String BACKUP_HOST_ID_DETAIL = "ablestack.backup.host.id";
-    public static final String BACKUP_HOST_NAME_DETAIL = "ablestack.backup.host.name";
     public static final String RESTORE_JOB_ID_DETAIL = "ablestack.restore.job.id";
     public static final String RESTORE_HOST_ID_DETAIL = "ablestack.restore.host.id";
     public static final String RESTORE_HOST_NAME_DETAIL = "ablestack.restore.host.name";

@@ -479,7 +479,6 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         if (backupDetails != null) {
             details.putAll(backupDetails);
         }
-        addBackupJobHostDetails(details, hostId);
         details.put(DETAIL_CHECKPOINT_NAME, checkpointName);
         details.put(DETAIL_CHECKPOINT_PATH, getCheckpointPath(backupPath, checkpointName, backupEngine));
         details.put(DETAIL_BACKUP_ENGINE, backupEngine);
@@ -498,37 +497,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         persistedBackup.setHostId(hostId);
         backupDao.update(persistedBackup.getId(), persistedBackup);
         backupDao.saveDetails(persistedBackup);
-        persistBackupJobHostDetails(persistedBackup, details);
         return persistedBackup;
-    }
-
-    private void addBackupJobHostDetails(final Map<String, String> details, final Long hostId) {
-        if (details == null || hostId == null) {
-            return;
-        }
-        details.put(AblestackBackupFrameworkUtils.BACKUP_HOST_ID_DETAIL, String.valueOf(hostId));
-        final HostVO host = hostDao.findById(hostId);
-        if (host != null) {
-            details.put(AblestackBackupFrameworkUtils.BACKUP_HOST_NAME_DETAIL, host.getName());
-        }
-    }
-
-    private void persistBackupJobHostDetails(final BackupVO backup, final Map<String, String> details) {
-        if (backup == null || details == null) {
-            return;
-        }
-        persistBackupDetail(backup.getId(), AblestackBackupFrameworkUtils.BACKUP_HOST_ID_DETAIL,
-                details.get(AblestackBackupFrameworkUtils.BACKUP_HOST_ID_DETAIL));
-        persistBackupDetail(backup.getId(), AblestackBackupFrameworkUtils.BACKUP_HOST_NAME_DETAIL,
-                details.get(AblestackBackupFrameworkUtils.BACKUP_HOST_NAME_DETAIL));
-    }
-
-    private void persistBackupDetail(final Long backupId, final String key, final String value) {
-        if (backupId == null || StringUtils.isBlank(key) || StringUtils.isBlank(value)) {
-            return;
-        }
-        backupDetailsDao.removeDetail(backupId, key);
-        backupDetailsDao.addDetail(backupId, key, value, false);
     }
 
     private String getCheckpointPath(String backupPath, String checkpointName, String backupEngine) {
@@ -1684,16 +1653,6 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
     private Long getBackupJobHostId(final Backup backup) {
         if (backup == null) {
             return null;
-        }
-        loadBackupDetailsIfNeeded(backup);
-        final String backupJobHostId = getBackupDetail(backup, AblestackBackupFrameworkUtils.BACKUP_HOST_ID_DETAIL);
-        if (StringUtils.isNotBlank(backupJobHostId)) {
-            try {
-                return Long.parseLong(backupJobHostId.trim());
-            } catch (NumberFormatException e) {
-                LOG.debug("Ignoring invalid NAS backup job host id detail [{}] for backup [{}]",
-                        backupJobHostId, backup.getUuid());
-            }
         }
         return backup.getHostId();
     }

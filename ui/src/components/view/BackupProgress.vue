@@ -166,11 +166,28 @@ export default {
         id: this.record.id,
         limit: 5
       }).then(json => {
-        const response = json?.[responseKey] || {}
+        const response = this.unwrapStatusResponse(json?.[responseKey] || {})
         this.applyStatus(response)
       }).catch(() => {
         this.stopPolling()
       })
+    },
+    unwrapStatusResponse (response) {
+      if (!response || typeof response !== 'object') {
+        return {}
+      }
+      if (Object.prototype.hasOwnProperty.call(response, 'progress') ||
+          Object.prototype.hasOwnProperty.call(response, 'state') ||
+          Object.prototype.hasOwnProperty.call(response, 'status')) {
+        return response
+      }
+      const nestedResponse = Object.values(response).find(value => {
+        return value && typeof value === 'object' &&
+          (Object.prototype.hasOwnProperty.call(value, 'progress') ||
+           Object.prototype.hasOwnProperty.call(value, 'state') ||
+           Object.prototype.hasOwnProperty.call(value, 'status'))
+      })
+      return nestedResponse || {}
     },
     applyStatus (response) {
       const wasRestoring = this.isRestoring

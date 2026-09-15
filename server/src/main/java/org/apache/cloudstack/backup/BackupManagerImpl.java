@@ -4069,7 +4069,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             for (final BackupVO backup : backingUpBackups) {
                 try {
                     final BackupOfferingVO offering = backupOfferingDao.findById(backup.getBackupOfferingId());
-                    if (offering == null || !backupProvider.getName().equalsIgnoreCase(offering.getProvider())) {
+                    if (offering == null || !isMatchingBackupProvider(backupProvider.getName(), offering.getProvider())) {
                         continue;
                     }
                     final VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(backup.getVmId());
@@ -4093,6 +4093,12 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                             backup.getUuid(), backupProvider.getName(), dataCenter.getId(), e.getMessage(), e);
                 }
             }
+        }
+
+        private boolean isMatchingBackupProvider(final String activeProviderName, final String offeringProviderName) {
+            return StringUtils.equalsIgnoreCase(activeProviderName, offeringProviderName)
+                    || StringUtils.equalsIgnoreCase(BackupProviderNameUtils.canonicalize(activeProviderName),
+                    BackupProviderNameUtils.canonicalize(offeringProviderName));
         }
 
         private void incrementResourceCountsIfBackupFinalized(final BackupVO originalBackup, final VirtualMachine vm) {
@@ -4549,11 +4555,6 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     private Long getBackupJobHostId(final BackupVO backup) {
         if (backup == null) {
             return null;
-        }
-        backupDao.loadDetails(backup);
-        final String backupJobHostId = backup.getDetail(AblestackBackupFrameworkUtils.BACKUP_HOST_ID_DETAIL);
-        if (NumberUtils.isDigits(backupJobHostId)) {
-            return Long.parseLong(backupJobHostId);
         }
         return backup.getHostId();
     }
