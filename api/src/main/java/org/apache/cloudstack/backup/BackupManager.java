@@ -71,8 +71,8 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
 
     ConfigKey<String> BackupProviderPlugin = new ConfigKey<>("Advanced", String.class,
             "backup.framework.provider.plugin",
-            "dummy",
-            "The backup and recovery provider plugin (comma-separated). Example: dummy, veeam, networker, nas, commvault, netbackup", true, ConfigKey.Scope.Zone, BackupFrameworkEnabled.key());
+            "nas",
+            "The backup and recovery provider plugin (comma-separated). Example: veeam, networker, nas, commvault, netbackup", true, ConfigKey.Scope.Zone, BackupFrameworkEnabled.key());
 
     ConfigKey<Long> BackupSyncPollingInterval = new ConfigKey<>("Advanced", Long.class,
             "backup.framework.sync.interval",

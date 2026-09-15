@@ -575,9 +575,13 @@ export default {
           message: 'message.backup.restore',
           dataView: true,
           show: (record) => { return record.status === 'BackedUp' },
-          args: () => {
-            const fields = ['quickrestore']
-            if (isAdmin()) {
+          args: (record) => {
+            const fields = []
+            const isKbossProvider = String(record?.provider || '').toLowerCase() === 'kboss'
+            if (isKbossProvider) {
+              fields.push('quickrestore')
+            }
+            if (isKbossProvider && isAdmin()) {
               fields.push('hostid')
             }
             return fields
