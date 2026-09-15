@@ -17,15 +17,15 @@
 
 <template>
   <div style="display: inline-flex;">
-    <a-tooltip placement="bottom">
-      <template #title>
+    <a-tooltip placement="bottom" :trigger="showTooltip ? 'hover' : []">
+      <template v-if="showTooltip" #title>
         <slot name="tooltip">
           {{ getTooltip(text) }}
         </slot>
       </template>
       <a-badge
         :style="getStyle()"
-        :title="text"
+        :title="showTooltip ? text : ''"
         :color="getStatusColor(text)"
         :status="getBadgeStatus(text)"
         :text="getText()" />
@@ -45,6 +45,10 @@ export default {
     displayText: {
       type: Boolean,
       default: false
+    },
+    showTooltip: {
+      type: Boolean,
+      default: true
     },
     styles: {
       type: Object,

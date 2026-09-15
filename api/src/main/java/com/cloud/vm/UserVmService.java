@@ -111,6 +111,8 @@ public interface UserVmService {
 
     void validateCloneCondition(CloneVMCmd cmd) throws ResourceUnavailableException, ConcurrentOperationException, ResourceAllocationException;
 
+    void updateVmCloneFlattenBandwidth(long vmId, Integer bandwidth);
+
     /**
      * Resets the password of a virtual machine.
      *

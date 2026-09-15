@@ -20,6 +20,7 @@ import store from '@/store'
 import { isZoneCreated } from '@/utils/zone'
 import { getAPI, postAPI, getBaseUrl } from '@/api'
 import { getLatestKubernetesIsoParams } from '@/utils/acsrepo'
+import { isFastClonePowerOperationBlocked, getFastClonePowerBlockedLabel, getFastClonePhase } from '@/utils/fastClone'
 import kubernetesIcon from '@/assets/icons/kubernetes.svg?inline'
 
 const activeFastCloneStatuses = ['pending', 'running']
@@ -37,7 +38,7 @@ const getActiveBackupStatus = (record) => {
 }
 
 const isFastCloneFlattenActive = (record) => {
-  return activeFastCloneStatuses.includes(getFastCloneStatus(record))
+  return !!getFastClonePhase(record) || activeFastCloneStatuses.includes(getFastCloneStatus(record))
 }
 
 const isBackupActive = (record) => {
@@ -45,7 +46,7 @@ const isBackupActive = (record) => {
 }
 
 const isFastCloneFlattenRunning = (record) => {
-  return runningFastCloneStatuses.includes(getFastCloneStatus(record))
+  return !!getFastClonePhase(record) || runningFastCloneStatuses.includes(getFastCloneStatus(record))
 }
 
 const hasFastCloneFlattenSelection = (selectedItems) => {
@@ -93,8 +94,9 @@ const getCloneOperationTooltip = (record, store, selectedItems) => {
   )
 }
 
-const getFastCloneRunningOperationTooltip = (record, store, selectedItems, fallbackLabel) => {
-  return disableDuringFastCloneFlattenRunning(record, store, selectedItems) ? fastCloneOperationBlockedLabel : fallbackLabel
+const getFastClonePowerOperationTooltip = (record, selectedItems, fallbackLabel, starting = false) => {
+  return isFastClonePowerOperationBlocked(record, selectedItems, starting)
+    ? getFastClonePowerBlockedLabel(record, selectedItems, starting) : fallbackLabel
 }
 
 export default {
@@ -224,8 +226,8 @@ export default {
             return []
           },
           show: (record) => { return ['Stopped'].includes(record.state) },
-          disabled: disableDuringFastCloneFlattenRunning,
-          tooltip: (record, store, selectedItems) => getFastCloneRunningOperationTooltip(record, store, selectedItems, 'label.action.start.instance'),
+          disabled: (record, store, selectedItems) => isFastClonePowerOperationBlocked(record, selectedItems, true),
+          tooltip: (record, store, selectedItems) => getFastClonePowerOperationTooltip(record, selectedItems, 'label.action.start.instance', true),
           component: shallowRef(defineAsyncComponent(() => import('@/views/compute/StartVirtualMachine.vue')))
         },
         {
@@ -242,8 +244,8 @@ export default {
               ? ['forced'] : []
           },
           show: (record) => { return ['Running'].includes(record.state) },
-          disabled: disableDuringFastCloneFlatten,
-          tooltip: (record, store, selectedItems) => getFastCloneOperationTooltip(record, store, selectedItems, 'label.action.stop.instance')
+          disabled: (record, store, selectedItems) => isFastClonePowerOperationBlocked(record, selectedItems),
+          tooltip: (record, store, selectedItems) => getFastClonePowerOperationTooltip(record, selectedItems, 'label.action.stop.instance')
         },
         {
           api: 'rebootVirtualMachine',
@@ -253,8 +255,8 @@ export default {
           docHelp: 'adminguide/virtual_machines.html#stopping-and-starting-vms',
           dataView: true,
           show: (record) => { return ['Running'].includes(record.state) },
-          disabled: (record, store, selectedItems) => { return record.hostcontrolstate === 'Offline' || disableDuringFastCloneFlatten(record, store, selectedItems) },
-          tooltip: (record, store, selectedItems) => getFastCloneOperationTooltip(record, store, selectedItems, 'label.action.reboot.instance'),
+          disabled: (record, store, selectedItems) => { return record.hostcontrolstate === 'Offline' || isFastClonePowerOperationBlocked(record, selectedItems) },
+          tooltip: (record, store, selectedItems) => getFastClonePowerOperationTooltip(record, selectedItems, 'label.action.reboot.instance'),
           args: (record, store) => {
             var fields = []
             fields.push('forced')
@@ -294,7 +296,8 @@ export default {
           dataView: true,
           popup: true,
           show: (record) => { return record.hypervisor !== 'External' && ['Running', 'Stopped'].includes(record.state) && record.vmtype !== 'sharedfsvm' },
-          disabled: (record) => { return record.hostcontrolstate === 'Offline' },
+          disabled: (record, store, selectedItems) => { return record.hostcontrolstate === 'Offline' || disableDuringFastCloneFlatten(record, store, selectedItems) },
+          tooltip: (record, store, selectedItems) => getFastCloneOperationTooltip(record, store, selectedItems, 'label.reinstall.vm'),
           component: shallowRef(defineAsyncComponent(() => import('@/views/compute/ReinstallVm.vue')))
         },
         {
