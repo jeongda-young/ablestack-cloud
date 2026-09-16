@@ -2121,7 +2121,6 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
                     BACKUP_TRACE, backup.getId(), backup.getUuid(), vm.getId(), vm.getInstanceName(), host.getId(), host.getName(),
                     backup.getExternalId(), jobLogPath);
         } else if ("CANCELED".equals(jobState)) {
-            cleanupFailedBackupArtifacts(host, backup);
             cleanupBackupJobFiles(host.getId(), backup.getUuid());
             final BackupVO backupVO = backupDao.findById(backup.getId());
             if (backupVO != null) {

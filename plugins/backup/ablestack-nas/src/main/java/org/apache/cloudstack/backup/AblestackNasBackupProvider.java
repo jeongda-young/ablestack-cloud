@@ -1599,7 +1599,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
                         BACKUP_TRACE, backup.getId(), backup.getUuid(), vm.getId(), vm.getInstanceName(), host.getId(), host.getName(),
                         backup.getExternalId(), jobLogPath);
             } else if ("CANCELED".equals(jobState)) {
-                cleanupCanceledBackup(backup, host);
+                cleanupBackupJobFiles(host.getId(), backup.getUuid());
                 BackupVO backupVO = backupDao.findById(backup.getId());
                 if (backupVO != null) {
                     backupVO.setStatus(Backup.Status.Canceled);
@@ -1641,20 +1641,6 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         } catch (AgentUnavailableException | OperationTimedoutException e) {
             LOG.warn("Failed to inspect NAS backup [{}] for async completion on host [{}]", backup.getUuid(), host.getName(), e);
             return false;
-        }
-    }
-
-    private void cleanupCanceledBackup(final Backup backup, final Host host) {
-        try {
-            if (!deleteBackup(backup, true)) {
-                LOG.warn("Failed to cleanup canceled NAS backup path [backupId: {}, backupUuid: {}, hostId: {}, backupPath: {}]",
-                        backup.getId(), backup.getUuid(), host.getId(), backup.getExternalId());
-            }
-        } catch (Exception e) {
-            LOG.warn("Failed to cleanup canceled NAS backup path [backupId: {}, backupUuid: {}, hostId: {}, backupPath: {}]",
-                    backup.getId(), backup.getUuid(), host.getId(), backup.getExternalId(), e);
-        } finally {
-            cleanupBackupJobFiles(host.getId(), backup.getUuid());
         }
     }
 

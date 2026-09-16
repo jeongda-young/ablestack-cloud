@@ -2255,7 +2255,6 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                     BACKUP_TRACE, backup.getId(), backup.getUuid(), vm.getId(), vm.getInstanceName(), stageHost.getId(), stageHost.getName(),
                     backupPath, jobLogPath);
         } else if ("CANCELED".equals(jobState)) {
-            cleanupBackupStagingPathFromDetails(backup);
             cleanupBackupJobFiles(stageHost.getId(), backup.getUuid());
             BackupVO backupVO = backupDao.findById(backup.getId());
             if (backupVO != null) {
