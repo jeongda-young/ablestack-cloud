@@ -7685,5 +7685,7 @@
   "message.additional.iso.boot": "Boot from the installation ISO with a driver ISO connected. The destination must support two ISO slots; ConfigDrive may reserve the second slot.",
   "message.additional.iso.empty": "No non-bootable ISO is available. Register a non-bootable driver ISO in this zone.",
   "message.additional.iso.load.failed": "Unable to load additional ISOs. Turn this option off or retry.",
-  "message.additional.iso.required": "Select an available non-bootable ISO or turn off additional ISO connection."
+  "message.additional.iso.required": "Select an available non-bootable ISO or turn off additional ISO connection.",
+  "label.stats.stale": "Statistics update delayed",
+  "label.stats.last.sample": "Last statistics sample"
 }
