@@ -39,20 +39,22 @@ under the License. -->
             <dt>{{ $t('label.deviceid') }} :</dt>
             <dd>{{ current.clonefastflattendeviceid ?? '-' }}</dd>
             <dt>{{ $t('label.progress') }} :</dt>
-            <dd>{{ progress === null ? '-' : progress.toFixed(2) + '%' }}</dd>
+            <dd class="clone-flatten-panel__progress-row">
+              <a-progress
+                v-if="progress !== null"
+                class="clone-flatten-panel__progress"
+                :percent="progress"
+                :status="failed ? 'exception' : running ? 'active' : 'normal'"
+                :show-info="false"
+                role="progressbar"
+                :aria-label="$t('label.progress')"
+                :aria-valuenow="progress"
+                :aria-valuemin="0"
+                :aria-valuemax="100"
+                size="small" />
+              <span class="clone-flatten-panel__progress-value">{{ progress === null ? '-' : progress.toFixed(2) + '%' }}</span>
+            </dd>
           </dl>
-          <a-progress
-            v-if="progress !== null"
-            class="clone-flatten-panel__progress"
-            :percent="progress"
-            :status="failed ? 'exception' : running ? 'active' : 'normal'"
-            :show-info="false"
-            role="progressbar"
-            :aria-label="$t('label.progress')"
-            :aria-valuenow="progress"
-            :aria-valuemin="0"
-            :aria-valuemax="100"
-            size="small" />
           <div v-if="isClone" class="clone-flatten-panel__bandwidth">
             <label :for="'flatten-bandwidth-' + current.id">{{ $t('label.clone.flatten.bandwidth') }}</label>
             <div class="clone-flatten-panel__input">
@@ -285,9 +287,9 @@ export default {
 .clone-flatten-panel__description { line-height: 1.5; margin-bottom: 10px; }
 .clone-flatten-panel__status {
   display: grid;
-  grid-template-columns: 80px minmax(0, 1fr);
+  grid-template-columns: 60px minmax(0, 1fr);
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   flex: 1;
   min-width: 0;
   .ant-tag { justify-self: start; }
@@ -295,16 +297,25 @@ export default {
 .clone-flatten-panel__status-label { color: #666; }
 .clone-flatten-panel__disk {
   display: grid;
-  grid-template-columns: 80px minmax(0, 1fr);
-  gap: 4px 10px;
+  grid-template-columns: 60px minmax(0, 1fr);
+  gap: 4px 6px;
   margin: 8px 0;
   dt { color: #666; }
   dd { margin: 0; }
 }
 .clone-flatten-panel__bandwidth { border-top: 1px solid #e8e8e8; margin-top: 12px; padding-top: 12px; }
+.clone-flatten-panel__progress-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.clone-flatten-panel__progress-value { flex-shrink: 0; white-space: nowrap; }
 .clone-flatten-panel__progress {
   display: flex;
   align-items: center;
+  flex: 1;
+  min-width: 0;
   :deep(.ant-progress-outer) { flex: 1; min-width: 0; margin-right: 0; padding-right: 0; }
 }
 .clone-flatten-panel__input {

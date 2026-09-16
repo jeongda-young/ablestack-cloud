@@ -487,9 +487,11 @@
         <span>{{ text ? $t('label.yes') : $t('label.no') }}</span>
       </template>
       <template v-if="column.key === 'state'">
-        <status v-if="$route.path.startsWith('/host')" :text="getHostState(record)" displayText />
-        <status v-else :text="text ? text : ''" displayText :styles="{ 'min-width': '80px' }" />
-        <clone-flatten-control :record="record" @refresh="$emit('refresh')" />
+        <span class="list-state-with-flatten">
+          <status v-if="$route.path.startsWith('/host')" :text="getHostState(record)" displayText />
+          <status v-else :text="text ? text : ''" displayText />
+          <clone-flatten-control :record="record" @refresh="$emit('refresh')" />
+        </span>
       </template>
       <template v-if="column.key === 'status'">
         <status
@@ -1936,6 +1938,16 @@ export default {
 </style>
 
 <style scoped lang="scss">
+.list-state-with-flatten {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+
+  :deep(.clone-flatten-control) {
+    margin-left: 0;
+  }
+}
+
   .shift-btns {
     display: flex;
   }

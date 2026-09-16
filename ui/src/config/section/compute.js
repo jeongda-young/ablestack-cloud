@@ -214,8 +214,7 @@ export default {
           dataView: true,
           popup: true,
           show: (record) => { return record.vmtype !== 'sharedfsvm' },
-          disabled: disableDuringFastCloneFlatten,
-          tooltip: (record, store, selectedItems) => getFastCloneOperationTooltip(record, store, selectedItems, 'label.action.edit.instance'),
+          tooltip: () => 'label.action.edit.instance',
           component: shallowRef(defineAsyncComponent(() => import('@/views/compute/EditVM.vue')))
         },
         {
