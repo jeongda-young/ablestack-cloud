@@ -34,7 +34,7 @@ public class LibvirtAblestackRestoreJobStatusCommandWrapper
     public Answer execute(final AblestackRestoreJobStatusCommand command, final LibvirtComputingResource resource) {
         BackupAnswer answer = LibvirtAblestackAsyncBackupRunner.getJobStatus(command, command.getRestoreJobId(),
                 command.getEventsOffset(), command.getEventsLimit(), logger);
-        logger.info("ABLESTACK restore job status command completed. restoreJobId=[{}], state=[{}], jobLog=[{}]",
+        logger.debug("ABLESTACK restore job status command completed. restoreJobId=[{}], state=[{}], jobLog=[{}]",
                 command.getRestoreJobId(), answer.getState(), AblestackBackupFrameworkUtils.getAsyncRestoreJobLogPath(command.getRestoreJobId()));
         return answer;
     }
