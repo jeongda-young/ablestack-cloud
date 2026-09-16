@@ -1122,7 +1122,7 @@ export default {
         this.resetSelection()
         if ('page' in to.query) {
           this.page = Number(to.query.page)
-          this.pageSize = Number(to.query.pagesize)
+          this.pageSize = this.getValidPageSize(to.query.pagesize)
         } else {
           this.page = 1
         }
@@ -1297,6 +1297,14 @@ export default {
     resetSelection () {
       this.selectedRowKeys = []
       this.selectedItems = []
+    },
+    getValidPageSize (value) {
+      const pageSize = Number(value)
+      if (Number.isFinite(pageSize) && pageSize > 0) {
+        return pageSize
+      }
+      const defaultPageSize = Number(this.$store.getters.defaultListViewPageSize)
+      return Number.isFinite(defaultPageSize) && defaultPageSize > 0 ? defaultPageSize : 20
     },
     onListEvent (name, handler) {
       this.listEventHandlers.push([name, handler])
@@ -1475,7 +1483,7 @@ export default {
           this.page = Number(this.$route.query.page)
         }
         if ('pagesize' in this.$route.query) {
-          this.pagesize = Number(this.$route.query.pagesize)
+          this.pageSize = this.getValidPageSize(this.$route.query.pagesize)
         }
         Object.assign(params, this.$route.query)
       }
@@ -1687,8 +1695,8 @@ export default {
         params.projectid = '-1'
       }
 
-      params.page = this.page
-      params.pagesize = this.pageSize
+      params.page = Number.isFinite(Number(this.page)) && Number(this.page) > 0 ? Number(this.page) : 1
+      params.pagesize = this.getValidPageSize(this.pageSize)
 
       if (this.$showIcon()) {
         params.showIcon = true

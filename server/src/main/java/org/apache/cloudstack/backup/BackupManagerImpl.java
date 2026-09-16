@@ -3070,7 +3070,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             throw new CloudRuntimeException("Failed to find Instance Backup Offering");
         }
 
-        if (!StringUtils.equals(KBOSS_BACKUP_PROVIDER, offering.getProvider()) && !VirtualMachine.PowerState.PowerOff.equals(vm.getPowerState())) {
+        if (!isLiveRestoreVolumeAttachSupported(offering) && !VirtualMachine.PowerState.PowerOff.equals(vm.getPowerState())) {
             throw new CloudRuntimeException(String.format("VM [%s] needs to be powered off to restore the volume [%s].", vm.getUuid(), backedUpVolumeUuid));
         }
 
@@ -3167,6 +3167,18 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         return offering != null && (BackupProviderNameUtils.isNetBackupFamily(offering.getProvider()) ||
                 BackupProviderNameUtils.isNasFamily(offering.getProvider()) ||
                 BackupProviderNameUtils.isCommvaultFamily(offering.getProvider()));
+    }
+
+    private boolean isLiveRestoreVolumeAttachSupported(final BackupOffering offering) {
+        if (offering == null) {
+            return false;
+        }
+        final String provider = offering.getProvider();
+        return StringUtils.equals(KBOSS_BACKUP_PROVIDER, provider) ||
+                BackupProviderNameUtils.isNasFamily(provider) ||
+                BackupProviderNameUtils.isCommvaultFamily(provider) ||
+                BackupProviderNameUtils.isNetBackupFamily(provider) ||
+                BackupProviderNameUtils.isVeeamFamily(provider);
     }
 
     protected Pair<Boolean, String> restoreBackedUpVolume(final Backup.VolumeInfo backupVolumeInfo, final BackupVO backup,
