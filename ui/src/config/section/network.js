@@ -651,7 +651,7 @@ export default {
           args: ['virtualmachineid'],
           show: (record) => {
             const provider = (record.backupprovider || '').toLowerCase()
-            return record.backupofferingid && !['netbackup', 'ablestack-netbackup', 'veeam', 'ablestack-veeam'].includes(provider)
+            return record.backupofferingid && !['ablestack-netbackup', 'ablestack-veeam'].includes(provider)
           },
           disabled: (record) => { return isFastCloneFlattenActive(record) },
           tooltip: (record) => { return isFastCloneFlattenActive(record) ? fastCloneOperationBlockedLabel : 'label.create.backup' },

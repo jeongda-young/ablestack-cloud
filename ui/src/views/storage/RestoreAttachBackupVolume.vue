@@ -69,13 +69,13 @@
           </a-select-option>
         </a-select>
       </a-form-item>
-      <a-form-item v-if="isKbossBackupProvider()" name="quickRestore" ref="quickRestore" >
+      <a-form-item v-if="apiParams.quickrestore" name="quickRestore" ref="quickRestore" >
         <template #label>
           <tooltip-label :title="$t('label.quickrestore')" :tooltip="apiParams.quickrestore?.description"/>
         </template>
         <a-switch v-model:checked="form.quickRestore" />
       </a-form-item>
-      <a-form-item name="hostId" ref="hostId" v-if="isAdmin() && isKbossBackupProvider()">
+      <a-form-item name="hostId" ref="hostId" v-if="isAdmin() && apiParams.hostid">
         <template #label>
           <tooltip-label :title="$t('label.hostid')" :tooltip="apiParams.hostid?.description"/>
         </template>
@@ -150,9 +150,6 @@ export default {
   inject: ['parentFetchData'],
   methods: {
     isAdmin,
-    isKbossBackupProvider () {
-      return String(this.resource?.provider || '').toLowerCase() === 'kboss'
-    },
     initForm () {
       this.formRef = ref()
       this.form = reactive({
@@ -222,8 +219,10 @@ export default {
         params.backupid = this.resource.id
         params.volumeid = values.volumeid
         params.virtualmachineid = this.virtualMachineOptions.opts.filter(opt => opt.name === values.virtualmachineid)[0].id || null
-        if (this.isKbossBackupProvider()) {
+        if (this.apiParams.quickrestore) {
           params.quickrestore = values.quickRestore
+        }
+        if (this.apiParams.hostid) {
           params.hostid = values.hostId
         }
 

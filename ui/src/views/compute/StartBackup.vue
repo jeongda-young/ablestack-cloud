@@ -40,7 +40,7 @@
             <a-input v-model:value="form.description"/>
           </a-form-item>
         </div>
-        <a-form-item v-if="['nas', 'commvault', 'kboss', 'ablestack-nas', 'ablestack-commvault'].includes(provider)" name="quiescevm" ref="quiescevm">
+        <a-form-item v-if="['kboss', 'ablestack-nas', 'ablestack-commvault'].includes(provider)" name="quiescevm" ref="quiescevm">
           <a-switch v-model:checked="form.quiescevm" />
           <template #label>
             <tooltip-label :title="$t('label.quiescevm')" :tooltip="apiParams.quiescevm.description"/>
@@ -94,7 +94,7 @@ export default {
   },
   computed: {
     canSetNameAndDescription () {
-      return ['nas', 'commvault', 'dummy', 'kboss', 'ablestack-nas', 'ablestack-commvault'].includes(this.provider)
+      return ['dummy', 'kboss', 'ablestack-nas', 'ablestack-commvault'].includes(this.provider)
     }
   },
   methods: {

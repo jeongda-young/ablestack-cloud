@@ -350,13 +350,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
         List<BackupOffering> allOfferings = new ArrayList<>();
         List<BackupProvider> providers = getBackupProvidersForZone(zoneId);
-        final String canonicalProviderName = BackupProviderNameUtils.canonicalize(providerName);
 
         for (BackupProvider provider : providers) {
-            final boolean nameMatch = provider.getName().equalsIgnoreCase(providerName)
-                    || provider.getName().equalsIgnoreCase(canonicalProviderName)
-                    || (BackupProviderNameUtils.isVeeamFamily(providerName)
-                        && BackupProviderNameUtils.isVeeamFamily(provider.getName()));
+            final boolean nameMatch = provider.getName().equalsIgnoreCase(providerName);
             if (nameMatch) {
                 try {
                     logger.debug("Listing external backup offerings for provider {} in zone {}", provider.getName(), zoneId);
@@ -377,39 +373,17 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     public BackupOffering importBackupOffering(final ImportBackupOfferingCmd cmd) {
         validateBackupForZone(cmd.getZoneId());
 
-        String providerName = BackupProviderNameUtils.canonicalize(cmd.getProvider());
+        String providerName = cmd.getProvider();
         if (StringUtils.isEmpty(providerName)) {
             throw new CloudRuntimeException("Provider name must be specified");
         }
 
         List<BackupProvider> zoneProviders = getBackupProvidersForZone(cmd.getZoneId());
         BackupProvider matchedProvider = null;
-        BackupProvider familyFallback = null;
         for (BackupProvider p : zoneProviders) {
-            // Prefer exact API provider name first (ablestack-veeam ≠ veeam/NAS-hybrid).
             if (p.getName().equalsIgnoreCase(cmd.getProvider())) {
                 matchedProvider = p;
                 break;
-            }
-            if (matchedProvider == null && p.getName().equalsIgnoreCase(providerName)) {
-                matchedProvider = p;
-            }
-            if (familyFallback == null
-                    && BackupProviderNameUtils.isVeeamFamily(cmd.getProvider())
-                    && BackupProviderNameUtils.isVeeamFamily(p.getName())) {
-                familyFallback = p;
-            }
-        }
-        if (matchedProvider == null) {
-            matchedProvider = familyFallback;
-        }
-        // Veeam family: prefer standalone ablestack-veeam over display-name veeam when both loaded.
-        if (matchedProvider != null && BackupProviderNameUtils.isVeeamFamily(cmd.getProvider())) {
-            for (BackupProvider p : zoneProviders) {
-                if (BackupProviderNameUtils.ABLESTACK_VEEAM.equalsIgnoreCase(p.getName())) {
-                    matchedProvider = p;
-                    break;
-                }
             }
         }
         if (matchedProvider == null) {
@@ -3467,8 +3441,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             if (provider == null) {
                 continue;
             }
-            final String displayName = BackupProviderNameUtils.toDisplayName(provider.getName());
-            if (seenProviders.add(displayName)) {
+            if (seenProviders.add(provider.getName().toLowerCase())) {
                 providers.add(provider);
             }
         }
@@ -3502,9 +3475,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             if (!StringUtils.isEmpty(trimmedName)) {
                 try {
                     BackupProvider provider = getBackupProvider(trimmedName);
-                    boolean exists = providers.stream().anyMatch(p ->
-                            BackupProviderNameUtils.toDisplayName(p.getName()).equalsIgnoreCase(
-                                    BackupProviderNameUtils.toDisplayName(provider.getName())));
+                    boolean exists = providers.stream().anyMatch(p -> p.getName().equalsIgnoreCase(provider.getName()));
                     if (!exists) {
                         providers.add(provider);
                     }
@@ -3524,26 +3495,8 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         if (StringUtils.isEmpty(name)) {
             throw new CloudRuntimeException("Invalid backup provider name provided");
         }
-        if (BackupProviderNameUtils.isNasFamily(name)
-                && backupProvidersMap.containsKey(BackupProviderNameUtils.ABLESTACK_NAS)) {
-            return backupProvidersMap.get(BackupProviderNameUtils.ABLESTACK_NAS);
-        }
-        // Prefer exact registered name first for Veeam (stock plugin registers as "veeam";
-        // ablestack-veeam registers as "ablestack-veeam"). Canonicalize is only a fallback.
         if (backupProvidersMap.containsKey(name)) {
             return backupProvidersMap.get(name);
-        }
-        final String canonicalName = BackupProviderNameUtils.canonicalize(name);
-        if (backupProvidersMap.containsKey(canonicalName)) {
-            return backupProvidersMap.get(canonicalName);
-        }
-        // Alias: ablestack-veeam ↔ veeam when only one is loaded
-        if (BackupProviderNameUtils.isVeeamFamily(name)) {
-            for (final String alias : new String[] {"ablestack-veeam", "veeam"}) {
-                if (backupProvidersMap.containsKey(alias)) {
-                    return backupProvidersMap.get(alias);
-                }
-            }
         }
         throw new CloudRuntimeException("Failed to find backup provider by the name: " + name);
     }
@@ -4269,9 +4222,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
 
         protected boolean isMatchingBackupProvider(final String activeProviderName, final String offeringProviderName) {
-            return StringUtils.equalsIgnoreCase(activeProviderName, offeringProviderName)
-                    || StringUtils.equalsIgnoreCase(BackupProviderNameUtils.canonicalize(activeProviderName),
-                    BackupProviderNameUtils.canonicalize(offeringProviderName));
+            return StringUtils.equalsIgnoreCase(activeProviderName, offeringProviderName);
         }
 
         protected void incrementResourceCountsIfBackupFinalized(final BackupVO originalBackup, final VirtualMachine vm) {

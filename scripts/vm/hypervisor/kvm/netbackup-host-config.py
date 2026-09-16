@@ -55,8 +55,7 @@ SECRET_KEY_FILE = Path(os.environ.get("SECRET_KEY_FILE", "/root/.ssh/ablestack.k
 NETBACKUP_BP_CONF_PATH = Path(os.environ.get("NETBACKUP_BP_CONF_PATH", "/usr/openv/netbackup/bp.conf"))
 NETBACKUP_SERVICE_NAME = os.environ.get("NETBACKUP_SERVICE_NAME", "netbackup")
 MOLD_API_RESPONSE_FORMAT = "json"
-NETBACKUP_PROVIDER_DISPLAY_NAME = "netbackup"
-NETBACKUP_PROVIDER_CANONICAL_NAME = "ablestack-netbackup"
+NETBACKUP_PROVIDER_NAME = "ablestack-netbackup"
 NETBACKUP_OFFERING_NAME = "NetBackup"
 NETBACKUP_OFFERING_DESCRIPTION = "Ablestack NetBackup backup offering"
 NETBACKUP_OFFERING_EXTERNAL_ID = "netbackup"
@@ -317,7 +316,7 @@ def ensure_backup_framework_configuration(zone_id: str, cluster_id: str, args: a
 
     log_info("Checking zone configuration: backup.framework.provider.plugin")
     current = get_configuration_value("backup.framework.provider.plugin", args.mold_url, args.admin_apikey, args.admin_secretkey, zone_id)
-    updated = append_provider_if_missing(current, NETBACKUP_PROVIDER_DISPLAY_NAME)
+    updated = append_provider_if_missing(current, NETBACKUP_PROVIDER_NAME)
     if updated != current:
         log_info(f"Updating zone configuration: backup.framework.provider.plugin={updated}")
         update_configuration_value("backup.framework.provider.plugin", updated, args.mold_url, args.admin_apikey, args.admin_secretkey, zone_id)
@@ -354,7 +353,7 @@ def ensure_netbackup_offering(zone_id: str, args: argparse.Namespace) -> None:
     for offering in offerings:
         provider = str(offering.get("provider", "")).lower()
         offering_zone = str(offering.get("zoneid", "") or offering.get("zoneId", ""))
-        if provider in {NETBACKUP_PROVIDER_DISPLAY_NAME, NETBACKUP_PROVIDER_CANONICAL_NAME} and offering_zone == zone_id:
+        if provider == NETBACKUP_PROVIDER_NAME and offering_zone == zone_id:
             print(f"NetBackup backup offering already exists for zoneid={zone_id}")
             return
 
@@ -362,7 +361,7 @@ def ensure_netbackup_offering(zone_id: str, args: argparse.Namespace) -> None:
     data = invoke_mold_api("POST", "importBackupOffering", {
         "name": NETBACKUP_OFFERING_NAME,
         "description": NETBACKUP_OFFERING_DESCRIPTION,
-        "provider": NETBACKUP_PROVIDER_DISPLAY_NAME,
+        "provider": NETBACKUP_PROVIDER_NAME,
         "externalid": NETBACKUP_OFFERING_EXTERNAL_ID,
         "allowuserdrivenbackups": "false",
         "zoneid": zone_id,
@@ -388,7 +387,7 @@ def ensure_netbackup_offering(zone_id: str, args: argparse.Namespace) -> None:
     for offering in offerings:
         provider = str(offering.get("provider", "")).lower()
         offering_zone = str(offering.get("zoneid", "") or offering.get("zoneId", ""))
-        if provider in {NETBACKUP_PROVIDER_DISPLAY_NAME, NETBACKUP_PROVIDER_CANONICAL_NAME} and offering_zone == zone_id:
+        if provider == NETBACKUP_PROVIDER_NAME and offering_zone == zone_id:
             print(f"Imported NetBackup backup offering for zoneid={zone_id}")
             return
     fail(f"importBackupOffering async job completed but NetBackup backup offering was not found for zoneid={zone_id}")

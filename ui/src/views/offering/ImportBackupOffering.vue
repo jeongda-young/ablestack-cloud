@@ -209,15 +209,15 @@ export default {
   },
   computed: {
     isCommvaultProvider () {
-      return this.selectedProviderName && this.selectedProviderName.toLowerCase() === 'commvault'
+      return this.selectedProviderName && this.selectedProviderName.toLowerCase() === 'ablestack-commvault'
     },
     isNetBackupProvider () {
       return this.selectedProviderName &&
-        ['netbackup', 'ablestack-netbackup'].includes(this.selectedProviderName.toLowerCase())
+        this.selectedProviderName.toLowerCase() === 'ablestack-netbackup'
     },
     isVeeamProvider () {
       return this.selectedProviderName &&
-        ['veeam', 'ablestack-veeam'].includes(this.selectedProviderName.toLowerCase())
+        this.selectedProviderName.toLowerCase() === 'ablestack-veeam'
     },
     isSingleOfferingProvider () {
       return this.isCommvaultProvider || this.isNetBackupProvider
