@@ -5151,7 +5151,7 @@
   "rackDiagram.hostCubePortal": "Cube 포털 접속",
   "rackDiagram.delete": "삭제",
   "rackDiagram.editRack": "랙 설정 수정",
-  "rackDiagram.rackName": "랙 이름 (Name)",
+  "rackDiagram.rackName": "랙 이름",
   "rackDiagram.rackNamePlaceholder": "예: Server Rack 1",
   "rackDiagram.rackLocation": "랙 위치",
   "rackDiagram.rackLocationPlaceholder": "예: 3F / Server Room A",
