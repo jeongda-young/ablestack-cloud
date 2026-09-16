@@ -43,7 +43,7 @@
               <span class="restore-button"><a-button type="link" size="small" :disabled="!!reason('revertToVMSnapshot', record)" @click="openAction('revertToVMSnapshot', record)">{{ $t('label.action.vmsnapshot.revert') }}</a-button></span>
             </a-tooltip>
             <a-dropdown :trigger="['click']" placement="bottomRight">
-              <a-button size="small" :aria-label="$t('label.actions')"><ellipsis-outlined /></a-button>
+              <a-button size="small" :aria-label="$t('label.actions')"><template #icon><down-outlined /></template></a-button>
               <template #overlay><a-menu>
                 <a-menu-item key="details"><router-link :to="'/vmsnapshot/' + record.id">{{ $t('label.details') }}</router-link></a-menu-item>
                 <a-menu-item v-if="allowed('revertToVMSnapshot')" key="restore" class="mobile-restore" :disabled="!!reason('revertToVMSnapshot', record)" @click="openAction('revertToVMSnapshot', record)">{{ $t('label.action.vmsnapshot.revert') }}</a-menu-item>
