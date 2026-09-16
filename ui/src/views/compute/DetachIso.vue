@@ -58,6 +58,7 @@
 <script>
 import { ref, reactive, toRaw } from 'vue'
 import { postAPI } from '@/api'
+import { detachIsoBatch } from '@/utils/detachIsoBatch'
 
 export default {
   name: 'DetachIso',
@@ -113,53 +114,67 @@ export default {
     closeAction () {
       this.$emit('close-action')
     },
-    handleSubmit (e) {
-      e.preventDefault()
+    async handleSubmit (e) {
+      if (e && typeof e.preventDefault === 'function') e.preventDefault()
       if (this.loading) return
-      this.formRef.value.validate().then(() => {
-        const values = toRaw(this.form)
-        const ids = values.ids || []
-        if (ids.length === 0) return
-
-        this.loading = true
-        const title = this.$t('label.action.detach.iso')
-        // detachIso is single-ISO server-side; fan out one call per selection.
-        const sendOne = (isoId) => {
-          const params = {
-            virtualmachineid: this.resource.id
-          }
-          // Single-attached: omit id so older servers (without the id parameter) still accept the call.
-          if (this.attached.length > 1 || ids.length > 1) {
-            params.id = isoId
-          }
-          if (values.forced) {
-            params.forced = values.forced
-          }
-          return new Promise((resolve, reject) => {
-            postAPI('detachIso', params).then(json => {
-              const jobId = json.detachisoresponse && json.detachisoresponse.jobid
-              if (jobId) {
-                this.$pollJob({
-                  jobId,
-                  title,
-                  description: isoId,
-                  successMessage: `${this.$t('label.action.detach.iso')} ${this.$t('label.success')}`,
-                  loadingMessage: `${title} ${this.$t('label.in.progress')}`,
-                  catchMessage: this.$t('error.fetching.async.job.result')
-                })
-              }
-              resolve()
-            }).catch(reject)
-          })
-        }
-
-        ids.reduce((p, id) => p.then(() => sendOne(id)), Promise.resolve())
-          .then(() => { this.closeAction() })
-          .catch(error => { this.$notifyError(error) })
-          .finally(() => { this.loading = false })
-      }).catch(error => {
-        this.formRef.value.scrollToField(error.errorFields[0].name)
-      })
+      try {
+        await this.formRef.value.validate()
+      } catch (error) {
+        if (error.errorFields?.length) this.formRef.value.scrollToField(error.errorFields[0].name)
+        return
+      }
+      const values = toRaw(this.form)
+      const ids = [...(values.ids || [])]
+      if (!ids.length) return
+      const scope = () => [this.$store.state.user.token, this.$store.getters.project?.id].join('|')
+      const originalScope = scope()
+      const title = this.$t('label.action.detach.iso')
+      const key = `detach-iso-${this.resource.id}-${Date.now()}`
+      const isoName = id => this.attached.find(iso => iso.id === id)?.name || id
+      this.loading = true
+      this.$message.loading({ key, content: `${title} 0/${ids.length}`, duration: 0 })
+      try {
+        const results = await detachIsoBatch({
+          ids,
+          isCurrent: () => scope() === originalScope,
+          submit: id => {
+            const params = { virtualmachineid: this.resource.id }
+            if (this.attached.length > 1 || ids.length > 1) params.id = id
+            if (values.forced) params.forced = values.forced
+            return postAPI('detachIso', params).then(json => json.detachisoresponse)
+          },
+          poll: (jobId, id) => this.$pollJob({
+            jobId,
+            batchKey: key,
+            title,
+            description: isoName(id),
+            resourceId: this.resource.id,
+            showLoading: false,
+            showSuccessMessage: false,
+            action: { api: 'detachIso', isFetchData: false }
+          }),
+          onProgress: results => this.$message.loading({ key, content: `${title} ${results.length}/${ids.length}`, duration: 0 })
+        })
+        if (scope() !== originalScope) return
+        const succeeded = results.filter(result => result.jobstatus === 1).map(result => result.id)
+        const failed = results.filter(result => result.jobstatus === 2).length
+        const unknown = results.filter(result => result.trackingStatus).length
+        const pending = ids.length - results.length
+        this.$notification.info({
+          key,
+          message: title,
+          description: this.$t('message.iso.detach.summary', { success: succeeded.length, failed, unknown, pending }) + ' ' + results.map(result => `${isoName(result.id)}: ${this.$t(result.jobstatus === 1 ? 'label.success' : result.jobstatus === 2 ? 'label.failed' : 'label.job.check.result')}`).join('; '),
+          duration: succeeded.length === ids.length ? 5 : 0
+        })
+        this.$emit('refresh-data')
+        // Keep only explicit failures selected; never repeat an uncertain accepted operation.
+        this.attached = this.attached.filter(iso => !succeeded.includes(iso.id))
+        this.form.ids = results.filter(result => result.jobstatus === 2).map(result => result.id)
+        if (succeeded.length === ids.length || unknown) this.closeAction()
+      } finally {
+        this.$message.destroy(key)
+        this.loading = false
+      }
     }
   }
 }

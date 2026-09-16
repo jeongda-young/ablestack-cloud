@@ -1043,8 +1043,8 @@ public class TemplateManagerImplTest {
         Mockito.when(host.getClusterId()).thenReturn(5L);
         Mockito.when(_hostDao.findById(7L)).thenReturn(host);
         Mockito.when(_hostDetailsDao.findDetail(7L, Host.HOST_CDROM_MAX_COUNT)).thenReturn(detail);
-        // Configured cap defaults to 1 (no cluster override mocked); hypervisor cap is 2; 1 <= 2 → no throw, returns 1.
-        Assert.assertEquals(1, templateManager.effectiveMaxCdroms(vm, 7L));
+        // Default and advertised host capacity both allow two ISO slots.
+        Assert.assertEquals(2, templateManager.effectiveMaxCdroms(vm, 7L));
     }
 
     @Test
@@ -1364,6 +1364,22 @@ public class TemplateManagerImplTest {
                 ComponentScan cs = TestConfiguration.class.getAnnotation(ComponentScan.class);
                 return SpringUtils.includedInBasePackageClasses(mdr.getClassMetadata().getClassName(), cs);
             }
+        }
+    }
+
+    @Test
+    public void destinationWithoutCapabilityRejectsAdditionalIsoBeforeStart() {
+        UserVmVO vm = Mockito.mock(UserVmVO.class);
+        Mockito.when(vm.getId()).thenReturn(1L);
+        Mockito.when(vm.getType()).thenReturn(VirtualMachine.Type.User);
+        Mockito.when(vm.getIsoId()).thenReturn(10L);
+        Mockito.when(_userVmDao.findById(1L)).thenReturn(vm);
+        Mockito.when(_vmIsoMapDao.listByVmId(1L)).thenReturn(Arrays.asList(new VmIsoMapVO(1L, 11L, 4)));
+        try {
+            templateManager.validateIsoDestination(vm, 7L);
+            Assert.fail("A host without advertised support must not start two ISOs");
+        } catch (com.cloud.exception.InsufficientServerCapacityException expected) {
+            Assert.assertEquals(Host.class, expected.getScope());
         }
     }
 }

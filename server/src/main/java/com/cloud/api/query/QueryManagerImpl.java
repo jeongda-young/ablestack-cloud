@@ -5678,7 +5678,6 @@ public class QueryManagerImpl extends MutualExclusiveIdsManagerBase implements Q
             options.put(VmDetailConstants.DATA_DISK_CONTROLLER, Arrays.asList("osdefault", "ide", "sata", "scsi", "virtio", "virtio-blk"));
             options.put(VmDetailConstants.SOUND, Arrays.asList("ich6"));
             options.put(VmDetailConstants.VIDEO_HARDWARE, Arrays.asList("cirrus", "vga", "qxl", "virtio"));
-            options.put("tpmversion", Arrays.asList(ApiConstants.TpmVersion.NONE.toString(), ApiConstants.TpmVersion.V2_0.toString()));
             options.put(VmDetailConstants.IO_POLICY, Arrays.asList("threads", "native", "io_uring", "storage_specific"));
             options.put(VmDetailConstants.IOTHREADS, Arrays.asList("enabled"));
             options.put(VmDetailConstants.NIC_MULTIQUEUE_NUMBER, Collections.emptyList());

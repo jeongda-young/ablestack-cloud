@@ -80,7 +80,7 @@ public interface TemplateManager {
 
     ConfigKey<Integer> VmIsoMaxCount = new ConfigKey<Integer>("Advanced",
             Integer.class,
-            "vm.iso.max.count", "1",
+            "vm.iso.max.count", "2",
             "Maximum number of ISOs that may be attached to a VM.",
             true,
             ConfigKey.Scope.Cluster);
@@ -181,6 +181,8 @@ public interface TemplateManager {
      *
      * @param VirtualMachineProfile
      */
+    void validateIsoDestination(com.cloud.vm.VirtualMachine vm, long hostId) throws com.cloud.exception.InsufficientServerCapacityException;
+
     void prepareIsoForVmProfile(VirtualMachineProfile profile, DeployDestination dest);
 
     public static final String MESSAGE_REGISTER_PUBLIC_TEMPLATE_EVENT = "Message.RegisterPublicTemplate.Event";

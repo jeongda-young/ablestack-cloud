@@ -2149,6 +2149,49 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
         return !uefiProperties.isEmpty();
     }
 
+    public Map<String, String> getTpmCapabilities() {
+        Map<String, String> unsupported = new HashMap<>();
+        unsupported.put("host.tpm.enable", "false");
+        unsupported.put(com.cloud.vm.KvmTpmConfig.HOST_MODELS, "");
+        unsupported.put(com.cloud.vm.KvmTpmConfig.HOST_VERSIONS, "");
+        if ("false".equalsIgnoreCase(_tpmProperties.getProperty("host.tpm.enable"))) {
+            return unsupported;
+        }
+        try {
+            // swtpm_setup 0.8.0 returns exit 1 for --version, even when installed correctly.
+            runTpmCommand(Script.getExecutableAbsolutePath("swtpm"), "socket", "--print-capabilities");
+            runTpmCommand(Script.getExecutableAbsolutePath("swtpm_setup"), "--print-capabilities");
+            return TpmCapabilities.parse(runTpmCommand(Script.getExecutableAbsolutePath("virsh"),
+                    "-c", "qemu:///system", "domcapabilities", "--virttype", "kvm"));
+        } catch (Exception e) {
+            LOGGER.warn("Unable to discover vTPM capability; refusing TPM allocation", e);
+            return unsupported;
+        }
+    }
+
+    protected String runTpmCommand(String... args) throws Exception {
+        Process process = new ProcessBuilder(args).redirectErrorStream(true).start();
+        java.util.concurrent.CompletableFuture<byte[]> output = java.util.concurrent.CompletableFuture.supplyAsync(() -> {
+            try {
+                return process.getInputStream().readAllBytes();
+            } catch (java.io.IOException e) {
+                throw new java.io.UncheckedIOException(e);
+            }
+        });
+        try {
+            if (!process.waitFor(30, java.util.concurrent.TimeUnit.SECONDS)) {
+                throw new java.io.IOException("TPM capability command timed out: " + args[0]);
+            }
+            String text = new String(output.get(5, java.util.concurrent.TimeUnit.SECONDS), java.nio.charset.StandardCharsets.UTF_8);
+            if (process.exitValue() != 0) {
+                throw new java.io.IOException("TPM capability command failed: " + args[0] + ": " + text);
+            }
+            return text;
+        } finally {
+            process.destroyForcibly();
+        }
+    }
+
     public boolean isTpmPropertiesFileLoaded() {
         return !_tpmProperties.isEmpty();
     }
@@ -3560,9 +3603,7 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
         Map<String, String> customParams = vmTO.getDetails();
         boolean isUefiEnabled = false;
         boolean isSecureBoot = false;
-        boolean isTpmEnabled = false;
         String bootMode = null;
-        String tpmversion = null;
 
         if (MapUtils.isNotEmpty(customParams) && customParams.containsKey(GuestDef.BootType.UEFI.toString())) {
             isUefiEnabled = true;
@@ -3574,19 +3615,6 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
             }
 
             bootMode = customParams.get(GuestDef.BootType.UEFI.toString());
-        }
-        if (MapUtils.isNotEmpty(customParams) && (
-                customParams.containsKey(GuestDef.TpmVersion.V2_0.toString()) ||
-                customParams.containsKey(GuestDef.TpmVersion.V1_2.toString())
-        )) {
-            isTpmEnabled = true;
-            LOGGER.debug(String.format("Enabled TPM for VM UUID [%s].", uuid));
-
-            if(customParams.containsKey(GuestDef.TpmVersion.V2_0.toString())) {
-                tpmversion = customParams.get(GuestDef.TpmVersion.V2_0.toString());
-            }else if(customParams.containsKey(GuestDef.TpmVersion.V1_2.toString())) {
-                tpmversion = customParams.get(GuestDef.TpmVersion.V1_2.toString());
-            }
         }
 
         Map<String, String> extraConfig = vmTO.getExtraConfig();
@@ -3957,17 +3985,23 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
         return cmd;
     }
 
+    public void validateTpmForHost(VirtualMachineTO vmTO) {
+        createTpmDef(vmTO);
+    }
+
     protected TpmDef createTpmDef(VirtualMachineTO vmTO) {
         Map<String, String> details = vmTO.getDetails();
-        if (MapUtils.isEmpty(details)) {
-            return null;
+        com.cloud.vm.KvmTpmConfig tpm = com.cloud.vm.KvmTpmConfig.resolve(details, false);
+        if (!tpm.isEnabled()) { return null; }
+        if (details == null || !details.containsKey(com.cloud.vm.KvmTpmConfig.MODEL)) {
+            throw new com.cloud.exception.InvalidParameterValueException(
+                    "Legacy TPM metadata has no canonical device model. Audit the existing domain and TPM state before starting.");
         }
-        String tpmModel = details.get(VmDetailConstants.VIRTUAL_TPM_MODEL);
-        if (tpmModel == null) {
-            return null;
+        if (!tpm.supportedBy(getTpmCapabilities())) {
+            throw new com.cloud.exception.InvalidParameterValueException("Host does not support requested TPM model/version: "
+                    + tpm.getModel() + "/" + tpm.getVersion());
         }
-        String tpmVersion = details.get(VmDetailConstants.VIRTUAL_TPM_VERSION);
-        return new TpmDef(tpmModel, tpmVersion);
+        return new TpmDef(tpm.getModel(), tpm.getVersion());
     }
 
     private void configureGuestIfUefiEnabled(boolean isSecureBoot, String bootMode, GuestDef guest) {
@@ -4055,16 +4089,13 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
                 }
             }
             guest.setIothreads(customParams.containsKey(VmDetailConstants.IOTHREADS));
-            configureBootOrder(guest, customParams);
+            if (!"true".equals(customParams.get("deploy.additional.iso"))) {
+                configureBootOrder(guest, customParams);
+            }
         } else {
             configureBootOrder(guest, null);
         }
         guest.setUuid(uuid);
-        guest.setBootOrder(GuestDef.BootOrder.HARDISK);
-        if(!isGuestS390x()) {
-            guest.setBootOrder(GuestDef.BootOrder.CDROM);
-        }
-        guest.setBootOrder(GuestDef.BootOrder.CDROM);
         return guest;
     }
 
@@ -4590,6 +4621,15 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
             if (vm.getDevices() == null) {
                 LOGGER.error("There is no devices for" + vm);
                 throw new RuntimeException("There is no devices for" + vm);
+            }
+            if (details != null && "true".equals(details.get("deploy.additional.iso"))) {
+                boolean cdFirst = "cdrom".equalsIgnoreCase(details.get(VmDetailConstants.BOOT_ORDER));
+                if (volume.getType() == Volume.Type.ROOT) {
+                    disk.setBootOrder(cdFirst ? 2 : 1);
+                } else if (volume.getType() == Volume.Type.ISO && devId == TemplateManager.CDROM_PRIMARY_DEVICE_SEQ
+                        && data.getPath() != null) {
+                    disk.setBootOrder(cdFirst ? 1 : 2);
+                }
             }
             vm.getDevices().addDevice(disk);
         }

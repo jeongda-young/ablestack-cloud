@@ -16,6 +16,9 @@
 // under the License.
 package com.cloud.vm;
 
+import com.cloud.storage.Storage.ImageFormat;
+import com.cloud.hypervisor.Hypervisor.HypervisorType;
+
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
@@ -4607,5 +4610,78 @@ public class UserVmManagerImplTest {
         java.lang.reflect.Method method = UserVmManagerImpl.class.getDeclaredMethod("transitionExpungingToError", long.class);
         method.setAccessible(true);
         method.invoke(userVmManagerImpl, vmId);
+    }
+
+    @Test
+    public void additionalIsoAbsentPreservesEveryExistingSource() {
+        DeployVMCmd cmd = Mockito.mock(DeployVMCmd.class);
+        when(cmd.getAdditionalIsoIds()).thenReturn(Collections.emptyList());
+        userVmManagerImpl.validateAdditionalDeployIsos(cmd, null, account);
+        Mockito.verify(cmd, Mockito.never()).isVolumeOrSnapshotProvided();
+    }
+
+    @Test
+    public void additionalIsoRejectsVolumeAndSnapshotSources() {
+        DeployVMCmd cmd = Mockito.mock(DeployVMCmd.class);
+        when(cmd.getAdditionalIsoIds()).thenReturn(Collections.singletonList(2L));
+        when(cmd.isVolumeOrSnapshotProvided()).thenReturn(true);
+        assertThrows(InvalidParameterValueException.class,
+                () -> userVmManagerImpl.validateAdditionalDeployIsos(cmd, null, account));
+    }
+
+    @Test
+    public void additionalIsoRejectsTemplateSource() {
+        DeployVMCmd cmd = Mockito.mock(DeployVMCmd.class);
+        VirtualMachineTemplate image = Mockito.mock(VirtualMachineTemplate.class);
+        when(cmd.getAdditionalIsoIds()).thenReturn(Collections.singletonList(2L));
+        when(image.getFormat()).thenReturn(ImageFormat.QCOW2);
+        assertThrows(InvalidParameterValueException.class,
+                () -> userVmManagerImpl.validateAdditionalDeployIsos(cmd, image, account));
+    }
+
+    @Test
+    public void additionalIsoRejectsDuplicatePrimary() {
+        DeployVMCmd cmd = Mockito.mock(DeployVMCmd.class);
+        VirtualMachineTemplate image = Mockito.mock(VirtualMachineTemplate.class);
+        when(cmd.getAdditionalIsoIds()).thenReturn(Collections.singletonList(1L));
+        when(cmd.getHypervisor()).thenReturn(HypervisorType.KVM);
+        when(image.getFormat()).thenReturn(ImageFormat.ISO);
+        when(image.isBootable()).thenReturn(true);
+        when(image.getId()).thenReturn(1L);
+        assertThrows(InvalidParameterValueException.class,
+                () -> userVmManagerImpl.validateAdditionalDeployIsos(cmd, image, account));
+    }
+
+    @Test
+    public void additionalIsoRejectsTooManyMedia() {
+        DeployVMCmd cmd = Mockito.mock(DeployVMCmd.class);
+        VirtualMachineTemplate image = Mockito.mock(VirtualMachineTemplate.class);
+        when(cmd.getAdditionalIsoIds()).thenReturn(Arrays.asList(2L, 3L));
+        when(cmd.getHypervisor()).thenReturn(HypervisorType.KVM);
+        when(image.getFormat()).thenReturn(ImageFormat.ISO);
+        when(image.isBootable()).thenReturn(true);
+        assertThrows(InvalidParameterValueException.class,
+                () -> userVmManagerImpl.validateAdditionalDeployIsos(cmd, image, account));
+    }
+
+    @Test
+    public void additionalIsoAcceptsDriverAndChecksOwnerAccess() {
+        DeployVMCmd cmd = Mockito.mock(DeployVMCmd.class);
+        VirtualMachineTemplate image = Mockito.mock(VirtualMachineTemplate.class);
+        VMTemplateVO driver = Mockito.mock(VMTemplateVO.class);
+        com.cloud.storage.dao.VMTemplateZoneDao zones = Mockito.mock(com.cloud.storage.dao.VMTemplateZoneDao.class);
+        ReflectionTestUtils.setField(userVmManagerImpl, "_templateZoneDao", zones);
+        when(cmd.getAdditionalIsoIds()).thenReturn(Collections.singletonList(2L));
+        when(cmd.getHypervisor()).thenReturn(HypervisorType.KVM);
+        when(cmd.getZoneId()).thenReturn(1L);
+        when(cmd.getDetails()).thenReturn(Collections.emptyMap());
+        when(image.getFormat()).thenReturn(ImageFormat.ISO);
+        when(image.isBootable()).thenReturn(true);
+        when(image.getId()).thenReturn(1L);
+        when(templateDao.findById(2L)).thenReturn(driver);
+        when(driver.getFormat()).thenReturn(ImageFormat.ISO);
+        when(zones.findByZoneTemplate(1L, 2L)).thenReturn(Mockito.mock(com.cloud.storage.VMTemplateZoneVO.class));
+        userVmManagerImpl.validateAdditionalDeployIsos(cmd, image, account);
+        Mockito.verify(accountManager).checkAccess(account, null, false, driver);
     }
 }

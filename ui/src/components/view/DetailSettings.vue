@@ -200,7 +200,14 @@ export default {
       })
     },
     displayedDetails () {
-      return this.details
+      const canonical = this.details.some(item => item.name === 'virtual.tpm.model')
+      if (this.resourceType === 'UserVm' && this.resource.hypervisor === 'KVM' && canonical) {
+        const model = this.details.find(item => item.name === 'virtual.tpm.model').value
+        const version = this.details.find(item => item.name === 'virtual.tpm.version')?.value || '2.0'
+        return [...this.details.filter(item => !['tpmversion', 'virtual.tpm.model', 'virtual.tpm.version'].includes(item.name)),
+          { name: 'TPM', value: model + ' / ' + version, edit: false }]
+      }
+      return this.details.filter(item => !(canonical && item.name === 'tpmversion'))
     },
     videoHardwareOptions () {
       if (this.detailOptions && this.detailOptions['video.hardware']) {
@@ -291,6 +298,10 @@ export default {
       }
     },
     allowEditOfDetail (name) {
+      if (this.resourceType === 'UserVm' && this.resource.hypervisor === 'KVM' &&
+          ['TPM', 'tpmversion', 'virtual.tpm.model', 'virtual.tpm.version'].includes(name)) {
+        return false
+      }
       if (this.deployasistemplate) {
         return this.resource.alloweddetails && this.resource.alloweddetails.split(',').map(item => item.trim()).includes(name)
       }

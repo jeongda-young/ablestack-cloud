@@ -190,6 +190,13 @@ public class KVMGuru extends HypervisorGuruBase implements HypervisorGuru {
         Long hostId = virtualMachine.getHostId();
         HostVO host = hostId == null ? null : hostDao.findById(hostId);
 
+        com.cloud.vm.KvmTpmConfig tpm = com.cloud.vm.KvmTpmConfig.resolve(to.getDetails(), false);
+        if (tpm.isEnabled() && virtualMachine.getLastHostId() != null
+                && !virtualMachine.getLastHostId().equals(hostId)) {
+            throw new com.cloud.exception.InvalidParameterValueException(
+                    "vTPM state is host-local. Restart on the previous host; cross-host state transfer is not supported.");
+        }
+
         // Determine the VM's OS description
         configureVmOsDescription(virtualMachine, to, host);
 

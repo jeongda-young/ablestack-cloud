@@ -6702,12 +6702,15 @@ public class LibvirtComputingResourceTest {
 
     @Test
     public void testCreateTpmDef() {
+        Mockito.doReturn(Map.of("host.tpm.enable", "true", "host.tpm.models", "tpm-tis", "host.tpm.versions", "2.0"))
+                .when(libvirtComputingResourceSpy).getTpmCapabilities();
         VirtualMachineTO virtualMachineTO = Mockito.mock(VirtualMachineTO.class);
         Map<String, String> details = new HashMap<>();
         details.put(VmDetailConstants.VIRTUAL_TPM_MODEL, "tpm-tis");
         details.put(VmDetailConstants.VIRTUAL_TPM_VERSION, "2.0");
         Mockito.when(virtualMachineTO.getDetails()).thenReturn(details);
         LibvirtVMDef.TpmDef tpmDef = libvirtComputingResourceSpy.createTpmDef(virtualMachineTO);
+        assertTrue(tpmDef.toString().contains("persistent_state='yes'"));
         assertEquals(LibvirtVMDef.TpmDef.TpmModel.TIS, tpmDef.getModel());
         assertEquals(LibvirtVMDef.TpmDef.TpmVersion.V2_0, tpmDef.getVersion());
     }
@@ -6719,9 +6722,8 @@ public class LibvirtComputingResourceTest {
         details.put(VmDetailConstants.VIRTUAL_TPM_MODEL, "tpm-crb");
         details.put(VmDetailConstants.VIRTUAL_TPM_VERSION, "3.0");
         Mockito.when(virtualMachineTO.getDetails()).thenReturn(details);
-        LibvirtVMDef.TpmDef tpmDef = libvirtComputingResourceSpy.createTpmDef(virtualMachineTO);
-        assertEquals(LibvirtVMDef.TpmDef.TpmModel.CRB, tpmDef.getModel());
-        assertEquals(LibvirtVMDef.TpmDef.TpmVersion.V2_0, tpmDef.getVersion());
+        Assert.assertThrows(com.cloud.exception.InvalidParameterValueException.class,
+                () -> libvirtComputingResourceSpy.createTpmDef(virtualMachineTO));
     }
 
     @Test
@@ -7731,5 +7733,37 @@ public class LibvirtComputingResourceTest {
         Pair<Integer, Long> expectedResult = new Pair<>(expectedPeriod, expectedQuota);
         Pair<Integer, Long> result = libvirtComputingResourceSpy.getPeriodAndQuota(cpuQuotaPercentage);
         Assert.assertEquals(expectedResult, result);
+    }
+
+    @Test
+    public void testTpmCommandCapturesFastProcessOutput() throws Exception {
+        for (int i = 0; i < 10; i++) {
+            assertEquals("tpm\n", libvirtComputingResourceSpy.runTpmCommand("/usr/bin/printf", "tpm\n"));
+        }
+        Assert.assertThrows(java.io.IOException.class, () -> libvirtComputingResourceSpy.runTpmCommand("/usr/bin/false"));
+    }
+
+    @Test
+    public void testAdditionalIsoOmitsOsBootOrderForBiosAndUefi() {
+        for (boolean uefi : new boolean[] {false, true}) {
+            VirtualMachineTO to = createDefaultVM(false);
+            Map<String, String> details = new HashMap<>();
+            details.put("deploy.additional.iso", "true");
+            details.put(VmDetailConstants.BOOT_ORDER, "cdrom");
+            if (uefi) {
+                details.put(GuestDef.BootType.UEFI.toString(), "legacy");
+            }
+            GuestDef guest = libvirtComputingResourceSpy.createGuestFromSpec(to, new LibvirtVMDef(), to.getUuid(), details);
+            Assert.assertFalse(guest.toString().contains("<boot dev="));
+        }
+    }
+
+    @Test
+    public void testLegacyBootOrderHasNoDuplicateDevices() {
+        VirtualMachineTO to = createDefaultVM(false);
+        GuestDef guest = libvirtComputingResourceSpy.createGuestFromSpec(to, new LibvirtVMDef(), to.getUuid(), null);
+        String xml = guest.toString();
+        Assert.assertEquals(xml.indexOf("<boot dev='hd'"), xml.lastIndexOf("<boot dev='hd'"));
+        Assert.assertTrue(xml.indexOf("<boot dev='hd'") < xml.indexOf("<boot dev='cdrom'"));
     }
 }

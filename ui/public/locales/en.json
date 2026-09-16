@@ -1,4 +1,7 @@
 {
+  "label.job.check.result": "Check result",
+  "message.iso.detach.summary": "ISO detach: succeeded {success}, failed {failed}, result unknown {unknown}, not submitted {pending}.",
+  "message.job.result.unknown": "The task result could not be confirmed. This does not mean the task failed. Click this notification to check again.",
   "message.list.refresh.stale": "Refresh failed. Showing the last successfully loaded data; retrying automatically.",
   "message.api.schema.mismatch": "The UI and server API do not match. Missing parameters for {api}: {parameters}. Refresh the page; if this persists, ask an administrator to verify the deployed modules.",
   "label.dr.boot.validation.mode": "Boot validation mode",
@@ -7678,5 +7681,14 @@
   "label.delete.confirmation": "Enter the exact resource name to proceed with deletion",
   "message.oauth.domain.providers.hint": "Enter your domain to see domain-specific providers",
   "message.oauth.domain.providers.empty": "No OAuth providers configured for this domain",
-  "message.oauth.domain.providers.prompt": "Enter your domain to see available providers"
+  "message.oauth.domain.providers.prompt": "Enter your domain to see available providers",
+  "label.tpm.model": "TPM model",
+  "label.tpm.inherit": "Use template setting (disabled if unspecified)",
+  "label.additional.iso.connect": "Connect an additional ISO",
+  "label.additional.iso": "Additional non-bootable ISO",
+  "message.additional.iso.unsupported": "Requires a server supporting additional ISO deployment and KVM.",
+  "message.additional.iso.boot": "Boot from the installation ISO with a driver ISO connected. The destination must support two ISO slots; ConfigDrive may reserve the second slot.",
+  "message.additional.iso.empty": "No non-bootable ISO is available. Register a non-bootable driver ISO in this zone.",
+  "message.additional.iso.load.failed": "Unable to load additional ISOs. Turn this option off or retry.",
+  "message.additional.iso.required": "Select an available non-bootable ISO or turn off additional ISO connection."
 }

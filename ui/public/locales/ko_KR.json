@@ -1,4 +1,7 @@
 {
+  "label.job.check.result": "결과 재조회",
+  "message.iso.detach.summary": "ISO 분리: 성공 {success}, 실패 {failed}, 결과 확인 필요 {unknown}, 미실행 {pending}.",
+  "message.job.result.unknown": "작업 결과를 확인하지 못했습니다. 작업 실패를 의미하지 않습니다. 이 알림을 클릭하면 결과를 다시 조회합니다.",
   "message.list.refresh.stale": "목록을 갱신하지 못했습니다. 마지막 정상 데이터를 표시하며 자동으로 다시 시도합니다.",
   "message.api.schema.mismatch": "UI와 서버 API 구성이 일치하지 않습니다. {api}의 누락 매개변수: {parameters}. 화면을 새로 고친 후에도 계속되면 관리자에게 배포 모듈 확인을 요청하세요.",
   "label.dr.boot.validation.mode": "부팅 검증 모드",
@@ -7687,5 +7690,14 @@
   "label.external.network.provider": "외부 네트워크 공급자",
   "label.networkorchestrator": "네트워크 오케스트레이터",
   "message.action.update.extension.resource": "확장 리소스 등록 상세 정보를 수정합니다.",
-  "message.success.update.extension.resource": "확장 리소스 등록 정보를 수정했습니다."
+  "message.success.update.extension.resource": "확장 리소스 등록 정보를 수정했습니다.",
+  "label.tpm.model": "TPM 모델",
+  "label.tpm.inherit": "템플릿 설정 사용 (미지정 시 사용 안 함)",
+  "label.additional.iso.connect": "추가 ISO 연결",
+  "label.additional.iso": "추가 비부팅 ISO",
+  "message.additional.iso.unsupported": "추가 ISO 생성 기능을 지원하는 서버와 KVM이 필요합니다.",
+  "message.additional.iso.boot": "설치 ISO로 부팅하며 드라이버 ISO를 함께 연결합니다. 대상은 ISO 슬롯 2개를 지원해야 하며, ConfigDrive가 두 번째 슬롯을 점유할 수 있습니다.",
+  "message.additional.iso.empty": "사용 가능한 비부팅 ISO가 없습니다. 이 Zone에 비부팅 드라이버 ISO를 등록하세요.",
+  "message.additional.iso.load.failed": "추가 ISO를 불러오지 못했습니다. 옵션을 해제하거나 다시 시도하세요.",
+  "message.additional.iso.required": "사용 가능한 비부팅 ISO를 선택하거나 추가 ISO 연결을 해제하세요."
 }
