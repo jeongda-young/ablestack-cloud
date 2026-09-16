@@ -115,6 +115,7 @@ export default {
           this.$pollJob({
             jobId: response.createsnapshotfromvmsnapshotresponse.jobid,
             title: this.$t('message.success.create.snapshot.from.vmsnapshot'),
+            action: { api: 'createSnapshotFromVMSnapshot', resource: this.resource },
             description: values.name,
             successMessage: this.$t('message.success.create.snapshot.from.vmsnapshot'),
             errorMessage: this.$t('message.create.snapshot.from.vmsnapshot.failed'),
