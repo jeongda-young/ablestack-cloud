@@ -143,5 +143,4 @@ describe('DR plan resource actions', () => {
     expect(deletes[0].disabled(resource)).toBe(false)
     expect(resolveDrActionAvailability(deletes[0], resource, { state: 'RUNNING' })).toEqual({ applicable: true, enabled: true, reasonCode: '' })
   })
-
 })
