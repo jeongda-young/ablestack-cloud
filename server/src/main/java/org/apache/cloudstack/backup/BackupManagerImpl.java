@@ -315,6 +315,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     private static final String RETENTION_CLEANUP_SCHEDULE_ID = "retention.cleanup.schedule.id";
     private static final String RETENTION_CLEANUP_REASON = "retention.cleanup.reason";
     private static final long MIN_ACTIVE_JOB_SYNC_INTERVAL_SECONDS = 5L;
+    private static final long RESTORE_JOB_START_GRACE_PERIOD_MS = TimeUnit.SECONDS.toMillis(60);
 
     private static Map<String, BackupProvider> backupProvidersMap = new HashMap<>();
     private static final String ABLESTACK_NETBACKUP_PROVIDER_NAME = "ablestack-netbackup";
@@ -1627,6 +1628,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         backup.setStatus(Backup.Status.Canceled);
         backupDao.update(backup.getId(), backup);
         backupDetailsDao.removeDetail(backup.getId(), AblestackBackupFrameworkUtils.RESOURCE_COUNT_PENDING_DETAIL);
+        cleanupBackupJobFiles(backup.getHostId(), backup.getUuid(), offering.getProvider());
         logger.info("Cancelled BackingUp backup [{}] for VM [{}] using provider [{}].",
                 backup.getUuid(), vm.getInstanceName(), offering.getProvider());
         return true;
@@ -4092,7 +4094,12 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             logger.trace("Reconciling restore job [{}] for backup [{}], VM [{}] using provider [{}]. state=[{}], step=[{}], progress=[{}]",
                     restoreJobId, backup.getUuid(), vm.getInstanceName(), backupProvider.getName(), restoreState,
                     restoreAnswer.getStep(), restoreAnswer.getProgress());
-            if ("COMPLETED".equalsIgnoreCase(restoreState)) {
+            if (isMissingUnstartedRestoreJob(backup, restoreState)) {
+                markRestoreJobStartFailed(backup.getId());
+                failInterruptedRestoreStates(vm);
+                logger.warn("Reconciled restore job [{}] for backup [{}], VM [{}] as failed because the host-side job was not created.",
+                        restoreJobId, backup.getUuid(), vm.getInstanceName());
+            } else if ("COMPLETED".equalsIgnoreCase(restoreState)) {
                 runPostRestoreMaintenance(backupProvider, vm, backup, false);
                 completeInterruptedRestoreStates(vm);
                 cleanupBackupJobFiles(restoreHost.getId(), restoreJobId, backupProvider.getName() + " restore");
@@ -4106,10 +4113,30 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
 
         protected boolean isTerminalRestoreFailureState(final String restoreState) {
-            return "FAILED".equalsIgnoreCase(restoreState)
-                    || "CANCELED".equalsIgnoreCase(restoreState)
-                    || "CANCELLED".equalsIgnoreCase(restoreState)
-                    || "INTERRUPTED".equalsIgnoreCase(restoreState);
+            return isRestoreFailureState(restoreState);
+        }
+
+        protected boolean isMissingUnstartedRestoreJob(final BackupVO backup, final String restoreState) {
+            if (!"UNKNOWN".equalsIgnoreCase(restoreState)) {
+                return false;
+            }
+            final String storedState = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_STATE_DETAIL);
+            final String storedStep = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_STEP_DETAIL);
+            if (!"STARTING".equalsIgnoreCase(storedState) && !"QUEUED".equalsIgnoreCase(storedStep)) {
+                return false;
+            }
+            final String trackedAt = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_TRACKED_AT_DETAIL);
+            if (StringUtils.isBlank(trackedAt)) {
+                return true;
+            }
+            return NumberUtils.isDigits(trackedAt)
+                    && Long.parseLong(trackedAt) <= System.currentTimeMillis() - RESTORE_JOB_START_GRACE_PERIOD_MS;
+        }
+
+        protected void markRestoreJobStartFailed(final Long backupId) {
+            persistBackupDetail(backupId, AblestackBackupFrameworkUtils.RESTORE_JOB_STATE_DETAIL, "FAILED");
+            persistBackupDetail(backupId, AblestackBackupFrameworkUtils.RESTORE_JOB_STEP_DETAIL, "START_FAILED");
+            persistBackupDetail(backupId, AblestackBackupFrameworkUtils.RESTORE_JOB_PROGRESS_DETAIL, "0");
         }
 
         protected boolean isRestoreStatePending(final VMInstanceVO vm) {
@@ -4673,6 +4700,8 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             response.setExitCode(backupAnswer.getExitCode());
             response.setOperation(backupAnswer.getOperation());
             response.setCapabilities(backupAnswer.getCapabilities());
+            response.setBandwidthLimitMbps(backupAnswer.getBandwidthLimitMbps());
+            response.setBandwidthStatus(backupAnswer.getBandwidthStatus());
             if (!backupAnswer.getResult()) {
                 response.setStep(StringUtils.defaultIfBlank(backupAnswer.getDetails(), response.getStep()));
             }
@@ -4767,14 +4796,22 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     }
 
     private boolean applyStoredRestoreJobStatus(final BackupVO backup, final VMInstanceVO vm, final BackupJobStatusResponse response) {
+        final String state = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_STATE_DETAIL);
         if (!isVmRestoreStatePending(vm)) {
+            if (isRestoreFailureState(state)) {
+                response.setState(state);
+                response.setStep(StringUtils.defaultIfBlank(backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_STEP_DETAIL), state));
+                final String progress = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_PROGRESS_DETAIL);
+                response.setProgress(NumberUtils.isDigits(progress) ? Integer.parseInt(progress) : 0);
+                response.setOperation(AblestackBackupFrameworkUtils.OPERATION_RESTORE);
+                return true;
+            }
             response.setState("COMPLETED");
             response.setStep("COMPLETED");
             response.setProgress(100);
             response.setOperation(AblestackBackupFrameworkUtils.OPERATION_RESTORE);
             return true;
         }
-        final String state = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_STATE_DETAIL);
         if (StringUtils.isBlank(state)) {
             return false;
         }
@@ -5072,10 +5109,13 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     }
 
     private String getRestoreJobStateForResponse(final Backup backup) {
+        final String storedState = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_STATE_DETAIL);
+        if (isRestoreFailureState(storedState)) {
+            return storedState;
+        }
         if (!isBackupRestoreStatePending(backup)) {
             return "COMPLETED";
         }
-        final String storedState = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_STATE_DETAIL);
         if (StringUtils.isNotBlank(storedState)) {
             return storedState;
         }
@@ -5097,6 +5137,13 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         return vm != null && (VirtualMachine.State.Restoring.equals(vm.getState()) ||
                 volumeDao.findIncludingRemovedByInstanceAndType(vm.getId(), null).stream()
                         .anyMatch(volume -> Volume.State.Restoring.equals(volume.getState())));
+    }
+
+    private boolean isRestoreFailureState(final String restoreState) {
+        return "FAILED".equalsIgnoreCase(restoreState)
+                || "CANCELED".equalsIgnoreCase(restoreState)
+                || "CANCELLED".equalsIgnoreCase(restoreState)
+                || "INTERRUPTED".equalsIgnoreCase(restoreState);
     }
 
     @Override

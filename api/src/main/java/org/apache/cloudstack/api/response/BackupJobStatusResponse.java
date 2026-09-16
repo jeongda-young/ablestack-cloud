@@ -72,6 +72,14 @@ public class BackupJobStatusResponse extends BaseResponse {
     @Param(description = "Comma-separated host-side backup job capabilities")
     private String capabilities;
 
+    @SerializedName(ApiConstants.BACKUP_JOB_BANDWIDTH_LIMIT_MBPS)
+    @Param(description = "Current requested backup bandwidth limit in Mbps")
+    private Integer bandwidthLimitMbps;
+
+    @SerializedName(ApiConstants.BACKUP_JOB_BANDWIDTH_STATUS)
+    @Param(description = "Current backup bandwidth adjustment status")
+    private String bandwidthStatus;
+
     public String getId() {
         return id;
     }
@@ -158,5 +166,21 @@ public class BackupJobStatusResponse extends BaseResponse {
 
     public void setCapabilities(final String capabilities) {
         this.capabilities = capabilities;
+    }
+
+    public Integer getBandwidthLimitMbps() {
+        return bandwidthLimitMbps;
+    }
+
+    public void setBandwidthLimitMbps(final Integer bandwidthLimitMbps) {
+        this.bandwidthLimitMbps = bandwidthLimitMbps;
+    }
+
+    public String getBandwidthStatus() {
+        return bandwidthStatus;
+    }
+
+    public void setBandwidthStatus(final String bandwidthStatus) {
+        this.bandwidthStatus = bandwidthStatus;
     }
 }

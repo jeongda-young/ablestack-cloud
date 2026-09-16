@@ -44,6 +44,8 @@ public class BackupAnswer extends Answer {
     private Integer exitCode;
     private String operation;
     private String capabilities;
+    private Integer bandwidthLimitMbps;
+    private String bandwidthStatus;
 
     public BackupAnswer(final Command command, final boolean success, final String details) {
         super(command, success, details);
@@ -170,5 +172,21 @@ public class BackupAnswer extends Answer {
 
     public void setCapabilities(String capabilities) {
         this.capabilities = capabilities;
+    }
+
+    public Integer getBandwidthLimitMbps() {
+        return bandwidthLimitMbps;
+    }
+
+    public void setBandwidthLimitMbps(Integer bandwidthLimitMbps) {
+        this.bandwidthLimitMbps = bandwidthLimitMbps;
+    }
+
+    public String getBandwidthStatus() {
+        return bandwidthStatus;
+    }
+
+    public void setBandwidthStatus(String bandwidthStatus) {
+        this.bandwidthStatus = bandwidthStatus;
     }
 }

@@ -51,6 +51,7 @@ public final class AblestackBackupFrameworkUtils {
     public static final String RESTORE_JOB_STATE_DETAIL = "ablestack.restore.job.state";
     public static final String RESTORE_JOB_STEP_DETAIL = "ablestack.restore.job.step";
     public static final String RESTORE_JOB_PROGRESS_DETAIL = "ablestack.restore.job.progress";
+    public static final String RESTORE_JOB_TRACKED_AT_DETAIL = "ablestack.restore.job.tracked.at";
 
     private AblestackBackupFrameworkUtils() {
     }

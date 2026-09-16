@@ -34,6 +34,14 @@
             <span>{{ $t('label.step') }} :</span>
             <span>{{ displayStep }}</span>
           </div>
+          <div v-if="bandwidthLimitMbps !== null" class="backup-progress-tooltip-row">
+            <span>{{ $t('label.bandwidth') }} :</span>
+            <span>{{ bandwidthLimitMbps === 0 ? $t('label.unlimited') : bandwidthLimitMbps + ' Mbps' }}</span>
+          </div>
+          <div v-if="bandwidthStatusLabel" class="backup-progress-tooltip-row" :class="{ 'backup-progress-tooltip-error': bandwidthStatus === 'failed' }">
+            <span>{{ $t('label.status') }} :</span>
+            <span>{{ bandwidthStatusLabel }}</span>
+          </div>
         </div>
       </template>
     </status>
@@ -77,6 +85,8 @@ export default {
       jobState: this.record?.backupjobstate || '',
       step: this.record?.backupjobstep || '',
       logPath: this.record?.backupjoblogpath || this.record?.restorejoblogpath || '',
+      bandwidthLimitMbps: this.normalizeBandwidth(this.record?.bandwidthlimitmbps),
+      bandwidthStatus: this.record?.bandwidthstatus || '',
       restoreJobId: this.record?.restorejobid || '',
       restoreFinished: this.isTerminalJobState(this.record?.restorejobstate)
     }
@@ -122,8 +132,15 @@ export default {
       }
       return this.step
     },
+    bandwidthStatusLabel () {
+      if (!this.bandwidthStatus) {
+        return ''
+      }
+      return this.$t('message.backup.bandwidth.' + this.bandwidthStatus)
+    },
     showJobDetails () {
-      return this.isActive && (this.hasProgress || !!this.jobState || !!this.displayStep || !!this.logPath)
+      return this.isActive && (this.hasProgress || !!this.jobState || !!this.displayStep || !!this.logPath ||
+        this.bandwidthLimitMbps !== null || !!this.bandwidthStatus)
     }
   },
   watch: {
@@ -172,11 +189,18 @@ export default {
       this.jobState = this.record?.restorejobstate || this.record?.backupjobstate || this.jobState
       this.step = this.record?.backupjobstep || this.step
       this.logPath = this.record?.restorejoblogpath || this.record?.backupjoblogpath || this.logPath
+      const bandwidthLimitMbps = this.normalizeBandwidth(this.record?.bandwidthlimitmbps)
+      if (bandwidthLimitMbps !== null) {
+        this.bandwidthLimitMbps = bandwidthLimitMbps
+      }
+      this.bandwidthStatus = this.record?.bandwidthstatus || this.bandwidthStatus
       if (!this.isActive) {
         this.progress = null
         this.jobState = ''
         this.step = ''
         this.logPath = ''
+        this.bandwidthLimitMbps = null
+        this.bandwidthStatus = ''
       }
     },
     fetchStatus () {
@@ -226,6 +250,10 @@ export default {
       if (Object.prototype.hasOwnProperty.call(response, 'progress')) {
         this.progress = this.normalizeProgress(response.progress)
       }
+      if (Object.prototype.hasOwnProperty.call(response, 'bandwidthlimitmbps')) {
+        this.bandwidthLimitMbps = this.normalizeBandwidth(response.bandwidthlimitmbps)
+      }
+      this.bandwidthStatus = response.bandwidthstatus || this.bandwidthStatus
       if (wasRestoring && this.isTerminalJobState(response.state)) {
         this.restoreFinished = true
       }
@@ -242,6 +270,16 @@ export default {
         return null
       }
       return Math.min(Math.max(progress, 0), 100)
+    },
+    normalizeBandwidth (value) {
+      if (value === undefined || value === null || value === '') {
+        return null
+      }
+      const bandwidth = Number.parseInt(value, 10)
+      if (!Number.isFinite(bandwidth)) {
+        return null
+      }
+      return Math.max(bandwidth, 0)
     }
   }
 }
@@ -285,5 +323,9 @@ export default {
 .backup-progress-tooltip-row {
   display: flex;
   gap: 6px;
+}
+
+.backup-progress-tooltip-error span:last-child {
+  color: #cf1322;
 }
 </style>

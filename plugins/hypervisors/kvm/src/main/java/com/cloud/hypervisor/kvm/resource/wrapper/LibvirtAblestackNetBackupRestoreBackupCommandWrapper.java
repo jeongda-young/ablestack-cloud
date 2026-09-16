@@ -62,7 +62,7 @@ public class LibvirtAblestackNetBackupRestoreBackupCommandWrapper extends Comman
     private static final String COMMAND_EXIT_MARKER = "__CS_COMMAND_EXIT__=";
     private static final String ATTACH_QCOW2_DISK_COMMAND = " virsh attach-disk %s %s %s --driver qemu --subdriver qcow2 --cache none";
     private static final String ATTACH_RBD_DISK_XML_COMMAND = " virsh attach-device %s /dev/stdin <<EOF%sEOF";
-    private static final String CURRENT_DEVICE = "virsh domblklist --domain %s | tail -n 3 | head -n 1 | awk '{print $1}'";
+    private static final String CURRENT_DEVICE = "virsh domblklist --domain %s --details | awk '$3 == \"disk\" && $4 ~ /^vd[a-z]+$/ {print $4}' | sort | tail -n 1";
     private static final String QEMU_IMG_HAS_BACKING_COMMAND = "qemu-img info --output=json %s 2>/dev/null | grep -q '\"backing-filename\"'";
     private static final String RESTORE_TRACE = AblestackBackupFrameworkUtils.buildTracePrefix("netbackup", AblestackBackupFrameworkUtils.OPERATION_RESTORE);
     private static final long RESTORE_PRIMARY_SPACE_BUFFER_BYTES = 10L * 1024L * 1024L * 1024L;

@@ -188,6 +188,8 @@ final class LibvirtAblestackAsyncBackupRunner {
         answer.setProgress(properties != null && Boolean.parseBoolean(properties.getProperty("progressUnavailable")) ? null : resolveProgress(state, properties));
         answer.setOperation(properties != null ? properties.getProperty("operation") : null);
         answer.setCapabilities(properties != null ? properties.getProperty("capabilities") : null);
+        answer.setBandwidthLimitMbps(parseNullableInteger(properties != null ? properties.getProperty("bandwidthLimitMbps") : null));
+        answer.setBandwidthStatus(properties != null ? properties.getProperty("bandwidthStatus") : null);
         answer.setEventsJson(readJobEventsJson(jobId, eventsOffset, eventsLimit, answer));
         if (jobId != null && !jobId.isBlank()) {
             final String operation = properties != null ? properties.getProperty("operation") : null;
@@ -327,16 +329,22 @@ final class LibvirtAblestackAsyncBackupRunner {
         }
 
         properties.setProperty("bandwidthLimitMbps", String.valueOf(effectiveLimitMbps));
+        properties.setProperty("bandwidthStatus", "applying");
         properties.setProperty("bandwidthLimitUpdated", String.valueOf(System.currentTimeMillis()));
         storeJobProperties(logger, jobId, properties);
 
         final int virshLimitMiBps = effectiveLimitMbps <= 0 ? 0 : Math.max(1, (effectiveLimitMbps + 7) / 8);
         final Pair<Integer, String> result = executeAndCapture("bash", "-lc", buildBlockJobBandwidthCommand(vmName, virshLimitMiBps));
-        final String details = "Updated backup bandwidth limit to " + effectiveLimitMbps + " Mbps";
+        final boolean applied = result.first() == 0;
+        properties.setProperty("bandwidthStatus", applied ? "applied" : "failed");
+        properties.setProperty("bandwidthLimitUpdated", String.valueOf(System.currentTimeMillis()));
+        storeJobProperties(logger, jobId, properties);
+
+        final String details = applied ? "Updated backup bandwidth limit to " + effectiveLimitMbps + " Mbps" :
+                "Backup bandwidth update failed; backup job will continue";
         appendJobEvent(logger, jobId, properties.getProperty("provider"), vmName, properties.getProperty("backupPath"),
                 properties.getProperty("backupType"), STATE_RUNNING, details, properties);
-        return new BackupAnswer(command, result.first() == 0,
-                result.first() == 0 ? details : "Failed to update backup bandwidth: " + result.second());
+        return new BackupAnswer(command, applied, applied ? details : "Failed to update backup bandwidth: " + result.second());
     }
 
     static Answer cleanupJob(final Command command, final String jobId, final Logger logger) {
@@ -744,6 +752,14 @@ final class LibvirtAblestackAsyncBackupRunner {
             return value != null ? Integer.parseInt(value) : defaultValue;
         } catch (NumberFormatException e) {
             return defaultValue;
+        }
+    }
+
+    private static Integer parseNullableInteger(final String value) {
+        try {
+            return value != null ? Integer.valueOf(value) : null;
+        } catch (NumberFormatException e) {
+            return null;
         }
     }
 
