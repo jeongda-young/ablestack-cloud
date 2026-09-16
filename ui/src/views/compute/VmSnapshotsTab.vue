@@ -61,7 +61,7 @@
     <a-pagination v-model:current="page" v-model:pageSize="pageSize" :total="total" :show-size-changer="true" class="snapshot-pagination" @change="fetchData" />
     <a-modal :visible="!!selected" :title="$t(actionLabel)" :confirm-loading="submitting" :ok-text="$t(actionLabel)" :ok-button-props="{ danger: actionApi === 'deleteVMSnapshot', disabled: !!confirmationReason }" @ok="submitAction" @cancel="cancelAction">
       <template v-if="selected">
-        <a-descriptions :column="1" bordered size="small">
+        <a-descriptions class="snapshot-confirmation" :column="1" bordered size="small">
           <a-descriptions-item :label="$t('label.vm')">{{ resource.displayname || resource.name }}</a-descriptions-item>
           <a-descriptions-item :label="$t('label.vm.snapshot')">{{ selected.displayname || selected.name }}</a-descriptions-item>
           <a-descriptions-item :label="$t('label.type')">{{ typeLabel(selected.type) }}</a-descriptions-item>
@@ -205,6 +205,10 @@ export default {
 .snapshot-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
 .snapshot-toolbar :deep(.ant-input-search) { margin-left: auto; width: 280px; }
 .snapshot-alert { margin: 12px 0; }
+.snapshot-confirmation :deep(.ant-descriptions-item-label) { background: var(--ui-bg-page); color: var(--ui-text-primary); }
+.snapshot-confirmation :deep(.ant-descriptions-item-content) { background: var(--ui-bg-surface); color: var(--ui-text-secondary); }
+.snapshot-confirmation :deep(.ant-descriptions-view), .snapshot-confirmation :deep(.ant-descriptions-row), .snapshot-confirmation :deep(.ant-descriptions-item-label), .snapshot-confirmation :deep(.ant-descriptions-item-content) { border-color: var(--ui-border); }
+.snapshot-pagination :deep(.ant-pagination-item-link) { background: var(--ui-bg-surface); color: var(--ui-text-secondary); border-color: var(--ui-border); }
 .snapshot-pagination { margin-top: 20px; text-align: right; }
 .snapshot-actions { display: flex; align-items: center; }
 .snapshot-parent { display: block; margin-top: 6px; opacity: .8; }
