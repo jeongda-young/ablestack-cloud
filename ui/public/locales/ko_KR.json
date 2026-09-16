@@ -3959,6 +3959,7 @@
   "placeholder.quota.tariff.value": "할당 요금 가격",
   "router.health.checks": "헬스 체크",
   "side.by.side": "나란히",
+  "state.canceled": "취소됨",
   "state.completed": "완료",
   "state.created": "생성됨",
   "state.declined": "거절",

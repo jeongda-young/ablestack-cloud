@@ -1259,6 +1259,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         if (backup == null || StringUtils.isBlank(backup.getExternalId())) {
             return;
         }
+        loadBackupDetailsIfNeeded(backup);
         final String stageHostName = getBackupDetail(backup, DETAIL_STAGE_HOST);
         if (StringUtils.isBlank(stageHostName)) {
             LOG.warn("Skipping Commvault staging cleanup for backup [{}] because stage host detail is missing", backup.getUuid());
@@ -2254,6 +2255,8 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                     BACKUP_TRACE, backup.getId(), backup.getUuid(), vm.getId(), vm.getInstanceName(), stageHost.getId(), stageHost.getName(),
                     backupPath, jobLogPath);
         } else if ("CANCELED".equals(jobState)) {
+            cleanupBackupStagingPathFromDetails(backup);
+            cleanupBackupJobFiles(stageHost.getId(), backup.getUuid());
             BackupVO backupVO = backupDao.findById(backup.getId());
             if (backupVO != null) {
                 backupVO.setStatus(Backup.Status.Canceled);

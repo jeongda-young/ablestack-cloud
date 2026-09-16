@@ -2112,6 +2112,8 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             return true;
         }
         if ("CANCELED".equals(jobState)) {
+            cleanupFailedBackupArtifacts(host, backup);
+            cleanupBackupJobFiles(host.getId(), backup.getUuid());
             final BackupVO backupVO = backupDao.findById(backup.getId());
             if (backupVO != null) {
                 backupVO.setStatus(Backup.Status.Canceled);

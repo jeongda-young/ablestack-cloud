@@ -99,6 +99,9 @@ export default {
           case 'failed':
             state = this.$t('state.failed')
             break
+          case 'canceled':
+            state = this.$t('state.canceled')
+            break
           case 'readonly':
             state = this.$t('state.readonly')
             break
@@ -270,6 +273,7 @@ export default {
         case 'poweroff':
         case 'stopped':
         case 'failed':
+        case 'canceled':
         case 'unmanaged':
         case 'no':
         case 'critical':

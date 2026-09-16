@@ -2121,6 +2121,8 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
                     BACKUP_TRACE, backup.getId(), backup.getUuid(), vm.getId(), vm.getInstanceName(), host.getId(), host.getName(),
                     backup.getExternalId(), jobLogPath);
         } else if ("CANCELED".equals(jobState)) {
+            cleanupFailedBackupArtifacts(host, backup);
+            cleanupBackupJobFiles(host.getId(), backup.getUuid());
             final BackupVO backupVO = backupDao.findById(backup.getId());
             if (backupVO != null) {
                 backupVO.setStatus(Backup.Status.Canceled);
@@ -2180,6 +2182,18 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         } catch (final AgentUnavailableException | OperationTimedoutException e) {
             LOG.debug("Failed to query NetBackup backup job state for job [{}] on host [{}]", backupJobId, hostId, e);
             return null;
+        }
+    }
+
+    private void cleanupBackupJobFiles(final Long hostId, final String backupJobId) {
+        try {
+            final Answer answer = agentManager.send(hostId, new AblestackBackupJobCleanupCommand(backupJobId));
+            if (answer == null || !answer.getResult()) {
+                LOG.warn("Failed to cleanup NetBackup backup job files [jobId: {}, hostId: {}]: {}",
+                        backupJobId, hostId, answer != null ? answer.getDetails() : null);
+            }
+        } catch (final AgentUnavailableException | OperationTimedoutException e) {
+            LOG.warn("Failed to send NetBackup backup job cleanup command [jobId: {}, hostId: {}]", backupJobId, hostId, e);
         }
     }
 
