@@ -3186,6 +3186,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                     if (result != null && StringUtils.isNotBlank(result.second())) {
                         failureDetails.add(String.format("host [%s], datastore [%s]: %s", hostData, datastoreData, result.second()));
                     }
+                    cleanupRestoreVolumeAttemptJobFiles(backup, vm, backupProvider.getName());
 
                     if (result != null && BooleanUtils.isTrue(result.first())) {
                         logger.info("Successfully restored volume [UUID: {}] using host [{}] and datastore [{}] through backup provider [{}]. Result details: [{}]",
@@ -3207,6 +3208,12 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
         final String resultDetails = result != null ? result.second() : null;
         return new Pair<>(false, CollectionUtils.isNotEmpty(failureDetails) ? StringUtils.join(failureDetails, "; ") : resultDetails);
+    }
+
+    private void cleanupRestoreVolumeAttemptJobFiles(final BackupVO backup, final VMInstanceVO vm, final String provider) {
+        if (cleanupTrackedRestoreJobFiles(backup, vm, provider)) {
+            clearTrackedRestoreJobDetails(backup);
+        }
     }
 
     private void runPostRestoreMaintenance(final BackupProvider backupProvider, final VirtualMachine vm, final Backup backup, final boolean volumeOnly) {
@@ -4750,36 +4757,53 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         return backup.getHostId();
     }
 
-    private void cleanupBackupJobFiles(final Long hostId, final String backupJobId, final String provider) {
+    private boolean cleanupBackupJobFiles(final Long hostId, final String backupJobId, final String provider) {
         if (hostId == null) {
             logger.debug("Skipping {} backup job cleanup because host id is missing [jobId: {}]", provider, backupJobId);
-            return;
+            return false;
         }
         try {
             final Answer answer = agentManager.send(hostId, new AblestackBackupJobCleanupCommand(backupJobId));
             if (answer == null || !answer.getResult()) {
                 logger.warn("Failed to cleanup {} backup job files [jobId: {}, hostId: {}]: {}",
                         provider, backupJobId, hostId, answer != null ? answer.getDetails() : null);
+                return false;
             }
+            return true;
         } catch (Exception e) {
             logger.warn("Failed to send {} backup job cleanup command [jobId: {}, hostId: {}]",
                     provider, backupJobId, hostId, e);
+            return false;
         }
     }
 
-    private void cleanupTrackedRestoreJobFiles(final BackupVO backup, final VMInstanceVO vm, final String provider) {
+    private boolean cleanupTrackedRestoreJobFiles(final BackupVO backup, final VMInstanceVO vm, final String provider) {
         backupDao.loadDetails(backup);
         final String restoreJobId = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_ID_DETAIL);
         if (StringUtils.isBlank(restoreJobId)) {
-            return;
+            return true;
         }
         final HostVO restoreHost = findRestoreJobHost(backup, vm);
         if (restoreHost == null) {
             logger.debug("Skipping {} restore job cleanup because restore host was not found [jobId: {}, backup: {}]",
                     provider, restoreJobId, backup.getUuid());
+            return false;
+        }
+        return cleanupBackupJobFiles(restoreHost.getId(), restoreJobId, provider + " restore");
+    }
+
+    private void clearTrackedRestoreJobDetails(final BackupVO backup) {
+        if (backup == null) {
             return;
         }
-        cleanupBackupJobFiles(restoreHost.getId(), restoreJobId, provider + " restore");
+        backupDetailsDao.removeDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_JOB_ID_DETAIL);
+        backupDetailsDao.removeDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_HOST_ID_DETAIL);
+        backupDetailsDao.removeDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_HOST_NAME_DETAIL);
+        backupDetailsDao.removeDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_JOB_STATE_DETAIL);
+        backupDetailsDao.removeDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_JOB_STEP_DETAIL);
+        backupDetailsDao.removeDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_JOB_PROGRESS_DETAIL);
+        backupDetailsDao.removeDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_JOB_TRACKED_AT_DETAIL);
+        backupDao.loadDetails(backup);
     }
 
     private void persistBackupDetail(final Long backupId, final String key, final String value) {
