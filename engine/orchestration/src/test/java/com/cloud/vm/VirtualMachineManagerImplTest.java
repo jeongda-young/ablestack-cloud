@@ -238,6 +238,8 @@ public class VirtualMachineManagerImplTest {
     @Mock
     VMTemplateDao templateDao;
     @Mock
+    com.cloud.template.TemplateManager isoTemplateManager;
+    @Mock
     VMTemplateZoneDao templateZoneDao;
 
     @Mock

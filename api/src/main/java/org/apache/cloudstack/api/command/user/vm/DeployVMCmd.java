@@ -60,6 +60,16 @@ public class DeployVMCmd extends BaseDeployVMCmd {
     @Parameter(name = ApiConstants.TEMPLATE_ID, type = CommandType.UUID, entityType = TemplateResponse.class, description = "The ID of the Template for the Instance")
     private Long templateId;
 
+    @Parameter(name = "additionalisoids", type = CommandType.LIST, collectionType = CommandType.UUID,
+            entityType = TemplateResponse.class,
+            description = "Non-bootable driver ISOs to connect before first boot (KVM ISO deployments only).")
+    private List<Long> additionalIsoIds;
+
+    public List<Long> getAdditionalIsoIds() {
+        return additionalIsoIds == null ? java.util.Collections.emptyList() : additionalIsoIds;
+    }
+
+
     @Parameter(name = ApiConstants.VOLUME_ID, type = CommandType.UUID, entityType = VolumeResponse.class, since = "4.21")
     private Long volumeId;
 

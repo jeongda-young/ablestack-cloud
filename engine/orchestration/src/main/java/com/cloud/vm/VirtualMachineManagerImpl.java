@@ -340,6 +340,9 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
     private DiskOfferingDao _diskOfferingDao;
     @Inject
     private VMTemplateDao _templateDao;
+
+    @Inject
+    private com.cloud.template.TemplateManager isoTemplateManager;
     @Inject
     private VMTemplateZoneDao templateZoneDao;
     @Inject
@@ -1564,6 +1567,7 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
                         reuseVolume = true;
                     }
 
+                    isoTemplateManager.validateIsoDestination(vm, dest.getHost().getId());
                     vmGuru.finalizeVirtualMachineProfile(vmProfile, dest, ctx);
 
                     final VirtualMachineTO vmTO = hvGuru.implement(vmProfile);

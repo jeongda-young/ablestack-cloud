@@ -372,7 +372,9 @@ public class LibvirtVMDef {
         }
 
         public void setBootOrder(BootOrder order) {
-            _bootdevs.add(order);
+            if (!_bootdevs.contains(order)) {
+                _bootdevs.add(order);
+            }
         }
 
         public void setUuid(String uuid) {
@@ -1120,6 +1122,12 @@ public class LibvirtVMDef {
             }
         }
 
+        private Integer bootOrder;
+
+        public void setBootOrder(Integer order) {
+            bootOrder = order;
+        }
+
         public void defISODisk(String volPath, DiskType diskType) {
             _diskType = diskType;
             _deviceType = DeviceType.CDROM;
@@ -1564,6 +1572,9 @@ public class LibvirtVMDef {
             }
             if (_shareable) {
                 diskBuilder.append("<shareable/>");
+            }
+            if (bootOrder != null) {
+                diskBuilder.append("<boot order='").append(bootOrder).append("'/>\n");
             }
             diskBuilder.append("</disk>\n");
             return diskBuilder.toString();
@@ -2729,7 +2740,7 @@ public class LibvirtVMDef {
             StringBuilder tpmBuidler = new StringBuilder();
             if (model != null) {
                 tpmBuidler.append("<tpm model='").append(model).append("'>\n");
-                tpmBuidler.append("<backend type='emulator' version='").append(version).append("'/>\n");
+                tpmBuidler.append("<backend type='emulator' version='").append(version).append("' persistent_state='yes'/>\n");
                 tpmBuidler.append("</tpm>\n");
             }
             return tpmBuidler.toString();

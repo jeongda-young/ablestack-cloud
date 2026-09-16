@@ -62,6 +62,9 @@ public class FirstFitAllocatorTest {
   private static final double TOLERANCE = 0.0001;
 
   @Mock
+  com.cloud.host.dao.HostDetailsDao hostDetailsDaoMock;
+
+  @Mock
   HostDao hostDaoMock;
 
   @Mock
@@ -629,6 +632,9 @@ public class FirstFitAllocatorTest {
 
   @Test
   public void tagRulesRespectOriginalCandidatesAndUefiAndTpmCapabilities() {
+    com.cloud.vm.VirtualMachine vm = mock(com.cloud.vm.VirtualMachine.class);
+    when(vm.getLastHostId()).thenReturn(null);
+    when(virtualMachineProfile.getVirtualMachine()).thenReturn(vm);
     List<HostVO> candidates = new ArrayList<>(Arrays.asList(host1, host2));
     Mockito.doReturn(new ArrayList<>(Arrays.asList(host1, host2))).when(resourceManagerMock)
         .listAllUpAndEnabledNonHAHosts(type, clusterId, podId, dcId);
@@ -642,8 +648,10 @@ public class FirstFitAllocatorTest {
         .thenReturn(new VMInstanceDetailVO(0L, "tpmversion", "2.0", true));
     when(hostDaoMock.listByHostCapability(type, clusterId, podId, dcId, Host.HOST_UEFI_ENABLE))
         .thenReturn(new ArrayList<>(Arrays.asList(host1, host2, host3)));
-    when(hostDaoMock.listByHostCapability(type, clusterId, podId, dcId, Host.HOST_TPM_ENABLE))
-        .thenReturn(new ArrayList<>(Arrays.asList(host2, host3)));
+    when(host1.getId()).thenReturn(1L);
+    when(host2.getId()).thenReturn(2L);
+    when(hostDetailsDaoMock.findDetails(2L)).thenReturn(Map.of(
+        "host.tpm.enable", "true", "host.tpm.models", "tpm-tis", "host.tpm.versions", "2.0"));
     try (org.mockito.MockedStatic<com.cloud.api.ApiDBUtils> api = Mockito.mockStatic(com.cloud.api.ApiDBUtils.class)) {
       api.when(() -> com.cloud.api.ApiDBUtils.getTemplateGuestOSName(vmTemplateVO)).thenReturn("Windows Server 2025 (64-bit)");
       Assert.assertEquals(List.of(host2), firstFitAllocatorSpy.retrieveHosts(virtualMachineProfile, type,
@@ -656,4 +664,30 @@ public class FirstFitAllocatorTest {
     }
   }
 
+
+  @Test
+  public void noneDoesNotFilterHostsOrQueryCapabilities() {
+    when(userVmDetailsDaoMock.findDetail(virtualMachineProfile.getId(), "tpmversion"))
+        .thenReturn(new VMInstanceDetailVO(0L, "tpmversion", "NONE", true));
+    List<HostVO> candidates = new ArrayList<>(Arrays.asList(host1, host2));
+    firstFitAllocatorSpy.filterHostsWithTpmEnabled(type, virtualMachineProfile, clusterId, podId, dcId, candidates);
+    Assert.assertEquals(Arrays.asList(host1, host2), candidates);
+    Mockito.verifyNoInteractions(hostDetailsDaoMock);
+  }
+
+  @Test
+  public void restartKeepsTpmStateOnPreviousHost() {
+    com.cloud.vm.VirtualMachine vm = mock(com.cloud.vm.VirtualMachine.class);
+    when(virtualMachineProfile.getVirtualMachine()).thenReturn(vm);
+    when(vm.getLastHostId()).thenReturn(2L);
+    when(userVmDetailsDaoMock.findDetail(virtualMachineProfile.getId(), "tpmversion"))
+        .thenReturn(new VMInstanceDetailVO(0L, "tpmversion", "2.0", true));
+    when(host1.getId()).thenReturn(1L);
+    when(host2.getId()).thenReturn(2L);
+    when(hostDetailsDaoMock.findDetails(2L)).thenReturn(Map.of(
+        "host.tpm.enable", "true", "host.tpm.models", "tpm-tis", "host.tpm.versions", "2.0"));
+    List<HostVO> candidates = new ArrayList<>(Arrays.asList(host1, host2));
+    firstFitAllocatorSpy.filterHostsWithTpmEnabled(type, virtualMachineProfile, clusterId, podId, dcId, candidates);
+    Assert.assertEquals(List.of(host2), candidates);
+  }
 }

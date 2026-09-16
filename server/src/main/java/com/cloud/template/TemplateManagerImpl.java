@@ -706,6 +706,19 @@ public class TemplateManagerImpl extends ManagerBase implements TemplateManager,
     }
 
     @Override
+    public void validateIsoDestination(VirtualMachine vm, long hostId) throws com.cloud.exception.InsufficientServerCapacityException {
+        if (vm.getType() != VirtualMachine.Type.User) {
+            return;
+        }
+        UserVmVO userVm = _userVmDao.findById(vm.getId());
+        if (userVm != null && slotsNeededFor(loadAttachedIsoSlots(userVm)) > effectiveMaxCdroms(vm, hostId)) {
+            throw new com.cloud.exception.InsufficientServerCapacityException(
+                    "Destination cannot accommodate the attached ISOs (cluster limit, host capability or ConfigDrive)",
+                    Host.class, hostId);
+        }
+    }
+
+    @Override
     public void prepareIsoForVmProfile(VirtualMachineProfile profile, DeployDestination dest) {
         UserVmVO vm = _userVmDao.findById(profile.getId());
         Map<Integer, Long> slotToIsoId = loadAttachedIsoSlots(vm);
@@ -713,7 +726,11 @@ public class TemplateManagerImpl extends ManagerBase implements TemplateManager,
 
         // Pre-allocate every cdrom slot at boot. QEMU/IDE refuses to hot-add new cdrom drives, so
         // runtime attachIso can only media-swap into a slot the domain already owns.
-        int totalSlots = Math.max(effectiveMaxCdroms(vm, dest.getHost().getId()), slotsNeededFor(slotToIsoId));
+        int effectiveMax = effectiveMaxCdroms(vm, dest.getHost().getId());
+        if (slotsNeededFor(slotToIsoId) > effectiveMax) {
+            throw new InvalidParameterValueException("Attached ISO slots exceed the destination host/cluster CD-ROM limit: " + effectiveMax);
+        }
+        int totalSlots = effectiveMax;
         if (usesConfigDrive(vm) && slotToIsoId.containsKey(CDROM_PRIMARY_DEVICE_SEQ + 1)) {
             throw new InvalidParameterValueException("The second CD-ROM slot is reserved for ConfigDrive; detach the extra ISO before starting or migrating this Instance.");
         }

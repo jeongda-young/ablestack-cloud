@@ -63,6 +63,15 @@ public final class LibvirtPrepareForMigrationCommandWrapper extends CommandWrapp
             return handleRollback(command, libvirtComputingResource);
         }
 
+        try {
+            if (com.cloud.vm.KvmTpmConfig.resolve(vm.getDetails(), false).isEnabled()) {
+                return new PrepareForMigrationAnswer(command, "vTPM state transfer between hosts is not supported; migration is blocked to preserve TPM identity.");
+            }
+            libvirtComputingResource.validateTpmForHost(vm);
+        } catch (com.cloud.exception.InvalidParameterValueException e) {
+            return new PrepareForMigrationAnswer(command, e.getMessage());
+        }
+
         if (logger.isDebugEnabled()) {
             logger.debug("Preparing host for migrating " + vm);
         }

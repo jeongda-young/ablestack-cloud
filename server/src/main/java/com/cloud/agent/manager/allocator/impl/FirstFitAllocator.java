@@ -204,11 +204,21 @@ public class FirstFitAllocator extends BaseAllocator {
     }
 
     protected void filterHostsWithTpmEnabled(Type type, VirtualMachineProfile vmProfile, Long clusterId, Long podId, long dcId, List<HostVO> clusterHosts) {
-        VMInstanceDetailVO detail = vmInstanceDetailsDao.findDetail(vmProfile.getId(), "tpmversion");
-        if (detail != null && StringUtils.isNotBlank(detail.getValue())
-                && !ApiConstants.TpmVersion.NONE.name().equalsIgnoreCase(detail.getValue())) {
-            clusterHosts.retainAll(hostDao.listByHostCapability(type, clusterId, podId, dcId, Host.HOST_TPM_ENABLE));
+        Map<String, String> details = new java.util.HashMap<>();
+        for (String key : java.util.List.of(com.cloud.vm.KvmTpmConfig.LEGACY, com.cloud.vm.KvmTpmConfig.MODEL, com.cloud.vm.KvmTpmConfig.VERSION)) {
+            VMInstanceDetailVO detail = vmInstanceDetailsDao.findDetail(vmProfile.getId(), key);
+            if (detail != null) { details.put(key, detail.getValue()); }
         }
+        com.cloud.vm.KvmTpmConfig tpm = com.cloud.vm.KvmTpmConfig.resolve(details, false);
+        if (!tpm.isEnabled()) { return; }
+        int before = clusterHosts.size();
+        Long stateHost = vmProfile.getVirtualMachine().getLastHostId();
+        if (stateHost != null) {
+            clusterHosts.removeIf(host -> host.getId() != stateHost.longValue());
+        }
+        clusterHosts.removeIf(host -> !tpm.supportedBy(_hostDetailsDao.findDetails(host.getId())));
+        logger.debug("TPM filter for VM {}: model={}, version={}, candidates {} -> {}",
+                vmProfile.getId(), tpm.getModel(), tpm.getVersion(), before, clusterHosts.size());
     }
 
     protected List<Host> allocateTo(VirtualMachineProfile vmProfile, DeploymentPlan plan, ServiceOffering offering, VMTemplateVO template, ExcludeList avoid, List<? extends Host> hosts, int returnUpTo,

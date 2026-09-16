@@ -531,6 +531,47 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
     private DomainDao _domainDao;
     @Inject
     private UserVmDao _vmDao;
+
+    @Inject
+    private com.cloud.vm.dao.VmIsoMapDao deployIsoMapDao;
+
+    private static final class DeployIsoSelection {
+        final long primaryId;
+        final List<Long> additionalIds;
+        DeployIsoSelection(long primaryId, List<Long> additionalIds) {
+            this.primaryId = primaryId;
+            this.additionalIds = List.copyOf(additionalIds);
+        }
+    }
+
+    protected void validateAdditionalDeployIsos(DeployVMCmd cmd, VirtualMachineTemplate template, Account owner) {
+        if (cmd.getAdditionalIsoIds().isEmpty()) {
+            return;
+        }
+        if (cmd.isVolumeOrSnapshotProvided() || cmd.isBlankInstance() || template.getFormat() != ImageFormat.ISO
+                || !template.isBootable() || cmd.getHypervisor() != HypervisorType.KVM) {
+            throw new InvalidParameterValueException("additionalisoids requires a bootable ISO deployment on KVM");
+        }
+        if (cmd.getAdditionalIsoIds().size() != 1 || cmd.getAdditionalIsoIds().contains(template.getId())) {
+            throw new InvalidParameterValueException("Select one additional ISO distinct from the installation ISO");
+        }
+        String bootOrder = cmd.getDetails().get(VmDetailConstants.BOOT_ORDER);
+        if (StringUtils.isNotBlank(bootOrder) && !"cdrom".equalsIgnoreCase(bootOrder)) {
+            throw new InvalidParameterValueException("Additional ISO deployment requires bootOrder=cdrom");
+        }
+        for (Long id : cmd.getAdditionalIsoIds()) {
+            VMTemplateVO iso = id == null ? null : _templateDao.findById(id);
+            if (iso == null || iso.getRemoved() != null || iso.getFormat() != ImageFormat.ISO || iso.isBootable()) {
+                throw new InvalidParameterValueException("Additional ISO must be an available non-bootable ISO");
+            }
+            _accountMgr.checkAccess(CallContext.current().getCallingAccount(), null, false, iso);
+            _accountMgr.checkAccess(owner, null, false, iso);
+            if (_templateZoneDao.findByZoneTemplate(cmd.getZoneId(), id) == null) {
+                throw new InvalidParameterValueException("Additional ISO is not available in the deployment zone");
+            }
+        }
+    }
+
     @Inject
     private VolumeDao _volsDao;
     @Inject
@@ -3408,6 +3449,13 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
                 .map(item -> (item).trim())
                 .collect(Collectors.toList());
         List<VMInstanceDetailVO> existingDetails = vmInstanceDetailsDao.listDetails(id);
+        if (HypervisorType.KVM.equals(vmInstance.getHypervisorType())) {
+            Map<String, String> tpmDetails = new HashMap<>();
+            for (VMInstanceDetailVO detail : existingDetails) {
+                tpmDetails.put(detail.getName(), detail.getValue());
+            }
+            KvmTpmConfig.validateUpdate(tpmDetails, details, cleanupDetails);
+        }
         if (cleanupDetails){
             if (template != null && template.isDeployAsIs()) {
                 throw new InvalidParameterValueException("Detail settings are read from OVA, it cannot be cleaned up by API call.");
@@ -5473,6 +5521,9 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
 
         setVncPasswordForKvmIfAvailable(customParameters, vm);
 
+        Map<String, String> normalizedTpm = HypervisorType.KVM.equals(hypervisorType) && !isImport
+                ? KvmTpmConfig.forCreation(template.getDetails(), customParameters) : null;
+
         vm.setUserVmType(vmType);
         _vmDao.persist(vm);
         for (String key : customParameters.keySet()) {
@@ -5513,6 +5564,12 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
             } else {
                 vm.setDetail(key, customParameters.get(key));
             }
+        }
+        if (normalizedTpm != null) {
+            vm.details.keySet().removeIf(KvmTpmConfig::isKey);
+            normalizedTpm.forEach((key, value) -> {
+                if (KvmTpmConfig.isKey(key)) { vm.setDetail(key, value); }
+            });
         }
         vm.setDetail(VmDetailConstants.DEPLOY_VM, "true");
 
@@ -5704,12 +5761,34 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
                                   Map<String, String> userVmOVFPropertiesMap, final boolean dynamicScalingEnabled, String vmType, final Long rootDiskOfferingId, final Long rootDiskKmsKeyId, String sshkeypairs,
                                   List<VmDiskInfo> dataDiskInfoList, Volume volume, Snapshot snapshot) throws InsufficientCapacityException {
         Long guestOsId = getGuestOsIdIfNeeded(template);
+        DeployIsoSelection selection = (DeployIsoSelection) CallContext.current().getContextParameter(DeployIsoSelection.class);
+        if (selection == null) {
         return commitUserVm(false, zone, null, null, template, hostName, displayName, owner,
                 diskOfferingId, diskSize, userData, userDataId, userDataDetails, isDisplayVm, keyboard,
                 accountId, userId, offering, isIso, guestOsId, sshPublicKeys, networkNicMap,
                 id, instanceName, uuidName, hypervisorType, customParameters,
                 extraDhcpOptionMap, dataDiskTemplateToDiskOfferingMap,
                 userVmOVFPropertiesMap, null, dynamicScalingEnabled, vmType, rootDiskOfferingId, rootDiskKmsKeyId, sshkeypairs, dataDiskInfoList, volume, snapshot);
+        }
+        if (!isIso || selection.primaryId != template.getId()) {
+            throw new InvalidParameterValueException("Additional ISO selection does not match deployment source");
+        }
+        return Transaction.execute((TransactionCallbackWithException<UserVmVO, InsufficientCapacityException>) status -> {
+            UserVmVO created = commitUserVm(false, zone, null, null, template, hostName, displayName, owner,
+                    diskOfferingId, diskSize, userData, userDataId, userDataDetails, isDisplayVm, keyboard,
+                    accountId, userId, offering, isIso, guestOsId, sshPublicKeys, networkNicMap,
+                    id, instanceName, uuidName, hypervisorType, customParameters,
+                    extraDhcpOptionMap, dataDiskTemplateToDiskOfferingMap,
+                    userVmOVFPropertiesMap, null, dynamicScalingEnabled, vmType, rootDiskOfferingId, rootDiskKmsKeyId, sshkeypairs, dataDiskInfoList, volume, snapshot);
+            int slot = TemplateManager.CDROM_PRIMARY_DEVICE_SEQ + 1;
+            for (Long isoId : selection.additionalIds) {
+                deployIsoMapDao.persist(new VmIsoMapVO(created.getId(), isoId, slot++));
+            }
+            created.setDetail(VmDetailConstants.BOOT_ORDER, "cdrom");
+            created.setDetail("deploy.additional.iso", "true");
+            _vmDao.saveDetails(created);
+            return created;
+        });
     }
 
     protected Long getGuestOsIdIfNeeded(VirtualMachineTemplate template) {
@@ -7156,8 +7235,24 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
             networkIds = new ArrayList<>(userVmNetworkMap.values());
         }
 
-        return createVirtualMachine(cmd, zone, owner, serviceOffering, template, cmd.getHypervisor(), diskOfferingId, cmd.getSize(), overrideDiskOfferingId, dataDiskInfoList,
-                networkIds, cmd.getIpToNetworkMap(), volume, snapshot);
+        validateAdditionalDeployIsos(cmd, template, owner);
+        // Request-scoped, validated data; never read ISO IDs from user VM details.
+        Object previousSelection = CallContext.current().getContextParameter(DeployIsoSelection.class);
+        try {
+            if (!cmd.getAdditionalIsoIds().isEmpty()) {
+                CallContext.current().putContextParameter(DeployIsoSelection.class,
+                        new DeployIsoSelection(template.getId(), cmd.getAdditionalIsoIds()));
+            } else {
+                CallContext.current().removeContextParameter(DeployIsoSelection.class);
+            }
+            return createVirtualMachine(cmd, zone, owner, serviceOffering, template, cmd.getHypervisor(), diskOfferingId, cmd.getSize(), overrideDiskOfferingId, dataDiskInfoList,
+                    networkIds, cmd.getIpToNetworkMap(), volume, snapshot);
+        } finally {
+            CallContext.current().removeContextParameter(DeployIsoSelection.class);
+            if (previousSelection != null) {
+                CallContext.current().putContextParameter(DeployIsoSelection.class, previousSelection);
+            }
+        }
     }
 
     private UserVm createVirtualMachine(BaseDeployVMCmd cmd, DataCenter zone, Account owner, ServiceOffering serviceOffering, VirtualMachineTemplate template,

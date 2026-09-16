@@ -208,6 +208,14 @@
                         </a-form-item>
                       </div>
                     </a-card>
+                    <additional-iso-selection
+                      v-if="imageType === 'isoid'"
+                      :zone-id="form.zoneid"
+                      :primary-id="form.isoid"
+                      :owner="owner"
+                      :project-id="$store.getters.project?.id"
+                      :supported="!!apiParams?.additionalisoids && form.hypervisor === 'KVM'"
+                      @change="additionalIsoSelection = $event" />
                     <a-form-item class="form-item-hidden">
                       <a-input v-model:value="form.templateid" />
                     </a-form-item>
@@ -627,9 +635,10 @@
                         </a-select-option>
                       </a-select>
                     </a-form-item>
-                    <a-form-item :label="$t('label.tpm')" name="tpmversion" ref="tpmversion">
+                    <a-form-item v-if="hypervisor === 'KVM'" :label="$t('label.tpm')" name="tpmversion" ref="tpmversion">
                       <a-select
                         v-model:value="form.tpmversion"
+                        @change="form.tpmmodel = 'tpm-tis'"
                         showSearch
                         optionFilterProp="label"
                         :filterOption="filterOption">
@@ -637,6 +646,9 @@
                           {{ tpmversion.description }}
                         </a-select-option>
                       </a-select>
+                    </a-form-item>
+                    <a-form-item v-if="hypervisor === 'KVM' && ['V1_2', 'V2_0'].includes(form.tpmversion)" :label="$t('label.tpm.model')" name="tpmmodel">
+                      <a-select v-model:value="form.tpmmodel" :options="form.tpmversion === 'V1_2' ? [{ value: 'tpm-tis', label: 'TIS' }] : [{ value: 'tpm-tis', label: 'TIS' }, { value: 'tpm-crb', label: 'CRB' }]" />
                     </a-form-item>
                     <a-form-item
                       :label="$t('label.bootintosetup')"
@@ -972,6 +984,8 @@
 </template>
 
 <script>
+import { deploymentTpmParams } from '@/utils/tpm'
+import AdditionalIsoSelection from './AdditionalIsoSelection.vue'
 import { ref, reactive, toRaw, nextTick, h } from 'vue'
 import { Button, message } from 'ant-design-vue'
 import { getAPI, postAPI } from '@/api'
@@ -1008,6 +1022,7 @@ import DeployInstanceBackupSelection from '@views/compute/wizard/DeployInstanceB
 export default {
   name: 'Wizard',
   components: {
+    AdditionalIsoSelection,
     OwnershipSelection,
     InfoCard,
     DeployButtons,
@@ -1052,6 +1067,7 @@ export default {
       isZoneSelectedMultiArch: false,
       dynamicscalingenabled: true,
       imageType: 'templateid',
+      additionalIsoSelection: { enabled: false, ids: [], valid: true },
       imageSearchFilters: null,
       templateKey: 0,
       showRegisteredUserdata: true,
@@ -2034,6 +2050,7 @@ export default {
         ['name', 'keyboard', 'boottype', 'bootmode', 'userdata', 'tpmversion', 'iothreadsenabled', 'iodriverpolicy', 'nicmultiqueuenumber', 'nicpackedvirtqueues'].forEach(this.fillValue)
         this.form.boottype = this.defaultBootType ? this.defaultBootType : this.options.bootTypes && this.options.bootTypes.length > 0 ? this.options.bootTypes[0].id : undefined
         this.form.bootmode = this.defaultBootMode ? this.defaultBootMode : this.options.bootModes && this.options.bootModes.length > 0 ? this.options.bootModes[0].id : undefined
+        this.form.tpmmodel = 'tpm-tis'
         this.form.tpmversion = this.defaultTPM ? this.defaultTPM : this.options.tpmversion && this.options.tpmversion.length > 0 ? this.options.tpmversion[0].id : undefined
         this.form.machinecompatibility = this.form.machinecompatibility || 'standard'
         this.instanceConfig = toRaw(this.form)
@@ -2080,7 +2097,9 @@ export default {
     },
     fetchTpm () {
       this.options.tpmversion = [
-        { id: 'NONE', description: 'Disabled' },
+        { id: 'INHERIT', description: this.$t('label.tpm.inherit') },
+        { id: 'NONE', description: this.$t('label.disabled') },
+        { id: 'V1_2', description: 'TPM Version 1.2' },
         { id: 'V2_0', description: 'TPM Version 2.0' }
       ]
     },
@@ -2450,6 +2469,7 @@ export default {
       this.updateImages()
     },
     changeImageType (imageType) {
+      this.additionalIsoSelection = { enabled: false, ids: [], valid: true }
       this.imageType = imageType
       this.updateImages()
     },
@@ -2462,6 +2482,13 @@ export default {
       if (this.loading.deploy) return
       this.formRef.value.validate().then(async () => {
         const values = toRaw(this.form)
+        if (this.imageType === 'isoid' && this.additionalIsoSelection.enabled && !this.additionalIsoSelection.valid) {
+          this.$notification.error({
+            message: this.$t('message.request.failed'),
+            description: this.$t('message.additional.iso.required')
+          })
+          return
+        }
         if (!values.templateid && !values.isoid && !values.volumeid && !values.snapshotid) {
           this.$notification.error({
             message: this.$t('message.request.failed'),
@@ -2505,7 +2532,7 @@ export default {
           deployVmData.boottype = values.boottype
           deployVmData.bootmode = values.bootmode
         }
-        deployVmData.tpmversion = values.tpmversion
+        Object.assign(deployVmData, deploymentTpmParams(this.hypervisor, values))
         deployVmData.dynamicscalingenabled = values.dynamicscalingenabled
         deployVmData.iothreadsenabled = values.iothreadsenabled
         deployVmData.iodriverpolicy = values.iodriverpolicy
@@ -2536,6 +2563,9 @@ export default {
           deployVmData.snapshotid = values.snapshotid
         } else {
           deployVmData.templateid = values.isoid
+          if (this.additionalIsoSelection.enabled) {
+            deployVmData.additionalisoids = this.additionalIsoSelection.ids.join(',')
+          }
         }
 
         if (this.showRootDiskSizeChanger && values.rootdisksize && values.rootdisksize > 0) {
