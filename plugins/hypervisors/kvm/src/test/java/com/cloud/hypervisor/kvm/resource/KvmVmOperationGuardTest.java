@@ -20,8 +20,13 @@
 package com.cloud.hypervisor.kvm.resource;
 
 import org.junit.Test;
-import static org.junit.Assert.*;
-import java.nio.file.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotEquals;
+import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.fail;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.UUID;
 import java.io.IOException;
 
@@ -94,7 +99,7 @@ public class KvmVmOperationGuardTest {
         long children = ProcessHandle.current().descendants().filter(ProcessHandle::isAlive).count();
         Thread.currentThread().interrupt();
         try { KvmVmOperationGuard.probe(5000, "sleep", "10"); fail("interrupt expected"); }
-        catch (InterruptedException expected) { }
+        catch (InterruptedException expected) { assertTrue(Thread.currentThread().isInterrupted()); }
         finally { Thread.interrupted(); }
         assertEquals(children, ProcessHandle.current().descendants().filter(ProcessHandle::isAlive).count());
     }

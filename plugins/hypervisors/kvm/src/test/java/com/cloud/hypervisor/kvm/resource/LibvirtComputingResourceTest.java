@@ -19,8 +19,6 @@
 
 package com.cloud.hypervisor.kvm.resource;
 
-import com.cloud.hypervisor.kvm.resource.KvmVmOperationGuard;
-import com.cloud.hypervisor.kvm.resource.KvmBoundedStats;
 import org.junit.After;
 
 import static org.junit.Assert.assertEquals;

@@ -19,11 +19,28 @@
 
 package com.cloud.hypervisor.kvm.resource;
 
-import java.io.*;
-import java.nio.file.*;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.file.DirectoryStream;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
-import java.util.*;
-import java.util.concurrent.*;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.Set;
+import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
+import java.util.concurrent.Semaphore;
+import java.util.concurrent.TimeUnit;
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.libvirt.Connect;
@@ -105,6 +122,7 @@ public final class KvmVmOperationGuard implements AutoCloseable {
                 LOG.info("VM operation acquire vmUuid={} kind={} operationId={}", uuid, kind, record.get("operationId"));
             }
         } catch (Exception e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             releaseProcess(lock);
             throw new IOException("Cannot protect VM " + uuid + ": " + e.getMessage(), e);
         }
@@ -181,6 +199,9 @@ public final class KvmVmOperationGuard implements AutoCloseable {
             if (!process.waitFor(timeoutMs, TimeUnit.MILLISECONDS)) throw new IOException("Probe timeout");
             if (process.exitValue() != 0 || Files.size(output) > 1024 * 1024) throw new IOException("Probe failed or output too large");
             return Files.readString(output);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw e;
         } finally {
             if (process != null && process.isAlive()) {
                 terminate(process);

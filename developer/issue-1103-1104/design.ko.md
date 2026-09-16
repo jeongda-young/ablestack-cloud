@@ -76,3 +76,5 @@ rollback은 활성 보호 작업이 없음을 확인한 다음 백업 JAR와 she
 | InfoCard / en, ko_KR locale | 마지막 수집 시각과 STALE 표시. theme 기본 tag를 사용하고 고정 흰 배경/글자색을 추가하지 않음 |
 | LibvirtComputingResource | CPU/network/disk 누적 카운터 감소 시 baseline을 교체하고 첫 샘플 생략. 복원·재시작 후 음수 delta 또는 잘못된 0 샘플을 방지. 다음 정상 주기부터 수집 재개 |
 | StatsCollectorTest | persisted timestamp와 STALE→FRESH 전이를 확인하고 freshness 조회가 DB에 가짜 샘플을 추가하지 않음을 검증 |
+
+의존 API 모듈의 기존 `KvmTpmConfigTest` wildcard import도 명시적 assert import로 바꿨다. Checkstyle을 생략하지 않고 통과시키기 위한 테스트 소스 정리이며 TPM 동작·단언은 변경하지 않는다.
