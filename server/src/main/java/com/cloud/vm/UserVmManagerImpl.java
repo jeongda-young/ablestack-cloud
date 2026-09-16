@@ -86,11 +86,9 @@ import org.apache.cloudstack.annotation.AnnotationService;
 import org.apache.cloudstack.annotation.dao.AnnotationDao;
 import org.apache.cloudstack.api.ApiCommandResourceType;
 import org.apache.cloudstack.api.ApiConstants;
-import org.apache.cloudstack.api.ApiErrorCode;
 import org.apache.cloudstack.api.command.admin.vm.DeployVMVolumeCmdByAdmin;
 import org.apache.cloudstack.api.BaseCmd;
 import org.apache.cloudstack.api.BaseCmd.HTTPMethod;
-import org.apache.cloudstack.api.ServerApiException;
 import org.apache.cloudstack.api.command.admin.vm.AssignVMCmd;
 import org.apache.cloudstack.api.command.admin.vm.CreateVMFromBackupCmdByAdmin;
 import org.apache.cloudstack.api.command.admin.vm.DeployVMCmdByAdmin;
@@ -11259,7 +11257,6 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         checkNoActiveBackupForClone(curVm.getId());
         Account curVmAccount = _accountDao.findById(curVm.getAccountId());
         long zoneId = cmd.getTargetVM().getDataCenterId();
-        String clone_type = cmd.getType();
         String orgName = cmd.getName();
 
         Account owner = _accountService.getAccount(cmd.getEntityOwnerId());
@@ -11274,151 +11271,256 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         if (isSharedMountPointQcow2CloneCandidate(curVm.getId())) {
             return cloneVirtualMachineUsingSharedMountPointFastClone(cmd, curVm, curVmAccount, zoneId, orgName);
         }
-        logger.info("Clone VM >> Creating snapshot for root volume creation");
+        if (cmd.getCount() == null || cmd.getCount() < 1) {
+            throw new InvalidParameterValueException("The number of VM clones must be at least one");
+        }
+        logger.info("Clone VM >> Creating snapshot for root and data volume creation");
         VMSnapshot vmSnapshot = null;
+        boolean cloningStarted = false;
+        UserVm lastCloneVm = null;
         try {
             vmSnapshot = _vmSnapshotMgr.allocVMSnapshot(curVm.getId(), null, null, false);
             if (vmSnapshot == null) {
-                throw new ServerApiException(ApiErrorCode.INTERNAL_ERROR, "Failed to create vm snapshot");
+                throw new CloudRuntimeException("Failed to allocate VM snapshot for cloning VM " + curVm.getId());
             }
-            vmSnapshot = _vmSnapshotMgr.createVMSnapshot(curVm.getId(), vmSnapshot.getId(), false);
-            if (vmSnapshot == null) {
-                throw new ServerApiException(ApiErrorCode.INTERNAL_ERROR, "Failed to create vm snapshot due to an internal error creating snapshot for vm " + curVm.getId());
+            VMSnapshot createdSnapshot = _vmSnapshotMgr.createVMSnapshot(curVm.getId(), vmSnapshot.getId(), false);
+            if (createdSnapshot == null) {
+                throw new CloudRuntimeException("Failed to create VM snapshot for cloning VM " + curVm.getId());
             }
+            vmSnapshot = createdSnapshot;
 
-        } catch (CloudRuntimeException e) {
-            if(vmSnapshot != null){
-                _vmSnapshotMgr.deleteVMSnapshot(vmSnapshot.getId());
-            }
-            throw new ServerApiException(ApiErrorCode.INTERNAL_ERROR, "Failed to create vm snapshot: " + e.getMessage(), e);
-        }
+            // Validate every disk before creating the first clone. VM snapshot details also
+            // contain CPU, memory and firmware settings, which are not snapshot IDs.
+            Map<VolumeVO, SnapshotVO> volumeSnapshots = getCloneVolumeSnapshots(curVm.getId(), vmSnapshot.getId());
+            int count = cmd.getCount();
+            for (int index = 1; index <= count; index++) {
+                cmd.setName(orgName + (count > 1 ? Integer.toString(index) : ""));
+                cloningStarted = true;
+                lastCloneVm = cloneVmFromVolumeSnapshots(cmd, curVm, curVmAccount, zoneId, volumeSnapshots);
 
-        List<VMSnapshotDetailsVO> listSnapshots = vmSnapshotDetailsDao.listDetails(vmSnapshot.getId());
-        if (CollectionUtils.isEmpty(listSnapshots)) {
-            throw new CloudRuntimeException("Could not find volume snapshots mapped to VM snapshot");
-        }
-
-        Integer countOfCloneVM = cmd.getCount();
-        for (int cnt = 1; cnt <= countOfCloneVM; cnt++) {
-            cmd.setName(orgName + (countOfCloneVM > 1 ? Integer.toString(cnt) : ""));
-            for (VMSnapshotDetailsVO vmSnapshotDetailsVO : listSnapshots) {
-                SnapshotVO snapVO = _snapshotDao.findById(Long.parseLong(vmSnapshotDetailsVO.getValue()));
-                if (snapVO == null) {
-                    throw new CloudRuntimeException("Could not find snapshot for VM snapshot");
+                if (index == count) {
+                    // Preserve the existing RBD snapshot/flatten lifecycle after all copies.
+                    cleanupCloneVMSnapshot(vmSnapshot.getId());
                 }
-
-                VolumeVO parentRootVolume = _volsDao.findByIdIncludingRemoved(snapVO.getVolumeId());
-                long diskOfferingId = snapVO.getDiskOfferingId();
-                DiskOfferingVO diskOffering = _diskOfferingDao.findById(diskOfferingId);
-                Long minIops = snapVO.getMinIops();
-                Long maxIops = snapVO.getMaxIops();
-                Long size = snapVO.getSize();
-                Storage.ProvisioningType provisioningType = diskOffering.getProvisioningType();
-                String rootVolumeName = cmd.getName() + "-" + parentRootVolume.getName();
-                if (parentRootVolume.getVolumeType() == Volume.Type.ROOT) {
-                    if (StringUtils.isNotBlank(clone_type)){
-                        snapVO.setCloneType(clone_type);
-                        _snapshotDao.update(snapVO.getId(), snapVO);
-                    }
-                    VolumeVO newVol = cloneVolumeFromSnapToDB(curVmAccount, true, zoneId, diskOfferingId, provisioningType, size, minIops, maxIops, parentRootVolume, rootVolumeName,
-                                                                        _uuidMgr.generateUuid(Volume.class, null), new HashMap<>(), Volume.Type.ROOT, 0L);
-                    VolumeVO rootVolume = (VolumeVO) _volumeService.cloneVolumeFromSnapshot(newVol, snapVO.getId(), curVm.getId());
-                    if (rootVolume == null) {
-                        throw new CloudRuntimeException("Creation of root volume is not queried. The virtual machine cannot be cloned!");
-                    }
-                    UserVm cloneVM = createCloneVM(cmd, rootVolume.getId());
-                    if (cloneVM == null) {
-                        throw new CloudRuntimeException("Unable to record the VM to DB!");
-                    }
-                    cmd.setEntityUuid(cloneVM.getUuid());
-                    cmd.setEntityId(cloneVM.getId());
-
-                    VolumeVO rootVolToUpdate = _volsDao.findById(rootVolume.getId());
-                    if (rootVolToUpdate != null) {
-                        rootVolToUpdate.setTemplateId(cloneVM.getTemplateId());
-                        _volsDao.update(rootVolume.getId(), rootVolToUpdate);
-                    }
-
-                    VMInstanceVO vmInstance = _vmInstanceDao.findById(cloneVM.getId());
-                    vmInstance.setGuestOSId(cmd.getTargetVM().getGuestOSId());
-                    _vmInstanceDao.update(cloneVM.getId(), vmInstance);
-                    break;
-                }
-            }
-
-            List<VolumeVO> createdVolumes = new ArrayList<>();
-            for (VMSnapshotDetailsVO vmSnapshotDetailsVO : listSnapshots) {
-                SnapshotVO snapVO = _snapshotDao.findById(Long.parseLong(vmSnapshotDetailsVO.getValue()));
-                if (snapVO == null) {
-                    throw new CloudRuntimeException("Could not find snapshot for VM snapshot");
-                }
-
-                VolumeVO parentDataDiskVolume = _volsDao.findByIdIncludingRemoved(snapVO.getVolumeId());
-                long diskOfferingId = snapVO.getDiskOfferingId();
-                DiskOfferingVO diskOffering = _diskOfferingDao.findById(diskOfferingId);
-                Long minIops = snapVO.getMinIops();
-                Long maxIops = snapVO.getMaxIops();
-                Long size = snapVO.getSize();
-                Storage.ProvisioningType provisioningType = diskOffering.getProvisioningType();
-                String dataVolumeName = cmd.getName() + "-" + parentDataDiskVolume.getName();
-
-                if (parentDataDiskVolume.getVolumeType() == Volume.Type.DATADISK) {
-                    if(StringUtils.isNotBlank(clone_type)){
-                        snapVO.setCloneType(clone_type);
-                        _snapshotDao.update(snapVO.getId(), snapVO);
-                    }
-                    VolumeVO newDataDiskVol = null;
-                    try {
-                        newDataDiskVol = cloneVolumeFromSnapToDB(curVmAccount, true, zoneId, diskOfferingId, provisioningType, size, minIops, maxIops, parentDataDiskVolume, dataVolumeName,
-                                                                            _uuidMgr.generateUuid(Volume.class, null), new HashMap<>(), Volume.Type.DATADISK, parentDataDiskVolume.getDeviceId());
-                        VolumeVO dataDiskVolume = (VolumeVO) _volumeService.cloneVolumeFromSnapshot(newDataDiskVol, snapVO.getId(), curVm.getId());
-                        if (dataDiskVolume == null) {
-                            throw new CloudRuntimeException("Creation of root volume is not queried. The virtual machine cannot be cloned!");
-                        }
-                        createdVolumes.add(dataDiskVolume);
-                        _volumeService.attachVolumeToVM(cmd.getEntityId(), dataDiskVolume.getId(), dataDiskVolume.getDeviceId(), false);
-                    } catch (CloudRuntimeException e){
-                        logger.warn("data disk process failed during clone, clearing the temporary resources...");
-                        for (VolumeVO dataDiskToClear : createdVolumes) {
-                            _volumeService.destroyVolume(dataDiskToClear.getId(), caller, true, false);
-                        }
-                        // clear the created disks
-                        if (newDataDiskVol != null) {
-                            _volumeService.destroyVolume(newDataDiskVol.getId(), caller, true, false);
-                        }
-                        destroyVm(cmd.getEntityId(), true);
-                        throw new CloudRuntimeException(e.getMessage());
-                    }
-                }
-            }
-
-            // start the VM if successfull
-            Long podId = curVm.getPodIdToDeployIn();
-            Long clusterId = null;
-            Long hostId = curVm.getHostId();
-            Map<VirtualMachineProfile.Param, Object> additonalParams =  new HashMap<>();
-            Map<Long, DiskOffering> diskOfferingMap = new HashMap<>();
-            if (MapUtils.isNotEmpty(curVm.getDetails()) && curVm.getDetails().containsKey(ApiConstants.BootType.UEFI.toString())) {
-                Map<String, String> map = curVm.getDetails();
-                additonalParams.put(VirtualMachineProfile.Param.UefiFlag, "Yes");
-                additonalParams.put(VirtualMachineProfile.Param.BootType, ApiConstants.BootType.UEFI.toString());
-                additonalParams.put(VirtualMachineProfile.Param.BootMode, map.get(ApiConstants.BootType.UEFI.toString()));
-            }
-
-            if (countOfCloneVM == cnt) {
-                _vmSnapshotMgr.deleteVMSnapshot(vmSnapshot.getId());
-
-                if (!cmd.getStartVm()) {
-                    return Optional.of(getUserVm(cmd.getEntityId()));
-                }
-                return Optional.of(startVirtualMachine(cmd.getEntityId(), podId, clusterId, hostId, diskOfferingMap, additonalParams, null));
-            } else {
                 if (cmd.getStartVm()) {
-                    startVirtualMachine(cmd.getEntityId(), podId, clusterId, hostId, diskOfferingMap, additonalParams, null);
+                    lastCloneVm = startVirtualMachine(lastCloneVm.getId(), curVm.getPodIdToDeployIn(), null, curVm.getHostId(),
+                            new HashMap<>(), getCloneVmAdditionalParams(curVm), null);
                 }
+            }
+            return Optional.ofNullable(lastCloneVm);
+        } catch (ResourceAllocationException | ResourceUnavailableException | InsufficientCapacityException | RuntimeException e) {
+            if (vmSnapshot != null) {
+                if (!cloningStarted) {
+                    cleanupCloneVMSnapshot(vmSnapshot.getId());
+                } else {
+                    // RBD clones may still depend on their parent until flatten/expunge
+                    // finishes. Do not delete their parent while rolling back a failed copy.
+                    logger.warn("Clone of VM [{}] failed after volume creation started. Snapshot [{}] may still have dependent volumes; "
+                            + "retain any remaining snapshot resources for recovery.", curVm.getId(), vmSnapshot.getId(), e);
+                }
+            }
+            throw e;
+        }
+    }
+
+    protected Map<VolumeVO, SnapshotVO> getCloneVolumeSnapshots(long vmId, long vmSnapshotId) {
+        List<VolumeVO> sourceVolumes = _volsDao.findByInstance(vmId).stream()
+                .filter(volume -> volume.getVolumeType() == Volume.Type.ROOT || volume.getVolumeType() == Volume.Type.DATADISK)
+                .sorted((left, right) -> {
+                    if (left.getVolumeType() != right.getVolumeType()) {
+                        return left.getVolumeType() == Volume.Type.ROOT ? -1 : 1;
+                    }
+                    return Long.compare(left.getDeviceId() == null ? 0L : left.getDeviceId(), right.getDeviceId() == null ? 0L : right.getDeviceId());
+                }).collect(Collectors.toList());
+        if (sourceVolumes.stream().filter(volume -> volume.getVolumeType() == Volume.Type.ROOT).count() != 1) {
+            throw new CloudRuntimeException("VM " + vmId + " must have exactly one ROOT volume to clone");
+        }
+        Map<Long, VolumeVO> sourceVolumesById = sourceVolumes.stream().collect(Collectors.toMap(VolumeVO::getId, volume -> volume));
+        Map<Long, SnapshotVO> snapshotsByVolumeId = new HashMap<>();
+        // RBD/legacy snapshots and file-based snapshots use different mapping keys.
+        // The SharedMountPoint fast-clone branch bypasses this snapshot-based path.
+        for (String detailName : Arrays.asList("kvmStorageSnapshot", "kvmFileBasedStorageSnapshot")) {
+            List<VMSnapshotDetailsVO> details = vmSnapshotDetailsDao.findDetails(vmSnapshotId, detailName);
+            if (details == null) {
+                continue;
+            }
+            for (VMSnapshotDetailsVO detail : details) {
+                long snapshotId;
+                try {
+                    snapshotId = Long.parseLong(detail.getValue());
+                } catch (NumberFormatException e) {
+                    throw new CloudRuntimeException("Invalid disk snapshot mapping for VM snapshot " + vmSnapshotId, e);
+                }
+                SnapshotVO snapshot = _snapshotDao.findById(snapshotId);
+                if (snapshot == null) {
+                    throw new CloudRuntimeException("Could not find volume snapshot " + snapshotId + " mapped to VM snapshot " + vmSnapshotId);
+                }
+                if (!sourceVolumesById.containsKey(snapshot.getVolumeId())) {
+                    throw new CloudRuntimeException("Snapshot " + snapshotId + " does not belong to a current ROOT or DATA volume of VM " + vmId);
+                }
+                if (snapshotsByVolumeId.putIfAbsent(snapshot.getVolumeId(), snapshot) != null) {
+                    throw new CloudRuntimeException("Multiple snapshots mapped to volume " + snapshot.getVolumeId() + " in VM snapshot " + vmSnapshotId);
+                }
+            }
+        }
+        Map<VolumeVO, SnapshotVO> result = new LinkedHashMap<>();
+        for (VolumeVO sourceVolume : sourceVolumes) {
+            SnapshotVO snapshot = snapshotsByVolumeId.get(sourceVolume.getId());
+            if (snapshot == null) {
+                throw new CloudRuntimeException("Missing " + sourceVolume.getVolumeType() + " volume snapshot for volume "
+                        + sourceVolume.getId() + " in VM snapshot " + vmSnapshotId + "; no VM clone was created");
+            }
+            result.put(sourceVolume, snapshot);
+        }
+        return result;
+    }
+
+    protected VolumeVO allocateSnapshotCloneVolume(CloneVMCmd cmd, Account owner, long zoneId, VolumeVO sourceVolume, SnapshotVO snapshot) {
+        DiskOfferingVO diskOffering = _diskOfferingDao.findById(snapshot.getDiskOfferingId());
+        if (diskOffering == null) {
+            throw new CloudRuntimeException("Unable to find disk offering " + snapshot.getDiskOfferingId() + " for snapshot " + snapshot.getId());
+        }
+        return cloneVolumeFromSnapToDB(owner, true, zoneId, snapshot.getDiskOfferingId(), diskOffering.getProvisioningType(), snapshot.getSize(),
+                snapshot.getMinIops(), snapshot.getMaxIops(), sourceVolume, cmd.getName() + "-" + sourceVolume.getName(),
+                _uuidMgr.generateUuid(Volume.class, null), new HashMap<>(), sourceVolume.getVolumeType(),
+                sourceVolume.getVolumeType() == Volume.Type.ROOT ? 0L : sourceVolume.getDeviceId());
+    }
+
+    protected UserVm cloneVmFromVolumeSnapshots(CloneVMCmd cmd, UserVmVO sourceVm, Account owner, long zoneId,
+            Map<VolumeVO, SnapshotVO> volumeSnapshots) throws ResourceAllocationException, ResourceUnavailableException, InsufficientCapacityException {
+        List<VolumeVO> allocatedVolumes = new ArrayList<>();
+        Long cloneVmId = null;
+        UserVm cloneVm = null;
+        try {
+            for (Map.Entry<VolumeVO, SnapshotVO> entry : volumeSnapshots.entrySet()) {
+                VolumeVO sourceVolume = entry.getKey();
+                SnapshotVO snapshot = entry.getValue();
+                if (StringUtils.isNotBlank(cmd.getType())) {
+                    snapshot.setCloneType(cmd.getType());
+                    _snapshotDao.update(snapshot.getId(), snapshot);
+                }
+                VolumeVO allocatedVolume = allocateSnapshotCloneVolume(cmd, owner, zoneId, sourceVolume, snapshot);
+                if (allocatedVolume == null) {
+                    throw new CloudRuntimeException("Unable to allocate clone volume for source volume " + sourceVolume.getId());
+                }
+                allocatedVolumes.add(allocatedVolume);
+                VolumeVO clonedVolume = (VolumeVO) _volumeService.cloneVolumeFromSnapshot(allocatedVolume, snapshot.getId(), sourceVm.getId());
+                if (clonedVolume == null) {
+                    throw new CloudRuntimeException("Unable to clone " + sourceVolume.getVolumeType() + " volume " + sourceVolume.getId());
+                }
+                if (sourceVolume.getVolumeType() == Volume.Type.ROOT) {
+                    cloneVm = createCloneVM(cmd, clonedVolume.getId());
+                    if (cloneVm == null || cloneVm.getId() == sourceVm.getId()) {
+                        throw new CloudRuntimeException("Unable to create a new VM for the cloned ROOT volume");
+                    }
+                    cloneVmId = cloneVm.getId();
+                    cmd.setEntityUuid(cloneVm.getUuid());
+                    cmd.setEntityId(cloneVmId);
+                    VolumeVO rootVolume = _volsDao.findById(clonedVolume.getId());
+                    if (rootVolume != null) {
+                        rootVolume.setTemplateId(cloneVm.getTemplateId());
+                        _volsDao.update(rootVolume.getId(), rootVolume);
+                    }
+                    VMInstanceVO vmInstance = _vmInstanceDao.findById(cloneVmId);
+                    vmInstance.setGuestOSId(sourceVm.getGuestOSId());
+                    _vmInstanceDao.update(cloneVmId, vmInstance);
+                } else {
+                    if (cloneVmId == null) {
+                        throw new CloudRuntimeException("Cannot attach cloned DATA volume before creating the cloned VM");
+                    }
+                    Volume attachedVolume = _volumeService.attachVolumeToVM(cloneVmId, clonedVolume.getId(), sourceVolume.getDeviceId(), false);
+                    if (attachedVolume == null || !Objects.equals(attachedVolume.getInstanceId(), cloneVmId)) {
+                        throw new CloudRuntimeException("Failed to attach cloned DATA volume " + clonedVolume.getId() + " to VM " + cloneVmId);
+                    }
+                }
+            }
+            if (cloneVm == null) {
+                throw new CloudRuntimeException("No ROOT volume was cloned for VM " + sourceVm.getId());
+            }
+            return cloneVm;
+        } catch (ResourceAllocationException | ResourceUnavailableException | InsufficientCapacityException | RuntimeException e) {
+            if (cloneVmId == null) {
+                // VM allocation can persist the VM and attach ROOT before it throws.
+                // Recover only through the ROOT allocated by this clone, never cmd.entityId.
+                cloneVmId = findIncompleteSnapshotCloneVmId(sourceVm, allocatedVolumes);
+            }
+            cleanupFailedSnapshotClone(cloneVmId, allocatedVolumes, CallContext.current().getCallingAccount());
+            throw e;
+        }
+    }
+
+    protected Long findIncompleteSnapshotCloneVmId(UserVmVO sourceVm, List<VolumeVO> allocatedVolumes) {
+        for (VolumeVO allocatedVolume : allocatedVolumes) {
+            if (allocatedVolume.getVolumeType() != Volume.Type.ROOT) {
+                continue;
+            }
+            try {
+                VolumeVO rootVolume = _volsDao.findById(allocatedVolume.getId());
+                if (rootVolume == null || rootVolume.getInstanceId() == null || rootVolume.getInstanceId() == sourceVm.getId()) {
+                    continue;
+                }
+                UserVmVO incompleteVm = _vmDao.findById(rootVolume.getInstanceId());
+                if (incompleteVm == null || incompleteVm.getRemoved() != null || incompleteVm.getAccountId() != sourceVm.getAccountId()
+                        || (incompleteVm.getState() != State.Stopped && incompleteVm.getState() != State.Error)) {
+                    continue;
+                }
+                List<VolumeVO> vmRootVolumes = _volsDao.findByInstanceAndType(incompleteVm.getId(), Volume.Type.ROOT);
+                if (vmRootVolumes.size() == 1 && vmRootVolumes.get(0).getId() == allocatedVolume.getId()) {
+                    return incompleteVm.getId();
+                }
+            } catch (Exception e) {
+                logger.warn("Unable to identify incomplete cloned VM from ROOT volume [{}]. Manual cleanup may be required.", allocatedVolume.getId(), e);
             }
         }
         return null;
+    }
+
+    protected void cleanupFailedSnapshotClone(Long cloneVmId, List<VolumeVO> allocatedVolumes, Account caller) {
+        if (cloneVmId != null) {
+            try {
+                destroyVm(cloneVmId, true);
+                UserVmVO incompleteVm = _vmDao.findById(cloneVmId);
+                if (incompleteVm != null && incompleteVm.getRemoved() == null) {
+                    // destroyVm only schedules expunge. Finish it here so DATA volumes
+                    // are detached before cleaning up this clone's allocated volumes.
+                    if ((incompleteVm.getState() != State.Destroyed && incompleteVm.getState() != State.Expunging) || !expunge(incompleteVm)) {
+                        logger.warn("Unable to expunge incomplete cloned VM [{}]. Manual cleanup may be required.", cloneVmId);
+                    }
+                }
+            } catch (Exception e) {
+                logger.warn("Unable to remove incomplete cloned VM [{}]. Manual cleanup may be required.", cloneVmId, e);
+            }
+        }
+        for (VolumeVO allocatedVolume : allocatedVolumes) {
+            try {
+                VolumeVO volume = _volsDao.findById(allocatedVolume.getId());
+                if (volume != null && volume.getInstanceId() != null) {
+                    logger.warn("Incomplete clone volume [{}] is still attached to VM [{}]; preserve it until it can be safely detached.",
+                            volume.getId(), volume.getInstanceId());
+                    continue;
+                }
+                // Expunge deletes ROOT volumes but only detaches DATA volumes.
+                // Delete only volumes allocated by this failed clone and now unattached.
+                if (volume != null && volume.getState() != Volume.State.Destroy
+                        && volume.getState() != Volume.State.Expunging && volume.getState() != Volume.State.Expunged) {
+                    if (_volumeService.destroyVolume(volume.getId(), caller, true, false) == null) {
+                        logger.warn("Unable to remove incomplete clone volume [{}]. Manual cleanup may be required.", volume.getId());
+                    }
+                }
+            } catch (Exception e) {
+                logger.warn("Unable to remove incomplete clone volume [{}]. Manual cleanup may be required.", allocatedVolume.getId(), e);
+            }
+        }
+    }
+
+    protected void cleanupCloneVMSnapshot(long vmSnapshotId) {
+        try {
+            if (!_vmSnapshotMgr.deleteVMSnapshot(vmSnapshotId)) {
+                logger.warn("Could not remove temporary clone VM snapshot [{}]; dependent clones may still require it.", vmSnapshotId);
+            }
+        } catch (Exception e) {
+            logger.warn("Could not remove temporary clone VM snapshot [{}]. Preserve it for recovery.", vmSnapshotId, e);
+        }
     }
 
     protected Optional<UserVm> cloneVirtualMachineUsingSharedMountPointFastClone(CloneVMCmd cmd, UserVmVO curVm, Account curVmAccount, long zoneId, String orgName)
