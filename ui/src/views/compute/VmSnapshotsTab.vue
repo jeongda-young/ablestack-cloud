@@ -73,7 +73,7 @@
       </template>
     </a-modal>
     <a-modal :visible="!!volumeSnapshot" :title="$t('label.action.create.snapshot.from.vmsnapshot')" :footer="null" @cancel="volumeSnapshot = null">
-      <CreateSnapshotFromVMSnapshot v-if="volumeSnapshot" :resource="volumeSnapshot" @close-action="volumeSnapshot = null" />
+      <CreateSnapshotFromVMSnapshot v-if="volumeSnapshot" full-width :resource="volumeSnapshot" @close-action="volumeSnapshot = null" />
     </a-modal>
   </div>
 </template>
