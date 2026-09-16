@@ -51,6 +51,7 @@ known_categories = {
     'VirtualMachine': 'Virtual Machine',
     'VM': 'Virtual Machine',
     'VmDevice': 'Virtual Machine',
+    'updateVmCloneFlattenBandwidth': 'Virtual Machine',
     'Vnf': 'Virtual Network Functions',
     'VnfTemplate': 'Virtual Network Functions',
     'GuestSubnet': 'Routing',
