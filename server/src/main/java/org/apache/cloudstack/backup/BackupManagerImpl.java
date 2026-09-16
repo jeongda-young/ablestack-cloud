@@ -2239,7 +2239,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                         imported ? RestorePhase.COMPLETED : RestorePhase.FAILED);
             }
             if (imported) {
-                cleanupTrackedRestoreJobFiles(backup, vm, getBackupProvider(offering.getProvider()).getName());
+                cleanupTrackedRestoreJobFilesAndDetails(backup, vm, getBackupProvider(offering.getProvider()).getName());
             }
             return imported;
         } catch (RuntimeException e) {
@@ -2993,6 +2993,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             netBackupRestoreCoordinator.persistRestoreContext(backup, netBackupRestoreMarkerVm, netBackupRestoreRequestIdentifier,
                     RestorePhase.COMPLETED, null, backup.getExternalId());
         }
+        cleanupTrackedRestoreJobFilesAndDetails(backup, vm, backupProvider.getName());
         return true;
     }
 
@@ -3211,9 +3212,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     }
 
     private void cleanupRestoreVolumeAttemptJobFiles(final BackupVO backup, final VMInstanceVO vm, final String provider) {
-        if (cleanupTrackedRestoreJobFiles(backup, vm, provider)) {
-            clearTrackedRestoreJobDetails(backup);
-        }
+        cleanupTrackedRestoreJobFilesAndDetails(backup, vm, provider);
     }
 
     private void runPostRestoreMaintenance(final BackupProvider backupProvider, final VirtualMachine vm, final Backup backup, final boolean volumeOnly) {
@@ -4790,6 +4789,12 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             return false;
         }
         return cleanupBackupJobFiles(restoreHost.getId(), restoreJobId, provider + " restore");
+    }
+
+    private void cleanupTrackedRestoreJobFilesAndDetails(final BackupVO backup, final VMInstanceVO vm, final String provider) {
+        if (cleanupTrackedRestoreJobFiles(backup, vm, provider)) {
+            clearTrackedRestoreJobDetails(backup);
+        }
     }
 
     private void clearTrackedRestoreJobDetails(final BackupVO backup) {
