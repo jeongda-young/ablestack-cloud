@@ -57,11 +57,28 @@ const hasQcow2VolumePath = (record) => {
   return volumes.some(volume => String(volume?.path || '').toLowerCase().endsWith('.qcow2'))
 }
 
+const getBackupEngine = (record) => {
+  if (record?.backupengine) {
+    return record.backupengine
+  }
+  const detailMaps = [record?.details, record?.vmdetails]
+  for (const details of detailMaps) {
+    if (!details) {
+      continue
+    }
+    const backupEngineKey = Object.keys(details).find(key => key.endsWith('.backup.engine'))
+    if (backupEngineKey) {
+      return details[backupEngineKey]
+    }
+  }
+  return ''
+}
+
 const isLiveBandwidthBackup = (record) => {
   if (hasBackupCapability(record, 'live-bandwidth')) {
     return true
   }
-  return ['QCOW2', 'GFS'].includes(String(record?.backupengine || '').toUpperCase()) || hasQcow2VolumePath(record)
+  return ['QCOW2', 'GFS'].includes(String(getBackupEngine(record)).toUpperCase()) || hasQcow2VolumePath(record)
 }
 
 export default {
