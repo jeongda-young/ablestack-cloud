@@ -116,8 +116,10 @@ import org.apache.cloudstack.backup.dao.BackupScheduleDao;
 import org.apache.cloudstack.context.CallContext;
 import org.apache.cloudstack.framework.config.ConfigKey;
 import org.apache.cloudstack.framework.jobs.AsyncJobDispatcher;
+import org.apache.cloudstack.framework.jobs.AsyncJobExecutionContext;
 import org.apache.cloudstack.framework.jobs.AsyncJobManager;
 import org.apache.cloudstack.framework.jobs.impl.AsyncJobVO;
+import org.apache.cloudstack.jobs.JobInfo;
 import org.apache.cloudstack.managed.context.ManagedContextRunnable;
 import org.apache.cloudstack.managed.context.ManagedContextTimerTask;
 import org.apache.cloudstack.poll.BackgroundPollManager;
@@ -2229,6 +2231,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                         phase, null, backup.getExternalId());
             }
 
+            persistCurrentRestoreAsyncJobDetail(backup.getId(), offering);
             tryRestoreVM(backup, vm, offering, backupDetailsInMessage, quickRestore, hostId);
             updateStates(vm, getBackupProvider(offering.getProvider()), quickRestore);
 
@@ -2954,6 +2957,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                     vm.getId(), ApiCommandResourceType.VirtualMachine.toString(),
                     true, 0);
 
+            persistCurrentRestoreAsyncJobDetail(backup.getId(), offering);
             String host = null;
             String dataStore = null;
             if (!BackupProviderNameUtils.isNasFamily(offering.getProvider()) &&
@@ -3101,6 +3105,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             netBackupRestoreCoordinator.persistRestoreContext(backup, netBackupRestoreMarkerVm, netBackupRestoreRequestIdentifier,
                     RestorePhase.HOST_RESTORE_IN_PROGRESS, host.getName(), backup.getExternalId());
         }
+        persistCurrentRestoreAsyncJobDetail(backup.getId(), offering);
         Pair<Boolean, String> result = restoreBackedUpVolume(backupVolumeInfo, backup, backupProvider, hostPossibleValues, datastoresPossibleValues, vm, isQuickRestore);
 
         if (BooleanUtils.isFalse(result.first())) {
@@ -4115,6 +4120,11 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             logger.trace("Reconciling restore job [{}] for backup [{}], VM [{}] using provider [{}]. state=[{}], step=[{}], progress=[{}]",
                     restoreJobId, backup.getUuid(), vm.getInstanceName(), backupProvider.getName(), restoreState,
                     restoreAnswer.getStep(), restoreAnswer.getProgress());
+            if (isAblestackHostSideRestoreProvider(offering) && isTrackedRestoreAsyncJobInProgress(backup)) {
+                logger.trace("Skipping restore job terminal reconciliation for backup [{}], VM [{}] because its API async job is still in progress.",
+                        backup.getUuid(), vm.getInstanceName());
+                return;
+            }
             if (isMissingUnstartedRestoreJob(backup, restoreState)) {
                 markRestoreJobStartFailed(backup.getId());
                 failInterruptedRestoreStates(vm);
@@ -4791,6 +4801,46 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         return cleanupBackupJobFiles(restoreHost.getId(), restoreJobId, provider + " restore");
     }
 
+    private void persistCurrentRestoreAsyncJobDetail(final Long backupId, final BackupOffering offering) {
+        if (backupId == null || !isAblestackHostSideRestoreProvider(offering)) {
+            return;
+        }
+        try {
+            final AsyncJobExecutionContext executionContext = AsyncJobExecutionContext.getCurrentExecutionContext();
+            if (executionContext == null || executionContext.getJob() == null) {
+                return;
+            }
+            persistBackupDetail(backupId, AblestackBackupFrameworkUtils.RESTORE_ASYNC_JOB_ID_DETAIL,
+                    String.valueOf(executionContext.getJob().getId()));
+        } catch (Exception e) {
+            logger.debug("Skipping restore async job detail persistence for backup [{}]: {}", backupId, e.getMessage());
+        }
+    }
+
+    private boolean isAblestackHostSideRestoreProvider(final BackupOffering offering) {
+        if (offering == null) {
+            return false;
+        }
+        final String provider = offering.getProvider();
+        return BackupProviderNameUtils.isNasFamily(provider) ||
+                BackupProviderNameUtils.isCommvaultFamily(provider) ||
+                BackupProviderNameUtils.isNetBackupFamily(provider) ||
+                BackupProviderNameUtils.isVeeamFamily(provider);
+    }
+
+    private boolean isTrackedRestoreAsyncJobInProgress(final BackupVO backup) {
+        if (backup == null) {
+            return false;
+        }
+        backupDao.loadDetails(backup);
+        final String asyncJobId = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_ASYNC_JOB_ID_DETAIL);
+        if (!NumberUtils.isDigits(asyncJobId)) {
+            return false;
+        }
+        final AsyncJobVO asyncJob = asyncJobManager.getAsyncJob(Long.parseLong(asyncJobId));
+        return asyncJob != null && JobInfo.Status.IN_PROGRESS.equals(asyncJob.getStatus());
+    }
+
     private void cleanupTrackedRestoreJobFilesAndDetails(final BackupVO backup, final VMInstanceVO vm, final String provider) {
         if (cleanupTrackedRestoreJobFiles(backup, vm, provider)) {
             clearTrackedRestoreJobDetails(backup);
@@ -4808,6 +4858,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         backupDetailsDao.removeDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_JOB_STEP_DETAIL);
         backupDetailsDao.removeDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_JOB_PROGRESS_DETAIL);
         backupDetailsDao.removeDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_JOB_TRACKED_AT_DETAIL);
+        backupDetailsDao.removeDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_ASYNC_JOB_ID_DETAIL);
         backupDao.loadDetails(backup);
     }
 
