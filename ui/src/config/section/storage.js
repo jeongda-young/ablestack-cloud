@@ -35,8 +35,33 @@ const isFastCloneFlattenRunning = (record) => {
   )
 }
 
-const isQcow2Backup = (record) => {
-  return String(record?.backupengine || '').toUpperCase() === 'QCOW2'
+const hasBackupCapability = (record, capability) => {
+  return String(record?.capabilities || record?.backupjobcapabilities || '')
+    .split(',')
+    .map(item => item.trim())
+    .includes(capability)
+}
+
+const hasQcow2VolumePath = (record) => {
+  let volumes = record?.volumes || []
+  if (typeof volumes === 'string') {
+    try {
+      volumes = JSON.parse(volumes)
+    } catch (e) {
+      volumes = []
+    }
+  }
+  if (!Array.isArray(volumes)) {
+    return false
+  }
+  return volumes.some(volume => String(volume?.path || '').toLowerCase().endsWith('.qcow2'))
+}
+
+const isLiveBandwidthBackup = (record) => {
+  if (hasBackupCapability(record, 'live-bandwidth')) {
+    return true
+  }
+  return ['QCOW2', 'GFS'].includes(String(record?.backupengine || '').toUpperCase()) || hasQcow2VolumePath(record)
 }
 
 export default {
@@ -611,7 +636,7 @@ export default {
           label: 'label.action.update.backup.bandwidth',
           dataView: true,
           popup: true,
-          show: (record) => { return record.status === 'BackingUp' && isQcow2Backup(record) },
+          show: (record) => { return record.status === 'BackingUp' && isLiveBandwidthBackup(record) },
           args: ['id', 'bandwidthlimitmbps'],
           mapping: {
             id: {
