@@ -65,7 +65,8 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
     private static final String FILE_PATH_PLACEHOLDER = "%s/%s";
     private static final String ATTACH_QCOW2_DISK_COMMAND = " virsh attach-disk %s %s %s --driver qemu --subdriver qcow2 --cache none";
     private static final String ATTACH_RBD_DISK_XML_COMMAND = " virsh attach-device %s /dev/stdin <<EOF%sEOF";
-    private static final String CURRENT_DEVICE = "virsh domblklist --domain %s --details | awk '$3 == \"disk\" && $4 ~ /^vd[a-z]+$/ {print $4}' | sort | tail -n 1";
+    private static final String CURRENT_DEVICE = "virsh domblklist --domain %s --details | awk '($3 ~ /^(vd|sd|hd)[a-z]+$/) {print $3} "
+            + "($4 ~ /^(vd|sd|hd)[a-z]+$/) {print $4}' | sort -V | tail -n 1";
     private static final String QEMU_IMG_HAS_BACKING_COMMAND = "qemu-img info --output=json %s 2>/dev/null | grep -q '\"backing-filename\"'";
     private static final long RESTORE_PRIMARY_SPACE_BUFFER_BYTES = 10L * 1024L * 1024L * 1024L;
     @Override
