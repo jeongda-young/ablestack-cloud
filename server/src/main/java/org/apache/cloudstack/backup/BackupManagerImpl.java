@@ -3075,12 +3075,16 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         if (snapshotSensitiveVolumeRestore) {
             validateNoVmSnapshotsForRestoreVolumeAttach(vm);
         }
-        String[] hostPossibleValues = netBackupRestore
+        final boolean singleRestoreTargetAttempt = isAblestackRestoreVolumeProvider(offering);
+        String[] hostPossibleValues = singleRestoreTargetAttempt
                 ? new String[]{host.getPrivateIpAddress()}
                 : new String[]{host.getPrivateIpAddress(), host.getName()};
-        String[] datastoresPossibleValues = netBackupRestore
+        String[] datastoresPossibleValues = singleRestoreTargetAttempt
                 ? new String[]{datastore.getUuid()}
                 : new String[]{datastore.getUuid(), datastore.getName()};
+        logger.info("Restore volume target candidates resolved for provider [{}], backup [{}], VM [{}]. singleAttempt=[{}], hosts={}, datastores={}",
+                offering.getProvider(), backup.getUuid(), vm.getInstanceName(), singleRestoreTargetAttempt,
+                Arrays.toString(hostPossibleValues), Arrays.toString(datastoresPossibleValues));
         final String netBackupRestoreRequestIdentifier = netBackupRestore ? netBackupRestoreCoordinator.getMoldRestoreRequestIdentifier(backup) : null;
         final VMInstanceVO netBackupRestoreMarkerVm = netBackupRestore ? netBackupRestoreCoordinator.getRestoreMarkerVm(backup, vm) : null;
         if (netBackupRestore) {
@@ -3152,6 +3156,17 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         final String provider = offering.getProvider();
         return StringUtils.equals(KBOSS_BACKUP_PROVIDER, provider) ||
                 BackupProviderNameUtils.isNasFamily(provider) ||
+                BackupProviderNameUtils.isCommvaultFamily(provider) ||
+                BackupProviderNameUtils.isNetBackupFamily(provider) ||
+                BackupProviderNameUtils.isVeeamFamily(provider);
+    }
+
+    private boolean isAblestackRestoreVolumeProvider(final BackupOffering offering) {
+        if (offering == null) {
+            return false;
+        }
+        final String provider = offering.getProvider();
+        return BackupProviderNameUtils.isNasFamily(provider) ||
                 BackupProviderNameUtils.isCommvaultFamily(provider) ||
                 BackupProviderNameUtils.isNetBackupFamily(provider) ||
                 BackupProviderNameUtils.isVeeamFamily(provider);
