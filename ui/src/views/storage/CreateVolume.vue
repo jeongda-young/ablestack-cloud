@@ -219,7 +219,7 @@
           />
         </a-form-item>
       </span>
-      <a-form-item v-if="submitHandler" ref="deviceid" name="deviceid" :label="$t('label.vmvolume.deviceid')" :extra="$t('message.vmvolume.device.auto')" :rules="[{ validator: validateDeviceId }]">
+      <a-form-item v-if="submitHandler" class="volume-device-hint" ref="deviceid" name="deviceid" :label="$t('label.vmvolume.deviceid')" :extra="$t('message.vmvolume.device.auto')" :rules="[{ validator: validateDeviceId }]">
         <a-input-number v-model:value="form.deviceid" :min="1" :precision="0" :placeholder="$t('label.vmvolume.device.auto')" style="width: 100%" />
       </a-form-item>
       <div :span="24" class="action-button">
@@ -640,6 +640,10 @@ export default {
 </script>
 
 <style lang="scss" scoped>
+.volume-device-hint :deep(.ant-form-item-extra) {
+  margin-top: 8px;
+  color: var(--ui-text-secondary);
+}
 .form {
   width: 80vw;
 

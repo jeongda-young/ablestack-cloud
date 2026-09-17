@@ -206,6 +206,11 @@ export default {
 .volume-row-actions :deep(.ant-btn) { height: 24px; display: inline-flex; align-items: center; justify-content: center; margin: 0; }
 .volume-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
 .volume-toolbar :deep(.ant-input-search) { width: 280px; margin-left: auto; }
+.volume-device-form :deep(.ant-form-item-explain) {
+  margin-top: 8px;
+  color: var(--ui-text-secondary);
+}
+.volume-device-form :deep(.ant-form-item-explain-error) { color: var(--ui-error-icon); }
 .volume-device-form { margin-top: 20px; }
 .volume-dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
 .volume-alert { margin: 12px 0; }
