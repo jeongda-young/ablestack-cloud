@@ -548,12 +548,24 @@
     }
 
     &-item {
+      background-color: @dark-secondary-bgColor;
+      border-color: @dark-border-color;
+
+      &:not(.ant-pagination-item-disabled):hover,
+      &:not(.ant-pagination-item-disabled):focus {
+        border-color: @primary-color;
+      }
+
       a:not(:hover) {
         color: @dark-text-color-3;
       }
 
       &-active {
-        background-color: transparent;
+        border-color: @primary-color;
+
+        a, a:hover, a:focus {
+          color: @primary-color;
+        }
       }
     }
 
