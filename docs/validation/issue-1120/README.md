@@ -62,7 +62,7 @@ VM, NIC, 스냅샷 리소스를 생성·변경·삭제하지 않았다. 원래 �
 
 ### 수정 전과 수정 후
 
-![수정 전 다크모드](before-dark.png)
-![수정 후 다크모드](after-dark.png)
-![수정 후 라이트모드](after-light.png)
-![활성 페이지와 hover 표시](after-dark-hover.png)
+![수정 전 다크모드](before-dark.jpg)
+![수정 후 다크모드](after-dark.jpg)
+![수정 후 라이트모드](after-light.jpg)
+![활성 페이지와 hover 표시](after-dark-hover.jpg)
