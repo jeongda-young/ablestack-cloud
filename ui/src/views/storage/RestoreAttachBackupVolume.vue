@@ -231,6 +231,7 @@ export default {
         postAPI('restoreVolumeFromBackupAndAttachToVM', params).then(json => {
           const jobId = json.restorevolumefrombackupandattachtovmresponse.jobid || null
           if (jobId) {
+            this.$emit('restore-started', this.resource)
             this.$pollJob({
               jobId,
               title,

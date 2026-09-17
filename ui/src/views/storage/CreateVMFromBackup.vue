@@ -57,6 +57,7 @@
     <div v-else class="form">
       <DeployVMFromBackup
         :preFillContent="dataPreFill"
+        @restore-started="$emit('restore-started', resource)"
         @close-action="closeAction"/>
     </div>
   </div>
@@ -303,6 +304,7 @@ export default {
       postAPI('createVMFromBackup', args, 'GET', null).then(response => {
         const jobId = response.deployvirtualmachineresponse.jobid
         if (jobId) {
+          this.$emit('restore-started', this.resource)
           this.$pollJob({
             jobId,
             title,

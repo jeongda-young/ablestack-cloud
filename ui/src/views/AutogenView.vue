@@ -202,6 +202,7 @@
               v-bind="{currentAction}"
               @refresh-data="fetchData"
               @poll-action="pollActionCompletion"
+              @restore-started="markBackupRestoreStarted"
               @close-action="closeAction"
               @cancel-bulk-action="handleCancel"
             />
@@ -2392,6 +2393,9 @@ export default {
           this.$store.dispatch('UpdateConfiguration')
         }
         if (jobId) {
+          if (action.api === 'restoreBackup') {
+            this.markBackupRestoreStarted(action.resource)
+          }
           if (selectedItems === this.selectedItems) {
             eventBus.emit('update-resource-state', { selectedItems, resource, state: 'InProgress', jobid: jobId })
           }
@@ -2399,6 +2403,20 @@ export default {
         }
         resolve(false)
       })
+    },
+    markBackupRestoreStarted (backup) {
+      if (!backup?.id) {
+        return
+      }
+      const provider = String(backup.provider || '').toLowerCase()
+      if (!['ablestack-nas', 'ablestack-commvault', 'ablestack-netbackup', 'ablestack-veeam'].includes(provider)) {
+        return
+      }
+      const trackedBackup = this.items.find(item => item.id === backup.id) || backup
+      trackedBackup.status = 'Restoring'
+      trackedBackup.restorejobstate = 'STARTING'
+      trackedBackup.backupjobprogress = 0
+      trackedBackup.backupjobstep = 'QUEUED'
     },
     execSubmit (e) {
       e.preventDefault()
