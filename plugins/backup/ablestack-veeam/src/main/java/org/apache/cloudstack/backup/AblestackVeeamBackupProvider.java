@@ -216,22 +216,6 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             "Veeam Backup & Replication REST API version header.",
             true, ConfigKey.Scope.Zone, BackupFrameworkEnabled.key());
 
-    public ConfigKey<Boolean> AblestackVeeamSyncDeleteRbdDiff = new ConfigKey<>("Advanced", Boolean.class,
-            "backup.plugin.ablestack-veeam.sync.delete.rbd.diff", "true",
-            "When true (default): BackupSync removes Mold RBD_DIFF rows when the matching Veeam restore "
-                    + "point is gone or the Agent Disk catalog is trusted-empty (Remove from Disk). "
-                    + "Unstamped RBD rows are only removed on trusted-empty catalog, not on partial time-match misses. "
-                    + "Ignored when backup.plugin.ablestack-veeam.sync.delete.missing.catalog is false.",
-            true, ConfigKey.Scope.Zone, BackupFrameworkEnabled.key());
-
-    public ConfigKey<Boolean> AblestackVeeamSyncDeleteMissingCatalog = new ConfigKey<>("Advanced", Boolean.class,
-            "backup.plugin.ablestack-veeam.sync.delete.missing.catalog", "false",
-            "When false (default): BackupSync never removes Mold backup rows just because they are missing "
-                    + "from the Veeam restore-point catalog or because a Veeam job name disappeared. "
-                    + "Mold backups are only removed when the user/API explicitly deletes them. "
-                    + "Set true only if Mold history must track Veeam Remove-from-Disk automatically.",
-            true, ConfigKey.Scope.Zone, BackupFrameworkEnabled.key());
-
     @Inject
     private BackupDao backupDao;
     @Inject
@@ -1220,14 +1204,17 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
 
     @Override
     public boolean deleteBackup(final Backup backup, final boolean forced) {
-        // Same model as Ablestack NetBackup: Mold never deletes rows from the UI/API.
-        // Retention lives in Veeam B&R (Remove from Disk / job retention). BackupSync
-        // (syncBackups → deleteMoldBackupsMissingFromVeeamCatalog) removes Mold metadata
-        // and host artifacts after the restore point disappears from the Veeam catalog.
-        throw new CloudRuntimeException(
-                "Veeam backups are managed by Veeam Backup & Replication and cannot be deleted individually from Mold. "
-                        + "Delete or expire restore points in Veeam (Remove from Disk); "
-                        + "Mold backup history is cleaned up by catalog sync.");
+        if (backup == null) {
+            return true;
+        }
+        if (Backup.Status.Error.equals(backup.getStatus()) && !forced) {
+            throw new CloudRuntimeException("Veeam backup in Error state requires forced deletion after manual cleanup verification.");
+        }
+        if (Backup.Status.Failed.equals(backup.getStatus()) || Backup.Status.Error.equals(backup.getStatus())) {
+            cleanupExpiredBackupArtifacts(Collections.singletonList(backup), Collections.singleton(backup.getId()));
+            return true;
+        }
+        throw new CloudRuntimeException("Veeam backups are managed by Veeam restore points and cannot be deleted individually from Mold.");
     }
 
     @Override
@@ -1697,9 +1684,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                 AblestackVeeamStageRootPath,
                 AblestackVeeamUseRestApi,
                 AblestackVeeamRestUrl,
-                AblestackVeeamRestApiVersion,
-                AblestackVeeamSyncDeleteRbdDiff,
-                AblestackVeeamSyncDeleteMissingCatalog
+                AblestackVeeamRestApiVersion
         };
     }
 
@@ -2255,9 +2240,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     private void syncMoldBackupsWithVeeamCatalog(final VirtualMachine vm) {
         final List<Backup> moldBackups = backupDao.listByVmId(vm.getDataCenterId(), vm.getId()).stream()
                 .filter(this::isVeeamBackup)
-                .filter(backup -> Backup.Status.BackedUp.equals(backup.getStatus())
-                        || Backup.Status.Failed.equals(backup.getStatus())
-                        || Backup.Status.Error.equals(backup.getStatus()))
+                .filter(backup -> Backup.Status.BackedUp.equals(backup.getStatus()))
                 .collect(Collectors.toList());
         if (moldBackups.isEmpty()) {
             return;
@@ -2273,11 +2256,6 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
 
         stampMissingRestorePointIds(moldBackups, catalog.restorePoints);
         stampMissingVeeamJobNames(moldBackups, catalog.restorePoints);
-        if (!Boolean.TRUE.equals(AblestackVeeamSyncDeleteMissingCatalog.valueIn(vm.getDataCenterId()))) {
-            LOG.debug("Skipping Veeam catalog delete sync for VM [{}]: "
-                    + "backup.plugin.ablestack-veeam.sync.delete.missing.catalog=false", vm.getInstanceName());
-            return;
-        }
         deleteMoldBackupsMissingFromVeeamCatalog(vm, moldBackups, catalog);
     }
 
@@ -2498,11 +2476,6 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     }
 
     private void removeMoldBackupsForDeletedVeeamJobs(final VirtualMachine vm) {
-        if (!Boolean.TRUE.equals(AblestackVeeamSyncDeleteMissingCatalog.valueIn(vm.getDataCenterId()))) {
-            LOG.debug("Skipping Veeam job-delete sync for VM [{}]: "
-                    + "backup.plugin.ablestack-veeam.sync.delete.missing.catalog=false", vm.getInstanceName());
-            return;
-        }
         // SSH Get-VBRJob inventory often hangs; with REST catalog sync, Remove-from-Disk is covered
         // by restore-point matching. Skip job-name wipe in REST mode.
         if (Boolean.TRUE.equals(AblestackVeeamUseRestApi.valueIn(vm.getDataCenterId()))) {
@@ -2588,17 +2561,12 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
 
     private void deleteMoldBackupsMissingFromVeeamCatalog(final VirtualMachine vm, final List<Backup> moldBackups,
             final VeeamCatalogQueryResult catalog) {
-        if (!Boolean.TRUE.equals(AblestackVeeamSyncDeleteMissingCatalog.valueIn(vm.getDataCenterId()))) {
-            return;
-        }
         final Set<String> catalogIds = catalog.restorePoints.stream()
                 .map(restorePoint -> normalizeVeeamRestorePointId(restorePoint.getId()))
                 .filter(StringUtils::isNotBlank)
                 .collect(Collectors.toSet());
         final long now = System.currentTimeMillis();
         final Set<Long> toRemove = new LinkedHashSet<>();
-        final boolean syncDeleteRbd = Boolean.TRUE.equals(
-                AblestackVeeamSyncDeleteRbdDiff.valueIn(vm.getDataCenterId()));
 
         for (final Backup backup : moldBackups) {
             if (backup.getDate() != null && backup.getDate().getTime() > now - VEEAM_SYNC_DELETE_GRACE_MS) {
@@ -2607,11 +2575,10 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             loadBackupDetailsIfNeeded(backup);
             final boolean rbdDiff = BACKUP_ENGINE_RBD_DIFF.equalsIgnoreCase(
                     getBackupDetail(backup, DETAIL_BACKUP_ENGINE));
-            // Stamped RP gone (incl. Remove-from-Disk of that point) → delete Mold row.
-            // RBD_DIFF respects backup.plugin.ablestack-veeam.sync.delete.rbd.diff.
+            // Stamped RP gone (including Remove-from-Disk of that point) -> delete Mold row.
             final String restorePointId = normalizeVeeamRestorePointId(getBackupDetail(backup, DETAIL_VEEAM_RESTORE_POINT_ID));
             if (StringUtils.isNotBlank(restorePointId)) {
-                if (!catalogIds.contains(restorePointId) && (!rbdDiff || syncDeleteRbd)) {
+                if (!catalogIds.contains(restorePointId)) {
                     toRemove.add(backup.getId());
                 }
                 continue;
@@ -2619,7 +2586,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             // RBD_DIFF without stamp: only clear on trusted-empty Disk (full Remove-from-Disk).
             // Do not drop new Mold RBD rows just because Agent time-match missed a partial catalog.
             if (rbdDiff) {
-                if (syncDeleteRbd && catalog.trustedEmptyCatalog() && backup.getDate() != null) {
+                if (catalog.trustedEmptyCatalog() && backup.getDate() != null) {
                     toRemove.add(backup.getId());
                 }
                 continue;

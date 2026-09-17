@@ -6644,14 +6644,9 @@ mold_backup_registry_cleanup_for_backup() {
 # (NetBackup-style catalog delete). Never calls deleteBackup from the host.
 mold_backup_catalog_delete_sync() {
   local job="${1:-${VEEAM_JOB_NAME:-}}"
-  local enable="${VEEAM_CATALOG_DELETE_SYNC:-true}"
   local state_dir state_f live_file prev_file live_ids deleted_id vm bid epoch
   local -a vms=()
   local -A sync_vms=()
-  [[ "$enable" == "true" ]] || {
-    mold_backup_notify_log info "catalog-sync: disabled (VEEAM_CATALOG_DELETE_SYNC=false)"
-    return 0
-  }
   [[ -n "$job" ]] || return 0
   mold_backup_load_config 2>/dev/null || true
   mold_backup_resolve_api_secret 2>/dev/null || true
