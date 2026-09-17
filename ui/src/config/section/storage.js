@@ -42,43 +42,8 @@ const hasBackupCapability = (record, capability) => {
     .includes(capability)
 }
 
-const hasQcow2VolumePath = (record) => {
-  let volumes = record?.volumes || []
-  if (typeof volumes === 'string') {
-    try {
-      volumes = JSON.parse(volumes)
-    } catch (e) {
-      volumes = []
-    }
-  }
-  if (!Array.isArray(volumes)) {
-    return false
-  }
-  return volumes.some(volume => String(volume?.path || '').toLowerCase().endsWith('.qcow2'))
-}
-
-const getBackupEngine = (record) => {
-  if (record?.backupengine) {
-    return record.backupengine
-  }
-  const detailMaps = [record?.details, record?.vmdetails]
-  for (const details of detailMaps) {
-    if (!details) {
-      continue
-    }
-    const backupEngineKey = Object.keys(details).find(key => key.endsWith('.backup.engine'))
-    if (backupEngineKey) {
-      return details[backupEngineKey]
-    }
-  }
-  return ''
-}
-
 const isLiveBandwidthBackup = (record) => {
-  if (hasBackupCapability(record, 'live-bandwidth')) {
-    return true
-  }
-  return ['QCOW2', 'GFS'].includes(String(getBackupEngine(record)).toUpperCase()) || hasQcow2VolumePath(record)
+  return hasBackupCapability(record, 'live-bandwidth')
 }
 
 export default {
@@ -654,6 +619,7 @@ export default {
           dataView: true,
           popup: true,
           show: (record) => { return record.status === 'BackingUp' && isLiveBandwidthBackup(record) },
+          suppressErrorNotification: true,
           args: ['id', 'bandwidthlimitmbps'],
           mapping: {
             id: {

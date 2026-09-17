@@ -30,6 +30,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.Logger;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.function.Function;
 import java.util.function.Supplier;
@@ -49,8 +50,9 @@ final class LibvirtAblestackTakeBackupCommandHelper {
         if (!context.waitForCompletion) {
             final String[] detachedCommand = detachedCommandSupplier.get();
             if (detachedCommand != null) {
+                final boolean liveBandwidthSupported = Arrays.asList(detachedCommand).contains("backup-running");
                 return LibvirtAblestackAsyncBackupRunner.startDetached(command, logger, trace, provider, context.jobId,
-                        context.vmName, context.backupPath, context.backupType, detachedCommand);
+                        context.vmName, context.backupPath, context.backupType, detachedCommand, liveBandwidthSupported);
             }
             logger.info("{} phase=[AGENT_DETACHED_JAVA_START], provider=[{}], jobId=[{}], vm=[{}], backupPath=[{}], backupType=[{}]",
                     trace, provider, context.jobId, context.vmName, context.backupPath, context.backupType);

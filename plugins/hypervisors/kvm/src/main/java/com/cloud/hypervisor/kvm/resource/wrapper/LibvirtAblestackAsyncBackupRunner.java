@@ -73,6 +73,12 @@ final class LibvirtAblestackAsyncBackupRunner {
 
     static BackupAnswer startDetached(final Command command, final Logger logger, final String trace, final String provider, final String jobId,
             final String vmName, final String backupPath, final String backupType, final String[] scriptCommand) {
+        return startDetached(command, logger, trace, provider, jobId, vmName, backupPath, backupType, scriptCommand, false);
+    }
+
+    static BackupAnswer startDetached(final Command command, final Logger logger, final String trace, final String provider, final String jobId,
+            final String vmName, final String backupPath, final String backupType, final String[] scriptCommand,
+            final boolean liveBandwidthSupported) {
         final String effectiveJobId = safeValue(jobId);
         if (effectiveJobId.isBlank()) {
             return new BackupAnswer(command, false, "backup job id is required for detached execution");
@@ -93,6 +99,8 @@ final class LibvirtAblestackAsyncBackupRunner {
                 properties.setProperty("launcher", "systemd-run");
                 properties.setProperty("script", getDetachedScriptPath(effectiveJobId).toString());
                 properties.setProperty("log", getJobDirectory(effectiveJobId).resolve(LOG_FILE).toString());
+                properties.setProperty("liveBandwidthSupported", String.valueOf(liveBandwidthSupported));
+                properties.setProperty("capabilities", resolveCapabilities(properties));
                 storeJobProperties(logger, effectiveJobId, properties);
             }
             writeJobState(logger, effectiveJobId, provider, vmName, backupPath, backupType, STATE_RUNNING,
@@ -718,7 +726,7 @@ final class LibvirtAblestackAsyncBackupRunner {
         capabilities.add(AblestackBackupFrameworkUtils.CAPABILITY_PROGRESS);
         if (AblestackBackupFrameworkUtils.OPERATION_RESTORE.equals(properties.getProperty("operation"))) {
             capabilities.add(AblestackBackupFrameworkUtils.CAPABILITY_RESTORE_PROGRESS);
-        } else if (!isRbdBackup(properties)) {
+        } else if (Boolean.parseBoolean(properties.getProperty("liveBandwidthSupported")) && !isRbdBackup(properties)) {
             capabilities.add(AblestackBackupFrameworkUtils.CAPABILITY_LIVE_BANDWIDTH);
         }
         return String.join(",", capabilities);

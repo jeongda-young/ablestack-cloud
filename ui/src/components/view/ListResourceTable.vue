@@ -47,7 +47,8 @@
             <backup-progress
               v-if="isBackupStatusColumn(column.key)"
               :record="record"
-              :statusText="text ? text : ''" />
+              :statusText="text ? text : ''"
+              @capabilities-change="record.capabilities = $event" />
             <template v-else>
               <status :text="text ? text : ''" />{{ text }}
             </template>

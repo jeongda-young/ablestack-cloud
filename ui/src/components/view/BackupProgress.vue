@@ -64,6 +64,7 @@ const POLL_INTERVAL_MS = 5000
 
 export default {
   name: 'BackupProgress',
+  emits: ['capabilities-change'],
   components: {
     Status
   },
@@ -266,6 +267,9 @@ export default {
       }
       if (Object.prototype.hasOwnProperty.call(response, 'bandwidthlimitmbps')) {
         this.bandwidthLimitMbps = this.normalizeBandwidth(response.bandwidthlimitmbps)
+      }
+      if (Object.prototype.hasOwnProperty.call(response, 'capabilities')) {
+        this.$emit('capabilities-change', response.capabilities || '')
       }
       this.bandwidthStatus = response.bandwidthstatus || this.bandwidthStatus
       if (wasRestoring && this.isTerminalJobState(response.state)) {
