@@ -151,6 +151,7 @@ class LibvirtAblestackCommvaultBackupHelper {
                 "-f", command.getBackupFiles() == null || command.getBackupFiles().isEmpty() ? "" : String.join(",", command.getBackupFiles()),
                 "-q", command.getQuiesce() != null && command.getQuiesce() ? "true" : "false",
                 "-d", diskPaths.isEmpty() ? "" : String.join(",", diskPaths),
+                "--data-operation-timeout-seconds", String.valueOf(command.getWait()),
                 "--bandwidth-limit-mbps", String.valueOf(command.getBandwidthLimitMbps())
         };
     }

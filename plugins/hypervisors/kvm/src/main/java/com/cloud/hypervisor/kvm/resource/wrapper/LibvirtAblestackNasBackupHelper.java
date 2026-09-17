@@ -183,6 +183,7 @@ class LibvirtAblestackNasBackupHelper {
                 "-q", command.getQuiesce() != null && command.getQuiesce() ? "true" : "false",
                 "-f", CollectionUtils.isNullOrEmpty(command.getBackupFiles()) ? "" : String.join(",", command.getBackupFiles()),
                 "-d", diskPaths.isEmpty() ? "" : String.join(",", diskPaths),
+                "--data-operation-timeout-seconds", String.valueOf(command.getWait()),
                 "--bandwidth-limit-mbps", String.valueOf(command.getBandwidthLimitMbps())
         };
     }

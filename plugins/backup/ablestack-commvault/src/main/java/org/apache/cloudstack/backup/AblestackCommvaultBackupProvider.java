@@ -111,9 +111,8 @@ import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
 
 import static org.apache.cloudstack.backup.BackupManager.BackupChainSize;
-import static org.apache.cloudstack.backup.BackupManager.BackupCommandTimeout;
+import static org.apache.cloudstack.backup.BackupManager.BackupDataOperationTimeout;
 import static org.apache.cloudstack.backup.BackupManager.BackupQosBandwidthLimitMbps;
-import static org.apache.cloudstack.backup.BackupManager.BackupRestoreTimeout;
 import static org.apache.cloudstack.backup.BackupManager.KvmIncrementalBackup;
 
 public class AblestackCommvaultBackupProvider extends AdapterBase implements BackupProvider, Configurable {
@@ -537,7 +536,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         if (Boolean.TRUE.equals(detachedRestoreStart.get())) {
             return (BackupAnswer) startAnswer;
         }
-        return AblestackRestoreJobPoller.waitForCompletion(restoreJobId, BackupRestoreTimeout.value(),
+        return AblestackRestoreJobPoller.waitForCompletion(restoreJobId, BackupDataOperationTimeout.value(),
                 () -> agentManager.send(hostId, new AblestackRestoreJobStatusCommand(restoreJobId, null, 5)));
     }
 
@@ -717,11 +716,8 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
 
         BackupVO backupVO = createBackupObject(vm, vmHost.getId(), backupPath, requestedBackupType, backupDetails);
         AblestackCommvaultTakeBackupCommand command = new AblestackCommvaultTakeBackupCommand(vm.getInstanceName(), backupPath);
+        command.setWait(BackupDataOperationTimeout.value());
         command.setBackupJobId(backupVO.getUuid());
-        final int deleteTimeout = BackupCommandTimeout.value();
-        if (deleteTimeout > 0) {
-            command.setWait(deleteTimeout);
-        }
         command.setQuiesce(quiesceVM);
         command.setVolumePools(volumePoolsAndPaths.first());
         command.setVolumePaths(volumePoolsAndPaths.second());
@@ -1469,7 +1465,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                 restoreCommand.setVmExists(vm.getRemoved() == null);
                 restoreCommand.setVmState(vm.getState());
                 restoreCommand.setRestorePlan(createRestorePlan(false));
-                restoreCommand.setTimeout(BackupRestoreTimeout.value());
+                restoreCommand.setTimeout(BackupDataOperationTimeout.value());
                 restoreCommand.setHostName(null);
                 restoreCommand.setBackupSourceHosts(new ArrayList<>(additionalSourceHostPaths.keySet()));
                 restoreCommand.setWaitForCompletion(false);
@@ -1691,7 +1687,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                     restoreCommand.setVmState(vmNameAndState.second());
                     restoreCommand.setRestoreVolumeUUID(backupVolumeInfo.getUuid());
                     restoreCommand.setRestorePlan(createRestorePlan(AblestackBackupFrameworkUtils.requiresRunningVmAttach(vmNameAndState.second())));
-                    restoreCommand.setTimeout(BackupRestoreTimeout.value());
+                    restoreCommand.setTimeout(BackupDataOperationTimeout.value());
                     restoreCommand.setCacheMode(cacheMode);
                     restoreCommand.setHostName(restoreHost.getName());
                     restoreCommand.setBackupSourceHosts(new ArrayList<>(additionalSourceHostPaths.keySet()));
@@ -2954,9 +2950,9 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
             throw new CloudRuntimeException(String.format("Unable to find stage host [%s] for backup cleanup", clientName));
         }
         AblestackDeleteBackupCommand command = new AblestackDeleteBackupCommand(path, null, null, null, forced);
-        final int commandTimeout = BackupCommandTimeout.value();
-        if (commandTimeout > 0) {
-            command.setWait(commandTimeout);
+        final int deleteTimeout = BackupDataOperationTimeout.value();
+        if (deleteTimeout > 0) {
+            command.setWait(deleteTimeout);
         }
         command.setBackupProvider("ablestack-commvault");
         command.setVmName(vmName);

@@ -670,9 +670,12 @@ def apply_netbackup_bp_conf() -> bool:
         print(f"NetBackup bp.conf not found: {NETBACKUP_BP_CONF_PATH}")
         return False
     copy_existing_file_backup(NETBACKUP_BP_CONF_PATH)
-    set_bp_conf_value(NETBACKUP_BP_CONF_PATH, "BPSTART_TIMEOUT", "21600")
-    set_bp_conf_value(NETBACKUP_BP_CONF_PATH, "BPEND_TIMEOUT", "21600")
-    set_bp_conf_value(NETBACKUP_BP_CONF_PATH, "CLIENT_READ_TIMEOUT", "21600")
+    # NetBackup's outer hook timeout must exceed Mold's default 12-hour
+    # backup.data.operation.timeout plus staging completion grace. CLIENT_READ_TIMEOUT must not be lower than the
+    # bpstart/bpend notify timeouts.
+    set_bp_conf_value(NETBACKUP_BP_CONF_PATH, "BPSTART_TIMEOUT", "86400")
+    set_bp_conf_value(NETBACKUP_BP_CONF_PATH, "BPEND_TIMEOUT", "86400")
+    set_bp_conf_value(NETBACKUP_BP_CONF_PATH, "CLIENT_READ_TIMEOUT", "86400")
     set_bp_conf_value(NETBACKUP_BP_CONF_PATH, "CLIENT_CONNECT_TIMEOUT", "1800")
     set_bp_conf_value(NETBACKUP_BP_CONF_PATH, "SERVER_CONNECT_TIMEOUT", "1800")
     print(f"Updated NetBackup config: {NETBACKUP_BP_CONF_PATH}")

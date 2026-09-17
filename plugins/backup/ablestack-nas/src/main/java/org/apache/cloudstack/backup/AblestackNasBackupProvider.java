@@ -88,8 +88,7 @@ import java.util.UUID;
 import java.util.stream.Collectors;
 
 import static org.apache.cloudstack.backup.BackupManager.BackupChainSize;
-import static org.apache.cloudstack.backup.BackupManager.BackupCommandTimeout;
-import static org.apache.cloudstack.backup.BackupManager.BackupRestoreTimeout;
+import static org.apache.cloudstack.backup.BackupManager.BackupDataOperationTimeout;
 import static org.apache.cloudstack.backup.BackupManager.BackupFrameworkEnabled;
 import static org.apache.cloudstack.backup.BackupManager.BackupQosBandwidthLimitMbps;
 import static org.apache.cloudstack.backup.BackupManager.KvmIncrementalBackup;
@@ -125,13 +124,6 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
             "nas.backup.restore.mount.timeout",
             "60",
             "Timeout in seconds after which backup repository mount fails.",
-            true,
-            BackupFrameworkEnabled.key());
-
-    ConfigKey<Integer> NASBackupRestoreTimeout = new ConfigKey<>("Advanced", Integer.class,
-            "nas.backup.restore.timeout",
-            "7200",
-            "Timeout in seconds after which NAS backup restore operations fail.",
             true,
             BackupFrameworkEnabled.key());
 
@@ -309,11 +301,8 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         BackupVO backupVO = createBackupObject(vm, host.getId(), backupPath, requestedBackupType,
                 checkpointName, backupEngine, incrementalBackup ? parentBackup : null, volumePoolsAndPaths.second());
         AblestackNasTakeBackupCommand command = new AblestackNasTakeBackupCommand(vm.getInstanceName(), backupPath);
+        command.setWait(BackupDataOperationTimeout.value());
         command.setBackupJobId(backupVO.getUuid());
-        final int deleteTimeout = BackupCommandTimeout.value();
-        if (deleteTimeout > 0) {
-            command.setWait(deleteTimeout);
-        }
         command.setBackupType(requestedBackupType);
         command.setCheckpointName(checkpointName);
         command.setBackupFiles(backupFiles);
@@ -337,11 +326,11 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         LOG.info("{} phase=[START], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupType=[{}], backupEngine=[{}], parentBackupUuid=[{}], hostId=[{}], hostName=[{}], backupPath=[{}], timeoutSeconds=[{}]",
                 BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
                 parentBackup != null ? parentBackup.getUuid() : null, host.getId(), host.getName(), backupPath,
-                commandTimeout > 0 ? commandTimeout : command.getWait());
+                command.getWait());
         LOG.info("Starting ABLESTACK NAS backup [backupId: {}, backupUuid: {}, vmId: {}, vmName: {}, backupType: {}, backupEngine: {}, parentBackupUuid: {}, hostId: {}, hostName: {}, repositoryId: {}, repositoryName: {}, repositoryType: {}, repositoryAddress: {}, backupPath: {}, timeoutSeconds: {}]",
                 backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
                 parentBackup != null ? parentBackup.getUuid() : null, host.getId(), host.getName(), backupRepository.getId(), backupRepository.getName(),
-                backupRepository.getType(), backupRepository.getAddress(), backupPath, commandTimeout > 0 ? commandTimeout : command.getWait());
+                backupRepository.getType(), backupRepository.getAddress(), backupPath, command.getWait());
         try {
             answer = (BackupAnswer) agentManager.send(host.getId(), command);
         } catch (AgentUnavailableException e) {
@@ -362,7 +351,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
             logger.error("Operation to initiate ABLESTACK NAS backup timed out [backupId: {}, backupUuid: {}, vmId: {}, vmName: {}, backupType: {}, backupEngine: {}, hostId: {}, repositoryId: {}, repositoryAddress: {}, elapsedMs: {}, timeoutSeconds: {}]",
                     backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
                     host.getId(), backupRepository.getId(), backupRepository.getAddress(), System.currentTimeMillis() - backupStartTime,
-                    commandTimeout > 0 ? commandTimeout : command.getWait(), e);
+                    command.getWait(), e);
             markBackupFailure(backupVO, "agent-send-timeout", "Operation to initiate backup timed out");
             backupVO.setStatus(Backup.Status.Failed);
             removeBackupWithDetails(backupVO.getId());
@@ -653,7 +642,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         if (Boolean.TRUE.equals(detachedRestoreStart.get())) {
             return (BackupAnswer) startAnswer;
         }
-        return AblestackRestoreJobPoller.waitForCompletion(restoreJobId, BackupRestoreTimeout.value(),
+        return AblestackRestoreJobPoller.waitForCompletion(restoreJobId, BackupDataOperationTimeout.value(),
                 () -> agentManager.send(hostId, new AblestackRestoreJobStatusCommand(restoreJobId, null, 5)));
     }
 
@@ -838,7 +827,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         restoreCommand.setVmState(vm.getState());
         restoreCommand.setRestorePlan(createRestorePlan(false));
         restoreCommand.setMountTimeout(NASBackupRestoreMountTimeout.value());
-        restoreCommand.setWait(BackupRestoreTimeout.value());
+        restoreCommand.setWait(BackupDataOperationTimeout.value());
         restoreCommand.setWaitForCompletion(false);
         trackRestoreJob(backup, restoreJobId, host);
 
@@ -1186,7 +1175,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         restoreCommand.setVmExists(null);
         restoreCommand.setVmState(vmNameAndState.second());
         restoreCommand.setMountTimeout(NASBackupRestoreMountTimeout.value());
-        restoreCommand.setWait(BackupRestoreTimeout.value());
+        restoreCommand.setWait(BackupDataOperationTimeout.value());
         restoreCommand.setCacheMode(cacheMode);
         restoreCommand.setVolumePaths(Collections.singletonList(String.format("%s/%s", pool.getPath(), volumeUUID)));
         restoreCommand.setBackupFiles(getBackupFiles(Collections.singletonList(matchingVolume), backup));
@@ -1286,9 +1275,9 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
 
         AblestackDeleteBackupCommand command = new AblestackDeleteBackupCommand(backup.getExternalId(), backupRepository.getType(),
                 backupRepository.getAddress(), backupRepository.getMountOptions(), forced);
-        final int commandTimeout = BackupCommandTimeout.value();
-        if (commandTimeout > 0) {
-            command.setWait(commandTimeout);
+        final int deleteTimeout = BackupDataOperationTimeout.value();
+        if (deleteTimeout > 0) {
+            command.setWait(deleteTimeout);
         }
         command.setMountTimeout(NASBackupRestoreMountTimeout.value());
         command.setBackupProvider("ablestack-nas");
@@ -1553,8 +1542,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
     @Override
     public ConfigKey<?>[] getConfigKeys() {
         return new ConfigKey[]{
-                NASBackupRestoreMountTimeout,
-                NASBackupRestoreTimeout
+                NASBackupRestoreMountTimeout
         };
     }
 

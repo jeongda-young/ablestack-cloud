@@ -903,6 +903,7 @@ mold_backup_run_local_incremental_on_mount() {
     -q "${quiesce}" \
     -f "${backup_files}" \
     -d "${disk_paths}" \
+    --data-operation-timeout-seconds "$(mold_backup_api_data_operation_timeout)" \
     || mold_backup_die "ablestack_veeam_nasbackup.sh ${op} failed"
 }
 
@@ -1099,6 +1100,7 @@ mold_backup_run_local_seed_import() {
     --source-format "${source_format}" \
     --veeam-restore-point "${VEEAM_RESTORE_POINT_ID}" \
     --bootstrap-checkpoint "${BOOTSTRAP_CHECKPOINT}" \
+    --data-operation-timeout-seconds "$(mold_backup_api_data_operation_timeout)" \
     || mold_backup_die "ablestack_veeam_nasbackup.sh import-veeam-seed failed"
 }
 
@@ -1462,13 +1464,19 @@ except Exception:
 }
 
 mold_backup_api_external_stage_timeout() {
+  local operation_timeout
+  operation_timeout="$(mold_backup_api_data_operation_timeout)"
+  echo "${VEEAM_EXTERNAL_STAGE_TIMEOUT:-$((operation_timeout + 600))}"
+}
+
+mold_backup_api_data_operation_timeout() {
   local configured
-  configured="$(mold_backup_api_list_config_value "backup.command.timeout" 2>/dev/null || true)"
+  configured="$(mold_backup_api_list_config_value "backup.data.operation.timeout" 2>/dev/null || true)"
   if [[ "$configured" =~ ^[1-9][0-9]*$ ]]; then
     echo "$configured"
     return 0
   fi
-  echo "${VEEAM_EXTERNAL_STAGE_TIMEOUT:-43200}"
+  echo "${VEEAM_DATA_OPERATION_TIMEOUT:-43200}"
 }
 
 mold_backup_api_update_config_if_needed() {
@@ -3340,6 +3348,7 @@ mold_backup_run_host_export() {
     -f "${backup_files}" \
     -d "${disk_paths}" \
     -q "${QUIESCE_VM:-false}" \
+    --data-operation-timeout-seconds "$(mold_backup_api_data_operation_timeout)" \
     >"$export_log" 2>&1; then
     mold_backup_notify_log err "Host export failed (${HOST_EXPORT_SCRIPT}): $(tail -5 "$export_log" | tr '\n' ' ')"
     rm -f "$export_log"
