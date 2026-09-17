@@ -49,7 +49,8 @@ under the License.
       <CreateNetwork ref="networkCreator" v-if="form === 'create'" :resource="formVm" :submit-handler="createAndAttach" @close-action="closeForm" />
       <template #footer><a-button @click="closeForm">{{ $t('label.cancel') }}</a-button><a-button type="primary" :disabled="busy" @click="$refs.networkCreator?.submit()">{{ $t('label.vmnic.create') }}</a-button></template>
     </a-modal>
-    <a-modal centered
+    <a-modal
+centered
 wrap-class-name="vm-nic-modal"
 :visible="form === 'attach'"
 :title="$t('label.vmnic.attach')"
@@ -68,7 +69,8 @@ wrap-class-name="vm-nic-modal"
       </a-form>
       <a-alert v-if="formError" class="nic-alert" type="error" :message="formError" />
     </a-modal>
-    <a-modal centered
+    <a-modal
+centered
 wrap-class-name="vm-nic-modal"
 :visible="form === 'action'"
 :title="actionTitle(action, selected)"
