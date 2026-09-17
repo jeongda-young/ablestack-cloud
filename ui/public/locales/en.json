@@ -7797,5 +7797,6 @@
   "message.vmnic.candidate": "The selected network is no longer eligible or is already attached.",
   "label.vmnic.link.down": "Set link DOWN",
   "label.vmnic.link.up": "Set link UP",
-  "label.isolatedpvlan": "Secondary VLAN"
+  "label.isolatedpvlan": "Secondary VLAN",
+  "message.vmnic.mac.stop": "Stop the VM before changing its MAC address. The existing API does not apply MAC changes to a running NIC."
 }

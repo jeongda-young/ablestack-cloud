@@ -7758,5 +7758,6 @@
   "label.vmnic.link.up": "링크 UP 설정",
   "message.warn.vpc.offerings": "VPC 네트워크 오퍼링은 VPC 안에 네트워크를 생성할 때 사용할 수 있습니다.",
   "label.keep.mac.address.on.public.nic": "공용 NIC의 MAC 주소 유지",
-  "label.isolatedpvlan": "보조 VLAN"
+  "label.isolatedpvlan": "보조 VLAN",
+  "message.vmnic.mac.stop": "MAC 주소는 VM을 정지한 후 변경하세요. 기존 API는 실행 중 NIC에 MAC 변경을 즉시 반영하지 않습니다."
 }

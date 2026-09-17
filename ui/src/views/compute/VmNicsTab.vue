@@ -62,8 +62,8 @@ wrap-class-name="vm-nic-modal"
       <a-form layout="vertical" class="nic-fields">
         <a-form-item :label="$t('label.network')"><a-select v-model:value="attachId" show-search :filter-option="filterOption" :loading="candidatesLoading" @change="changeCandidate"><a-select-option v-for="network in candidates" :key="network.id" :value="network.id" :label="network.name">{{ network.name }} · {{ network.type || network.guestiptype }}</a-select-option></a-select></a-form-item>
         <a-alert v-if="!candidatesLoading && !candidates.length" type="info" :message="$t('message.vmnic.empty')" />
-        <a-form-item :label="$t('label.ipaddress')" :extra="candidate?.type === 'L2' ? $t('message.vmnic.l2') : $t('message.vmnic.autoip')"><a-input v-model:value="values.ipaddress" :disabled="candidate?.type === 'L2'" /></a-form-item>
-        <a-form-item :label="$t('label.macaddress')" :extra="$t('message.vmnic.automac')"><a-input v-model:value="values.macaddress" /></a-form-item>
+        <a-form-item :label="$t('label.ipaddress')" :extra="candidate?.type === 'L2' ? $t('message.vmnic.l2') : $t('message.vmnic.autoip')"><a-input :aria-label="$t('label.ipaddress')" v-model:value="values.ipaddress" :disabled="candidate?.type === 'L2'" /></a-form-item>
+        <a-form-item :label="$t('label.macaddress')" :extra="$t('message.vmnic.automac')"><a-input :aria-label="$t('label.macaddress')" v-model:value="values.macaddress" /></a-form-item>
         <a-checkbox v-if="allowed('updateDefaultNicForVirtualMachine')" v-model:checked="makeDefault">{{ $t('label.make.default') }}</a-checkbox>
       </a-form>
       <a-alert v-if="formError" class="nic-alert" type="error" :message="formError" />
@@ -78,7 +78,7 @@ wrap-class-name="vm-nic-modal"
 @ok="submitAction"
 @cancel="closeForm">
       <a-descriptions v-if="selected" bordered :column="1" size="small" class="nic-description"><a-descriptions-item :label="$t('label.vm')">{{ vm.displayname || vm.name }}</a-descriptions-item><a-descriptions-item :label="$t('label.network')">{{ selected.networkname || selected.networkid }}</a-descriptions-item><a-descriptions-item :label="$t('label.id')">{{ selected.id }}</a-descriptions-item><a-descriptions-item :label="$t('label.ipaddress')">{{ action === 'removeIpFromNic' ? values.secondaryAddress : selected.ipaddress || '—' }}</a-descriptions-item><a-descriptions-item :label="$t('label.macaddress')">{{ selected.macaddress }}</a-descriptions-item></a-descriptions>
-      <template v-if="action === 'updateVmNicIp'"><a-form layout="vertical" class="nic-fields"><a-form-item :label="$t('label.ipaddress')" :extra="selected?.type === 'L2' ? $t('message.vmnic.l2') : $t('message.vmnic.preserveip')"><a-input v-model:value="values.ipaddress" :disabled="selected?.type === 'L2'" /></a-form-item><a-form-item :label="$t('label.macaddress')"><a-input v-model:value="values.macaddress" /></a-form-item></a-form></template>
+      <template v-if="action === 'updateVmNicIp'"><a-form layout="vertical" class="nic-fields"><a-form-item :label="$t('label.ipaddress')" :extra="selected?.type === 'L2' ? $t('message.vmnic.l2') : $t('message.vmnic.preserveip')"><a-input :aria-label="$t('label.ipaddress')" v-model:value="values.ipaddress" :disabled="selected?.type === 'L2'" /></a-form-item><a-form-item :label="$t('label.macaddress')" :extra="vm.state !== 'Stopped' ? $t('message.vmnic.mac.stop') : undefined"><a-input :aria-label="$t('label.macaddress')" v-model:value="values.macaddress" :disabled="vm.state !== 'Stopped'" /></a-form-item></a-form></template>
       <a-alert class="nic-alert" type="warning" show-icon :message="$t(action === 'removeNicFromVirtualMachine' ? 'message.vmnic.detach' : 'message.vmnic.impact')" />
       <a-alert v-if="reason(action, selected)" class="nic-alert" type="warning" :message="reason(action, selected)" />
       <a-alert v-if="formError" class="nic-alert" type="error" :message="formError" />
@@ -86,7 +86,7 @@ wrap-class-name="vm-nic-modal"
     </a-modal>
     <a-modal wrap-class-name="vm-nic-modal" :visible="form === 'secondary'" :title="$t('label.edit.secondary.ips')" @cancel="closeForm">
       <p>{{ selected?.networkname }} / {{ selected?.macaddress }}</p>
-      <a-form v-if="allowed('addIpToNic')" layout="vertical" class="nic-fields"><a-form-item :label="$t('label.ipaddress')" :extra="$t('message.vmnic.autoip')"><a-input v-model:value="values.ipaddress" /></a-form-item><a-form-item :label="$t('label.description')"><a-input v-model:value="values.description" /></a-form-item></a-form>
+      <a-form v-if="allowed('addIpToNic')" layout="vertical" class="nic-fields"><a-form-item :label="$t('label.ipaddress')" :extra="$t('message.vmnic.autoip')"><a-input :aria-label="$t('label.ipaddress')" v-model:value="values.ipaddress" /></a-form-item><a-form-item :label="$t('label.description')"><a-input v-model:value="values.description" /></a-form-item></a-form>
       <a-alert v-if="formError" class="nic-alert" type="error" :message="formError" />
       <a-list :data-source="selected?.secondaryip || []"><template #renderItem="{ item }"><a-list-item>{{ item.ipaddress }} {{ item.description }}<a-button v-if="allowed('removeIpFromNic')" danger size="small" :disabled="busy || !!reason('removeIpFromNic', selected)" @click="removeSecondary(item)">{{ $t('label.action.release.ip') }}</a-button></a-list-item></template></a-list>
       <a-alert class="nic-alert" type="info" :message="$t('message.network.secondaryip')" />
@@ -242,6 +242,7 @@ export default {
           if (reason) throw new Error(this.$t(reason))
           if (api === 'addNicToVirtualMachine' && (!latestNetwork || latestNetwork.zoneid !== vm.zoneid || data.rows.some(n => n.networkid === latestNetwork.id))) throw new Error(this.$t('message.vmnic.candidate'))
           if (api === 'updateVmNicIp' && target.type !== 'L2' && !op.values.ipaddress) op.values.ipaddress = target.ipaddress
+          if (api === 'updateVmNicIp' && data.vm.state !== 'Stopped' && op.values.macaddress && op.values.macaddress.trim().toLowerCase() !== target.macaddress?.toLowerCase()) throw new Error(this.$t('message.vmnic.mac.stop'))
           if (api === 'removeIpFromNic' && !target.secondaryip?.some(ip => ip.id === op.values.secondaryId)) throw new Error(this.$t('message.vmnic.context'))
         },
         submit: op => {
@@ -276,7 +277,7 @@ export default {
             const response = await getAPI('listVirtualMachines', { id: vm.id })
             return response.listvirtualmachinesresponse.virtualmachine?.[0]?.nic?.find(nic => nic.id === found.id)?.linkstate === op.values.linkstate
           }
-          if (api === 'updateVmNicIp') return (!op.values.macaddress || found.macaddress?.toLowerCase() === op.values.macaddress.trim().toLowerCase()) && (found.type === 'L2' || found.ipaddress === op.values.ipaddress)
+          if (api === 'updateVmNicIp') return (!op.values.macaddress || found.macaddress?.toLowerCase() === op.values.macaddress.trim().toLowerCase()) && (found.type === 'L2' || found.ipaddress === nicAddressParams(op.nic, op.values).ipaddress)
           if (api === 'removeIpFromNic') return !(found.secondaryip || []).some(ip => ip.id === op.values.secondaryId)
           if (api === 'addIpToNic') return (found.secondaryip || []).some(ip => op.values.ipaddress ? ip.ipaddress === op.values.ipaddress.trim() : !op.values.previousSecondary.includes(ip.id)) && op.accepted
           return false

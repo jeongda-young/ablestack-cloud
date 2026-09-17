@@ -37,6 +37,8 @@ test('topology requires known context and respects snapshots, basic, default, VM
   for (const update of [{ state: 'Starting' }, { hypervisor: 'External' }]) expect(nicActionReason('addNicToVirtualMachine', null, { ...vm, ...update }, context)).toBeTruthy()
 })
 test('enabled and link gates are independent; address changes require network services or stopped VM', () => {
+  expect(nicActionReason('updateVmNicIp', { ...nic, type: 'L2' }, vm, { ...context, network: { type: 'L2' } })).toBe('message.vmnic.mac.stop')
+  expect(nicActionReason('updateVmNicIp', { ...nic, type: 'L2' }, { ...vm, state: 'Stopped' }, context)).toBe('')
   expect(nicActionReason('updateVmNic', nic, { ...vm, hypervisor: 'VMware' }, context)).toBe('message.vmnic.kvm')
   expect(nicActionReason('UpdateVmNicLinkState', { ...nic, linkstate: undefined }, vm, context)).toBeTruthy()
   expect(nicActionReason('updateVmNicIp', nic, vm, { ...context, network: { service: [{ name: 'Dhcp' }] } })).toBe('message.vmnic.stop')

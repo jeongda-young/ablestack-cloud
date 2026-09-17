@@ -36,6 +36,7 @@ export function nicActionReason (api, nic, vm, context = {}) {
   if (api === 'UpdateVmNicLinkState' && (!context.zone || context.zone.networktype === 'Basic' || typeof nic.linkstate !== 'boolean')) return 'message.vmnic.context'
   if (api === 'updateVmNic' && typeof nic.enabled !== 'boolean') return 'message.vmnic.context'
   if (['addIpToNic', 'removeIpFromNic'].includes(api) && nic.type === 'L2') return 'message.vmnic.l2'
+  if (api === 'updateVmNicIp' && vm.state !== 'Stopped' && nic.type === 'L2') return 'message.vmnic.mac.stop'
   if (api === 'updateVmNicIp' && vm.state !== 'Stopped' && context.network?.type !== 'L2') {
     if (!context.network || !Array.isArray(context.network.service)) return 'message.vmnic.context'
     if (context.network.service.length) return 'message.vmnic.stop'
