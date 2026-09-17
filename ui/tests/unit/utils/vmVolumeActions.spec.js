@@ -63,3 +63,21 @@ test('created volume ID survives attach failure', async () => {
   const op = startVolumeOperation('key', { steps: ['createVolume', 'attachVolume'], values: { name: 'test' } }, deps)
   await flush(); expect(op.volume.id).toBe(volume.id); expect(op.stage).toBe(1); expect(op.status).toBe('failed')
 })
+test('failed detach never starts destruction', async () => {
+  const deps = dependencies(); deps.poll.mockResolvedValue({ jobstatus: 2 })
+  const op = startVolumeOperation('key', { steps: ['detachVolume', 'destroyVolume'], volume }, deps)
+  await flush(); expect(op.stage).toBe(0); expect(op.status).toBe('failed'); expect(deps.submit).toHaveBeenCalledTimes(1)
+})
+test('ROOT detach requires stopped supported hypervisor and pool identity', () => {
+  const root = { ...volume, type: 'ROOT', virtualmachineid: vm.id, storageid: 'pool' }
+  expect(volumeActionReason('detachVolume', root, { ...vm, state: 'Stopped', hypervisor: 'KVM' })).toBe('')
+  expect(volumeActionReason('detachVolume', root, { ...vm, state: 'Stopped', hypervisor: 'Other' })).toBeTruthy()
+  expect(volumeActionReason('destroyVolume', { ...root, virtualmachineid: null }, vm)).toBeTruthy()
+})
+test('revalidation failure after detach preserves volume and allows cancel remaining steps', async () => {
+  const deps = dependencies(); deps.validate.mockResolvedValueOnce().mockRejectedValueOnce(new Error('reattached'))
+  const op = startVolumeOperation('key', { steps: ['detachVolume', 'destroyVolume'], volume }, deps)
+  await flush(); expect(op.stage).toBe(1); expect(op.status).toBe('failed'); expect(deps.submit).toHaveBeenCalledTimes(1)
+  op.abandon(); expect(startVolumeOperation('key', { steps: ['attachVolume'], volume }, dependencies())).not.toBe(op)
+  await flush()
+})
