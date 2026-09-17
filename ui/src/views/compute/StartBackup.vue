@@ -134,6 +134,7 @@ export default {
             jobId: response.createbackupresponse.jobid,
             title: this.$t('label.create.backup'),
             description: values.name,
+            successMessage: this.$t('label.backup.requested'),
             errorMessage: this.$t('message.create.backup.failed'),
             loadingMessage: `${this.$t('label.create.backup')}: ${this.resource.name || this.resource.id}`,
             catchMessage: this.$t('error.fetching.async.job.result')

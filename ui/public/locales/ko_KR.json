@@ -467,6 +467,7 @@
   "label.backup.finalizing": "완료 처리 대기",
   "label.restore.finalizing": "복원 완료 처리 대기",
   "label.restore.requested": "복원 요청",
+  "label.backup.requested": "백업 요청",
   "label.restore.queued": "복원 시작 대기",
   "label.restore.prepare.source": "복원 원본 준비",
   "label.restore.validate.chain": "백업 체인 검증",
