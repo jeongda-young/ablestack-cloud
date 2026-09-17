@@ -118,6 +118,7 @@ import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
 import org.libvirt.Connect;
 import org.libvirt.Domain;
+import org.libvirt.DomainBlockJobInfo;
 import org.libvirt.DomainInfo;
 import org.libvirt.DomainSnapshot;
 import org.libvirt.Error.ErrorNumber;
@@ -145,6 +146,7 @@ import com.cloud.exception.InternalErrorException;
 import com.cloud.exception.InvalidParameterValueException;
 import com.cloud.hypervisor.Hypervisor;
 import com.cloud.hypervisor.kvm.resource.LibvirtComputingResource;
+import com.cloud.hypervisor.kvm.resource.KvmVmOperationGuard;
 import com.cloud.hypervisor.kvm.resource.LibvirtConnection;
 import com.cloud.hypervisor.kvm.resource.LibvirtDomainXMLParser;
 import com.cloud.hypervisor.kvm.resource.LibvirtVMDef.DiskDef;
@@ -2089,7 +2091,9 @@ public class KVMStorageProcessor implements StorageProcessor {
         String disksToAvoid = diskToSnapshotAndDisksToAvoid.second().stream().map(label -> String.format(TAG_AVOID_DISK_FROM_SNAPSHOT, label)).collect(Collectors.joining());
         String snapshotName = "clone-overlay-" + operationId + "-" + diskLabel;
         String snapshotXml = String.format(XML_CREATE_DISK_SNAPSHOT, snapshotName, diskLabel, overlayPath, disksToAvoid);
-        vm.snapshotCreateXML(snapshotXml, VIR_DOMAIN_SNAPSHOT_CREATE_DISK_ONLY | VIR_DOMAIN_SNAPSHOT_CREATE_NO_METADATA);
+        try (KvmVmOperationGuard protection = KvmVmOperationGuard.begin(vm, "volume-snapshot")) {
+            vm.snapshotCreateXML(snapshotXml, VIR_DOMAIN_SNAPSHOT_CREATE_DISK_ONLY | VIR_DOMAIN_SNAPSHOT_CREATE_NO_METADATA);
+        }
         logger.info("Created running source overlay [{}] for VM [{}] disk [{}] with backing [{}].", overlayPath, vmName, diskLabel, sourcePath);
         return diskLabel;
     }
@@ -3011,7 +3015,9 @@ public class KVMStorageProcessor implements StorageProcessor {
         String vmUuid = vm.getUUIDString();
 
         long start = System.currentTimeMillis();
-        vm.snapshotCreateXML(String.format(XML_CREATE_FULL_VM_SNAPSHOT, snapshotName, vmUuid));
+        try (KvmVmOperationGuard protection = KvmVmOperationGuard.begin(vm, "volume-snapshot")) {
+            vm.snapshotCreateXML(String.format(XML_CREATE_FULL_VM_SNAPSHOT, snapshotName, vmUuid));
+        }
         logger.debug(String.format("Full Instance Snapshot [%s] of Instance [%s] took [%s] seconds to finish.", snapshotName, vmName, (System.currentTimeMillis() - start)/1000));
     }
 
@@ -3140,7 +3146,9 @@ public class KVMStorageProcessor implements StorageProcessor {
         String createSnapshotXmlFormated = String.format(XML_CREATE_DISK_SNAPSHOT, snapshotName, diskLabelToSnapshot, snapshotTemporaryPath, disksToAvoidsOnSnapshot);
 
         long start = System.currentTimeMillis();
-        vm.snapshotCreateXML(createSnapshotXmlFormated, VIR_DOMAIN_SNAPSHOT_CREATE_DISK_ONLY);
+        try (KvmVmOperationGuard protection = KvmVmOperationGuard.begin(vm, "volume-snapshot")) {
+            vm.snapshotCreateXML(createSnapshotXmlFormated, VIR_DOMAIN_SNAPSHOT_CREATE_DISK_ONLY);
+        }
         logger.debug(String.format("Snapshot [%s] took [%s] seconds to finish.", snapshotName, (System.currentTimeMillis() - start)/1000));
 
         return diskLabelToSnapshot;
@@ -3603,13 +3611,30 @@ public class KVMStorageProcessor implements StorageProcessor {
         String vmName = cmd.getOptions() != null ? cmd.getOptions().get("vmName") : null;
 
         try {
-            if ("commitSourceOverlay".equals(operation)) {
+            // A distinct operation prevents older agents from deleting the overlay before the DB update.
+            if ("commitSourceOverlayPreserveOverlay".equals(operation)) {
                 String backingPath = cmd.getOptions().get("backingPath");
                 if (StringUtils.isBlank(backingPath)) {
                     throw new CloudRuntimeException("backingPath option is required for source overlay commit.");
                 }
-                commitSourceOverlay(pool, volumePath, resolveSharedMountPointPath(pool, backingPath), vmName);
+                commitSourceOverlay(pool, volumePath, resolveSharedMountPointPath(pool, backingPath), vmName, cmd.getOptions().get("sourceVmState"));
                 return new FlattenCmdAnswer(volume, cmd, true, "committed");
+            }
+
+            if ("cleanupSourceOverlay".equals(operation)) {
+                String backingPath = cmd.getOptions().get("backingPath");
+                String overlayPath = cmd.getOptions().get("overlayPath");
+                if (StringUtils.isBlank(backingPath) || StringUtils.isBlank(overlayPath)
+                        || !volumePath.equals(resolveSharedMountPointPath(pool, backingPath))) {
+                    throw new CloudRuntimeException("Source volume must point to the committed base before overlay cleanup.");
+                }
+                cleanupSourceOverlay(pool, resolveSharedMountPointPath(pool, overlayPath), volumePath, vmName, cmd.getOptions().get("sourceVmState"));
+                return new FlattenCmdAnswer(volume, cmd, true, "cleaned");
+            }
+
+            if ("pauseCloneVolume".equals(operation) || "checkStoppedCloneVolume".equals(operation)
+                    || "checkFlattenCloneVolumeManaged".equals(operation) || "setCloneFlattenBandwidth".equals(operation)) {
+                return manageCloneVolumePower(cmd, volume, pool, volumePath, vmName, operation);
             }
 
             if (!SHARED_MOUNT_POINT_FLATTEN_OPERATION.equals(operation) && !SHARED_MOUNT_POINT_FLATTEN_CHECK_OPERATION.equals(operation)) {
@@ -3652,37 +3677,226 @@ public class KVMStorageProcessor implements StorageProcessor {
         }
     }
 
-    protected void commitSourceOverlay(KVMStoragePool pool, Path overlayPath, Path backingPath, String vmName) throws IOException, LibvirtException {
-        if (StringUtils.isNotBlank(vmName)) {
-            Connect conn = LibvirtConnection.getConnectionByVmName(vmName);
-            Domain vm = resource.getDomain(conn, vmName);
-            try {
-                if (vm.getInfo().state == DomainInfo.DomainState.VIR_DOMAIN_RUNNING) {
-                    String diskLabel = getDiskLabelForPath(conn, vm, vmName, overlayPath.toString());
-                    if (StringUtils.isBlank(diskLabel)) {
-                        throw new CloudRuntimeException("Could not find source overlay disk " + overlayPath + " in VM " + vmName);
-                    }
-                    String command = String.format("virsh blockcommit %s %s --base %s --active --wait --pivot", shellQuote(vm.getName()), shellQuote(diskLabel), shellQuote(backingPath.toString()));
-                    String result = Script.runSimpleBashScript(command);
-                    if (result != null) {
-                        throw new CloudRuntimeException("Failed to commit source overlay using command [" + command + "]. Result: " + result);
-                    }
-                    Files.deleteIfExists(overlayPath);
-                    logger.info("Committed running source overlay [{}] into backing [{}] for VM [{}].", overlayPath, backingPath, vmName);
-                    return;
+    protected Answer manageCloneVolumePower(FlattenSharedMountPointCommand cmd, VolumeObjectTO volume, KVMStoragePool pool,
+            Path volumePath, String vmName, String operation) throws LibvirtException, IOException {
+        String expectedState = cmd.getOptions().get("cloneVmState");
+        if (("checkStoppedCloneVolume".equals(operation) && !"Stopped".equals(expectedState))
+                || (("checkFlattenCloneVolumeManaged".equals(operation) || "setCloneFlattenBandwidth".equals(operation))
+                        && !"Running".equals(expectedState))) {
+            throw new CloudRuntimeException("Clone VM state does not match the requested disk operation.");
+        }
+        Domain vm = getSourceDomainForFinalization(vmName, expectedState);
+        try {
+            String diskLabel = null;
+            DomainBlockJobInfo job = null;
+            if ("Running".equals(expectedState)) {
+                diskLabel = getDiskLabelForPath(LibvirtConnection.getConnectionByVmName(vmName), vm, vmName, volumePath.toString());
+                if (StringUtils.isBlank(diskLabel)) {
+                    throw new CloudRuntimeException("Active clone disk does not match the recorded volume path.");
                 }
-            } finally {
+                job = getClonePullJob(vm, diskLabel);
+                if ("pauseCloneVolume".equals(operation) && job != null) {
+                    try {
+                        vm.blockJobAbort(diskLabel, 0); // Synchronous cancellation, never pivot or delete.
+                    } catch (LibvirtException e) {
+                        if (getClonePullJob(vm, diskLabel) != null) {
+                            throw e;
+                        }
+                        // Completion may have won the race with cancellation. Verify again below.
+                    }
+                    if (getClonePullJob(vm, diskLabel) != null) {
+                        throw new CloudRuntimeException("Clone blockpull cancellation has not completed.");
+                    }
+                }
+            }
+            boolean hasBacking = validateManagedCloneImage(pool, volumePath, cmd.getOptions().get("backingPath"));
+            if ("setCloneFlattenBandwidth".equals(operation)) {
+                int bandwidth = Integer.parseInt(cmd.getOptions().get("bandwidth"));
+                if (bandwidth < 0) {
+                    throw new CloudRuntimeException("Clone flatten bandwidth must not be negative.");
+                }
+                if (job == null) {
+                    return new FlattenCmdAnswer(volume, cmd, true, "bandwidthPending");
+                }
+                Pair<Integer, String> result = runBashCommand(String.format("virsh blockjob %s %s --bandwidth %d",
+                        shellQuote(vmName), shellQuote(diskLabel), bandwidth));
+                DomainBlockJobInfo current = getClonePullJob(vm, diskLabel);
+                if (current == null) {
+                    // The job may complete while its limit is being changed. Never restart it here.
+                    return new FlattenCmdAnswer(volume, cmd, true, "bandwidthPending");
+                }
+                if (result.first() != 0 || current.bandwidth != bandwidth) {
+                    throw new CloudRuntimeException("Unable to confirm clone blockpull bandwidth: " + result.second());
+                }
+                return new FlattenCmdAnswer(volume, cmd, true, "bandwidthApplied");
+            }
+            if ("pauseCloneVolume".equals(operation)) {
+                return new FlattenCmdAnswer(volume, cmd, true, "paused");
+            }
+            if ("Stopped".equals(expectedState)) {
+                return new FlattenCmdAnswer(volume, cmd, true, hasBacking ? "paused" : SHARED_MOUNT_POINT_FLATTENED);
+            }
+            if (job != null) {
+                double progress = job.end > 0 ? Math.min(100, Math.max(0, 100.0 * job.cur / job.end)) : 0;
+                return new FlattenCmdAnswer(volume, cmd, true, SHARED_MOUNT_POINT_FLATTEN_RUNNING_DETAIL_PREFIX + progress);
+            }
+            if (!hasBacking) {
+                return new FlattenCmdAnswer(volume, cmd, true, SHARED_MOUNT_POINT_FLATTENED);
+            }
+            int bandwidth = Math.max(0, NumberUtils.toInt(cmd.getOptions().get("bandwidth"), SHARED_MOUNT_POINT_BLOCKPULL_BANDWIDTH_MIB));
+            Pair<Integer, String> result = runBashCommand(String.format("virsh blockpull %s %s --bandwidth %d",
+                    shellQuote(vmName), shellQuote(diskLabel), bandwidth));
+            if (result.first() != 0) {
+                throw new CloudRuntimeException("Unable to resume clone blockpull: " + result.second());
+            }
+            return new FlattenCmdAnswer(volume, cmd, true, SHARED_MOUNT_POINT_FLATTEN_RUNNING_DETAIL_PREFIX + "0");
+        } finally {
+            if (vm != null) {
                 vm.free();
             }
         }
+    }
 
-        String command = String.format("qemu-img commit %s", shellQuote(overlayPath.toString()));
-        String result = Script.runSimpleBashScript(command);
-        if (result != null) {
-            throw new CloudRuntimeException("Failed to commit stopped source overlay using command [" + command + "]. Result: " + result);
+    protected DomainBlockJobInfo getClonePullJob(Domain vm, String diskLabel) throws LibvirtException {
+        DomainBlockJobInfo info = vm.getBlockJobInfo(diskLabel, 0);
+        if (info == null || info.type == 0) {
+            return null;
         }
-        Files.deleteIfExists(overlayPath);
-        logger.info("Committed stopped source overlay [{}] into backing [{}].", overlayPath, backingPath);
+        // libvirt VIR_DOMAIN_BLOCK_JOB_TYPE_PULL = 1; never cancel commit/copy/backup jobs.
+        if (info.type != 1) {
+            throw new CloudRuntimeException("A non-flatten block job is active on clone disk " + diskLabel);
+        }
+        return info;
+    }
+
+    protected boolean validateManagedCloneImage(KVMStoragePool pool, Path volumePath, String expectedBacking) throws IOException {
+        if (StringUtils.isBlank(expectedBacking) || !Files.isRegularFile(volumePath)) {
+            throw new CloudRuntimeException("Clone image or expected backing path is missing.");
+        }
+        Path backing = resolveSharedMountPointPath(pool, expectedBacking);
+        if (volumePath.equals(backing)) {
+            throw new CloudRuntimeException("A clone image cannot be its own backing file.");
+        }
+        Pair<Integer, String> result = runBashCommand("qemu-img info --output=json -U " + shellQuote(volumePath.toString()));
+        if (result.first() != 0) {
+            throw new CloudRuntimeException("Unable to inspect clone image: " + result.second());
+        }
+        JsonNode info = new ObjectMapper().readTree(result.second());
+        if (info == null || !"qcow2".equals(info.path("format").asText())) {
+            throw new CloudRuntimeException("Clone image is not QCOW2.");
+        }
+        String actualBacking = info.path("full-backing-filename").asText(info.path("backing-filename").asText());
+        if (StringUtils.isBlank(actualBacking)) {
+            return false;
+        }
+        Path actual = Paths.get(actualBacking);
+        if (!actual.isAbsolute()) {
+            actual = volumePath.getParent().resolve(actual);
+        }
+        if (!Files.isRegularFile(backing) || !Files.isSameFile(backing, actual.normalize())) {
+            throw new CloudRuntimeException("Clone backing chain does not match the recorded dependency.");
+        }
+        return true;
+    }
+
+    protected void validateSourceOverlayPaths(KVMStoragePool pool, Path overlayPath, Path backingPath) {
+        Path overlayDirectory = resolveSharedMountPointPath(pool, "clone/overlay");
+        if (overlayPath.equals(backingPath) || overlayPath.equals(overlayDirectory) || !overlayPath.startsWith(overlayDirectory)
+                || !Files.isRegularFile(backingPath)) {
+            throw new CloudRuntimeException("Invalid source overlay or backing path for finalization.");
+        }
+    }
+
+    protected Domain getSourceDomainForFinalization(String vmName, String expectedState) throws LibvirtException {
+        if (StringUtils.isBlank(vmName) || (!"Running".equals(expectedState) && !"Stopped".equals(expectedState))) {
+            throw new CloudRuntimeException("Source VM name and stable power state are required for overlay finalization.");
+        }
+        Domain vm;
+        try {
+            Connect conn = LibvirtConnection.getConnectionByVmName(vmName);
+            vm = resource.getDomain(conn, vmName);
+        } catch (LibvirtException e) {
+            if ("Stopped".equals(expectedState) && isLibvirtNoDomain(e)) {
+                return null;
+            }
+            throw e;
+        }
+        try {
+            DomainInfo.DomainState actualState = vm.getInfo().state;
+            boolean matches = "Running".equals(expectedState) ? actualState == DomainInfo.DomainState.VIR_DOMAIN_RUNNING
+                    : actualState == DomainInfo.DomainState.VIR_DOMAIN_SHUTOFF;
+            if (!matches) {
+                throw new CloudRuntimeException("Source VM power state changed before overlay finalization: " + actualState);
+            }
+            return vm;
+        } catch (RuntimeException | LibvirtException e) {
+            vm.free();
+            throw e;
+        }
+    }
+
+    protected void commitSourceOverlay(KVMStoragePool pool, Path overlayPath, Path backingPath, String vmName, String expectedState) throws IOException, LibvirtException {
+        validateSourceOverlayPaths(pool, overlayPath, backingPath);
+        Domain vm = getSourceDomainForFinalization(vmName, expectedState);
+        try {
+            if ("Running".equals(expectedState)) {
+                Connect conn = LibvirtConnection.getConnectionByVmName(vmName);
+                String diskLabel = getDiskLabelForPath(conn, vm, vmName, overlayPath.toString());
+                if (StringUtils.isBlank(diskLabel)) {
+                    String baseDiskLabel = getDiskLabelForPath(conn, vm, vmName, backingPath.toString());
+                    if (StringUtils.isNotBlank(baseDiskLabel) && !hasActiveSourceBlockJob(vmName, baseDiskLabel)) {
+                        return; // The pivot completed before a previous answer was lost.
+                    }
+                    throw new CloudRuntimeException("Could not find source overlay disk " + overlayPath + " in VM " + vmName);
+                }
+                if (hasActiveSourceBlockJob(vmName, diskLabel)) {
+                    throw new CloudRuntimeException("A source disk block job is still active; preserve the overlay.");
+                }
+                String command = String.format("virsh blockcommit %s %s --base %s --active --wait --pivot", shellQuote(vmName), shellQuote(diskLabel), shellQuote(backingPath.toString()));
+                requireSuccessfulSourceCommand(command);
+            } else {
+                requireSuccessfulSourceCommand(String.format("qemu-img commit -f qcow2 %s", shellQuote(overlayPath.toString())));
+            }
+            logger.info("Committed source overlay [{}] into backing [{}] for VM [{}]. Retaining overlay until DB path restoration is acknowledged.", overlayPath, backingPath, vmName);
+        } finally {
+            if (vm != null) {
+                vm.free();
+            }
+        }
+    }
+
+    protected void requireSuccessfulSourceCommand(String command) {
+        Pair<Integer, String> result = runBashCommand(command);
+        if (result.first() != 0) {
+            throw new CloudRuntimeException("Source overlay command failed: " + command + "; exit=" + result.first() + "; output=" + result.second());
+        }
+    }
+
+    protected void cleanupSourceOverlay(KVMStoragePool pool, Path overlayPath, Path backingPath, String vmName, String expectedState) throws IOException, LibvirtException {
+        validateSourceOverlayPaths(pool, overlayPath, backingPath);
+        Domain vm = getSourceDomainForFinalization(vmName, expectedState);
+        try {
+            if ("Running".equals(expectedState)) {
+                Connect conn = LibvirtConnection.getConnectionByVmName(vmName);
+                String baseDiskLabel = getDiskLabelForPath(conn, vm, vmName, backingPath.toString());
+                if (StringUtils.isNotBlank(getDiskLabelForPath(conn, vm, vmName, overlayPath.toString()))
+                        || StringUtils.isBlank(baseDiskLabel) || hasActiveSourceBlockJob(vmName, baseDiskLabel)) {
+                    throw new CloudRuntimeException("Source disk is not fully pivoted to the base; preserve the overlay.");
+                }
+            }
+            Files.deleteIfExists(overlayPath);
+            logger.info("Removed committed source overlay [{}] after DB path restoration for VM [{}].", overlayPath, vmName);
+        } finally {
+            if (vm != null) {
+                vm.free();
+            }
+        }
+    }
+
+    protected boolean hasActiveSourceBlockJob(String vmName, String diskLabel) {
+        String info = getBlockJobInfo(vmName, diskLabel);
+        // Source cleanup must also wait for commit/copy jobs, not just clone blockpull.
+        return StringUtils.isNotBlank(info) && !StringUtils.containsIgnoreCase(info, NO_CURRENT_BLOCK_JOB);
     }
 
     protected String getDiskLabelForPath(Connect conn, Domain vm, String vmName, String diskPath) throws LibvirtException {
