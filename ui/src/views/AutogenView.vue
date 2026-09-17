@@ -2222,18 +2222,29 @@ export default {
             if (['createProject', 'updateProject', 'deleteProject'].includes(action.api)) {
               eventBus.emit('projects-updated', { action: action.api, project: this.resource })
             }
+            if (action.api === 'restoreBackup') {
+              this.fetchData({ irefresh: true })
+            }
             resolve(true)
           },
           errorMethod: () => {
             if (selectedItems === this.selectedItems && selectedItems.length > 0) {
               eventBus.emit('update-resource-state', { selectedItems, resource, state: 'failed' })
             }
+            if (action.api === 'restoreBackup') {
+              this.fetchData({ irefresh: true })
+            }
             resolve(true)
           },
           loadingMessage: `${this.$t(action.label)} - ${resourceName}`,
           showLoading: showLoading,
           catchMessage: this.$t('error.fetching.async.job.result'),
-          catchMethod: () => resolve(false),
+          catchMethod: () => {
+            if (action.api === 'restoreBackup') {
+              this.fetchData({ irefresh: true })
+            }
+            resolve(false)
+          },
           action,
           bulkAction: `${selectedItems.length > 0}` && this.showGroupActionModal,
           resourceId: resource
@@ -2394,7 +2405,7 @@ export default {
         }
         if (jobId) {
           if (action.api === 'restoreBackup') {
-            this.markBackupRestoreStarted(action.resource)
+            this.markBackupRestoreStarted(this.resource)
           }
           if (selectedItems === this.selectedItems) {
             eventBus.emit('update-resource-state', { selectedItems, resource, state: 'InProgress', jobid: jobId })

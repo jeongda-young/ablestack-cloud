@@ -776,11 +776,15 @@ final class LibvirtAblestackAsyncBackupRunner {
     }
 
     private static String buildBlockJobBandwidthCommand(final String vmName, final int virshLimitMiBps) {
-        return "set -o pipefail; rc=0; "
-                + "while read -r disk target; do "
+        return "set -o pipefail; rc=0; active=0; "
+                + "while read -r disk; do "
                 + "[ -z \"$disk\" ] && continue; "
+                + "if virsh -c qemu:///system blockjob " + shellQuote(vmName) + " \"$disk\" --info >/dev/null 2>&1; then "
+                + "active=$((active + 1)); "
                 + "virsh -c qemu:///system blockjob " + shellQuote(vmName) + " \"$disk\" --bandwidth " + virshLimitMiBps + " || rc=$?; "
-                + "done < <(virsh -c qemu:///system domblklist " + shellQuote(vmName) + " --details 2>/dev/null | awk '/disk/ {print $3 \" \" $4}'); "
+                + "fi; "
+                + "done < <(virsh -c qemu:///system domblklist " + shellQuote(vmName) + " --details 2>/dev/null | awk '$2 == \"disk\" {print $3}'); "
+                + "if [ \"$active\" -eq 0 ]; then echo 'No active backup block jobs were found' >&2; exit 1; fi; "
                 + "exit $rc";
     }
 
