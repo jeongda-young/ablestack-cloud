@@ -7763,6 +7763,7 @@
   "message.vmvolume.device.auto": "Leave empty for automatic assignment. 0 is ROOT; 3 is reserved. The supported range and guest disk mapping depend on the hypervisor.",
   "message.vmvolume.device.invalid": "Enter a positive integer other than reserved ID 3.",
   "message.vmvolume.device.used": "This number is already used by an attached volume.",
+  "label.vmnic.abandon": "Cancel remaining steps · keep resources",
   "label.vmnic.create": "Create and attach",
   "label.vmnic.attach": "Attach existing network",
   "label.vmnic.detach": "Detach network",

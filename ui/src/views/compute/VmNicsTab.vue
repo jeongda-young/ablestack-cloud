@@ -100,7 +100,7 @@ wrap-class-name="vm-nic-modal"
         <a-alert v-if="operation.stage > 0 && operation.status !== 'complete'" class="nic-alert" type="warning" :message="$t('message.vmnic.partial')" />
         <p v-if="operation.status === 'unknown'">{{ $t('message.vmnic.unknown') }}</p><p v-if="operation.jobId">Job ID: {{ operation.jobId }}</p>
       </template>
-      <template v-if="operation" #footer><a-button v-if="['unknown', 'failed'].includes(operation.status)" :loading="operation.checking" @click="operation.resume()">{{ $t(operation.status === 'unknown' ? 'label.vmvolume.check' : 'label.vmvolume.retry') }}</a-button><a-button v-if="operation.status === 'failed'" @click="operation.abandon(); progressVisible = false">{{ $t('label.vmvolume.abandon') }}</a-button><a-button @click="progressVisible = false">{{ $t('label.close') }}</a-button></template>
+      <template v-if="operation" #footer><a-button v-if="['unknown', 'failed'].includes(operation.status)" :loading="operation.checking" @click="operation.resume()">{{ $t(operation.status === 'unknown' ? 'label.vmvolume.check' : 'label.vmvolume.retry') }}</a-button><a-button v-if="operation.status === 'failed'" @click="operation.abandon(); progressVisible = false">{{ $t('label.vmnic.abandon') }}</a-button><a-button @click="progressVisible = false">{{ $t('label.close') }}</a-button></template>
     </a-modal>
   </div>
 </template>
