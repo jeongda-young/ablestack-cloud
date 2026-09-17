@@ -76,3 +76,11 @@ test('refresh leaves the open creation form resource stable and VM switch closes
   expect(wrapper.vm.form).toBe(''); expect(wrapper.vm.loading).toBe(false)
   wrapper.unmount()
 })
+
+test('flat locale message keys are translated even when the existence lookup cannot resolve them', () => {
+  const { createI18n } = require('vue-i18n')
+  const i18n = createI18n({ locale: 'ko', messages: { ko: { 'message.vmnic.reconcile': 'NIC state has not been reflected yet' } } })
+  const context = { $t: i18n.global.t.bind(i18n.global) }
+  expect(VmNicsTab.methods.translateError.call(context, 'message.vmnic.reconcile')).toBe('NIC state has not been reflected yet')
+  expect(VmNicsTab.methods.translateError.call(context, 'Server rejected request')).toBe('Server rejected request')
+})

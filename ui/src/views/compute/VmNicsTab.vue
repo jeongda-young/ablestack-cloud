@@ -154,7 +154,7 @@ export default {
   created () { this.fetchData() },
   methods: {
     allowed (api) { return api in this.$store.getters.apis },
-    translateError (error) { return this.$te(error) ? this.$t(error) : error },
+    translateError (error) { return /^(message|label)\./.test(error) ? this.$t(error) : error },
     booleanText (v) { return this.$t(v === true ? 'state.enabled' : v === false ? 'state.disabled' : 'label.vmnic.unknown') },
     nicState (nic) { return this.stateAction === 'UpdateVmNicLinkState' ? nic.linkstate : nic.enabled },
     actionTitle (api, nic) {
