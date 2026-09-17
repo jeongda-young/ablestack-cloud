@@ -71,12 +71,7 @@
         <GuestNetworkTab :resource="vm"/>
       </a-tab-pane>
       <a-tab-pane :tab="$t('label.vm.snapshots')" key="vmsnapshots" v-if="'listVMSnapshot' in $store.getters.apis">
-        <ListResourceTable
-          apiName="listVMSnapshot"
-          :resource="dataResource"
-          :params="{virtualmachineid: dataResource.id}"
-          :columns="['displayname', 'state', 'type', 'created']"
-          :routerlinks="(record) => { return { displayname: '/vmsnapshot/' + record.id } }"/>
+        <VmSnapshotsTab :resource="vm" />
       </a-tab-pane>
       <a-tab-pane :tab="$t('label.dr.plans')" key="drplans" v-if="'getDrVmProtectionView' in $store.getters.apis">
         <DrPlanVmTab :resource="vm" :loading="loading" />
@@ -264,6 +259,7 @@ import SecurityGroupSelection from '@views/compute/wizard/SecurityGroupSelection
 import DrPlanVmTab from '@/views/compute/dr/DrPlanVmTab.vue'
 import GPUTab from '@/components/view/GPUTab.vue'
 import FtctlTab from '@/views/compute/FtctlTab.vue'
+import VmSnapshotsTab from '@/views/compute/VmSnapshotsTab.vue'
 
 export default {
   name: 'InstanceTab',
@@ -279,6 +275,7 @@ export default {
     DrPlanVmTab,
     GPUTab,
     FtctlTab,
+    VmSnapshotsTab,
     ResourceSchedules,
     ListResourceTable,
     SecurityGroupSelection,
