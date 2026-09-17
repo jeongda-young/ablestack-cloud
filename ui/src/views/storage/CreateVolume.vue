@@ -17,7 +17,7 @@
 
 <template>
   <a-spin :spinning="loading">
-    <div v-if="!isNormalUserOrProject">
+    <div v-if="!isNormalUserOrProject && !submitHandler">
       <ownership-selection @fetch-owner="fetchOwnerOptions" />
     </div>
     <a-form
@@ -246,6 +246,7 @@ export default {
     TooltipLabel
   },
   props: {
+    submitHandler: { type: Function, default: null },
     resource: {
       type: Object,
       default: () => {}
@@ -299,6 +300,7 @@ export default {
     this.apiParams = this.$getApiParams('createVolume')
   },
   created () {
+    if (this.submitHandler) this.owner = { account: this.resource.account, domainid: this.resource.domainid, projectid: this.resource.projectid }
     this.initForm()
     this.fetchData()
   },
@@ -521,6 +523,7 @@ export default {
         } else {
           values.account = this.owner.account
         }
+        if (this.submitHandler) return this.submitHandler(values)
         this.loading = true
         postAPI('createVolume', values).then(response => {
           this.$pollJob({
@@ -563,7 +566,8 @@ export default {
           this.loading = false
         })
       }).catch((error) => {
-        this.formRef.value.scrollToField(error.errorFields[0].name)
+        if (error.errorFields?.length) this.formRef.value.scrollToField(error.errorFields[0].name)
+        else this.$notifyError(error)
       })
     },
     closeModal () {
