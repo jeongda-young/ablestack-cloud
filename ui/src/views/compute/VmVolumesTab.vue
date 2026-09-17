@@ -59,9 +59,11 @@
         <a-steps direction="vertical" size="small" :current="operation.stage" :status="operation.status === 'failed' ? 'error' : 'process'"><a-step v-for="step in operation.steps" :key="step" :title="$t('label.vmvolume.step.' + step)" /></a-steps>
         <a-alert class="volume-alert" :type="operation.status === 'complete' ? 'success' : operation.status === 'failed' ? 'error' : 'info'" :message="$t('label.vmvolume.' + operation.status)" :description="operation.error ? $t(operation.error) : ''" />
         <p v-if="operation.stage > 0 && operation.status !== 'complete'">{{ $t('message.vmvolume.partial') }}</p>
+        <div class="volume-dialog-actions">
         <a-button v-if="operation.status === 'failed' || (operation.status === 'unknown' && operation.jobId)" :loading="operation.checking" @click="operation.resume()">{{ $t(operation.jobId && operation.status === 'unknown' ? 'label.vmvolume.check' : 'label.vmvolume.retry') }}</a-button>
         <a-button v-if="operation.status === 'failed'" @click="operation.abandon(); progressVisible = false">{{ $t('label.vmvolume.abandon') }}</a-button>
         <a-button @click="progressVisible = false">{{ $t('label.close') }}</a-button>
+        </div>
       </template>
     </a-modal>
   </div>
@@ -180,6 +182,7 @@ export default {
 <style scoped lang="scss">
 .volume-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
 .volume-toolbar :deep(.ant-input-search) { width: 280px; margin-left: auto; }
+.volume-dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
 .volume-alert { margin: 12px 0; }
 .volume-options { display: flex; flex-direction: column; gap: 12px; margin: 20px 0; }
 .volume-description :deep(.ant-descriptions-item-label) { background: var(--ui-bg-page); color: var(--ui-text-primary); }
