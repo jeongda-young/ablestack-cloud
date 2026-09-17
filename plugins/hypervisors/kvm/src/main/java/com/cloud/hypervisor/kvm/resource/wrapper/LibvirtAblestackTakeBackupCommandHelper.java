@@ -52,10 +52,10 @@ final class LibvirtAblestackTakeBackupCommandHelper {
                 return LibvirtAblestackAsyncBackupRunner.startDetached(command, logger, trace, provider, context.jobId,
                         context.vmName, context.backupPath, context.backupType, detachedCommand);
             }
-            logger.info("{} phase=[AGENT_DETACHED_FALLBACK], provider=[{}], jobId=[{}], vm=[{}], backupPath=[{}], backupType=[{}]",
+            logger.info("{} phase=[AGENT_DETACHED_JAVA_START], provider=[{}], jobId=[{}], vm=[{}], backupPath=[{}], backupType=[{}]",
                     trace, provider, context.jobId, context.vmName, context.backupPath, context.backupType);
-            return LibvirtAblestackAsyncBackupRunner.start(command, logger, trace, provider, context.jobId,
-                    context.vmName, context.backupPath, context.backupType, backupTask);
+            return LibvirtAblestackAsyncBackupRunner.startDetachedBackup(command, logger, trace, provider, context.jobId,
+                    context.vmName, context.backupPath, context.backupType);
         }
 
         final Pair<Integer, String> result = backupTask.get();

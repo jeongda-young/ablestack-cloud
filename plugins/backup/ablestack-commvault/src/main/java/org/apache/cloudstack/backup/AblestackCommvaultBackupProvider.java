@@ -119,6 +119,7 @@ import static org.apache.cloudstack.backup.BackupManager.KvmIncrementalBackup;
 public class AblestackCommvaultBackupProvider extends AdapterBase implements BackupProvider, Configurable {
 
     private static final Logger LOG = LogManager.getLogger(AblestackCommvaultBackupProvider.class);
+    private final ThreadLocal<Boolean> detachedRestoreStart = ThreadLocal.withInitial(() -> false);
     private static final String BACKUP_TYPE_FULL = "FULL";
     private static final String BACKUP_TYPE_INCREMENTAL = "INCREMENTAL";
     private static final String BACKUP_ENGINE_QCOW2 = "QCOW2";
@@ -140,6 +141,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
     private static final String RESTORE_TRACE = AblestackBackupFrameworkUtils.buildTracePrefix("commvault", AblestackBackupFrameworkUtils.OPERATION_RESTORE);
     private static final String DETAIL_STAGE_HOST = "commvault.stage.host";
     private static final String DETAIL_BACKUPSET_HOST = "commvault.backupset.host";
+    private static final String DETAIL_RESTORE_SOURCE_PATHS = "commvault.restore.source.paths";
     private static final String DETAIL_CHAIN_SEALED = "commvault.chain.sealed";
     private static final String DETAIL_CHAIN_SEAL_REASON = "commvault.chain.seal.reason";
     private static final String DETAIL_FALLBACK_VOLUME_UUIDS = "commvault.fallback.volume.uuids";
@@ -521,6 +523,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_HOST_NAME_DETAIL, host != null ? host.getName() : null);
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_STATE_DETAIL, "STARTING");
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_STEP_DETAIL, "QUEUED");
+        updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_PROGRESS_DETAIL, "10");
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_TRACKED_AT_DETAIL, String.valueOf(System.currentTimeMillis()));
     }
 
@@ -530,6 +533,9 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         if (!(startAnswer instanceof BackupAnswer) || !startAnswer.getResult()) {
             return startAnswer instanceof BackupAnswer ? (BackupAnswer) startAnswer
                     : new BackupAnswer(restoreCommand, false, "Unexpected restore start response");
+        }
+        if (Boolean.TRUE.equals(detachedRestoreStart.get())) {
+            return (BackupAnswer) startAnswer;
         }
         return AblestackRestoreJobPoller.waitForCompletion(restoreJobId, BackupRestoreTimeout.value(),
                 () -> agentManager.send(hostId, new AblestackRestoreJobStatusCommand(restoreJobId, null, 5)));
@@ -712,9 +718,9 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         BackupVO backupVO = createBackupObject(vm, vmHost.getId(), backupPath, requestedBackupType, backupDetails);
         AblestackCommvaultTakeBackupCommand command = new AblestackCommvaultTakeBackupCommand(vm.getInstanceName(), backupPath);
         command.setBackupJobId(backupVO.getUuid());
-        final int commandTimeout = BackupCommandTimeout.value();
-        if (commandTimeout > 0) {
-            command.setWait(commandTimeout);
+        final int deleteTimeout = BackupCommandTimeout.value();
+        if (deleteTimeout > 0) {
+            command.setWait(deleteTimeout);
         }
         command.setQuiesce(quiesceVM);
         command.setVolumePools(volumePoolsAndPaths.first());
@@ -961,8 +967,42 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         loadBackupDetailsIfNeeded(backup);
         final List<BackupVolumeChainState> chainStates = getVolumeChainStates(backup.getBackedUpVolumes(), backup);
         AblestackBackupFrameworkUtils.validateVolumeChainStates(chainStates);
+        cleanupTrackedRestoreSourcePaths(backup);
         LOG.debug("Completed Commvault post-restore maintenance for VM [{}], backup [{}], volumeOnly=[{}]", vm != null ? vm.getInstanceName() : null,
                 backup.getUuid(), volumeOnly);
+    }
+
+    private void trackRestoreSourcePaths(final Backup backup, final HostVO restoreHost,
+            final List<String> restoreSourcePaths, final Map<String, List<String>> additionalSourceHostPaths,
+            final HostVO commandHost, final String commandHostPath) {
+        if (!Boolean.TRUE.equals(detachedRestoreStart.get())) {
+            return;
+        }
+        final Map<String, List<String>> hostPaths = new LinkedHashMap<>();
+        if (restoreHost != null && CollectionUtils.isNotEmpty(restoreSourcePaths)) {
+            hostPaths.put(restoreHost.getName(), new ArrayList<>(restoreSourcePaths));
+        }
+        if (additionalSourceHostPaths != null) {
+            additionalSourceHostPaths.forEach((host, paths) ->
+                    hostPaths.computeIfAbsent(host, key -> new ArrayList<>()).addAll(paths));
+        }
+        if (commandHost != null && StringUtils.isNotBlank(commandHostPath)) {
+            hostPaths.computeIfAbsent(commandHost.getName(), key -> new ArrayList<>()).add(commandHostPath);
+        }
+        updateBackupDetail(backup, DETAIL_RESTORE_SOURCE_PATHS, new com.google.gson.Gson().toJson(hostPaths));
+    }
+
+    private void cleanupTrackedRestoreSourcePaths(final Backup backup) {
+        final String trackedPaths = getBackupDetail(backup, DETAIL_RESTORE_SOURCE_PATHS);
+        if (StringUtils.isBlank(trackedPaths)) {
+            return;
+        }
+        final java.lang.reflect.Type type = new com.google.gson.reflect.TypeToken<Map<String, List<String>>>() { }.getType();
+        final Map<String, List<String>> hostPaths = new com.google.gson.Gson().fromJson(trackedPaths, type);
+        if (hostPaths != null) {
+            hostPaths.forEach((hostName, paths) -> cleanupBackupPathsOnHost(hostDao.findByName(hostName), paths));
+        }
+        backupDetailsDao.removeDetail(backup.getId(), DETAIL_RESTORE_SOURCE_PATHS);
     }
 
     @Override
@@ -1310,10 +1350,36 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         return restoreVMBackup(vm, backup);
     }
 
+    @Override
+    public boolean supportsDetachedRestoreOrchestration() {
+        return true;
+    }
+
+    @Override
+    public Pair<Boolean, String> startRestoreBackupToVM(VirtualMachine vm, Backup backup, String hostIp,
+            String dataStoreUuid, boolean quickRestore) {
+        detachedRestoreStart.set(true);
+        try {
+            return restoreBackupToVM(vm, backup, hostIp, dataStoreUuid, quickRestore);
+        } finally {
+            detachedRestoreStart.remove();
+        }
+    }
+
     // 가상머신 백업 복원
     @Override
     public boolean restoreVMFromBackup(VirtualMachine vm, Backup backup, boolean quickRestore, Long hostId) {
         return restoreVMBackup(vm, backup).first();
+    }
+
+    @Override
+    public boolean startRestoreVMFromBackup(VirtualMachine vm, Backup backup, boolean quickRestore, Long hostId) {
+        detachedRestoreStart.set(true);
+        try {
+            return restoreVMFromBackup(vm, backup, quickRestore, hostId);
+        } finally {
+            detachedRestoreStart.remove();
+        }
     }
 
     private Pair<Boolean, String> restoreVMBackup(VirtualMachine vm, Backup backup) {
@@ -1408,6 +1474,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                 restoreCommand.setBackupSourceHosts(new ArrayList<>(additionalSourceHostPaths.keySet()));
                 restoreCommand.setWaitForCompletion(false);
                 trackRestoreJob(backup, restoreJobId, restoreHost);
+                trackRestoreSourcePaths(backup, restoreHostVO, restoreSourcePaths, additionalSourceHostPaths, null, null);
 
                 BackupAnswer answer;
                 try {
@@ -1438,8 +1505,10 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                 throw new CloudRuntimeException("Failed to restore Full VM commvault api");
             }
         } finally {
-            cleanupBackupPathsOnHost(restoreHostVO, restoreSourcePaths);
-            cleanupBackupPathsOnAdditionalHosts(additionalSourceHostPaths);
+            if (!Boolean.TRUE.equals(detachedRestoreStart.get())) {
+                cleanupBackupPathsOnHost(restoreHostVO, restoreSourcePaths);
+                cleanupBackupPathsOnAdditionalHosts(additionalSourceHostPaths);
+            }
         }
     }
 
@@ -1628,6 +1697,8 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                     restoreCommand.setBackupSourceHosts(new ArrayList<>(additionalSourceHostPaths.keySet()));
                     restoreCommand.setWaitForCompletion(false);
                     trackRestoreJob(backup, restoreJobId, vmHost);
+                    trackRestoreSourcePaths(backup, restoreHostVO, restoreSourcePaths, additionalSourceHostPaths,
+                            commandHostForCleanup, restoreSourcePath);
 
                     BackupAnswer answer;
                     try {
@@ -1659,7 +1730,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                                 RESTORE_TRACE, restoreJobId, vmNameAndState.first(), backup.getId(), backup.getUuid(),
                                 backupVolumeInfo.getUuid(), volumeUUID, vmHost.getId(), vmHost.getName(), true,
                                 answer != null ? answer.getDetails() : null);
-                        return new Pair<>(answer.getResult(), answer.getDetails());
+                        return new Pair<>(answer.getResult(), restoredVolume.getUuid());
                     } else {
                         cleanupBackupPathsOnHost(restoreHostVO, Collections.singletonList(restoreSourcePath));
                         LOG.warn("{} phase=[RESTORE_VOLUME_COMMAND_FAILED], restoreJobId=[{}], vmName=[{}], backupId=[{}], "
@@ -1682,11 +1753,26 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                 return new Pair<>(false, errorMessage);
             }
         } finally {
-            cleanupBackupPathsOnHost(restoreHostVO, restoreSourcePaths);
-            cleanupBackupPathsOnAdditionalHosts(additionalSourceHostPaths);
-            if (commandHostForCleanup != null && !isSameHost(commandHostForCleanup, restoreHostVO)) {
-                cleanupBackupPathsOnHost(commandHostForCleanup, Collections.singletonList(restoreSourcePath));
+            if (!Boolean.TRUE.equals(detachedRestoreStart.get())) {
+                cleanupBackupPathsOnHost(restoreHostVO, restoreSourcePaths);
+                cleanupBackupPathsOnAdditionalHosts(additionalSourceHostPaths);
+                if (commandHostForCleanup != null && !isSameHost(commandHostForCleanup, restoreHostVO)) {
+                    cleanupBackupPathsOnHost(commandHostForCleanup, Collections.singletonList(restoreSourcePath));
+                }
             }
+        }
+    }
+
+    @Override
+    public Pair<Boolean, String> startRestoreBackedUpVolume(Backup backup, Backup.VolumeInfo backupVolumeInfo,
+            String hostIp, String dataStoreUuid, Pair<String, VirtualMachine.State> vmNameAndState,
+            VirtualMachine targetVm, boolean quickRestore) {
+        detachedRestoreStart.set(true);
+        try {
+            return restoreBackedUpVolume(backup, backupVolumeInfo, hostIp, dataStoreUuid, vmNameAndState,
+                    targetVm, quickRestore);
+        } finally {
+            detachedRestoreStart.remove();
         }
     }
 

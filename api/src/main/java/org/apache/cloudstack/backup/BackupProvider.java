@@ -145,6 +145,15 @@ public interface BackupProvider {
 
     Pair<Boolean, String> restoreBackupToVM(VirtualMachine vm, Backup backup, String hostIp, String dataStoreUuid, boolean quickrestore);
 
+    default boolean supportsDetachedRestoreOrchestration() {
+        return false;
+    }
+
+    default Pair<Boolean, String> startRestoreBackupToVM(VirtualMachine vm, Backup backup, String hostIp,
+            String dataStoreUuid, boolean quickrestore) {
+        return restoreBackupToVM(vm, backup, hostIp, dataStoreUuid, quickrestore);
+    }
+
     /**
      * Restore VM from BX backup
      */
@@ -156,6 +165,10 @@ public interface BackupProvider {
      * Restore VM from backup
      */
     boolean restoreVMFromBackup(VirtualMachine vm, Backup backup, boolean quickRestore, Long hostId);
+
+    default boolean startRestoreVMFromBackup(VirtualMachine vm, Backup backup, boolean quickRestore, Long hostId) {
+        return restoreVMFromBackup(vm, backup, quickRestore, hostId);
+    }
 
     default boolean restoreVMFromBackup(VirtualMachine vm, Backup backup) {
         return restoreVMFromBackup(vm, backup, false, null);
@@ -178,6 +191,11 @@ public interface BackupProvider {
      */
     Pair<Boolean, String> restoreBackedUpVolume(Backup backup, Backup.VolumeInfo backupVolumeInfo, String hostIp, String dataStoreUuid,
             Pair<String, VirtualMachine.State> vmNameAndState, VirtualMachine vm, boolean quickRestore);
+
+    default Pair<Boolean, String> startRestoreBackedUpVolume(Backup backup, Backup.VolumeInfo backupVolumeInfo, String hostIp,
+            String dataStoreUuid, Pair<String, VirtualMachine.State> vmNameAndState, VirtualMachine vm, boolean quickRestore) {
+        return restoreBackedUpVolume(backup, backupVolumeInfo, hostIp, dataStoreUuid, vmNameAndState, vm, quickRestore);
+    }
 
     /**
      * Syncs backup metrics (backup size, protected size) from the plugin and stores it within the provider

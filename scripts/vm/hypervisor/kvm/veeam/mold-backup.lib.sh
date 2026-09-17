@@ -1461,6 +1461,16 @@ except Exception:
   echo "$val"
 }
 
+mold_backup_api_external_stage_timeout() {
+  local configured
+  configured="$(mold_backup_api_list_config_value "backup.command.timeout" 2>/dev/null || true)"
+  if [[ "$configured" =~ ^[1-9][0-9]*$ ]]; then
+    echo "$configured"
+    return 0
+  fi
+  echo "${VEEAM_EXTERNAL_STAGE_TIMEOUT:-43200}"
+}
+
 mold_backup_api_update_config_if_needed() {
   local name="$1" value="$2"
   local current
@@ -2422,6 +2432,10 @@ mold_backup_api_ensure_vm_stopped_for_restore() {
 mold_backup_api_create_veeam_and_wait() {
   local vm_id="$1" vm_label="${2:-}"
   local json job_id backup_id backup_type backup_name ids_before interval_type veeam_job
+  local stage_timeout stage_started_at remaining_timeout
+  stage_timeout="$(mold_backup_api_external_stage_timeout)"
+  [[ "$stage_timeout" =~ ^[1-9][0-9]*$ ]] || stage_timeout=43200
+  stage_started_at="$(date +%s)"
   backup_name="$(mold_backup_api_build_backup_name_for_vm "$vm_id" "$vm_label")"
   ids_before="$(mold_backup_api_list_backup_ids "$vm_id" 2>/dev/null || true)"
   interval_type="$(mold_backup_resolve_veeam_interval_type "${VEEAM_SCHEDULE_NAME:-${SCHEDULE:-default}}")"
@@ -2440,14 +2454,16 @@ mold_backup_api_create_veeam_and_wait() {
   job_id="$(mold_backup_api_json_field "$json" "createablestackveeambackupresponse.jobid")"
   [[ -z "$job_id" ]] && job_id="$(mold_backup_api_json_field "$json" "createbackupresponse.jobid")"
   if [[ -n "$job_id" ]]; then
-    mold_backup_notify_log info "createAblestackVeeamBackup job=${job_id}; waiting for MS/NAS backup"
-    json=$(mold_backup_api_wait_async_job "$job_id" 1200) || return 1
+    mold_backup_notify_log info "createAblestackVeeamBackup job=${job_id}; waiting for MS/NAS backup timeout=${stage_timeout}s"
+    json=$(mold_backup_api_wait_async_job "$job_id" "$stage_timeout") || return 1
     backup_id="$(mold_backup_api_json_field "$json" "queryasyncjobresultresponse.jobresult.backup.id")"
     backup_type="$(mold_backup_api_json_field "$json" "queryasyncjobresultresponse.jobresult.backup.type")"
     if [[ -z "$backup_id" ]]; then
       local latest
       # Wait for a NEW backup id (not in ids_before) to reach BackedUp — do not reuse older FULL.
-      latest="$(mold_backup_api_wait_new_backup_for_vm "$vm_id" "$ids_before" 900 2>/dev/null || true)"
+      remaining_timeout=$((stage_timeout - ($(date +%s) - stage_started_at)))
+      [[ "$remaining_timeout" -gt 0 ]] || return 1
+      latest="$(mold_backup_api_wait_new_backup_for_vm "$vm_id" "$ids_before" "$remaining_timeout" 2>/dev/null || true)"
       if [[ -z "$latest" ]]; then
         latest="$(mold_backup_api_find_latest_backup_for_vm "$vm_id" "backedup" 2>/dev/null || true)"
       fi

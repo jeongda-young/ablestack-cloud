@@ -53,6 +53,16 @@ public final class AblestackBackupFrameworkUtils {
     public static final String RESTORE_JOB_PROGRESS_DETAIL = "ablestack.restore.job.progress";
     public static final String RESTORE_JOB_TRACKED_AT_DETAIL = "ablestack.restore.job.tracked.at";
     public static final String RESTORE_ASYNC_JOB_ID_DETAIL = "ablestack.restore.async.job.id";
+    public static final String RESTORE_OPERATION_TYPE_DETAIL = "ablestack.restore.operation.type";
+    public static final String RESTORE_TARGET_VM_ID_DETAIL = "ablestack.restore.target.vm.id";
+    public static final String RESTORE_SOURCE_VOLUME_UUID_DETAIL = "ablestack.restore.source.volume.uuid";
+    public static final String RESTORE_TARGET_DATASTORE_UUID_DETAIL = "ablestack.restore.target.datastore.uuid";
+    public static final String RESTORE_TARGET_VOLUME_UUID_DETAIL = "ablestack.restore.target.volume.uuid";
+    public static final String RESTORE_EVENT_ID_DETAIL = "ablestack.restore.event.id";
+
+    public static final String RESTORE_OPERATION_VM = "VM_RESTORE";
+    public static final String RESTORE_OPERATION_CREATE_INSTANCE = "CREATE_INSTANCE";
+    public static final String RESTORE_OPERATION_VOLUME_ATTACH = "VOLUME_ATTACH";
 
     private AblestackBackupFrameworkUtils() {
     }

@@ -112,6 +112,7 @@ import static org.apache.cloudstack.backup.BackupManager.KvmIncrementalBackup;
 public class AblestackNetBackupProvider extends AdapterBase implements BackupProvider, Configurable {
 
     private static final Logger LOG = LogManager.getLogger(AblestackNetBackupProvider.class);
+    private final ThreadLocal<Boolean> detachedRestoreStart = ThreadLocal.withInitial(() -> false);
 
     private static final String BACKUP_TYPE_FULL = "FULL";
     private static final String BACKUP_TYPE_INCREMENTAL = "INCREMENTAL";
@@ -489,9 +490,9 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
                 && StringUtils.isNotBlank(getBackupDetail(backup, DETAIL_CHECKPOINT_NAME))
                 && StringUtils.isNotBlank(getBackupDetail(backup, DETAIL_RBD_DISK_PATHS))) {
             final AblestackDeleteBackupCommand command = new AblestackDeleteBackupCommand(backup.getExternalId(), null, null, null, true);
-            final int commandTimeout = BackupCommandTimeout.value();
-            if (commandTimeout > 0) {
-                command.setWait(commandTimeout);
+            final int deleteTimeout = BackupCommandTimeout.value();
+            if (deleteTimeout > 0) {
+                command.setWait(deleteTimeout);
             }
             command.setBackupProvider(getName());
             final VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(backup.getVmId());
@@ -911,6 +912,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_HOST_NAME_DETAIL, host != null ? host.getName() : null);
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_STATE_DETAIL, "STARTING");
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_STEP_DETAIL, "QUEUED");
+        updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_PROGRESS_DETAIL, "10");
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_TRACKED_AT_DETAIL, String.valueOf(System.currentTimeMillis()));
     }
 
@@ -920,6 +922,9 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         if (!(startAnswer instanceof BackupAnswer) || !startAnswer.getResult()) {
             return startAnswer instanceof BackupAnswer ? (BackupAnswer) startAnswer
                     : new BackupAnswer(restoreCommand, false, "Unexpected restore start response");
+        }
+        if (Boolean.TRUE.equals(detachedRestoreStart.get())) {
+            return (BackupAnswer) startAnswer;
         }
         return AblestackRestoreJobPoller.waitForCompletion(restoreJobId, BackupRestoreTimeout.value(),
                 () -> agentManager.send(hostId, new AblestackRestoreJobStatusCommand(restoreJobId, null, 5)));
@@ -1140,6 +1145,22 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
     }
 
     @Override
+    public boolean supportsDetachedRestoreOrchestration() {
+        return true;
+    }
+
+    @Override
+    public Pair<Boolean, String> startRestoreBackupToVM(final VirtualMachine vm, final Backup backup,
+            final String hostIp, final String dataStoreUuid, final boolean quickRestore) {
+        detachedRestoreStart.set(true);
+        try {
+            return restoreBackupToVM(vm, backup, hostIp, dataStoreUuid, quickRestore);
+        } finally {
+            detachedRestoreStart.remove();
+        }
+    }
+
+    @Override
     public Pair<Boolean, String> restoreBackupToVM(final Long backupId, final String vmName) {
         final Backup backup = backupDao.findByIdIncludingRemoved(backupId);
         if (backup == null) {
@@ -1157,6 +1178,17 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
     @Override
     public boolean restoreVMFromBackup(final VirtualMachine vm, final Backup backup, boolean quickRestore, Long hostId) {
         return restoreVirtualMachine(vm, backup, null, false).first();
+    }
+
+    @Override
+    public boolean startRestoreVMFromBackup(final VirtualMachine vm, final Backup backup, final boolean quickRestore,
+            final Long hostId) {
+        detachedRestoreStart.set(true);
+        try {
+            return restoreVMFromBackup(vm, backup, quickRestore, hostId);
+        } finally {
+            detachedRestoreStart.remove();
+        }
     }
 
     public boolean restoreVMFromPreparedBackup(final VirtualMachine vm, final Backup backup, final String restoreHostIp) {
@@ -1284,7 +1316,9 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
                     host.getId(), host.getName(), answer != null && answer.getResult(), answer != null ? answer.getDetails() : null);
             return new Pair<>(answer != null && answer.getResult(), answer != null ? answer.getDetails() : null);
         } finally {
-            cleanupRestoreSourcesOnStageHosts(vm.getDataCenterId(), host.getName(), restoreSourcesToPrepare);
+            if (!Boolean.TRUE.equals(detachedRestoreStart.get())) {
+                cleanupRestoreSourcesOnStageHosts(vm.getDataCenterId(), host.getName(), restoreSourcesToPrepare);
+            }
         }
     }
 
@@ -1461,7 +1495,23 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
                     volumeUuid, restoreHost.getId(), restoreHost.getName(), false, answer != null ? answer.getDetails() : null);
             return new Pair<>(false, answer != null ? answer.getDetails() : "NetBackup restore agent returned no response");
         } finally {
-            cleanupRestoreSourcesOnStageHosts(backup.getZoneId(), restoreHost.getName(), restoreSourcesToPrepare);
+            if (!Boolean.TRUE.equals(detachedRestoreStart.get())) {
+                cleanupRestoreSourcesOnStageHosts(backup.getZoneId(), restoreHost.getName(), restoreSourcesToPrepare);
+            }
+        }
+    }
+
+    @Override
+    public Pair<Boolean, String> startRestoreBackedUpVolume(final Backup backup,
+            final Backup.VolumeInfo backupVolumeInfo, final String hostIp, final String dataStoreUuid,
+            final Pair<String, VirtualMachine.State> vmNameAndState, final VirtualMachine targetVm,
+            final boolean quickRestore) {
+        detachedRestoreStart.set(true);
+        try {
+            return restoreBackedUpVolume(backup, backupVolumeInfo, hostIp, dataStoreUuid, vmNameAndState,
+                    targetVm, quickRestore);
+        } finally {
+            detachedRestoreStart.remove();
         }
     }
 
@@ -1560,6 +1610,10 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         loadBackupDetailsIfNeeded(backup);
         final List<BackupVolumeChainState> chainStates = getVolumeChainStates(backup.getBackedUpVolumes(), backup);
         AblestackBackupFrameworkUtils.validateVolumeChainStates(chainStates);
+        final String restoreHostName = getBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_HOST_NAME_DETAIL);
+        if (StringUtils.isNotBlank(restoreHostName)) {
+            cleanupRestoreSourcesOnStageHosts(backup.getZoneId(), restoreHostName, getStagedRestoreChainForBackup(backup));
+        }
         LOG.debug("Completed NetBackup post-restore maintenance for VM [{}], backup [{}], volumeOnly=[{}]",
                 vm != null ? vm.getInstanceName() : null, backup.getUuid(), volumeOnly);
     }
@@ -2327,9 +2381,9 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         }
 
         final AblestackDeleteBackupCommand command = new AblestackDeleteBackupCommand(backup.getExternalId(), null, null, null, true);
-        final int commandTimeout = BackupCommandTimeout.value();
-        if (commandTimeout > 0) {
-            command.setWait(commandTimeout);
+        final int deleteTimeout = BackupCommandTimeout.value();
+        if (deleteTimeout > 0) {
+            command.setWait(deleteTimeout);
         }
         command.setBackupProvider(getName());
         final VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(backup.getVmId());

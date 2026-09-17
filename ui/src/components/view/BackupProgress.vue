@@ -130,7 +130,21 @@ export default {
       if (this.isAwaitingBackupFinalization) {
         return this.$t('label.backup.finalizing')
       }
-      return this.step
+      const restoreStepLabels = {
+        REQUESTED: 'label.restore.requested',
+        QUEUED: 'label.restore.queued',
+        PREPARE_SOURCE: 'label.restore.prepare.source',
+        VALIDATE_CHAIN: 'label.restore.validate.chain',
+        RESTORE_DATA: 'label.restore.data',
+        ATTACH_VOLUME: 'label.restore.attach.volume',
+        CLEANUP_SOURCE: 'label.restore.cleanup.source',
+        FINALIZING: 'label.restore.finalizing',
+        FINALIZATION_FAILED: 'label.restore.finalization.failed',
+        COMPLETED: 'label.completed',
+        FAILED: 'label.failed'
+      }
+      const translationKey = restoreStepLabels[String(this.step || '').toUpperCase()]
+      return translationKey ? this.$t(translationKey) : this.step
     },
     bandwidthStatusLabel () {
       if (!this.bandwidthStatus) {

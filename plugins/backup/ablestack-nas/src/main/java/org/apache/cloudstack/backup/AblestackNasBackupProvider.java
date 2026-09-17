@@ -96,6 +96,7 @@ import static org.apache.cloudstack.backup.BackupManager.KvmIncrementalBackup;
 
 public class AblestackNasBackupProvider extends AdapterBase implements BackupProvider, Configurable {
     private static final Logger LOG = LogManager.getLogger(AblestackNasBackupProvider.class);
+    private final ThreadLocal<Boolean> detachedRestoreStart = ThreadLocal.withInitial(() -> false);
     private static final String BACKUP_TYPE_FULL = "FULL";
     private static final String BACKUP_TYPE_INCREMENTAL = "INCREMENTAL";
     private static final String BACKUP_ENGINE_QCOW2 = "QCOW2";
@@ -309,9 +310,9 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
                 checkpointName, backupEngine, incrementalBackup ? parentBackup : null, volumePoolsAndPaths.second());
         AblestackNasTakeBackupCommand command = new AblestackNasTakeBackupCommand(vm.getInstanceName(), backupPath);
         command.setBackupJobId(backupVO.getUuid());
-        final int commandTimeout = BackupCommandTimeout.value();
-        if (commandTimeout > 0) {
-            command.setWait(commandTimeout);
+        final int deleteTimeout = BackupCommandTimeout.value();
+        if (deleteTimeout > 0) {
+            command.setWait(deleteTimeout);
         }
         command.setBackupType(requestedBackupType);
         command.setCheckpointName(checkpointName);
@@ -638,6 +639,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_HOST_NAME_DETAIL, host != null ? host.getName() : null);
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_STATE_DETAIL, "STARTING");
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_STEP_DETAIL, "QUEUED");
+        updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_PROGRESS_DETAIL, "10");
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_TRACKED_AT_DETAIL, String.valueOf(System.currentTimeMillis()));
     }
 
@@ -647,6 +649,9 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         if (!(startAnswer instanceof BackupAnswer) || !startAnswer.getResult()) {
             return startAnswer instanceof BackupAnswer ? (BackupAnswer) startAnswer
                     : new BackupAnswer(restoreCommand, false, "Unexpected restore start response");
+        }
+        if (Boolean.TRUE.equals(detachedRestoreStart.get())) {
+            return (BackupAnswer) startAnswer;
         }
         return AblestackRestoreJobPoller.waitForCompletion(restoreJobId, BackupRestoreTimeout.value(),
                 () -> agentManager.send(hostId, new AblestackRestoreJobStatusCommand(restoreJobId, null, 5)));
@@ -766,8 +771,34 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
     }
 
     @Override
+    public boolean supportsDetachedRestoreOrchestration() {
+        return true;
+    }
+
+    @Override
+    public Pair<Boolean, String> startRestoreBackupToVM(VirtualMachine vm, Backup backup, String hostIp,
+            String dataStoreUuid, boolean quickRestore) {
+        detachedRestoreStart.set(true);
+        try {
+            return restoreBackupToVM(vm, backup, hostIp, dataStoreUuid, quickRestore);
+        } finally {
+            detachedRestoreStart.remove();
+        }
+    }
+
+    @Override
     public boolean restoreVMFromBackup(VirtualMachine vm, Backup backup, boolean quickRestore, Long hostId) {
         return restoreVMBackup(vm, backup).first();
+    }
+
+    @Override
+    public boolean startRestoreVMFromBackup(VirtualMachine vm, Backup backup, boolean quickRestore, Long hostId) {
+        detachedRestoreStart.set(true);
+        try {
+            return restoreVMFromBackup(vm, backup, quickRestore, hostId);
+        } finally {
+            detachedRestoreStart.remove();
+        }
     }
 
     private Pair<Boolean, String> restoreVMBackup(VirtualMachine vm, Backup backup) {
@@ -1194,7 +1225,20 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
                         + "backupVolumeUuid=[{}], restoredVolumeUuid=[{}], hostId=[{}], hostName=[{}], result=[{}], details=[{}]",
                 RESTORE_TRACE, restoreJobId, vmNameAndState.first(), backup.getId(), backup.getUuid(), backupVolumeInfo.getUuid(), volumeUUID,
                 vmHost.getId(), vmHost.getName(), answer != null && answer.getResult(), answer != null ? answer.getDetails() : null);
-        return new Pair<>(answer.getResult(), answer.getDetails());
+        return new Pair<>(answer.getResult(), answer.getResult() ? restoredVolume.getUuid() : answer.getDetails());
+    }
+
+    @Override
+    public Pair<Boolean, String> startRestoreBackedUpVolume(Backup backup, Backup.VolumeInfo backupVolumeInfo,
+            String hostIp, String dataStoreUuid, Pair<String, VirtualMachine.State> vmNameAndState,
+            VirtualMachine targetVm, boolean quickRestore) {
+        detachedRestoreStart.set(true);
+        try {
+            return restoreBackedUpVolume(backup, backupVolumeInfo, hostIp, dataStoreUuid, vmNameAndState,
+                    targetVm, quickRestore);
+        } finally {
+            detachedRestoreStart.remove();
+        }
     }
 
     private BackupRepository getBackupRepository(Backup backup) {

@@ -27,6 +27,7 @@ SECRET_HELPER_DEFAULT="/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/ne
 SECRET_SUBDIR_DEFAULT="secrets"
 BACKUP_STAGING_ROOT_DEFAULT="/tmp/mold/netbackup"
 NETBACKUP_STAGE_ROOT_CONFIG_NAME="backup.plugin.netbackup.stage.root.path"
+BACKUP_COMMAND_TIMEOUT_CONFIG_NAME="backup.command.timeout"
 
 CONFIG_ROOT="${CONFIG_ROOT:-$CONFIG_ROOT_DEFAULT}"
 STATE_ROOT="${STATE_ROOT:-$STATE_ROOT_DEFAULT}"
@@ -53,7 +54,7 @@ MOLD_API_SKIP_TLS_VERIFY="${MOLD_API_SKIP_TLS_VERIFY:-false}"
 MOLD_ASYNC_JOB_POLL_INTERVAL="${MOLD_ASYNC_JOB_POLL_INTERVAL:-5}"
 MOLD_ASYNC_JOB_TIMEOUT="${MOLD_ASYNC_JOB_TIMEOUT:-7200}"
 NETBACKUP_STAGING_POLL_INTERVAL="${NETBACKUP_STAGING_POLL_INTERVAL:-${MOLD_ASYNC_JOB_POLL_INTERVAL}}"
-NETBACKUP_STAGING_TIMEOUT="${NETBACKUP_STAGING_TIMEOUT:-${MOLD_ASYNC_JOB_TIMEOUT}}"
+NETBACKUP_STAGING_TIMEOUT="${NETBACKUP_STAGING_TIMEOUT:-43200}"
 NETBACKUP_TRANSIENT_STATE_RETENTION_MINUTES="${NETBACKUP_TRANSIENT_STATE_RETENTION_MINUTES:-1440}"
 NETBACKUP_RUNTIME_MAX_FILES="${NETBACKUP_RUNTIME_MAX_FILES:-14}"
 
@@ -525,6 +526,30 @@ load_backup_staging_root_from_mold() {
   log -ne "Loaded ${NETBACKUP_STAGE_ROOT_CONFIG_NAME}=${BACKUP_STAGING_ROOT}"
 }
 
+load_backup_staging_timeout_from_mold() {
+  local response
+  local configured_timeout
+
+  response="$(invoke_mold_api \
+    "${MOLD_LIST_VMS_API_METHOD}" \
+    "${MOLD_LIST_VMS_API_URL}" \
+    "listConfigurations" \
+    "name" "${BACKUP_COMMAND_TIMEOUT_CONFIG_NAME}")" || \
+    fail "Failed to query Mold global configuration ${BACKUP_COMMAND_TIMEOUT_CONFIG_NAME}"
+
+  configured_timeout="$(extract_json_value_by_key "${response}" "value" || true)"
+  if [[ -z "${configured_timeout}" ]]; then
+    log -ne "Mold global configuration ${BACKUP_COMMAND_TIMEOUT_CONFIG_NAME} is blank; using ${NETBACKUP_STAGING_TIMEOUT}s"
+    return 0
+  fi
+  if [[ ! "${configured_timeout}" =~ ^[1-9][0-9]*$ ]]; then
+    fail "Invalid ${BACKUP_COMMAND_TIMEOUT_CONFIG_NAME}=${configured_timeout}. It must be a positive integer."
+  fi
+
+  NETBACKUP_STAGING_TIMEOUT="${configured_timeout}"
+  log -ne "Loaded ${BACKUP_COMMAND_TIMEOUT_CONFIG_NAME}=${NETBACKUP_STAGING_TIMEOUT}"
+}
+
 load_policy_schedule_config() {
   local config_file
   config_file="$(resolve_config_file_path)"
@@ -561,6 +586,7 @@ load_policy_schedule_config() {
 
   load_admin_secretkey
   load_backup_staging_root_from_mold
+  load_backup_staging_timeout_from_mold
 
   log -ne "VM selection include=${VM_INCLUDE} exclude=${VM_EXCLUDE}"
 }

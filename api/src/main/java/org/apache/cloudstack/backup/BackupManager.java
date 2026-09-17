@@ -87,15 +87,15 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
 
     ConfigKey<Integer> BackupCommandTimeout = new ConfigKey<>("Advanced", Integer.class,
             "backup.command.timeout",
-            "7200",
-            "Timeout in seconds for KVM backup commands. A value of 0 uses the global command wait timeout.",
+            "43200",
+            "Maximum execution time in seconds for KVM backup operations that require in-process polling. Detached script jobs are not limited by this value. A value of 0 uses the agent command timeout.",
             true,
             BackupFrameworkEnabled.key());
 
     ConfigKey<Integer> BackupRestoreTimeout = new ConfigKey<>("Advanced", Integer.class,
             "backup.restore.timeout",
-            "7200",
-            "Timeout in seconds for KVM backup restore commands. A value of 0 uses the global command wait timeout.",
+            "43200",
+            "Maximum execution time in seconds for host-side KVM restore data operations. Detached execution prevents management request timeouts but does not disable this operation timeout.",
             true,
             BackupFrameworkEnabled.key());
 

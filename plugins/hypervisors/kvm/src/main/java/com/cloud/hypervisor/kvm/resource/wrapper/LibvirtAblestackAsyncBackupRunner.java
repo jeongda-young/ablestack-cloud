@@ -45,7 +45,6 @@ import java.util.List;
 import java.util.Properties;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.function.Supplier;
 import java.util.stream.Stream;
 
 final class LibvirtAblestackAsyncBackupRunner {
@@ -60,6 +59,7 @@ final class LibvirtAblestackAsyncBackupRunner {
     private static final String LOG_FILE = "job.log";
     private static final String EVENTS_FILE = "events.jsonl";
     private static final String SCRIPT_FILE = "run.sh";
+    private static final String BACKUP_COMMAND_FILE = "backup-command.json";
     private static final String RESTORE_COMMAND_FILE = "restore-command.json";
     private static final String RBD_PROGRESS_FILE = "rbd-progress.properties";
     private static final int DEFAULT_EVENTS_LIMIT = 50;
@@ -69,42 +69,6 @@ final class LibvirtAblestackAsyncBackupRunner {
     private static final Set<String> ACTIVE_JOBS = ConcurrentHashMap.newKeySet();
 
     private LibvirtAblestackAsyncBackupRunner() {
-    }
-
-    static BackupAnswer start(final Command command, final Logger logger, final String trace, final String provider, final String jobId,
-            final String vmName, final String backupPath, final String backupType, final Supplier<Pair<Integer, String>> task) {
-        final String effectiveJobId = safeValue(jobId);
-        writeJobState(logger, effectiveJobId, provider, vmName, backupPath, backupType, STATE_STARTED, null);
-        Thread worker = new Thread(() -> {
-            ACTIVE_JOBS.add(effectiveJobId);
-            writeJobState(logger, effectiveJobId, provider, vmName, backupPath, backupType, STATE_RUNNING, null);
-            try {
-                Pair<Integer, String> asyncResult = task.get();
-                if (asyncResult.first() == 0) {
-                    final String completedState = isCancelRequested(effectiveJobId, logger) ? STATE_CANCELED : STATE_COMPLETED;
-                    writeJobState(logger, effectiveJobId, provider, vmName, backupPath, backupType, completedState, asyncResult.second());
-                    logger.info("{} phase=[AGENT_ASYNC_DONE], provider=[{}], jobId=[{}], vm=[{}], backupPath=[{}], backupType=[{}], details=[{}]",
-                            trace, provider, effectiveJobId, vmName, backupPath, backupType, asyncResult.second());
-                } else {
-                    final String failedState = isCancelRequested(effectiveJobId, logger) ? STATE_CANCELED : STATE_FAILED;
-                    writeJobState(logger, effectiveJobId, provider, vmName, backupPath, backupType, failedState, asyncResult.second());
-                    logger.warn("{} phase=[AGENT_ASYNC_FAILED], provider=[{}], jobId=[{}], vm=[{}], backupPath=[{}], backupType=[{}], resultCode=[{}], reason=[{}]",
-                            trace, provider, effectiveJobId, vmName, backupPath, backupType, asyncResult.first(), asyncResult.second());
-                }
-            } catch (RuntimeException e) {
-                final String failedState = isCancelRequested(effectiveJobId, logger) ? STATE_CANCELED : STATE_FAILED;
-                writeJobState(logger, effectiveJobId, provider, vmName, backupPath, backupType, failedState, e.getMessage());
-                logger.warn("{} phase=[AGENT_ASYNC_FAILED], provider=[{}], jobId=[{}], vm=[{}], backupPath=[{}], backupType=[{}], reason=[{}]",
-                        trace, provider, effectiveJobId, vmName, backupPath, backupType, e.getMessage(), e);
-            } finally {
-                ACTIVE_JOBS.remove(effectiveJobId);
-            }
-        }, String.format("ablestack-%s-backup-%s", safeValue(provider).toLowerCase(), safeValue(vmName)));
-        worker.setDaemon(true);
-        worker.start();
-        logger.info("{} phase=[AGENT_STARTED], provider=[{}], jobId=[{}], vm=[{}], backupPath=[{}], backupType=[{}]",
-                trace, provider, effectiveJobId, vmName, backupPath, backupType);
-        return new BackupAnswer(command, true, "started");
     }
 
     static BackupAnswer startDetached(final Command command, final Logger logger, final String trace, final String provider, final String jobId,
@@ -158,24 +122,34 @@ final class LibvirtAblestackAsyncBackupRunner {
 
     static BackupAnswer startDetachedRestore(final Command command, final Logger logger, final String trace, final String provider,
             final String jobId, final String vmName, final String backupPath) {
+        return startDetachedJavaJob(command, logger, trace, provider, jobId, vmName, backupPath, "RESTORE", RESTORE_COMMAND_FILE);
+    }
+
+    static BackupAnswer startDetachedBackup(final Command command, final Logger logger, final String trace, final String provider,
+            final String jobId, final String vmName, final String backupPath, final String backupType) {
+        return startDetachedJavaJob(command, logger, trace, provider, jobId, vmName, backupPath, backupType, BACKUP_COMMAND_FILE);
+    }
+
+    private static BackupAnswer startDetachedJavaJob(final Command command, final Logger logger, final String trace, final String provider,
+            final String jobId, final String vmName, final String backupPath, final String backupType, final String commandFile) {
         if (command == null || safeValue(jobId).isBlank()) {
-            return new BackupAnswer(command, false, "restore command and job id are required for detached execution");
+            return new BackupAnswer(command, false, "backup command and job id are required for detached execution");
         }
         try {
             final Path jobDirectory = getJobDirectory(jobId);
             Files.createDirectories(jobDirectory);
-            final Path commandPath = jobDirectory.resolve(RESTORE_COMMAND_FILE);
+            final Path commandPath = jobDirectory.resolve(commandFile);
             Files.writeString(commandPath, new Gson().toJson(command), StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
             Files.setPosixFilePermissions(commandPath, PosixFilePermissions.fromString("rw-------"));
             final String runnerCommand = ". /etc/default/cloudstack-agent; exec /usr/bin/java $JAVA_OPTS -cp \"$CLASSPATH\" "
-                    + LibvirtAblestackRestoreJobMain.class.getName() + " " + shellQuote(command.getClass().getName()) + " "
+                    + LibvirtAblestackJobMain.class.getName() + " " + shellQuote(command.getClass().getName()) + " "
                     + shellQuote(commandPath.toString());
-            return startDetached(command, logger, trace, provider, jobId, vmName, backupPath, "RESTORE",
+            return startDetached(command, logger, trace, provider, jobId, vmName, backupPath, backupType,
                     new String[]{"/bin/bash", "-lc", runnerCommand});
         } catch (IOException e) {
-            writeJobState(logger, jobId, provider, vmName, backupPath, "RESTORE", STATE_FAILED, e.getMessage());
-            return new BackupAnswer(command, false, "Failed to prepare detached restore job: " + e.getMessage());
+            writeJobState(logger, jobId, provider, vmName, backupPath, backupType, STATE_FAILED, e.getMessage());
+            return new BackupAnswer(command, false, "Failed to prepare detached backup job: " + e.getMessage());
         }
     }
 
