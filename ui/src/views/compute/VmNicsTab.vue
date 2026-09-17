@@ -140,16 +140,18 @@ export default {
       const labels = { createNetwork: 'label.vmnic.create', addNicToVirtualMachine: 'label.vmnic.attach', removeNicFromVirtualMachine: 'label.vmnic.detach', updateDefaultNicForVirtualMachine: 'label.set.default.nic', updateVmNicIp: 'label.change.ipaddress.or.macaddress', addIpToNic: 'label.add.secondary.ip', removeIpFromNic: 'label.action.release.ip', updateVmNic: nic?.enabled ? 'label.vmnic.disable' : 'label.vmnic.enable', UpdateVmNicLinkState: nic?.linkstate ? 'label.action.nic.linkstate.down' : 'label.action.nic.linkstate.up' }
       return this.$t(labels[api] || 'label.details')
     },
-    reason (api, nic) { if (this.listRefreshFailed) return this.$t('message.list.refresh.stale'); const key = nicActionReason(api, nic, this.vm, { ...this.context, network: this.networks[nic?.networkid] }); return key ? this.$t(key) : '' },
+    reason (api, nic) { if (this.listRefreshFailed) return this.$t('message.list.refresh.stale'); const key = nicActionReason(api, nic, this.vm, { ...this.context, rows: this.rows, network: this.networks[nic?.networkid] }); return key ? this.$t(key) : '' },
     async readVm (vm) {
       const [a, b, z, s] = await Promise.all([
         getAPI('listVirtualMachines', { id: vm.id }), getAPI('listNics', { virtualmachineid: vm.id }),
         this.allowed('listZones') ? getAPI('listZones', { id: vm.zoneid }) : Promise.resolve({}),
-        this.allowed('listVMSnapshot') ? getAPI('listVMSnapshot', { virtualmachineid: vm.id, pagesize: 1, listall: true }) : Promise.resolve({})
+        this.allowed('listVMSnapshot') ? getAPI('listVMSnapshot', { virtualmachineid: vm.id, page: 1, pagesize: 1, listall: true }) : Promise.resolve({})
       ])
       const fresh = a.listvirtualmachinesresponse.virtualmachine?.find(v => v.id === vm.id)
       if (!fresh) throw new Error(this.$t('message.vmnic.context'))
-      return { vm: fresh, rows: b.listnicsresponse.nic || [], zone: z.listzonesresponse?.zone?.[0], snapshots: s.listvmsnapshotresponse ? (s.listvmsnapshotresponse.count || s.listvmsnapshotresponse.vmSnapshot?.length || 0) : null }
+      // listNics does not populate linkstate on this server; VM NIC responses do.
+      const rows = (b.listnicsresponse.nic || []).map(nic => ({ ...nic, linkstate: fresh.nic?.find(item => item.id === nic.id)?.linkstate }))
+      return { vm: fresh, rows, zone: z.listzonesresponse?.zone?.[0], snapshots: s.listvmsnapshotresponse ? (s.listvmsnapshotresponse.count || s.listvmsnapshotresponse.vmSnapshot?.length || 0) : null }
     },
     async fetchData () {
       if (!this.resource.id) return
@@ -249,7 +251,10 @@ export default {
           if (!found) return false
           if (api === 'updateDefaultNicForVirtualMachine') return found.isdefault === true
           if (api === 'updateVmNic') return found.enabled === op.values.enabled
-          if (api === 'UpdateVmNicLinkState') return found.linkstate === op.values.linkstate
+          if (api === 'UpdateVmNicLinkState') {
+            const response = await getAPI('listVirtualMachines', { id: vm.id })
+            return response.listvirtualmachinesresponse.virtualmachine?.[0]?.nic?.find(nic => nic.id === found.id)?.linkstate === op.values.linkstate
+          }
           if (api === 'updateVmNicIp') return (!op.values.macaddress || found.macaddress?.toLowerCase() === op.values.macaddress.trim().toLowerCase()) && (found.type === 'L2' || found.ipaddress === op.values.ipaddress)
           if (api === 'removeIpFromNic') return !(found.secondaryip || []).some(ip => ip.id === op.values.secondaryId)
           if (api === 'addIpToNic') return (found.secondaryip || []).some(ip => op.values.ipaddress ? ip.ipaddress === op.values.ipaddress.trim() : !op.values.previousSecondary.includes(ip.id)) && op.accepted

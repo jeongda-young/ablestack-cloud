@@ -25,7 +25,7 @@ export function nicActionReason (api, nic, vm, context = {}) {
   if (topology.includes(api)) {
     if (context.snapshots == null || !context.zone) return 'message.vmnic.context'
     if (context.snapshots) return 'message.vmnic.snapshots'
-    if (context.zone.networktype === 'Basic') return 'message.vmnic.basic'
+    if (context.zone.networktype === 'Basic' && !(api === 'addNicToVirtualMachine' && context.rows?.length === 0)) return 'message.vmnic.basic'
   }
   if (['createNetwork', 'addNicToVirtualMachine'].includes(api)) return ''
   if (!nic?.id) return 'message.vmnic.context'

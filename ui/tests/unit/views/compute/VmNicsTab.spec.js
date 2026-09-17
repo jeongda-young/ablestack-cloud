@@ -22,10 +22,13 @@ const vm = { id: 'vm', zoneid: 'zone', account: 'admin', domainid: 'domain', sta
 const nic = { id: 'nic', networkid: 'l2', type: 'L2', isdefault: true, enabled: true, linkstate: true }
 const flush = async () => { for (let i = 0; i < 40; i++) await Promise.resolve() }
 const responses = (api, params) => {
-  if (api === 'listVirtualMachines') return { listvirtualmachinesresponse: { virtualmachine: [{ ...vm, id: params.id }] } }
-  if (api === 'listNics') return { listnicsresponse: { nic: [nic] } }
+  if (api === 'listVirtualMachines') return { listvirtualmachinesresponse: { virtualmachine: [{ ...vm, id: params.id, nic: [nic] }] } }
+  if (api === 'listNics') return { listnicsresponse: { nic: [{ ...nic, linkstate: false }] } }
   if (api === 'listZones') return { listzonesresponse: { zone: [{ networktype: 'Advanced' }] } }
-  if (api === 'listVMSnapshot') return { listvmsnapshotresponse: {} }
+  if (api === 'listVMSnapshot') {
+    if (params.pagesize && !params.page) throw new Error('page is required with pagesize')
+    return { listvmsnapshotresponse: {} }
+  }
   if (api === 'listNetworks') return { listnetworksresponse: { network: [{ id: 'l2', type: 'L2', state: 'Setup' }] } }
   throw new Error('Unexpected API: ' + api)
 }
@@ -41,6 +44,7 @@ test('initial load completes and snapshot API uses the existing singular command
   const wrapper = mount(); await flush()
   expect(wrapper.vm.loading).toBe(false)
   expect(wrapper.vm.rows).toHaveLength(1)
+  expect(wrapper.vm.rows[0].linkstate).toBe(true)
   expect(wrapper.vm.listLastUpdated).not.toBeNull()
   expect(wrapper.vm.reason('addNicToVirtualMachine')).toBe('')
   expect(getAPI).toHaveBeenCalledWith('listVMSnapshot', expect.objectContaining({ virtualmachineid: 'vm' }))
