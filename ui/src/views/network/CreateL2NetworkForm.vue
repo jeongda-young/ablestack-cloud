@@ -73,7 +73,7 @@
               </a-select-option>
             </a-select>
           </a-form-item>
-          <ownership-selection v-if="isAdminOrDomainAdmin()" @fetch-owner="fetchOwnerOptions"/>
+          <ownership-selection v-if="!submitHandler && isAdminOrDomainAdmin()" @fetch-owner="fetchOwnerOptions"/>
           <a-form-item name="networkofferingid" ref="networkofferingid">
             <template #label>
               <tooltip-label :title="$t('label.networkofferingid')" :tooltip="apiParams.networkofferingid.description"/>
@@ -187,6 +187,7 @@ export default {
     ResourceIcon
   },
   props: {
+    submitHandler: { type: Function, default: null },
     loading: {
       type: Boolean,
       default: false
@@ -228,6 +229,7 @@ export default {
   },
   created () {
     this.initForm()
+    if (this.submitHandler) this.owner = { account: this.resource.projectid ? null : this.resource.account, domainid: this.resource.domainid, projectid: this.resource.projectid }
     this.fetchData()
   },
   methods: {
@@ -264,7 +266,7 @@ export default {
     fetchZoneData () {
       this.zones = []
       const params = {}
-      if (this.resource.zoneid && (this.$route.name === 'deployVirtualMachine' || this.$route.path.startsWith('/backup'))) {
+      if (this.resource.zoneid && (this.submitHandler || this.$route.name === 'deployVirtualMachine' || this.$route.path.startsWith('/backup'))) {
         params.id = this.resource.zoneid
       }
       params.showicon = true
@@ -397,6 +399,11 @@ export default {
           if (this.isValidValueForKey(values, 'isolatedpvlanid')) {
             params.isolatedpvlan = values.isolatedpvlanid
           }
+        }
+        if (this.submitHandler) {
+          this.submitHandler(params)
+          this.actionLoading = false
+          return
         }
         postAPI('createNetwork', params).then(json => {
           this.$notification.success({

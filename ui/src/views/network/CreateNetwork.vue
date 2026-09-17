@@ -22,6 +22,7 @@
         <CreateIsolatedNetworkForm
           :loading="loading"
           :resource="resource"
+          :submit-handler="submitHandler"
           @close-action="closeAction"
           @refresh-data="refreshParent"
           @refresh="handleRefresh"/>
@@ -30,6 +31,7 @@
         <CreateL2NetworkForm
           :loading="loading"
           :resource="resource"
+          :submit-handler="submitHandler"
           @close-action="closeAction"
           @refresh-data="refreshParent"
           @refresh="handleRefresh"/>
@@ -38,6 +40,7 @@
         <CreateSharedNetworkForm
           :loading="loading"
           :resource="resource"
+          :submit-handler="submitHandler"
           @close-action="closeAction"
           @refresh-data="refreshParent"
           @refresh="handleRefresh"/>
@@ -60,6 +63,7 @@ export default {
     CreateSharedNetworkForm
   },
   props: {
+    submitHandler: { type: Function, default: null },
     resource: {
       type: Object,
       required: true
@@ -106,7 +110,7 @@ export default {
     fetchActionZoneData () {
       this.loading = true
       const params = {}
-      if (this.resource?.zoneid && (this.$route.name === 'deployVirtualMachine' || this.$route.path.startsWith('/backup'))) {
+      if (this.resource?.zoneid && (this.submitHandler || this.$route.name === 'deployVirtualMachine' || this.$route.path.startsWith('/backup'))) {
         params.id = this.resource.zoneid
       }
       this.actionZoneLoading = true
