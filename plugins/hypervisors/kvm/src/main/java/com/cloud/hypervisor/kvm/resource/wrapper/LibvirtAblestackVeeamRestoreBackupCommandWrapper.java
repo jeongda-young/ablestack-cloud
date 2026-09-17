@@ -72,6 +72,10 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
 
     @Override
     public Answer execute(final AblestackVeeamRestoreBackupCommand command, final LibvirtComputingResource serverResource) {
+        if (!command.isWaitForCompletion()) {
+            return LibvirtAblestackAsyncBackupRunner.startDetachedRestore(command, logger, RESTORE_TRACE, "veeam",
+                    command.getRestoreJobId(), command.getVmName(), command.getBackupPath());
+        }
         final String backupPath = command.getBackupPath();
         final Boolean vmExists = command.isVmExists();
         final String diskType = command.getDiskType();

@@ -537,6 +537,7 @@ def write_watcher_config(path: Path, args: argparse.Namespace) -> None:
         f'MOLD_CONFIG_FILE="{RESTORE_CONFIG_PATH}"',
         f'LOG_FILE="{WATCHER_LOG_PATH}"',
         'STATE_FILE="/var/lib/ablestack/netbackup/restore-watcher-state.json"',
+        'LOCK_FILE="/var/lib/ablestack/netbackup/restore-watcher.lock"',
         'POLL_INTERVAL_SECONDS="60"',
         'NETBACKUP_CLIENT_NAME=""',
         'NETBACKUP_BP_CONF_PATH="/usr/openv/netbackup/bp.conf"',

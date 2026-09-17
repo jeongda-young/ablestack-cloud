@@ -308,7 +308,7 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
      */
     boolean syncAblestackVeeamBackups(SyncAblestackVeeamBackupsCmd cmd);
 
-    boolean restoreAblestackVeeamBackup(Long backupId);
+    boolean restoreAblestackVeeamBackup(Long backupId, String sessionId);
 
     Pair<List<Backup>, Integer> listAblestackVeeamBackups(ListAblestackVeeamBackupsCmd cmd);
 

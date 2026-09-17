@@ -18,6 +18,7 @@ package org.apache.cloudstack.backup;
 
 import com.cloud.agent.AgentManager;
 import com.cloud.agent.api.Answer;
+import com.cloud.agent.api.Command;
 import com.cloud.exception.AgentUnavailableException;
 import com.cloud.exception.OperationTimedoutException;
 import com.cloud.dc.dao.ClusterDao;
@@ -521,6 +522,17 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_STATE_DETAIL, "STARTING");
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_STEP_DETAIL, "QUEUED");
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_TRACKED_AT_DETAIL, String.valueOf(System.currentTimeMillis()));
+    }
+
+    private BackupAnswer sendAndWaitForRestore(final Long hostId, final Command restoreCommand, final String restoreJobId)
+            throws AgentUnavailableException, OperationTimedoutException {
+        final Answer startAnswer = agentManager.send(hostId, restoreCommand);
+        if (!(startAnswer instanceof BackupAnswer) || !startAnswer.getResult()) {
+            return startAnswer instanceof BackupAnswer ? (BackupAnswer) startAnswer
+                    : new BackupAnswer(restoreCommand, false, "Unexpected restore start response");
+        }
+        return AblestackRestoreJobPoller.waitForCompletion(restoreJobId, BackupRestoreTimeout.value(),
+                () -> agentManager.send(hostId, new AblestackRestoreJobStatusCommand(restoreJobId, null, 5)));
     }
 
     private void markBackupFailure(Backup backup, String phase, String reason) {
@@ -1394,6 +1406,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                 restoreCommand.setTimeout(BackupRestoreTimeout.value());
                 restoreCommand.setHostName(null);
                 restoreCommand.setBackupSourceHosts(new ArrayList<>(additionalSourceHostPaths.keySet()));
+                restoreCommand.setWaitForCompletion(false);
                 trackRestoreJob(backup, restoreJobId, restoreHost);
 
                 BackupAnswer answer;
@@ -1404,7 +1417,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                             RESTORE_TRACE, restoreJobId, AblestackBackupFrameworkUtils.getAsyncRestoreJobLogPath(restoreJobId),
                             vm.getId(), vm.getInstanceName(), backup.getId(), backup.getUuid(), restoreHost.getId(), restoreHost.getName(),
                             restoreSourcePath, jobId2);
-                    answer = (BackupAnswer) agentManager.send(restoreHost.getId(), restoreCommand);
+                    answer = sendAndWaitForRestore(restoreHost.getId(), restoreCommand, restoreJobId);
                 } catch (AgentUnavailableException e) {
                     throw new CloudRuntimeException("Unable to contact backend control plane to initiate backup");
                 } catch (OperationTimedoutException e) {
@@ -1613,6 +1626,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                     restoreCommand.setCacheMode(cacheMode);
                     restoreCommand.setHostName(restoreHost.getName());
                     restoreCommand.setBackupSourceHosts(new ArrayList<>(additionalSourceHostPaths.keySet()));
+                    restoreCommand.setWaitForCompletion(false);
                     trackRestoreJob(backup, restoreJobId, vmHost);
 
                     BackupAnswer answer;
@@ -1624,7 +1638,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                                 RESTORE_TRACE, restoreJobId, AblestackBackupFrameworkUtils.getAsyncRestoreJobLogPath(restoreJobId),
                                 vmNameAndState.first(), backup.getId(), backup.getUuid(), backupVolumeInfo.getUuid(), volumeUUID,
                                 vmHost.getId(), vmHost.getName(), restoreHost.getName(), restoreSourcePath, jobId2);
-                        answer = (BackupAnswer) agentManager.send(vmHost.getId(), restoreCommand);
+                        answer = sendAndWaitForRestore(vmHost.getId(), restoreCommand, restoreJobId);
                     } catch (AgentUnavailableException e) {
                         throw new CloudRuntimeException("Unable to contact backend control plane to initiate backup");
                     } catch (OperationTimedoutException e) {

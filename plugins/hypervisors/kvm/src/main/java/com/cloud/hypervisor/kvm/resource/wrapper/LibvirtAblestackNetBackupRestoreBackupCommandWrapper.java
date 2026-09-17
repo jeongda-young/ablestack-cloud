@@ -70,6 +70,10 @@ public class LibvirtAblestackNetBackupRestoreBackupCommandWrapper extends Comman
 
     @Override
     public Answer execute(final AblestackNetBackupRestoreBackupCommand command, final LibvirtComputingResource serverResource) {
+        if (!command.isWaitForCompletion()) {
+            return LibvirtAblestackAsyncBackupRunner.startDetachedRestore(command, logger, RESTORE_TRACE, "netbackup",
+                    command.getRestoreJobId(), command.getVmName(), command.getBackupPath());
+        }
         final String backupPath = command.getBackupPath();
         final Boolean vmExists = command.isVmExists();
         final String diskType = command.getDiskType();

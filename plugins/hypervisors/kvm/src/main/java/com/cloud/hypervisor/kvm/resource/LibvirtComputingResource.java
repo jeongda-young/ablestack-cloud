@@ -832,6 +832,16 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
         return storagePoolManager;
     }
 
+    public boolean configureForDetachedRestore() throws ConfigurationException {
+        storageLayer = new JavaStorageLayer();
+        if (!storageLayer.configure("StorageLayer", new HashMap<>())) {
+            return false;
+        }
+        kvmhaMonitor = new KVMHAMonitor(null, null, null, null, null, null);
+        storagePoolManager = new KVMStoragePoolManager(storageLayer, kvmhaMonitor);
+        return true;
+    }
+
     @Override
     public void disconnected() {
         cleanupUnavailableSecondaryNfsIsoMountsSafely("management server disconnect");

@@ -20,6 +20,7 @@ package com.cloud.hypervisor.kvm.resource.wrapper;
 import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.Command;
 import com.cloud.utils.Pair;
+import com.google.gson.Gson;
 
 import org.apache.cloudstack.backup.AblestackBackupFrameworkUtils;
 import org.apache.cloudstack.backup.BackupAnswer;
@@ -59,6 +60,7 @@ final class LibvirtAblestackAsyncBackupRunner {
     private static final String LOG_FILE = "job.log";
     private static final String EVENTS_FILE = "events.jsonl";
     private static final String SCRIPT_FILE = "run.sh";
+    private static final String RESTORE_COMMAND_FILE = "restore-command.json";
     private static final String RBD_PROGRESS_FILE = "rbd-progress.properties";
     private static final int DEFAULT_EVENTS_LIMIT = 50;
     private static final int MAX_EVENTS_LIMIT = 200;
@@ -129,6 +131,8 @@ final class LibvirtAblestackAsyncBackupRunner {
                 properties.setProperty("log", getJobDirectory(effectiveJobId).resolve(LOG_FILE).toString());
                 storeJobProperties(logger, effectiveJobId, properties);
             }
+            writeJobState(logger, effectiveJobId, provider, vmName, backupPath, backupType, STATE_RUNNING,
+                    "Detached backup job is being started by systemd-run");
 
             Pair<Integer, String> launchResult = launchDetached(effectiveJobId, unitName);
             if (launchResult.first() != 0) {
@@ -139,8 +143,6 @@ final class LibvirtAblestackAsyncBackupRunner {
                 return new BackupAnswer(command, false, launchResult.second());
             }
 
-            writeJobState(logger, effectiveJobId, provider, vmName, backupPath, backupType, STATE_RUNNING,
-                    "Detached backup job started by systemd-run");
             logger.info("{} phase=[AGENT_DETACHED_STARTED], provider=[{}], jobId=[{}], vm=[{}], backupPath=[{}], "
                             + "backupType=[{}], unit=[{}], command=[{}]",
                     trace, provider, effectiveJobId, vmName, backupPath, backupType, unitName, formatCommand(scriptCommand));
@@ -151,6 +153,29 @@ final class LibvirtAblestackAsyncBackupRunner {
                             + "backupType=[{}], unit=[{}], reason=[{}]",
                     trace, provider, effectiveJobId, vmName, backupPath, backupType, unitName, e.getMessage(), e);
             return new BackupAnswer(command, false, e.getMessage());
+        }
+    }
+
+    static BackupAnswer startDetachedRestore(final Command command, final Logger logger, final String trace, final String provider,
+            final String jobId, final String vmName, final String backupPath) {
+        if (command == null || safeValue(jobId).isBlank()) {
+            return new BackupAnswer(command, false, "restore command and job id are required for detached execution");
+        }
+        try {
+            final Path jobDirectory = getJobDirectory(jobId);
+            Files.createDirectories(jobDirectory);
+            final Path commandPath = jobDirectory.resolve(RESTORE_COMMAND_FILE);
+            Files.writeString(commandPath, new Gson().toJson(command), StandardCharsets.UTF_8,
+                    StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+            Files.setPosixFilePermissions(commandPath, PosixFilePermissions.fromString("rw-------"));
+            final String runnerCommand = ". /etc/default/cloudstack-agent; exec /usr/bin/java $JAVA_OPTS -cp \"$CLASSPATH\" "
+                    + LibvirtAblestackRestoreJobMain.class.getName() + " " + shellQuote(command.getClass().getName()) + " "
+                    + shellQuote(commandPath.toString());
+            return startDetached(command, logger, trace, provider, jobId, vmName, backupPath, "RESTORE",
+                    new String[]{"/bin/bash", "-lc", runnerCommand});
+        } catch (IOException e) {
+            writeJobState(logger, jobId, provider, vmName, backupPath, "RESTORE", STATE_FAILED, e.getMessage());
+            return new BackupAnswer(command, false, "Failed to prepare detached restore job: " + e.getMessage());
         }
     }
 
@@ -182,7 +207,8 @@ final class LibvirtAblestackAsyncBackupRunner {
             final Logger logger) {
         final String state = getJobState(jobId, logger);
         final Properties properties = ensureCommonJobMetadata(jobId, refreshLiveProgress(jobId, readJob(jobId, logger), state, logger), logger);
-        final BackupAnswer answer = new BackupAnswer(command, true, state);
+        final String details = properties != null ? properties.getProperty("details", state) : state;
+        final BackupAnswer answer = new BackupAnswer(command, true, details);
         answer.setState(state);
         answer.setStep(properties != null ? properties.getProperty("step", state) : state);
         answer.setProgress(properties != null && Boolean.parseBoolean(properties.getProperty("progressUnavailable")) ? null : resolveProgress(state, properties));

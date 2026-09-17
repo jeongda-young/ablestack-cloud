@@ -18,6 +18,7 @@ package org.apache.cloudstack.backup;
 
 import com.cloud.agent.AgentManager;
 import com.cloud.agent.api.Answer;
+import com.cloud.agent.api.Command;
 import com.cloud.exception.AgentUnavailableException;
 import com.cloud.exception.OperationTimedoutException;
 import com.cloud.host.Host;
@@ -986,6 +987,17 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_TRACKED_AT_DETAIL, String.valueOf(System.currentTimeMillis()));
     }
 
+    private BackupAnswer sendAndWaitForRestore(final Long hostId, final Command restoreCommand, final String restoreJobId)
+            throws AgentUnavailableException, OperationTimedoutException {
+        final Answer startAnswer = agentManager.send(hostId, restoreCommand);
+        if (!(startAnswer instanceof BackupAnswer) || !startAnswer.getResult()) {
+            return startAnswer instanceof BackupAnswer ? (BackupAnswer) startAnswer
+                    : new BackupAnswer(restoreCommand, false, "Unexpected restore start response");
+        }
+        return AblestackRestoreJobPoller.waitForCompletion(restoreJobId, BackupRestoreTimeout.value(),
+                () -> agentManager.send(hostId, new AblestackRestoreJobStatusCommand(restoreJobId, null, 5)));
+    }
+
     private void markBackupFailure(final Backup backup, final String phase, final String reason) {
         if (backup == null) {
             return;
@@ -1338,6 +1350,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             restoreCommand.setRestorePlan(createRestorePlan(false));
             restoreCommand.setTimeout(BackupRestoreTimeout.value());
             restoreCommand.setCheckpointName(getBackupDetail(backup, DETAIL_CHECKPOINT_NAME));
+            restoreCommand.setWaitForCompletion(false);
             trackRestoreJob(backup, restoreJobId, host);
 
             final BackupAnswer answer;
@@ -1346,7 +1359,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                                 + "backupId=[{}], backupUuid=[{}], restoreHostId=[{}], restoreHostName=[{}], backupPath=[{}]",
                         RESTORE_TRACE, restoreJobId, AblestackBackupFrameworkUtils.getAsyncRestoreJobLogPath(restoreJobId),
                         vm.getId(), vm.getInstanceName(), backup.getId(), backup.getUuid(), host.getId(), host.getName(), backup.getExternalId());
-                answer = requireBackupAnswer(agentManager.send(host.getId(), restoreCommand), host.getName(), "Veeam restore");
+                answer = sendAndWaitForRestore(host.getId(), restoreCommand, restoreJobId);
             } catch (final AgentUnavailableException e) {
                 LOG.error("{} phase=[PROVIDER_FAILED], restoreJobId=[{}], vmId=[{}], vmName=[{}], backupId=[{}], backupUuid=[{}], "
                                 + "restoreHost=[{}], reason=[{}]",
@@ -1505,6 +1518,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             restoreCommand.setTimeout(BackupRestoreTimeout.value());
             restoreCommand.setCacheMode(cacheMode);
             restoreCommand.setCheckpointName(getBackupDetail(backup, DETAIL_CHECKPOINT_NAME));
+            restoreCommand.setWaitForCompletion(false);
             trackRestoreJob(backup, restoreJobId, restoreHost);
 
             final BackupAnswer answer;
@@ -1514,7 +1528,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                         RESTORE_TRACE, restoreJobId, AblestackBackupFrameworkUtils.getAsyncRestoreJobLogPath(restoreJobId),
                         vmNameAndState.first(), backup.getId(), backup.getUuid(), backupVolumeInfo.getUuid(),
                         restoreHost.getId(), restoreHost.getName(), backup.getExternalId());
-                answer = requireBackupAnswer(agentManager.send(restoreHost.getId(), restoreCommand), restoreHost.getName(), "Veeam volume restore");
+                answer = sendAndWaitForRestore(restoreHost.getId(), restoreCommand, restoreJobId);
             } catch (AgentUnavailableException e) {
                 LOG.error("{} phase=[PROVIDER_FAILED], restoreJobId=[{}], vmName=[{}], backupId=[{}], backupUuid=[{}], "
                                 + "backedUpVolumeUuid=[{}], restoreHost=[{}], reason=[{}]",

@@ -316,6 +316,11 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     private static final String RETENTION_CLEANUP_FAILED_AT = "retention.cleanup.failed.at";
     private static final String RETENTION_CLEANUP_SCHEDULE_ID = "retention.cleanup.schedule.id";
     private static final String RETENTION_CLEANUP_REASON = "retention.cleanup.reason";
+    private static final String VEEAM_RESTORE_SESSION_ID = "veeam.restore.session.id";
+    private static final String VEEAM_RESTORE_VM_UUID = "veeam.restore.vm.uuid";
+    private static final String VEEAM_RESTORE_PHASE = "veeam.restore.phase";
+    private static final String VEEAM_RESTORE_UPDATED_AT = "veeam.restore.updated.at";
+    private static final String VEEAM_RESTORE_FAILURE_REASON = "veeam.restore.failure.reason";
     private static final long MIN_ACTIVE_JOB_SYNC_INTERVAL_SECONDS = 5L;
     private static final long RESTORE_JOB_START_GRACE_PERIOD_MS = TimeUnit.SECONDS.toMillis(60);
 
@@ -1428,7 +1433,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
 
     @Override
     @ActionEvent(eventType = EventTypes.EVENT_VM_BACKUP_RESTORE, eventDescription = "restoring VM from Ablestack Veeam backup", async = true)
-    public boolean restoreAblestackVeeamBackup(final Long backupId) {
+    public boolean restoreAblestackVeeamBackup(final Long backupId, final String sessionId) {
         BackupVO backup = backupDao.findById(backupId);
         if (backup == null) {
             backup = backupDao.findByIdIncludingRemoved(backupId);
@@ -1443,7 +1448,85 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         if (backupOffering == null || !BackupProviderNameUtils.isVeeamFamily(backupOffering.getProvider())) {
             throw new CloudRuntimeException("Backup is not from an ablestack-veeam offering");
         }
-        return restoreBackup(backupId, false, null);
+        if (StringUtils.isBlank(sessionId)) {
+            return restoreBackup(backupId, false, null);
+        }
+
+        backupDao.loadDetails(backup);
+        final VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(backup.getVmId());
+        if (vm == null || VirtualMachine.State.Expunging.equals(vm.getState())) {
+            throw new CloudRuntimeException("The Instance from which the Veeam backup was taken could not be found.");
+        }
+        final String existingSessionId = backup.getDetail(VEEAM_RESTORE_SESSION_ID);
+        final String existingPhase = backup.getDetail(VEEAM_RESTORE_PHASE);
+        if (StringUtils.equals(sessionId, existingSessionId) && "COMPLETED".equalsIgnoreCase(existingPhase)) {
+            logger.info("Skipping already completed Veeam restore session [{}] for backup [{}].", sessionId, backup.getUuid());
+            return true;
+        }
+        final BackupVO activeRestore = findActiveVeeamRestoreForVm(vm);
+        if (activeRestore != null) {
+            backupDao.loadDetails(activeRestore);
+            final String activeSessionId = activeRestore.getDetail(VEEAM_RESTORE_SESSION_ID);
+            if (StringUtils.equals(sessionId, activeSessionId)) {
+                logger.info("Skipping duplicate Veeam restore session [{}] for VM [{}]; phase=[{}].",
+                        sessionId, vm.getInstanceName(), activeRestore.getDetail(VEEAM_RESTORE_PHASE));
+                return true;
+            }
+            throw new CloudRuntimeException(String.format(
+                    "Veeam restore session [%s] is already active for VM [%s] in phase [%s].",
+                    activeSessionId, vm.getInstanceName(), activeRestore.getDetail(VEEAM_RESTORE_PHASE)));
+        }
+
+        persistVeeamRestoreState(backup, vm, sessionId, "CLAIMED", null);
+        try {
+            final boolean restored = restoreBackup(backupId, false, null);
+            persistVeeamRestoreState(backup, vm, sessionId, restored ? "COMPLETED" : "FAILED",
+                    restored ? null : "Veeam restore returned false");
+            return restored;
+        } catch (RuntimeException e) {
+            persistVeeamRestoreState(backup, vm, sessionId, "FAILED", e.getMessage());
+            throw e;
+        }
+    }
+
+    private BackupVO findActiveVeeamRestoreForVm(final VMInstanceVO vm) {
+        if (vm == null || StringUtils.isBlank(vm.getUuid())) {
+            return null;
+        }
+        return backupDetailsDao.findDetails(VEEAM_RESTORE_VM_UUID, vm.getUuid(), false).stream()
+                .map(BackupDetailVO::getResourceId)
+                .map(backupDao::findByIdIncludingRemoved)
+                .filter(Objects::nonNull)
+                .peek(backupDao::loadDetails)
+                .filter(candidate -> isActiveExternalRestorePhase(candidate.getDetail(VEEAM_RESTORE_PHASE)))
+                .findFirst()
+                .orElse(null);
+    }
+
+    private boolean isActiveExternalRestorePhase(final String phase) {
+        return StringUtils.isNotBlank(phase) && !isTerminalExternalRestorePhase(phase);
+    }
+
+    private boolean isTerminalExternalRestorePhase(final String phase) {
+        return "COMPLETED".equalsIgnoreCase(phase) || "FAILED".equalsIgnoreCase(phase);
+    }
+
+    private void persistVeeamRestoreState(final BackupVO backup, final VMInstanceVO vm, final String sessionId,
+            final String phase, final String failureReason) {
+        if (backup == null || vm == null || StringUtils.isBlank(sessionId) || StringUtils.isBlank(phase)) {
+            return;
+        }
+        persistBackupDetail(backup.getId(), VEEAM_RESTORE_SESSION_ID, sessionId);
+        persistBackupDetail(backup.getId(), VEEAM_RESTORE_VM_UUID, vm.getUuid());
+        persistBackupDetail(backup.getId(), VEEAM_RESTORE_PHASE, phase);
+        persistBackupDetail(backup.getId(), VEEAM_RESTORE_UPDATED_AT, String.valueOf(System.currentTimeMillis()));
+        if (StringUtils.isNotBlank(failureReason)) {
+            persistBackupDetail(backup.getId(), VEEAM_RESTORE_FAILURE_REASON,
+                    StringUtils.abbreviate(failureReason, 1024));
+        } else {
+            backupDetailsDao.removeDetail(backup.getId(), VEEAM_RESTORE_FAILURE_REASON);
+        }
+        backupDao.loadDetails(backup);
     }
 
     @Override
@@ -4081,9 +4164,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             if (offering == null || !isMatchingBackupProvider(backupProvider.getName(), offering.getProvider())) {
                 return;
             }
-            if (!BackupProviderNameUtils.isNasFamily(offering.getProvider()) && !BackupProviderNameUtils.isCommvaultFamily(offering.getProvider())) {
-                logger.debug("Skipping interrupted restore reconciliation for backup [{}] and provider [{}] because external-provider restore completion needs provider-specific verification.",
-                        backup.getUuid(), offering.getProvider());
+            if (!isAblestackHostSideRestoreProvider(offering)) {
                 return;
             }
             backupDao.loadDetails(backup);
@@ -4130,18 +4211,47 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             if (isMissingUnstartedRestoreJob(backup, restoreState)) {
                 markRestoreJobStartFailed(backup.getId());
                 failInterruptedRestoreStates(vm);
+                reconcileExternalRestoreTracking(offering, backup, vm, false, "Host-side restore job was not created");
                 logger.warn("Reconciled restore job [{}] for backup [{}], VM [{}] as failed because the host-side job was not created.",
                         restoreJobId, backup.getUuid(), vm.getInstanceName());
             } else if ("COMPLETED".equalsIgnoreCase(restoreState)) {
                 runPostRestoreMaintenance(backupProvider, vm, backup, false);
                 completeInterruptedRestoreStates(vm);
+                reconcileExternalRestoreTracking(offering, backup, vm, true, null);
                 cleanupBackupJobFiles(restoreHost.getId(), restoreJobId, backupProvider.getName() + " restore");
                 logger.info("Reconciled completed restore job [{}] for backup [{}], VM [{}].",
                         restoreJobId, backup.getUuid(), vm.getInstanceName());
             } else if (isTerminalRestoreFailureState(restoreState)) {
                 failInterruptedRestoreStates(vm);
+                reconcileExternalRestoreTracking(offering, backup, vm, false,
+                        StringUtils.defaultIfBlank(restoreAnswer.getDetails(), restoreState));
                 logger.warn("Reconciled failed restore job [{}] for backup [{}], VM [{}]. state=[{}]",
                         restoreJobId, backup.getUuid(), vm.getInstanceName(), restoreState);
+            }
+        }
+
+        protected void reconcileExternalRestoreTracking(final BackupOffering offering, final BackupVO backup,
+                final VMInstanceVO vm, final boolean completed, final String failureReason) {
+            final String reason = StringUtils.defaultIfBlank(failureReason, "Host-side restore job failed");
+            if (isAblestackNetBackupOffering(offering)) {
+                final String requestIdentifier = netBackupRestoreCoordinator.getRestoreRequestId(backup);
+                if (StringUtils.isNotBlank(requestIdentifier)) {
+                    if (completed) {
+                        netBackupRestoreCoordinator.persistRestoreState(backup, vm, requestIdentifier, RestorePhase.COMPLETED);
+                        netBackupRestoreCoordinator.completeSession(vm.getId(), requestIdentifier);
+                    } else {
+                        netBackupRestoreCoordinator.persistRestoreFailure(backup, vm, requestIdentifier, reason);
+                        netBackupRestoreCoordinator.failSession(vm.getId(), requestIdentifier, reason);
+                    }
+                }
+            }
+            if (BackupProviderNameUtils.isVeeamFamily(offering.getProvider())) {
+                backupDao.loadDetails(backup);
+                final String sessionId = backup.getDetail(VEEAM_RESTORE_SESSION_ID);
+                if (StringUtils.isNotBlank(sessionId)) {
+                    persistVeeamRestoreState(backup, vm, sessionId, completed ? "COMPLETED" : "FAILED",
+                            completed ? null : reason);
+                }
             }
         }
 

@@ -249,6 +249,7 @@ mold_backup_load_config() {
   VM_TARGETS="${VM_TARGETS:-}"
   KVM_HOSTNAME="${KVM_HOSTNAME:-}"
   RESTORE_WATCH_TRIGGER_MOLD="${RESTORE_WATCH_TRIGGER_MOLD:-false}"
+  RESTORE_WATCH_SKIP_EXISTING_ON_START="${RESTORE_WATCH_SKIP_EXISTING_ON_START:-true}"
   VEEAM_UI_RESTORE_SOURCE="${VEEAM_UI_RESTORE_SOURCE:-mold-only}"
   RESTORE_LOCK_DIR="${RESTORE_LOCK_DIR:-}"
   VEEAM_RESTORE_WATCH_WINDOW_MIN="${VEEAM_RESTORE_WATCH_WINDOW_MIN:-60}"
@@ -1126,16 +1127,26 @@ mold_backup_api_create_backup() {
 mold_backup_api_restore() {
   mold_backup_require_var BACKUP_ID
   local json job_id
+  MOLD_RESTORE_ASYNC_JOB_ID=""
+  MOLD_RESTORE_ASYNC_SUBMITTED=false
   # Existing-VM restore requires Stopped; FLR→Mold auto-stops unless RESTORE_AUTO_STOP=false.
   if [[ -n "${VM_NAME:-}" ]]; then
     mold_backup_api_ensure_vm_stopped_for_restore "$VM_NAME" || return 1
   fi
-  json=$(mold_backup_cmk_run restoreAblestackVeeamBackup "id=${BACKUP_ID}" 2>/dev/null) \
+  local restore_args=("id=${BACKUP_ID}")
+  [[ -n "${VEEAM_RESTORE_SESSION_ID:-}" ]] && restore_args+=("sessionid=${VEEAM_RESTORE_SESSION_ID}")
+  json=$(mold_backup_cmk_run restoreAblestackVeeamBackup "${restore_args[@]}" 2>/dev/null) \
     || json=$(mold_backup_cmk_run restoreBackup "id=${BACKUP_ID}" 2>/dev/null) \
     || return 1
   job_id="$(mold_backup_api_json_field "$json" "restoreablestackveeambackupresponse.jobid")"
   [[ -z "$job_id" ]] && job_id="$(mold_backup_api_json_field "$json" "restorebackupresponse.jobid")"
   if [[ -n "$job_id" ]]; then
+    MOLD_RESTORE_ASYNC_JOB_ID="$job_id"
+    if [[ "${MOLD_RESTORE_ASYNC_DETACH:-false}" == "true" ]]; then
+      MOLD_RESTORE_ASYNC_SUBMITTED=true
+      mold_backup_notify_log info "Restore async job submitted: ${job_id}; host restore will continue independently"
+      return 0
+    fi
     mold_backup_notify_log info "restoreAblestackVeeamBackup job=${job_id}; waiting for MS/agent restore"
     mold_backup_api_wait_async_job "$job_id" 3600 || return 1
     mold_backup_notify_log info "Restore async job completed: ${job_id}"
@@ -4006,6 +4017,33 @@ mold_backup_restore_session_mark_seen() {
   fi
 }
 
+mold_backup_restore_watch_baseline_marker() {
+  local state_file
+  state_file="$(mold_backup_restore_watch_state)"
+  echo "${state_file}.baseline-complete"
+}
+
+mold_backup_initialize_restore_watch_baseline() {
+  local since_min="${1:-${VEEAM_RESTORE_WATCH_WINDOW_MIN:-60}}"
+  local marker sid _rest marked=0
+  [[ "${RESTORE_WATCH_SKIP_EXISTING_ON_START:-true}" == "true" ]] || return 0
+  marker="$(mold_backup_restore_watch_baseline_marker)"
+  [[ -f "$marker" ]] && return 0
+
+  while IFS='|' read -r sid _rest; do
+    [[ -n "$sid" ]] || continue
+    if [[ "$sid" =~ ^[0-9a-fA-F-]{8,}$ || "$sid" == local-flr-* ]]; then
+      mold_backup_restore_session_mark_seen "$sid"
+      marked=$((marked+1))
+    fi
+  done < <(
+    mold_backup_query_veeam_restores "$since_min" 2>/dev/null || true
+    mold_backup_query_local_host_flr "$since_min" 2>/dev/null || true
+  )
+  date -u +%FT%TZ > "$marker" 2>/dev/null || true
+  mold_backup_notify_log info "Veeam restore watcher initial baseline completed sessions=${marked}"
+}
+
 # Query Veeam for restore sessions that completed within the last N minutes.
 # Emits one line per session: sessionId|targetIp|endTimeUTC|result|name|backupName|restorePointId
 # The target IP/computer is parsed out of the session Options XML (FLR/restore specs put
@@ -5225,7 +5263,7 @@ mold_backup_handle_veeam_restore_session() {
     mold_backup_restore_lock_release
     return 1
   fi
-  export BACKUP_ID="$backup_id" VM_NAME="$vm"
+  export BACKUP_ID="$backup_id" VM_NAME="$vm" VEEAM_RESTORE_SESSION_ID="$sid"
   [[ -n "$rp_id" ]] && export VEEAM_RESTORE_POINT_ID="$rp_id"
   export RESTORE_SOURCE="${RESTORE_SOURCE:-${VEEAM_UI_RESTORE_SOURCE:-mold-only}}"
   mold_backup_notify_log info "Veeam UI restore session=${sid} vm=${vm} rp=${rp_id:-n/a} ckpt=${ckpt:-n/a} → Mold datadisk restore backup_id=${backup_id} (RESTORE_SOURCE=${RESTORE_SOURCE})"
@@ -5234,9 +5272,16 @@ mold_backup_handle_veeam_restore_session() {
   mold_backup_trigger_mark "mold-restore-active" "$vm"
   mold_backup_trigger_mark "veeam-restore-active" "$vm"
   if mold_backup_restore_notify "$(hostname -s)" "$job"; then
-    mold_backup_registry_save_restore "$job" "$vm" "veeam" "$sid" "${detail};backup_id=${backup_id}" "mold-restored"
     mold_backup_restore_session_mark_seen "$sid"
-    mold_backup_emit_restore_event "mold.restore.completed" "$vm" "session=${sid};backup_id=${backup_id}"
+    if [[ "${MOLD_RESTORE_ASYNC_SUBMITTED:-false}" == "true" ]]; then
+      mold_backup_registry_save_restore "$job" "$vm" "veeam" "$sid" \
+        "${detail};backup_id=${backup_id};async_job_id=${MOLD_RESTORE_ASYNC_JOB_ID:-}" "mold-submitted"
+      mold_backup_emit_restore_event "mold.restore.submitted" "$vm" \
+        "session=${sid};backup_id=${backup_id};async_job_id=${MOLD_RESTORE_ASYNC_JOB_ID:-}"
+    else
+      mold_backup_registry_save_restore "$job" "$vm" "veeam" "$sid" "${detail};backup_id=${backup_id}" "mold-restored"
+      mold_backup_emit_restore_event "mold.restore.completed" "$vm" "session=${sid};backup_id=${backup_id}"
+    fi
   else
     # Always mark seen on failure so restore-watch does not re-stop the same VM every 3min.
     # Set RESTORE_WATCH_RETRY_FAILED=true to allow retries of failed sessions.
@@ -5276,6 +5321,7 @@ mold_backup_watch_veeam_restores() {
   }
   [[ "${trigger_mold}" == "true" ]] && mold_backup_restore_preflight
   mold_backup_notify_log info "=== restore-watch job=${job} window=${since_min}min trigger_mold=${trigger_mold} host=$(mold_backup_local_kvm_name) ==="
+  mold_backup_initialize_restore_watch_baseline "$since_min"
   local sid sip et result nm bn rp_id rp_epoch matched_ip vm
   local processed=0 handled=0
   while IFS='|' read -r sid sip et result nm bn rp_id rp_epoch; do

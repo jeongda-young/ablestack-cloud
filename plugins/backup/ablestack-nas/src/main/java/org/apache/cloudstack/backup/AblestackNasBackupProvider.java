@@ -18,6 +18,7 @@ package org.apache.cloudstack.backup;
 
 import com.cloud.agent.AgentManager;
 import com.cloud.agent.api.Answer;
+import com.cloud.agent.api.Command;
 import com.cloud.exception.AgentUnavailableException;
 import com.cloud.exception.OperationTimedoutException;
 import com.cloud.host.Host;
@@ -640,6 +641,17 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         updateBackupDetail(backup, AblestackBackupFrameworkUtils.RESTORE_JOB_TRACKED_AT_DETAIL, String.valueOf(System.currentTimeMillis()));
     }
 
+    private BackupAnswer sendAndWaitForRestore(final Long hostId, final Command restoreCommand, final String restoreJobId)
+            throws AgentUnavailableException, OperationTimedoutException {
+        final Answer startAnswer = agentManager.send(hostId, restoreCommand);
+        if (!(startAnswer instanceof BackupAnswer) || !startAnswer.getResult()) {
+            return startAnswer instanceof BackupAnswer ? (BackupAnswer) startAnswer
+                    : new BackupAnswer(restoreCommand, false, "Unexpected restore start response");
+        }
+        return AblestackRestoreJobPoller.waitForCompletion(restoreJobId, BackupRestoreTimeout.value(),
+                () -> agentManager.send(hostId, new AblestackRestoreJobStatusCommand(restoreJobId, null, 5)));
+    }
+
     private void markBackupFailure(Backup backup, String phase, String reason) {
         if (backup == null) {
             return;
@@ -796,6 +808,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         restoreCommand.setRestorePlan(createRestorePlan(false));
         restoreCommand.setMountTimeout(NASBackupRestoreMountTimeout.value());
         restoreCommand.setWait(BackupRestoreTimeout.value());
+        restoreCommand.setWaitForCompletion(false);
         trackRestoreJob(backup, restoreJobId, host);
 
         BackupAnswer answer;
@@ -804,7 +817,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
                             + "backupUuid=[{}], hostId=[{}], hostName=[{}], backupPath=[{}]",
                     RESTORE_TRACE, restoreJobId, AblestackBackupFrameworkUtils.getAsyncRestoreJobLogPath(restoreJobId),
                     vm.getId(), vm.getInstanceName(), backup.getId(), backup.getUuid(), host.getId(), host.getName(), backup.getExternalId());
-            answer = (BackupAnswer) agentManager.send(host.getId(), restoreCommand);
+            answer = sendAndWaitForRestore(host.getId(), restoreCommand, restoreJobId);
         } catch (AgentUnavailableException e) {
             throw new CloudRuntimeException("Unable to contact backend control plane to initiate backup");
         } catch (OperationTimedoutException e) {
@@ -1150,6 +1163,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
                 backedVolume -> getBackupFileChain(backedVolume.getUuid(), backup))));
         restoreCommand.setVolumeChainStates(getVolumeChainStates(Collections.singletonList(matchingVolume), backup));
         restoreCommand.setRestorePlan(createRestorePlan(AblestackBackupFrameworkUtils.requiresRunningVmAttach(vmNameAndState.second())));
+        restoreCommand.setWaitForCompletion(false);
         trackRestoreJob(backup, restoreJobId, vmHost);
 
         BackupAnswer answer;
@@ -1159,7 +1173,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
                     RESTORE_TRACE, restoreJobId, AblestackBackupFrameworkUtils.getAsyncRestoreJobLogPath(restoreJobId),
                     vmNameAndState.first(), backup.getId(), backup.getUuid(), backupVolumeInfo.getUuid(), volumeUUID,
                     vmHost.getId(), vmHost.getName(), backup.getExternalId());
-            answer = (BackupAnswer) agentManager.send(vmHost.getId(), restoreCommand);
+            answer = sendAndWaitForRestore(vmHost.getId(), restoreCommand, restoreJobId);
         } catch (AgentUnavailableException e) {
             throw new CloudRuntimeException("Unable to contact backend control plane to initiate backup");
         } catch (OperationTimedoutException e) {

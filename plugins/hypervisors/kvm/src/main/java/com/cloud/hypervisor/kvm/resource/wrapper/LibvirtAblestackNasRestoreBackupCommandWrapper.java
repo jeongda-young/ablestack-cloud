@@ -71,6 +71,10 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
     private static final long RESTORE_PRIMARY_SPACE_BUFFER_BYTES = 10L * 1024L * 1024L * 1024L;
     @Override
     public Answer execute(AblestackNasRestoreBackupCommand command, LibvirtComputingResource serverResource) {
+        if (!command.isWaitForCompletion()) {
+            return LibvirtAblestackAsyncBackupRunner.startDetachedRestore(command, logger, RESTORE_TRACE, "nas",
+                    command.getRestoreJobId(), command.getVmName(), command.getBackupPath());
+        }
         String vmName = command.getVmName();
         String backupPath = command.getBackupPath();
         String backupRepoAddress = command.getBackupRepoAddress();

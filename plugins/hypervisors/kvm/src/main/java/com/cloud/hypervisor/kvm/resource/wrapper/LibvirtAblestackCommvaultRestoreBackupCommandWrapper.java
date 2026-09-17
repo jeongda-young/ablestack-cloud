@@ -73,6 +73,10 @@ public class LibvirtAblestackCommvaultRestoreBackupCommandWrapper extends Comman
 
     @Override
     public Answer execute(AblestackCommvaultRestoreBackupCommand command, LibvirtComputingResource serverResource) {
+        if (!command.isWaitForCompletion()) {
+            return LibvirtAblestackAsyncBackupRunner.startDetachedRestore(command, logger, RESTORE_TRACE, "commvault",
+                    command.getRestoreJobId(), command.getVmName(), command.getBackupPath());
+        }
         String vmName = command.getVmName();
         String backupPath = command.getBackupPath();
         Boolean vmExists = command.isVmExists();
