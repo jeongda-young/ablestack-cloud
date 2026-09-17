@@ -42,14 +42,14 @@ under the License.
         </div></template>
       </template>
     </a-table>
-    <a-modal wrap-class-name="vm-nic-modal" :visible="form === 'create'" :title="$t('label.vmnic.create')" :width="760" :mask-closable="false" @cancel="closeForm">
+    <a-modal centered wrap-class-name="vm-nic-modal" :visible="form === 'create'" :title="$t('label.vmnic.create')" :width="760" :mask-closable="false" @cancel="closeForm">
       <dl class="nic-context"><dt>{{ $t('label.virtualmachine') }}</dt><dd>{{ vm.displayname || vm.name }}</dd><dt>{{ $t('label.zone') }}</dt><dd>{{ vm.zonename }}</dd><dt>{{ $t(vm.projectid ? 'label.project' : 'label.account') }}</dt><dd>{{ vm.project || vm.account }}</dd><template v-if="!vm.projectid"><dt>{{ $t('label.domain') }}</dt><dd>{{ vm.domain }}</dd></template></dl>
       <a-checkbox v-if="allowed('updateDefaultNicForVirtualMachine')" v-model:checked="makeDefault">{{ $t('label.make.default') }}</a-checkbox>
       <a-alert class="nic-alert" type="info" show-icon :message="$t('message.vmnic.partial')" />
       <CreateNetwork ref="networkCreator" v-if="form === 'create'" :resource="formVm" :submit-handler="createAndAttach" @close-action="closeForm" />
       <template #footer><a-button @click="closeForm">{{ $t('label.cancel') }}</a-button><a-button type="primary" :disabled="busy" @click="$refs.networkCreator?.submit()">{{ $t('label.vmnic.create') }}</a-button></template>
     </a-modal>
-    <a-modal
+    <a-modal centered
 wrap-class-name="vm-nic-modal"
 :visible="form === 'attach'"
 :title="$t('label.vmnic.attach')"
@@ -68,7 +68,7 @@ wrap-class-name="vm-nic-modal"
       </a-form>
       <a-alert v-if="formError" class="nic-alert" type="error" :message="formError" />
     </a-modal>
-    <a-modal
+    <a-modal centered
 wrap-class-name="vm-nic-modal"
 :visible="form === 'action'"
 :title="actionTitle(action, selected)"
@@ -84,7 +84,7 @@ wrap-class-name="vm-nic-modal"
       <a-alert v-if="formError" class="nic-alert" type="error" :message="formError" />
       <a-checkbox v-model:checked="ack">{{ $t('message.vmnic.ack') }}</a-checkbox>
     </a-modal>
-    <a-modal wrap-class-name="vm-nic-modal" :visible="form === 'secondary'" :title="$t('label.edit.secondary.ips')" @cancel="closeForm">
+    <a-modal centered wrap-class-name="vm-nic-modal" :visible="form === 'secondary'" :title="$t('label.edit.secondary.ips')" @cancel="closeForm">
       <p>{{ selected?.networkname }} / {{ selected?.macaddress }}</p>
       <a-form v-if="allowed('addIpToNic')" layout="vertical" class="nic-fields"><a-form-item :label="$t('label.ipaddress')" :extra="$t('message.vmnic.autoip')"><a-input :aria-label="$t('label.ipaddress')" v-model:value="values.ipaddress" /></a-form-item><a-form-item :label="$t('label.description')"><a-input v-model:value="values.description" /></a-form-item></a-form>
       <a-alert v-if="formError" class="nic-alert" type="error" :message="formError" />
@@ -92,8 +92,8 @@ wrap-class-name="vm-nic-modal"
       <a-alert class="nic-alert" type="info" :message="$t('message.network.secondaryip')" />
       <template #footer><a-button @click="closeForm">{{ $t('label.cancel') }}</a-button><a-button v-if="allowed('addIpToNic')" type="primary" :disabled="busy || !!reason('addIpToNic', selected)" @click="addSecondary">{{ $t('label.add.secondary.ip') }}</a-button></template>
     </a-modal>
-    <a-modal wrap-class-name="vm-nic-modal" :visible="form === 'details'" :title="$t('label.details')" @cancel="closeForm"><a-descriptions v-if="selected" bordered :column="1" size="small" class="nic-description"><a-descriptions-item v-for="key in detailKeys" :key="key" :label="$t('label.' + key)">{{ selected[key] ?? '—' }}</a-descriptions-item></a-descriptions><p>{{ $t('label.vmnic.enabled') }}: {{ booleanText(selected?.enabled) }} / {{ $t('label.vmnic.link') }}: {{ selected?.linkstate === true ? 'UP' : selected?.linkstate === false ? 'DOWN' : $t('label.vmnic.unknown') }}</p><template #footer><a-button @click="closeForm">{{ $t('label.close') }}</a-button></template></a-modal>
-    <a-modal wrap-class-name="vm-nic-modal" :visible="progressVisible && !!operation" :title="$t('label.vmnic.progress')" @cancel="progressVisible = false">
+    <a-modal centered wrap-class-name="vm-nic-modal" :visible="form === 'details'" :title="$t('label.details')" @cancel="closeForm"><a-descriptions v-if="selected" bordered :column="1" size="small" class="nic-description"><a-descriptions-item v-for="key in detailKeys" :key="key" :label="$t('label.' + key)">{{ selected[key] ?? '—' }}</a-descriptions-item></a-descriptions><p>{{ $t('label.vmnic.enabled') }}: {{ booleanText(selected?.enabled) }} / {{ $t('label.vmnic.link') }}: {{ selected?.linkstate === true ? 'UP' : selected?.linkstate === false ? 'DOWN' : $t('label.vmnic.unknown') }}</p><template #footer><a-button @click="closeForm">{{ $t('label.close') }}</a-button></template></a-modal>
+    <a-modal centered wrap-class-name="vm-nic-modal" :visible="progressVisible && !!operation" :title="$t('label.vmnic.progress')" @cancel="progressVisible = false">
       <template v-if="operation"><p>{{ operation.vm.displayname || operation.vm.name }}</p><p v-if="operation.network?.id"><router-link :to="'/guestnetwork/' + operation.network.id">{{ operation.network.name || operation.network.id }}</router-link></p>
         <a-steps direction="vertical" size="small" :current="operation.stage" :status="operation.status === 'failed' ? 'error' : 'process'"><a-step v-for="step in operation.steps" :key="step" :title="actionTitle(step, operation.nic)" /></a-steps>
         <a-alert class="nic-alert" :type="operation.status === 'complete' ? 'success' : operation.status === 'failed' ? 'error' : 'info'" :message="$t('label.vmvolume.' + operation.status)" :description="operation.error ? translateError(operation.error) : ''" />
@@ -303,7 +303,7 @@ export default {
 
 <style lang="scss">
 .vm-nic-modal {
-  .ant-modal { top: 24px; padding-bottom: 0; max-width: calc(100vw - 32px); margin: 0 auto; }
+  .ant-modal { top: 0; padding-bottom: 0; max-width: calc(100vw - 32px); margin: 0 auto; }
   .ant-modal-content { display: flex; flex-direction: column; max-height: calc(100vh - 48px); overflow: hidden; }
   .ant-modal-header, .ant-modal-footer { flex: 0 0 auto; margin: 0; }
   .ant-modal-header { padding: 16px 24px; }
@@ -324,7 +324,7 @@ export default {
   .ant-descriptions-item-label { width: 128px; }
   .ant-modal-title { padding-right: 24px; overflow-wrap: anywhere; }
   @media (max-width: 600px) {
-    .ant-modal { top: 12px; max-width: calc(100vw - 24px); }
+    .ant-modal { max-width: calc(100vw - 24px); }
     .ant-modal-content { max-height: calc(100vh - 24px); }
     .ant-modal-header, .ant-modal-footer { padding-left: 16px; padding-right: 16px; }
     .ant-modal-body { padding: 16px; }
