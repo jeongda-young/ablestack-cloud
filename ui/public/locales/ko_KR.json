@@ -7716,5 +7716,10 @@
   "message.vmvolume.owner": "VM과 동일한 계정 또는 프로젝트의 볼륨만 연결할 수 있습니다.",
   "message.vmvolume.failed": "작업이 실패했습니다.",
   "label.vmvolume.abandon": "남은 작업 취소 · 볼륨 보존",
-  "message.vmvolume.root": "ROOT 연결 해제는 지원 하이퍼바이저의 정지 VM에서만 가능하며 비관리형 스토리지 확인 권한이 필요합니다."
+  "message.vmvolume.root": "ROOT 연결 해제는 지원 하이퍼바이저의 정지 VM에서만 가능하며 비관리형 스토리지 확인 권한이 필요합니다.",
+  "label.vmvolume.deviceid": "볼륨 번호 (Device ID)",
+  "label.vmvolume.device.auto": "자동 배정",
+  "message.vmvolume.device.auto": "비워두면 자동 배정합니다. 0은 ROOT, 3은 예약 번호입니다. 허용 범위와 게스트 디스크 매핑은 하이퍼바이저 정책에 따릅니다.",
+  "message.vmvolume.device.invalid": "1 이상의 정수를 입력하세요. 예약 번호 3은 사용할 수 없습니다.",
+  "message.vmvolume.device.used": "이미 연결된 볼륨이 사용하는 번호입니다."
 }

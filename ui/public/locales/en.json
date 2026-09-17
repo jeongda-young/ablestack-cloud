@@ -7757,5 +7757,10 @@
   "message.vmvolume.owner": "The volume must belong to the same account or project as the VM.",
   "message.vmvolume.failed": "Operation failed.",
   "label.vmvolume.abandon": "Cancel remaining steps; preserve volume",
-  "message.vmvolume.root": "ROOT detach requires a stopped VM on a supported hypervisor and permission to verify an unmanaged storage pool."
+  "message.vmvolume.root": "ROOT detach requires a stopped VM on a supported hypervisor and permission to verify an unmanaged storage pool.",
+  "label.vmvolume.deviceid": "Volume number (Device ID)",
+  "label.vmvolume.device.auto": "Automatic",
+  "message.vmvolume.device.auto": "Leave empty for automatic assignment. 0 is ROOT; 3 is reserved. The supported range and guest disk mapping depend on the hypervisor.",
+  "message.vmvolume.device.invalid": "Enter a positive integer other than reserved ID 3.",
+  "message.vmvolume.device.used": "This number is already used by an attached volume."
 }

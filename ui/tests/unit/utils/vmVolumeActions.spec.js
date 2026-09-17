@@ -15,7 +15,7 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { startVolumeOperation, volumeActionReason, clearVolumeOperations } from '@/utils/vmVolumeActions'
+import { startVolumeOperation, volumeActionReason, volumeDeviceIdReason, clearVolumeOperations } from '@/utils/vmVolumeActions'
 const flush = async () => { for (let i = 0; i < 60; i++) await Promise.resolve() }
 const vm = { id: 'vm', state: 'Running', zoneid: 'zone', account: 'account', domainid: 'domain' }
 const volume = { id: 'volume', type: 'DATADISK', state: 'Ready', zoneid: 'zone', account: 'account', domainid: 'domain' }
@@ -80,4 +80,11 @@ test('revalidation failure after detach preserves volume and allows cancel remai
   await flush(); expect(op.stage).toBe(1); expect(op.status).toBe('failed'); expect(deps.submit).toHaveBeenCalledTimes(1)
   op.abandon(); expect(startVolumeOperation('key', { steps: ['attachVolume'], volume }, dependencies())).not.toBe(op)
   await flush()
+})
+
+test('device ID supports automatic assignment and rejects reserved or occupied slots', () => {
+  for (const value of [undefined, null, '']) expect(volumeDeviceIdReason(value)).toBe('')
+  for (const value of [0, -1, 3, 1.5, 'abc']) expect(volumeDeviceIdReason(value)).toBeTruthy()
+  expect(volumeDeviceIdReason(6, [{ deviceid: 6 }])).toBe('message.vmvolume.device.used')
+  expect(volumeDeviceIdReason('6', [{ deviceid: 1 }])).toBe('')
 })

@@ -38,6 +38,15 @@ export function volumeActionReason (api, volume, vm) {
   return ''
 }
 
+// 0 is ROOT and 3 is reserved by the server; data-volume workflows cannot use them.
+export function volumeDeviceIdReason (value, volumes = []) {
+  if (value === undefined || value === null || value === '') return ''
+  const id = Number(value)
+  if (!Number.isSafeInteger(id) || id < 1 || id === 3) return 'message.vmvolume.device.invalid'
+  if (volumes.some(volume => Number(volume.deviceid) === id)) return 'message.vmvolume.device.used'
+  return ''
+}
+
 // Keep mutations independent of the attached-volume list and tab lifetime.
 // An ambiguous submission must never be repeated automatically.
 export function startVolumeOperation (key, options, dependencies) {

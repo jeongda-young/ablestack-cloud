@@ -77,3 +77,19 @@ test('changed attachment prevents detach and subsequent deletion', async () => {
   expect(postAPI).not.toHaveBeenCalled(); expect(wrapper.vm.operation.status).toBe('failed')
   wrapper.unmount()
 })
+
+test.each(['existing', 'create'])('passes chosen device ID only to attachVolume (%s)', async flow => {
+  const wrapper = mount({ listVolumes: {}, createVolume: {}, attachVolume: {} }); await flush()
+  const available = { ...row, virtualmachineid: undefined, zoneid: vm.zoneid, account: vm.account, domainid: vm.domainid }
+  getAPI.mockImplementation((api, params) => Promise.resolve(api === 'listVirtualMachines' ? { listvirtualmachinesresponse: { virtualmachine: [vm] } } : response(params.id ? [available] : [{ ...row, deviceid: 1 }])))
+  postAPI.mockImplementation(api => Promise.resolve({ [api.toLowerCase() + 'response']: { jobid: api } }))
+  wrapper.vm.$pollJob.mockResolvedValue({ jobstatus: 1, jobresult: { volume: available } })
+  if (flow === 'existing') {
+    wrapper.vm.candidates = [available]; wrapper.vm.attachId = available.id; wrapper.vm.attachDeviceId = 6
+    wrapper.vm.attachExisting()
+  } else wrapper.vm.createAndAttach({ name: 'new', deviceid: 6 })
+  await flush()
+  expect(postAPI).toHaveBeenCalledWith('attachVolume', { id: available.id, virtualmachineid: vm.id, deviceid: 6 })
+  if (flow === 'create') expect(postAPI.mock.calls.find(call => call[0] === 'createVolume')[1]).not.toHaveProperty('deviceid')
+  wrapper.unmount()
+})

@@ -35,15 +35,22 @@
         <template v-else-if="column.key === 'storage'"><router-link v-if="record.storageid" :to="'/storagepool/' + record.storageid">{{ record.storage }}</router-link></template>
         <template v-else-if="column.key === 'kmskey'"><router-link v-if="record.kmskeyid" :to="'/kmskey/' + record.kmskeyid">{{ record.kmskey }}</router-link></template>
         <template v-else-if="column.key === 'actions'">
-          <a-tooltip :title="reason('detachVolume', record) ? $t(reason('detachVolume', record)) : ''"><span><a-button v-if="allowed('detachVolume')" type="link" size="small" :disabled="busy || !!reason('detachVolume', record)" @click="openDetach(record)">{{ $t('label.action.detach.disk') }}</a-button></span></a-tooltip>
+          <div class="volume-row-actions">
+          <a-tooltip :title="reason('detachVolume', record) ? $t(reason('detachVolume', record)) : ''"><span><a-button v-if="allowed('detachVolume')" size="small" :disabled="busy || !!reason('detachVolume', record)" @click="openDetach(record)">{{ $t('label.action.detach.disk') }}</a-button></span></a-tooltip>
           <a-dropdown :trigger="['click']"><a-button size="small" :aria-label="$t('label.actions')"><template #icon><down-outlined /></template></a-button><template #overlay><a-menu><a-menu-item v-if="allowed('detachVolume')" key="detach" :disabled="busy || !!reason('detachVolume', record)" @click="openDetach(record)">{{ $t('label.vmvolume.detach') }}</a-menu-item><a-menu-item key="details"><router-link :to="'/volume/' + record.id">{{ $t('label.details') }}</router-link></a-menu-item></a-menu></template></a-dropdown>
+          </div>
         </template>
       </template>
     </a-table>
     <a-modal :visible="form === 'create'" :title="$t('label.vmvolume.create')" :footer="null" :mask-closable="false" @cancel="form = ''"><CreateVolume v-if="form === 'create'" :resource="resource" :submit-handler="createAndAttach" @close-action="form = ''" /></a-modal>
-    <a-modal :visible="form === 'attach'" :title="$t('label.vmvolume.attach')" :ok-button-props="{ disabled: !attachId || busy || candidatesLoading }" @ok="attachExisting" @cancel="form = ''">
+    <a-modal :visible="form === 'attach'" :title="$t('label.vmvolume.attach')" :ok-button-props="{ disabled: !attachId || busy || candidatesLoading || !!deviceReason }" @ok="attachExisting" @cancel="form = ''">
       <p>{{ resource.displayname || resource.name }}</p>
       <a-select v-model:value="attachId" show-search :filter-option="filterOption" :loading="candidatesLoading" style="width: 100%" :placeholder="$t('label.volumes')"><a-select-option v-for="volume in candidates" :key="volume.id" :value="volume.id" :label="volume.name">{{ volume.name }} ({{ (volume.size / 1073741824).toFixed(2) }} GB)</a-select-option></a-select>
+      <a-form layout="vertical" class="volume-device-form">
+        <a-form-item :label="$t('label.vmvolume.deviceid')" :validate-status="deviceReason ? 'error' : ''" :help="deviceReason ? $t(deviceReason) : $t('message.vmvolume.device.auto')">
+          <a-input-number v-model:value="attachDeviceId" :min="1" :precision="0" :aria-label="$t('label.vmvolume.deviceid')" :placeholder="$t('label.vmvolume.device.auto')" style="width: 100%" />
+        </a-form-item>
+      </a-form>
       <a-alert v-if="candidateError" class="volume-alert" type="error" :message="candidateError" />
     </a-modal>
     <a-modal :visible="!!selected" :title="$t('label.vmvolume.detach')" :ok-text="$t(mode === 'preserve' ? 'label.action.detach.disk' : 'label.vmvolume.' + mode)" :ok-button-props="{ danger: mode !== 'preserve', disabled: busy }" @ok="detach" @cancel="selected = null">
@@ -72,7 +79,7 @@
 <script>
 import { getAPI, postAPI } from '@/api'
 import { listRefreshMixin } from '@/utils/listRefreshMixin'
-import { volumeOperations, startVolumeOperation, volumeActionReason } from '@/utils/vmVolumeActions'
+import { volumeOperations, startVolumeOperation, volumeActionReason, volumeDeviceIdReason } from '@/utils/vmVolumeActions'
 import Status from '@/components/widgets/Status'
 import CreateVolume from '@/views/storage/CreateVolume.vue'
 import eventBus from '@/config/eventBus'
@@ -82,15 +89,16 @@ export default {
   components: { Status, CreateVolume },
   props: { resource: { type: Object, required: true } },
   mixins: [listRefreshMixin(['fetchData'], { interval: 10000, active: vm => !!vm.resource.id })],
-  data () { return { rows: [], loading: false, search: '', form: '', selected: null, mode: 'preserve', candidates: [], candidatesLoading: false, candidateError: '', attachId: undefined, progressVisible: false } },
+  data () { return { rows: [], loading: false, search: '', form: '', selected: null, mode: 'preserve', candidates: [], candidatesLoading: false, candidateError: '', attachId: undefined, attachDeviceId: undefined, progressVisible: false } },
   computed: {
     security () { return JSON.stringify([this.$store.getters.project?.id, this.$store.getters.userInfo?.id, this.$store.state?.user?.token]) },
     scopeKey () { return this.security + ':' + this.resource.id },
     operation () { return volumeOperations[this.scopeKey] },
     busy () { return this.operation && this.operation.status !== 'complete' },
+    deviceReason () { return volumeDeviceIdReason(this.attachDeviceId, this.rows) },
     canExpunge () { return this.allowed('destroyVolume') && (this.$store.getters.userInfo?.roletype === 'Admin' || this.$store.getters.features?.allowuserexpungerecovervolume) },
     filteredRows () { const query = this.search.trim().toLowerCase(); return this.rows.filter(row => (row.name || '').toLowerCase().includes(query)) },
-    columns () { return ['name', 'state', 'type', 'size', 'storage', ...(this.allowed('listKMSKeys') ? ['kmskey'] : []), 'actions'].map(key => ({ key, dataIndex: key, title: this.$t(key === 'kmskey' ? 'label.kms.key' : 'label.' + key), ...(key === 'actions' ? { width: 160, fixed: 'right' } : {}) })) }
+    columns () { return ['name', 'state', 'type', 'deviceid', 'size', 'storage', ...(this.allowed('listKMSKeys') ? ['kmskey'] : []), 'actions'].map(key => ({ key, dataIndex: key, title: this.$t(key === 'kmskey' ? 'label.kms.key' : key === 'deviceid' ? 'label.vmvolume.deviceid' : 'label.' + key), ...(key === 'actions' ? { width: 160, fixed: 'right' } : {}) })) }
   },
   watch: { scopeKey () { this.rows = []; this.search = ''; this.form = ''; this.selected = null; this.progressVisible = false; this.fetchData() } },
   created () { this.fetchData(); this.onJobComplete = () => this.fetchData(); eventBus.on('async-job-complete', this.onJobComplete) },
@@ -114,7 +122,7 @@ export default {
     },
     async openAttach () {
       const scope = this.scopeKey
-      this.form = 'attach'; this.attachId = undefined; this.candidates = []; this.candidateError = ''; this.candidatesLoading = true
+      this.form = 'attach'; this.attachId = undefined; this.attachDeviceId = undefined; this.candidates = []; this.candidateError = ''; this.candidatesLoading = true
       try {
         const params = { listall: true, zoneid: this.resource.zoneid, type: 'DATADISK', pagesize: 500, ...(this.resource.projectid ? { projectid: this.resource.projectid } : { account: this.resource.account, domainid: this.resource.domainid }) }
         let page = 1
@@ -132,15 +140,19 @@ export default {
       } catch (error) { if (scope === this.scopeKey) this.candidateError = this.$t('message.list.refresh.stale') } finally { if (scope === this.scopeKey) this.candidatesLoading = false }
     },
     openDetach (record) { this.selected = { ...record }; this.mode = 'preserve' },
-    createAndAttach (values) { this.begin(['createVolume', 'attachVolume'], null, values) },
-    attachExisting () { const volume = this.candidates.find(item => item.id === this.attachId); if (volume) this.begin(['attachVolume'], volume) },
+    createAndAttach (values) {
+      const reason = volumeDeviceIdReason(values.deviceid, this.rows)
+      if (reason) throw new Error(this.$t(reason))
+      this.begin(['createVolume', 'attachVolume'], null, values)
+    },
+    attachExisting () { const volume = this.candidates.find(item => item.id === this.attachId); if (volume && !this.deviceReason) this.begin(['attachVolume'], volume, { deviceid: this.attachDeviceId }) },
     detach () { if (this.selected) this.begin(this.mode === 'preserve' ? ['detachVolume'] : ['detachVolume', 'destroyVolume'], this.selected) },
     begin (steps, volume, values) {
       if (this.busy) return
       const key = this.scopeKey; const security = this.security; const vm = { ...this.resource }; const mode = this.mode; const originalPage = this.$route.path
       const current = () => this.security === security
       const refresh = () => { if (key === this.scopeKey && !this.listRefreshDisposed) this.fetchData() }
-      startVolumeOperation(key, { steps, vm, volume: volume ? { ...volume } : null, values, mode }, {
+      startVolumeOperation(key, { steps, vm, volume: volume ? { ...volume } : null, values, mode, deviceId: values?.deviceid }, {
         current,
         refresh,
         validate: async operation => {
@@ -150,6 +162,11 @@ export default {
           const freshVm = response.listvirtualmachinesresponse.virtualmachine?.find(item => item.id === vm.id)
           let freshVolume = operation.volume
           if (freshVolume?.id) { const result = await getAPI('listVolumes', { id: freshVolume.id, listall: true }); freshVolume = result.listvolumesresponse.volume?.find(item => item.id === freshVolume.id) }
+          if (['createVolume', 'attachVolume'].includes(api) && operation.deviceId !== undefined && operation.deviceId !== null && operation.deviceId !== '') {
+            const attached = await getAPI('listVolumes', { virtualmachineid: vm.id, listall: true })
+            const deviceReason = volumeDeviceIdReason(operation.deviceId, attached.listvolumesresponse.volume || [])
+            if (deviceReason) throw new Error(this.$t(deviceReason))
+          }
           const reason = volumeActionReason(api, freshVolume, freshVm)
           if (reason) throw new Error(this.$t(reason))
           if (api === 'detachVolume' && freshVolume.type === 'ROOT') {
@@ -164,10 +181,14 @@ export default {
           const params = api === 'createVolume' ? { ...operation.values } : { id: operation.volume.id }
           if (api === 'createVolume') {
             delete params.virtualmachineid
+            delete params.deviceid
             params.zoneid = vm.zoneid
             if (vm.projectid) { params.projectid = vm.projectid; delete params.account; delete params.domainid } else { params.account = vm.account; params.domainid = vm.domainid; delete params.projectid }
           }
-          if (api === 'attachVolume') params.virtualmachineid = vm.id
+          if (api === 'attachVolume') {
+            params.virtualmachineid = vm.id
+            if (operation.deviceId !== undefined && operation.deviceId !== null && operation.deviceId !== '') params.deviceid = Number(operation.deviceId)
+          }
           if (api === 'destroyVolume') params.expunge = operation.mode === 'expunge'
           return postAPI(api, params)
         },
@@ -180,8 +201,12 @@ export default {
 </script>
 
 <style scoped lang="scss">
+.volume-row-actions { display: inline-flex; align-items: center; gap: 8px; white-space: nowrap; }
+.volume-row-actions > span { display: inline-flex; align-items: center; }
+.volume-row-actions :deep(.ant-btn) { height: 24px; display: inline-flex; align-items: center; justify-content: center; margin: 0; }
 .volume-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; }
 .volume-toolbar :deep(.ant-input-search) { width: 280px; margin-left: auto; }
+.volume-device-form { margin-top: 20px; }
 .volume-dialog-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 20px; }
 .volume-alert { margin: 12px 0; }
 .volume-options { display: flex; flex-direction: column; gap: 12px; margin: 20px 0; }
