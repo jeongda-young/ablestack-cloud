@@ -30,25 +30,35 @@ under the License.
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'network'"><router-link :to="'/guestnetwork/' + record.networkid">{{ record.networkname || record.networkid }}</router-link><br><a-tag>{{ record.type }}</a-tag><a-tag v-if="record.isdefault" color="blue">{{ $t('label.default') }}</a-tag></template>
         <template v-else-if="column.key === 'address'">{{ record.ipaddress || (record.type === 'L2' ? $t('message.vmnic.l2.short') : '—') }}<br><small>{{ record.macaddress }}</small></template>
-        <template v-else-if="column.key === 'state'"><a-badge :status="record.enabled === true ? 'success' : 'default'" :text="booleanText(record.enabled)" /><br><small>{{ $t('label.vmnic.link') }}: {{ record.linkstate === true ? 'UP' : record.linkstate === false ? 'DOWN' : $t('label.vmnic.unknown') }}</small></template>
+        <template v-else-if="column.key === 'state'"><a-badge :status="nicState(record) === true ? 'success' : 'default'" :text="booleanText(nicState(record))" /></template>
         <template v-else-if="column.key === 'actions'"><div class="nic-row-actions">
           <a-tooltip :title="reason('removeNicFromVirtualMachine', record)"><span v-if="allowed('removeNicFromVirtualMachine')"><a-button size="small" :disabled="busy || !!reason('removeNicFromVirtualMachine', record)" @click="openAction('removeNicFromVirtualMachine', record)">{{ $t('label.vmnic.detach') }}</a-button></span></a-tooltip>
           <a-dropdown :trigger="['click']"><a-button size="small" :aria-label="$t('label.actions')"><template #icon><down-outlined /></template></a-button><template #overlay><a-menu>
             <a-menu-item v-for="api in actions.filter(allowed)" :key="api" :disabled="busy || !!reason(api, record)" @click="openAction(api, record)"><a-tooltip :title="reason(api, record)">{{ actionTitle(api, record) }}</a-tooltip></a-menu-item>
-            <a-menu-item key="details" @click="openAction('details', record)">{{ $t('label.details') }}</a-menu-item>
             <a-menu-item v-if="allowed('addIpToNic') || allowed('removeIpFromNic')" key="secondary" :disabled="record.type === 'L2'" @click="openAction('secondary', record)">{{ $t('label.edit.secondary.ips') }}</a-menu-item>
+            <a-menu-divider />
+            <a-menu-item key="details" @click="openAction('details', record)">{{ $t('label.details') }}</a-menu-item>
           </a-menu></template></a-dropdown>
         </div></template>
       </template>
     </a-table>
-    <a-modal :visible="form === 'create'" :title="$t('label.vmnic.create')" :width="760" :body-style="{ maxHeight: '75vh', overflowY: 'auto' }" :footer="null" :mask-closable="false" @cancel="closeForm">
-      <p>{{ vm.displayname || vm.name }} / {{ vm.zonename }} / {{ vm.account }}</p>
+    <a-modal wrap-class-name="vm-nic-modal" :visible="form === 'create'" :title="$t('label.vmnic.create')" :width="760" :mask-closable="false" @cancel="closeForm">
+      <dl class="nic-context"><dt>{{ $t('label.virtualmachine') }}</dt><dd>{{ vm.displayname || vm.name }}</dd><dt>{{ $t('label.zone') }}</dt><dd>{{ vm.zonename }}</dd><dt>{{ $t(vm.projectid ? 'label.project' : 'label.account') }}</dt><dd>{{ vm.project || vm.account }}</dd><template v-if="!vm.projectid"><dt>{{ $t('label.domain') }}</dt><dd>{{ vm.domain }}</dd></template></dl>
       <a-checkbox v-if="allowed('updateDefaultNicForVirtualMachine')" v-model:checked="makeDefault">{{ $t('label.make.default') }}</a-checkbox>
       <a-alert class="nic-alert" type="info" show-icon :message="$t('message.vmnic.partial')" />
-      <CreateNetwork v-if="form === 'create'" :resource="formVm" :submit-handler="createAndAttach" @close-action="closeForm" />
+      <CreateNetwork ref="networkCreator" v-if="form === 'create'" :resource="formVm" :submit-handler="createAndAttach" @close-action="closeForm" />
+      <template #footer><a-button @click="closeForm">{{ $t('label.cancel') }}</a-button><a-button type="primary" :disabled="busy" @click="$refs.networkCreator?.submit()">{{ $t('label.vmnic.create') }}</a-button></template>
     </a-modal>
-    <a-modal :visible="form === 'attach'" :title="$t('label.vmnic.attach')" :ok-text="$t('label.vmnic.attach')" :ok-button-props="{ disabled: busy || candidatesLoading || !attachId }" :mask-closable="false" @ok="attach" @cancel="closeForm">
-      <p>{{ vm.displayname || vm.name }} / {{ vm.zonename }} / {{ vm.account }}</p>
+    <a-modal
+wrap-class-name="vm-nic-modal"
+:visible="form === 'attach'"
+:title="$t('label.vmnic.attach')"
+:ok-text="$t('label.vmnic.attach')"
+:ok-button-props="{ disabled: busy || candidatesLoading || !attachId }"
+:mask-closable="false"
+@ok="attach"
+@cancel="closeForm">
+      <dl class="nic-context"><dt>{{ $t('label.virtualmachine') }}</dt><dd>{{ vm.displayname || vm.name }}</dd><dt>{{ $t('label.zone') }}</dt><dd>{{ vm.zonename }}</dd><dt>{{ $t(vm.projectid ? 'label.project' : 'label.account') }}</dt><dd>{{ vm.project || vm.account }}</dd><template v-if="!vm.projectid"><dt>{{ $t('label.domain') }}</dt><dd>{{ vm.domain }}</dd></template></dl>
       <a-form layout="vertical" class="nic-fields">
         <a-form-item :label="$t('label.network')"><a-select v-model:value="attachId" show-search :filter-option="filterOption" :loading="candidatesLoading" @change="changeCandidate"><a-select-option v-for="network in candidates" :key="network.id" :value="network.id" :label="network.name">{{ network.name }} · {{ network.type || network.guestiptype }}</a-select-option></a-select></a-form-item>
         <a-alert v-if="!candidatesLoading && !candidates.length" type="info" :message="$t('message.vmnic.empty')" />
@@ -58,7 +68,15 @@ under the License.
       </a-form>
       <a-alert v-if="formError" class="nic-alert" type="error" :message="formError" />
     </a-modal>
-    <a-modal :visible="form === 'action'" :title="actionTitle(action, selected)" :ok-text="actionTitle(action, selected)" :ok-button-props="{ danger: action === 'removeNicFromVirtualMachine' || action === 'removeIpFromNic', disabled: busy || !ack || !!reason(action, selected) }" :mask-closable="false" @ok="submitAction" @cancel="closeForm">
+    <a-modal
+wrap-class-name="vm-nic-modal"
+:visible="form === 'action'"
+:title="actionTitle(action, selected)"
+:ok-text="actionTitle(action, selected)"
+:ok-button-props="{ danger: action === 'removeNicFromVirtualMachine' || action === 'removeIpFromNic', disabled: busy || !ack || !!reason(action, selected) }"
+:mask-closable="false"
+@ok="submitAction"
+@cancel="closeForm">
       <a-descriptions v-if="selected" bordered :column="1" size="small" class="nic-description"><a-descriptions-item :label="$t('label.vm')">{{ vm.displayname || vm.name }}</a-descriptions-item><a-descriptions-item :label="$t('label.network')">{{ selected.networkname || selected.networkid }}</a-descriptions-item><a-descriptions-item :label="$t('label.id')">{{ selected.id }}</a-descriptions-item><a-descriptions-item :label="$t('label.ipaddress')">{{ action === 'removeIpFromNic' ? values.secondaryAddress : selected.ipaddress || '—' }}</a-descriptions-item><a-descriptions-item :label="$t('label.macaddress')">{{ selected.macaddress }}</a-descriptions-item></a-descriptions>
       <template v-if="action === 'updateVmNicIp'"><a-form layout="vertical" class="nic-fields"><a-form-item :label="$t('label.ipaddress')" :extra="selected?.type === 'L2' ? $t('message.vmnic.l2') : $t('message.vmnic.preserveip')"><a-input v-model:value="values.ipaddress" :disabled="selected?.type === 'L2'" /></a-form-item><a-form-item :label="$t('label.macaddress')"><a-input v-model:value="values.macaddress" /></a-form-item></a-form></template>
       <a-alert class="nic-alert" type="warning" show-icon :message="$t(action === 'removeNicFromVirtualMachine' ? 'message.vmnic.detach' : 'message.vmnic.impact')" />
@@ -66,22 +84,23 @@ under the License.
       <a-alert v-if="formError" class="nic-alert" type="error" :message="formError" />
       <a-checkbox v-model:checked="ack">{{ $t('message.vmnic.ack') }}</a-checkbox>
     </a-modal>
-    <a-modal :visible="form === 'secondary'" :title="$t('label.edit.secondary.ips')" :footer="null" @cancel="closeForm">
+    <a-modal wrap-class-name="vm-nic-modal" :visible="form === 'secondary'" :title="$t('label.edit.secondary.ips')" @cancel="closeForm">
       <p>{{ selected?.networkname }} / {{ selected?.macaddress }}</p>
-      <a-form v-if="allowed('addIpToNic')" layout="vertical" class="nic-fields"><a-form-item :label="$t('label.ipaddress')" :extra="$t('message.vmnic.autoip')"><a-input v-model:value="values.ipaddress" /></a-form-item><a-form-item :label="$t('label.description')"><a-input v-model:value="values.description" /></a-form-item><a-button type="primary" :disabled="busy || !!reason('addIpToNic', selected)" @click="addSecondary">{{ $t('label.add.secondary.ip') }}</a-button></a-form>
+      <a-form v-if="allowed('addIpToNic')" layout="vertical" class="nic-fields"><a-form-item :label="$t('label.ipaddress')" :extra="$t('message.vmnic.autoip')"><a-input v-model:value="values.ipaddress" /></a-form-item><a-form-item :label="$t('label.description')"><a-input v-model:value="values.description" /></a-form-item></a-form>
       <a-alert v-if="formError" class="nic-alert" type="error" :message="formError" />
       <a-list :data-source="selected?.secondaryip || []"><template #renderItem="{ item }"><a-list-item>{{ item.ipaddress }} {{ item.description }}<a-button v-if="allowed('removeIpFromNic')" danger size="small" :disabled="busy || !!reason('removeIpFromNic', selected)" @click="removeSecondary(item)">{{ $t('label.action.release.ip') }}</a-button></a-list-item></template></a-list>
       <a-alert class="nic-alert" type="info" :message="$t('message.network.secondaryip')" />
+      <template #footer><a-button @click="closeForm">{{ $t('label.cancel') }}</a-button><a-button v-if="allowed('addIpToNic')" type="primary" :disabled="busy || !!reason('addIpToNic', selected)" @click="addSecondary">{{ $t('label.add.secondary.ip') }}</a-button></template>
     </a-modal>
-    <a-modal :visible="form === 'details'" :title="$t('label.details')" :footer="null" @cancel="closeForm"><a-descriptions v-if="selected" bordered :column="1" size="small" class="nic-description"><a-descriptions-item v-for="key in detailKeys" :key="key" :label="$t('label.' + key)">{{ selected[key] ?? '—' }}</a-descriptions-item></a-descriptions><p>{{ $t('label.vmnic.enabled') }}: {{ booleanText(selected?.enabled) }} / {{ $t('label.vmnic.link') }}: {{ selected?.linkstate === true ? 'UP' : selected?.linkstate === false ? 'DOWN' : $t('label.vmnic.unknown') }}</p></a-modal>
-    <a-modal :visible="progressVisible && !!operation" :title="$t('label.vmnic.progress')" :footer="null" @cancel="progressVisible = false">
+    <a-modal wrap-class-name="vm-nic-modal" :visible="form === 'details'" :title="$t('label.details')" @cancel="closeForm"><a-descriptions v-if="selected" bordered :column="1" size="small" class="nic-description"><a-descriptions-item v-for="key in detailKeys" :key="key" :label="$t('label.' + key)">{{ selected[key] ?? '—' }}</a-descriptions-item></a-descriptions><p>{{ $t('label.vmnic.enabled') }}: {{ booleanText(selected?.enabled) }} / {{ $t('label.vmnic.link') }}: {{ selected?.linkstate === true ? 'UP' : selected?.linkstate === false ? 'DOWN' : $t('label.vmnic.unknown') }}</p><template #footer><a-button @click="closeForm">{{ $t('label.close') }}</a-button></template></a-modal>
+    <a-modal wrap-class-name="vm-nic-modal" :visible="progressVisible && !!operation" :title="$t('label.vmnic.progress')" @cancel="progressVisible = false">
       <template v-if="operation"><p>{{ operation.vm.displayname || operation.vm.name }}</p><p v-if="operation.network?.id"><router-link :to="'/guestnetwork/' + operation.network.id">{{ operation.network.name || operation.network.id }}</router-link></p>
         <a-steps direction="vertical" size="small" :current="operation.stage" :status="operation.status === 'failed' ? 'error' : 'process'"><a-step v-for="step in operation.steps" :key="step" :title="actionTitle(step, operation.nic)" /></a-steps>
         <a-alert class="nic-alert" :type="operation.status === 'complete' ? 'success' : operation.status === 'failed' ? 'error' : 'info'" :message="$t('label.vmvolume.' + operation.status)" :description="operation.error ? translateError(operation.error) : ''" />
         <a-alert v-if="operation.stage > 0 && operation.status !== 'complete'" class="nic-alert" type="warning" :message="$t('message.vmnic.partial')" />
         <p v-if="operation.status === 'unknown'">{{ $t('message.vmnic.unknown') }}</p><p v-if="operation.jobId">Job ID: {{ operation.jobId }}</p>
-        <div class="nic-dialog-actions"><a-button v-if="['unknown', 'failed'].includes(operation.status)" :loading="operation.checking" @click="operation.resume()">{{ $t(operation.status === 'unknown' ? 'label.vmvolume.check' : 'label.vmvolume.retry') }}</a-button><a-button v-if="operation.status === 'failed'" @click="operation.abandon(); progressVisible = false">{{ $t('label.vmvolume.abandon') }}</a-button><a-button @click="progressVisible = false">{{ $t('label.close') }}</a-button></div>
       </template>
+      <template v-if="operation" #footer><a-button v-if="['unknown', 'failed'].includes(operation.status)" :loading="operation.checking" @click="operation.resume()">{{ $t(operation.status === 'unknown' ? 'label.vmvolume.check' : 'label.vmvolume.retry') }}</a-button><a-button v-if="operation.status === 'failed'" @click="operation.abandon(); progressVisible = false">{{ $t('label.vmvolume.abandon') }}</a-button><a-button @click="progressVisible = false">{{ $t('label.close') }}</a-button></template>
     </a-modal>
   </div>
 </template>
@@ -90,7 +109,7 @@ under the License.
 import { getAPI, postAPI } from '@/api'
 import CreateNetwork from '@/views/network/CreateNetwork.vue'
 import { listRefreshMixin } from '@/utils/listRefreshMixin'
-import { nicOperations, startNicOperation, nicActionReason, nicOwner, nicAddressParams } from '@/utils/vmNicActions'
+import { nicOperations, startNicOperation, nicActionReason, nicOwner, nicAddressParams, nicStateAction } from '@/utils/vmNicActions'
 
 export default {
   name: 'VmNicsTab',
@@ -117,11 +136,12 @@ export default {
       candidatesLoading: false,
       attachId: undefined,
       progressVisible: false,
-      actions: ['updateDefaultNicForVirtualMachine', 'updateVmNic', 'UpdateVmNicLinkState', 'updateVmNicIp'],
       detailKeys: ['id', 'networkid', 'networkname', 'deviceid', 'type', 'macaddress', 'ipaddress', 'netmask', 'gateway', 'ip6address', 'ip6gateway', 'ip6cidr']
     }
   },
   computed: {
+    stateAction () { return nicStateAction(this.vm, this.$store.getters.apis) },
+    actions () { return ['updateDefaultNicForVirtualMachine', ...(this.stateAction ? [this.stateAction] : []), 'updateVmNicIp'] },
     security () { return JSON.stringify([this.$store.getters.project?.id, this.$store.getters.userInfo?.id, this.$store.state.user.token]) },
     scopeKey () { return this.security + ':' + this.resource.id },
     operation () { return nicOperations[this.scopeKey] },
@@ -136,8 +156,9 @@ export default {
     allowed (api) { return api in this.$store.getters.apis },
     translateError (error) { return this.$te(error) ? this.$t(error) : error },
     booleanText (v) { return this.$t(v === true ? 'state.enabled' : v === false ? 'state.disabled' : 'label.vmnic.unknown') },
+    nicState (nic) { return this.stateAction === 'UpdateVmNicLinkState' ? nic.linkstate : nic.enabled },
     actionTitle (api, nic) {
-      const labels = { createNetwork: 'label.vmnic.create', addNicToVirtualMachine: 'label.vmnic.attach', removeNicFromVirtualMachine: 'label.vmnic.detach', updateDefaultNicForVirtualMachine: 'label.set.default.nic', updateVmNicIp: 'label.change.ipaddress.or.macaddress', addIpToNic: 'label.add.secondary.ip', removeIpFromNic: 'label.action.release.ip', updateVmNic: nic?.enabled ? 'label.vmnic.disable' : 'label.vmnic.enable', UpdateVmNicLinkState: nic?.linkstate ? 'label.action.nic.linkstate.down' : 'label.action.nic.linkstate.up' }
+      const labels = { createNetwork: 'label.vmnic.create', addNicToVirtualMachine: 'label.vmnic.attach', removeNicFromVirtualMachine: 'label.vmnic.detach', updateDefaultNicForVirtualMachine: 'label.set.default.nic', updateVmNicIp: 'label.change.ipaddress.or.macaddress', addIpToNic: 'label.add.secondary.ip', removeIpFromNic: 'label.action.release.ip', updateVmNic: nic?.enabled ? 'label.vmnic.disable' : 'label.vmnic.enable', UpdateVmNicLinkState: nic?.linkstate ? 'label.vmnic.disable' : 'label.vmnic.enable' }
       return this.$t(labels[api] || 'label.details')
     },
     reason (api, nic) { if (this.listRefreshFailed) return this.$t('message.list.refresh.stale'); const key = nicActionReason(api, nic, this.vm, { ...this.context, rows: this.rows, network: this.networks[nic?.networkid] }); return key ? this.$t(key) : '' },
@@ -277,4 +298,36 @@ export default {
 .nic-description :deep(.ant-descriptions-item-content) { background: var(--ui-bg-surface); color: var(--ui-text-secondary); overflow-wrap: anywhere; }
 .nic-description :deep(.ant-descriptions-view), .nic-description :deep(.ant-descriptions-row), .nic-description :deep(.ant-descriptions-item-label), .nic-description :deep(.ant-descriptions-item-content) { border-color: var(--ui-border); }
 @media (max-width: 768px) { .nic-toolbar :deep(.ant-input-search) { width: 100%; } }
+</style>
+
+<style lang="scss">
+.vm-nic-modal {
+  .ant-modal { top: 24px; padding-bottom: 0; max-width: calc(100vw - 32px); margin: 0 auto; }
+  .ant-modal-content { display: flex; flex-direction: column; max-height: calc(100vh - 48px); overflow: hidden; }
+  .ant-modal-header, .ant-modal-footer { flex: 0 0 auto; margin: 0; }
+  .ant-modal-header { padding: 16px 24px; }
+  .ant-modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; overflow-x: hidden; padding: 20px 24px; }
+  .ant-modal-footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 12px 24px; }
+  .ant-modal-footer .ant-btn + .ant-btn { margin-left: 0; }
+  .form-layout, .form, .ant-form, .ant-spin-nested-loading, .ant-spin-container { width: 100% !important; max-width: 100%; min-width: 0; box-sizing: border-box; margin-left: 0; margin-right: 0; }
+  .ant-form-item { width: 100%; margin-left: 0; margin-right: 0; }
+  .nic-context { display: grid; grid-template-columns: 104px minmax(0, 1fr); gap: 8px 16px; margin: 0 0 20px; padding: 12px 16px; border: 1px solid var(--ui-border); border-radius: 4px; background: var(--ui-bg-page); }
+  .nic-context dt { margin: 0; color: var(--ui-text-secondary); font-weight: 400; }
+  .nic-context dd { margin: 0; color: var(--ui-text-primary); overflow-wrap: anywhere; }
+  .ant-form-item-control { min-width: 0; }
+  .ant-form-item-extra, .ant-form-item-extra *, .ant-form-item-explain { color: var(--ui-text-secondary); }
+  .ant-form-item-explain-error, .ant-form-item-explain-error * { color: var(--ui-error-text); }
+  .ant-form-item-control-input-content > .ant-input, .ant-form-item-control-input-content > .ant-select, .ant-input-number, .ant-input-affix-wrapper { width: 100%; }
+  .ant-descriptions { width: 100%; }
+  .ant-descriptions-item-content { overflow-wrap: anywhere; }
+  .ant-descriptions-item-label { width: 128px; }
+  .ant-modal-title { padding-right: 24px; overflow-wrap: anywhere; }
+  @media (max-width: 600px) {
+    .ant-modal { top: 12px; max-width: calc(100vw - 24px); }
+    .ant-modal-content { max-height: calc(100vh - 24px); }
+    .ant-modal-header, .ant-modal-footer { padding-left: 16px; padding-right: 16px; }
+    .ant-modal-body { padding: 16px; }
+    .ant-descriptions-item-label { width: 96px; }
+  }
+}
 </style>

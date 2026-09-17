@@ -18,6 +18,8 @@ import { reactive } from 'vue'
 export const nicOperations = reactive({})
 export const clearNicOperations = () => Object.keys(nicOperations).forEach(key => delete nicOperations[key])
 export const nicOwner = vm => vm.projectid ? { projectid: vm.projectid } : { account: vm.account, domainid: vm.domainid }
+// Both commands change the KVM interface link. Offer one state action, not two.
+export const nicStateAction = (vm, apis) => vm.hypervisor === 'KVM' && 'updateVmNic' in apis ? 'updateVmNic' : 'UpdateVmNicLinkState' in apis ? 'UpdateVmNicLinkState' : null
 const topology = ['createNetwork', 'addNicToVirtualMachine', 'removeNicFromVirtualMachine', 'updateDefaultNicForVirtualMachine']
 
 export function nicActionReason (api, nic, vm, context = {}) {

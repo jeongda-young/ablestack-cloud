@@ -13,13 +13,20 @@
 // specific language governing permissions and limitations
 // under the License.
 
-import { startNicOperation, clearNicOperations, nicActionReason, nicAddressParams, nicOwner } from '@/utils/vmNicActions'
+import { startNicOperation, clearNicOperations, nicActionReason, nicAddressParams, nicOwner, nicStateAction } from '@/utils/vmNicActions'
 const flush = async () => { for (let i = 0; i < 90; i++) await Promise.resolve() }
 const vm = { id: 'vm', state: 'Running', hypervisor: 'KVM', account: 'owner', domainid: 'domain' }
 const nic = { id: 'nic', type: 'Shared', ipaddress: '10.0.0.2', macaddress: '02:00:00:00:00:01', enabled: true, linkstate: true }
 const context = { snapshots: 0, zone: { networktype: 'Advanced' } }
 const deps = () => ({ current: () => true, refresh: jest.fn(), validate: jest.fn().mockResolvedValue(), reconcile: jest.fn().mockResolvedValue(true), submit: jest.fn().mockImplementation(op => Promise.resolve({ [op.steps[op.stage].toLowerCase() + 'response']: { jobid: 'job-' + op.stage } })), poll: jest.fn().mockResolvedValue({ jobstatus: 1 }) })
 beforeEach(clearNicOperations)
+test('one state action is selected for each hypervisor and permission set', () => {
+  const apis = { updateVmNic: {}, UpdateVmNicLinkState: {} }
+  expect(nicStateAction(vm, apis)).toBe('updateVmNic')
+  expect(nicStateAction({ ...vm, hypervisor: 'VMware' }, apis)).toBe('UpdateVmNicLinkState')
+  expect(nicStateAction(vm, { UpdateVmNicLinkState: {} })).toBe('UpdateVmNicLinkState')
+  expect(nicStateAction(vm, {})).toBeNull()
+})
 test('topology requires known context and respects snapshots, basic, default, VM state and external hypervisor', () => {
   expect(nicActionReason('addNicToVirtualMachine', null, vm)).toBeTruthy()
   expect(nicActionReason('addNicToVirtualMachine', null, vm, context)).toBe('')

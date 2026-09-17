@@ -308,7 +308,7 @@
             </template>
             <a-switch v-model:checked="form.keepMacAddressOnPublicNic" />
           </a-form-item>
-          <div :span="24" class="action-button">
+          <div v-if="!submitHandler" :span="24" class="action-button">
             <a-button
               :loading="actionLoading"
               @click="closeAction">

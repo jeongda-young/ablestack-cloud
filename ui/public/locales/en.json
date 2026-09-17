@@ -7634,8 +7634,8 @@
   "message.action.migrate.volume.to.kms": "Please confirm that you want to migrate this volume's passphrase encryption to KMS. This operation re-encrypts the volume key using the selected KMS key and cannot be undone.",
   "message.action.migrate.volumes.to.kms": "Please confirm that you want to migrate volumes to KMS encryption. This operation re-encrypts volume keys using the selected KMS key and cannot be undone.",
   "message.kms.key.optional": "Optional: Select a KMS key for encryption. If not selected, legacy passphrase encryption will be used.",
-  "label.keep.mac.address.on.public.nic": "Use same MAC address for public NIC of VRs",
-  "message.warn.vpc.offerings": "VPC offerings will only be shown if the selected account has at least one VPC.",
+  "label.keep.mac.address.on.public.nic": "Keep MAC address on the public NIC",
+  "message.warn.vpc.offerings": "VPC network offerings are available when creating a network within a VPC.",
   "label.new.secondaryip.description.description": "Enter a description for the new secondary IP address",
   "label.secondaryip.description": "Description",
   "label.action.delete.dns.server": "Delete DNS Server",
@@ -7794,5 +7794,8 @@
   "message.vmnic.impact": "This operation can affect VM traffic and remote access. Check guest OS addressing and routing as well.",
   "message.vmnic.ack": "I have checked the target NIC and communication impact.",
   "message.vmnic.mac": "Enter a MAC address such as 02:00:5e:00:00:01.",
-  "message.vmnic.candidate": "The selected network is no longer eligible or is already attached."
+  "message.vmnic.candidate": "The selected network is no longer eligible or is already attached.",
+  "label.vmnic.link.down": "Set link DOWN",
+  "label.vmnic.link.up": "Set link UP",
+  "label.isolatedpvlan": "Secondary VLAN"
 }

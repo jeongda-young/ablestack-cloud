@@ -7753,5 +7753,10 @@
   "message.vmnic.impact": "이 작업은 VM의 네트워크 통신과 원격 접속에 영향을 줄 수 있습니다. 게스트 OS의 주소 및 라우팅도 확인하세요.",
   "message.vmnic.ack": "대상 NIC와 통신 영향을 확인했습니다.",
   "message.vmnic.mac": "MAC 주소는 02:00:5e:00:00:01 형식으로 입력하세요.",
-  "message.vmnic.candidate": "선택한 네트워크가 더 이상 연결 가능하지 않거나 이미 연결되어 있습니다."
+  "message.vmnic.candidate": "선택한 네트워크가 더 이상 연결 가능하지 않거나 이미 연결되어 있습니다.",
+  "label.vmnic.link.down": "링크 DOWN 설정",
+  "label.vmnic.link.up": "링크 UP 설정",
+  "message.warn.vpc.offerings": "VPC 네트워크 오퍼링은 VPC 안에 네트워크를 생성할 때 사용할 수 있습니다.",
+  "label.keep.mac.address.on.public.nic": "공용 NIC의 MAC 주소 유지",
+  "label.isolatedpvlan": "보조 VLAN"
 }

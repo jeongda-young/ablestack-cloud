@@ -20,6 +20,7 @@
     <a-tabs v-model:activeKey="defaultNetworkTypeTabKey" :animated="false" v-if="!loading">
       <a-tab-pane :tab="$t('label.isolated')" key="1" v-if="isAdvancedZoneWithoutSGAvailable">
         <CreateIsolatedNetworkForm
+          ref="isolated"
           :loading="loading"
           :resource="resource"
           :submit-handler="submitHandler"
@@ -29,6 +30,7 @@
       </a-tab-pane>
       <a-tab-pane :tab="$t('label.l2')" key="3">
         <CreateL2NetworkForm
+          ref="l2"
           :loading="loading"
           :resource="resource"
           :submit-handler="submitHandler"
@@ -38,6 +40,7 @@
       </a-tab-pane>
       <a-tab-pane :tab="$t('label.shared')" key="2">
         <CreateSharedNetworkForm
+          ref="shared"
           :loading="loading"
           :resource="resource"
           :submit-handler="submitHandler"
@@ -90,6 +93,10 @@ export default {
     this.fetchData()
   },
   methods: {
+    submit () {
+      const form = { 1: 'isolated', 2: 'shared', 3: 'l2' }[this.defaultNetworkTypeTabKey]
+      if (this.$refs[form]) this.$refs[form].handleSubmit()
+    },
     fetchData () {
       const promises = []
       promises.push(this.fetchActionZoneData())

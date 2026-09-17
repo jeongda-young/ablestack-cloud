@@ -149,7 +149,7 @@
               v-model:value="form.isolatedpvlanid"
               :placeholder="apiParams.isolatedpvlan.description"/>
           </a-form-item>
-          <div :span="24" class="action-button">
+          <div v-if="!submitHandler" :span="24" class="action-button">
             <a-button
               :loading="actionLoading"
               @click="closeAction">
