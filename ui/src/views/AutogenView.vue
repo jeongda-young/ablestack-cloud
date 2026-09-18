@@ -2224,6 +2224,7 @@ export default {
             }
             if (action.api === 'restoreBackup') {
               this.markBackupRestoreStarted(this.resource)
+              this.fetchData({ irefresh: true })
             }
             resolve(true)
           },
