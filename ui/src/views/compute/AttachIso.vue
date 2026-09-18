@@ -162,7 +162,7 @@ export default {
       this.$emit('close-action')
     },
     async handleSubmit (e) {
-      e?.preventDefault?.()
+      if (e && typeof e.preventDefault === 'function') e.preventDefault()
       if (this.loading) return
       try { await this.formRef.value.validate() } catch (error) { if (error.errorFields?.length) this.formRef.value.scrollToField(error.errorFields[0].name); return }
       const values = toRaw(this.form); const ids = [...values.ids]
