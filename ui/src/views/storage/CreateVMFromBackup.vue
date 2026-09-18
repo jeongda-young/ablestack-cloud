@@ -337,6 +337,7 @@ export default {
               isFetchData: false
             }
           })
+          this.closeAction()
         }
         // Sending a refresh in case it hasn't picked up the new VM
         new Promise(resolve => setTimeout(resolve, 3000)).then(() => {
@@ -349,7 +350,6 @@ export default {
         this.form.stayonpage = false
         this.loading = false
       })
-      this.$emit('close-action')
     }
   }
 }
