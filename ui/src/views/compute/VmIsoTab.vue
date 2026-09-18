@@ -210,8 +210,8 @@ export default {
 .iso-row-actions { display: flex; gap: 4px; white-space: nowrap; }
 .iso-name { overflow-wrap: anywhere; }
 .iso-spacing { margin-bottom: 16px; }
-.iso-note { display: block; margin: 6px 0 0; color: inherit; opacity: .8; overflow-wrap: anywhere; }
-.iso-candidates { display: flex; flex-direction: column; width: 100%; gap: 8px; }
+.iso-note { display: block; margin: 6px 0 0; color: var(--ui-text-secondary); overflow-wrap: anywhere; }
+.iso-candidates { color: var(--ui-text-primary); display: flex; flex-direction: column; width: 100%; gap: 8px; }
 .iso-choice { display: flex; align-items: flex-start; gap: 12px; padding: 14px; border: 1px solid rgba(128,128,128,.35); border-radius: 4px; cursor: pointer; }
 .iso-choice strong { overflow-wrap: anywhere; }
 .iso-result { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 12px 0; border-bottom: 1px solid rgba(128,128,128,.3); }
