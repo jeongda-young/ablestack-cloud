@@ -44,6 +44,10 @@ public class BackupJobStatusResponse extends BaseResponse {
     @Param(description = "Current host-side backup job step")
     private String step;
 
+    @SerializedName(ApiConstants.DETAILS)
+    @Param(description = "Current host-side backup or restore job details")
+    private String details;
+
     @SerializedName(ApiConstants.BACKUP_JOB_PROGRESS)
     @Param(description = "Current host-side backup job progress percentage")
     private Integer progress;
@@ -110,6 +114,14 @@ public class BackupJobStatusResponse extends BaseResponse {
 
     public void setStep(final String step) {
         this.step = step;
+    }
+
+    public String getDetails() {
+        return details;
+    }
+
+    public void setDetails(final String details) {
+        this.details = details;
     }
 
     public Integer getProgress() {

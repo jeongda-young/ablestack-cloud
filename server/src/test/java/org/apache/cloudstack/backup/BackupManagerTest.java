@@ -92,6 +92,7 @@ import org.mockito.stubbing.Answer;
 import org.springframework.test.util.ReflectionTestUtils;
 
 import com.cloud.alert.AlertManager;
+import com.cloud.agent.AgentManager;
 import com.cloud.api.query.dao.UserVmJoinDao;
 import com.cloud.api.query.vo.UserVmJoinVO;
 import com.cloud.capacity.CapacityVO;
@@ -282,6 +283,9 @@ public class BackupManagerTest {
 
     @Mock
     AsyncJobManager asyncJobManager;
+
+    @Mock
+    AgentManager agentManager;
 
     @Mock
     private AccountService accountServiceMock;
@@ -1525,6 +1529,70 @@ public class BackupManagerTest {
         }
 
         verify(virtualMachineManager).start("vm-uuid", Collections.emptyMap());
+    }
+
+    @Test
+    public void testFailedDetachedVolumeRestoreStopsTrackingAfterSingleCleanupAttempt() throws Exception {
+        final long backupId = 1L;
+        final long vmId = 2L;
+        final long hostId = 3L;
+        final long offeringId = 4L;
+        final String restoreJobId = "restore-job-id";
+        final String restoredVolumeUuid = "restored-volume-uuid";
+        final String failureReason = "Failed to attach volume to VM";
+
+        final BackupVO backup = mock(BackupVO.class);
+        when(backup.getId()).thenReturn(backupId);
+        when(backup.getUuid()).thenReturn("backup-uuid");
+        when(backup.getZoneId()).thenReturn(1L);
+        when(backup.getVmId()).thenReturn(vmId);
+        when(backup.getBackupOfferingId()).thenReturn(offeringId);
+        when(backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_ID_DETAIL)).thenReturn(restoreJobId);
+        when(backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_OPERATION_TYPE_DETAIL))
+                .thenReturn(AblestackBackupFrameworkUtils.RESTORE_OPERATION_VOLUME_ATTACH);
+        when(backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_TARGET_VM_ID_DETAIL)).thenReturn(String.valueOf(vmId));
+        when(backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_HOST_ID_DETAIL)).thenReturn(String.valueOf(hostId));
+        when(backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_TARGET_VOLUME_UUID_DETAIL)).thenReturn(restoredVolumeUuid);
+
+        final BackupOfferingVO offering = mock(BackupOfferingVO.class);
+        when(offering.getProvider()).thenReturn("ablestack-nas");
+        when(backupProvider.getName()).thenReturn("ablestack-nas");
+
+        final DataCenter dataCenter = mock(DataCenter.class);
+        when(dataCenter.getId()).thenReturn(1L);
+        final VMInstanceVO vm = mock(VMInstanceVO.class);
+        when(vm.getId()).thenReturn(vmId);
+        when(vm.getAccountId()).thenReturn(5L);
+        when(vm.getInstanceName()).thenReturn("i-2-202-VM");
+        final HostVO host = mock(HostVO.class);
+        when(host.getId()).thenReturn(hostId);
+        when(host.getName()).thenReturn("ablecube4");
+
+        final BackupAnswer restoreAnswer = mock(BackupAnswer.class);
+        when(restoreAnswer.getState()).thenReturn("FAILED");
+        when(restoreAnswer.getStep()).thenReturn("FAILED");
+        when(restoreAnswer.getDetails()).thenReturn(failureReason);
+
+        final VolumeVO restoredVolume = mock(VolumeVO.class);
+        when(restoredVolume.getId()).thenReturn(6L);
+        when(restoredVolume.getAccountId()).thenReturn(5L);
+
+        when(backupDao.findById(backupId)).thenReturn(backup);
+        when(backupOfferingDao.findById(offeringId)).thenReturn(offering);
+        when(vmInstanceDao.findByIdIncludingRemoved(vmId)).thenReturn(vm);
+        when(hostDao.findById(hostId)).thenReturn(host);
+        when(volumeDao.findByUuid(restoredVolumeUuid)).thenReturn(restoredVolume);
+        when(agentManager.send(eq(hostId), any(AblestackRestoreJobStatusCommand.class))).thenReturn(restoreAnswer);
+
+        final BackupManagerImpl.BackupSyncTask backupSyncTask = backupManager.new BackupSyncTask(backupManager);
+        try (MockedStatic<ActionEventUtils> ignored = Mockito.mockStatic(ActionEventUtils.class)) {
+            backupSyncTask.reconcileInterruptedRestoreJob(backupProvider, dataCenter, backupId);
+        }
+
+        verify(volumeApiService, times(1)).deleteVolume(eq(restoredVolume.getId()), any());
+        verify(backupDetailsDao).addDetail(backupId,
+                AblestackBackupFrameworkUtils.RESTORE_JOB_FAILURE_REASON_DETAIL, failureReason, false);
+        verify(backupDetailsDao).removeDetail(backupId, AblestackBackupFrameworkUtils.RESTORE_JOB_ID_DETAIL);
     }
 
     @Test

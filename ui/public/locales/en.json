@@ -515,6 +515,7 @@
   "label.restore.attach.volume": "Attaching restored volume",
   "label.restore.cleanup.source": "Cleaning up restore source",
   "label.restore.finalization.failed": "Restore finalization failed",
+  "label.restore.failed": "Restore failed",
   "label.backup.offering.assign": "Assign Instance to backup offering",
   "label.backup.offering.remove": "Remove Instance from backup offering",
   "label.backup.offerings": "Backup offerings",

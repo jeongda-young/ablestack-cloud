@@ -477,6 +477,7 @@
   "label.restore.attach.volume": "복원 볼륨 연결",
   "label.restore.cleanup.source": "복원 임시 데이터 정리",
   "label.restore.finalization.failed": "복원 완료 처리 실패",
+  "label.restore.failed": "복원 실패",
   "label.backup.offering.assign": "백업 오퍼링 할당",
   "label.backup.offering.remove": "백업 오퍼링 제거",
   "label.backup.offerings": "백업 오퍼링",

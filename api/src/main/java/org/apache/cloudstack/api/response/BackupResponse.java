@@ -170,6 +170,10 @@ public class BackupResponse extends BaseResponse {
     @Param(description = "Host-side restore job state for the latest tracked restore", since = "4.23.0")
     private String restoreJobState;
 
+    @SerializedName(ApiConstants.RESTORE_JOB_DETAILS)
+    @Param(description = "Failure details for the latest restore job", since = "4.23.0")
+    private String restoreJobDetails;
+
     @SerializedName(ApiConstants.RESTORE_JOB_LOG_PATH)
     @Param(description = "Host-side restore job log path for the latest tracked restore", since = "4.23.0")
     private String restoreJobLogPath;
@@ -448,6 +452,14 @@ public class BackupResponse extends BaseResponse {
 
     public String getRestoreJobState() {
         return restoreJobState;
+    }
+
+    public void setRestoreJobDetails(String restoreJobDetails) {
+        this.restoreJobDetails = restoreJobDetails;
+    }
+
+    public String getRestoreJobDetails() {
+        return restoreJobDetails;
     }
 
     public void setRestoreJobLogPath(String restoreJobLogPath) {

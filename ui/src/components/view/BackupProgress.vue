@@ -18,7 +18,19 @@
 -->
 <template>
   <div class="backup-progress">
-    <status :text="displayStatus" displayText :styles="{ 'min-width': '80px' }">
+    <a-tooltip v-if="hasRestoreFailure" placement="bottom">
+      <template #title>
+        <div class="backup-progress-tooltip">
+          <div class="backup-progress-tooltip-title">{{ $t('label.restore.failed') }}</div>
+          <div v-if="failureDetails" class="backup-progress-failure-details">{{ failureDetails }}</div>
+        </div>
+      </template>
+      <span class="backup-progress-failure">
+        <warning-outlined />
+        <span>{{ $t('label.restore.failed') }}</span>
+      </span>
+    </a-tooltip>
+    <status v-else :text="displayStatus" displayText :styles="{ 'min-width': '80px' }">
       <template v-if="showJobDetails" #tooltip>
         <div class="backup-progress-tooltip">
           <div class="backup-progress-tooltip-title">{{ displayStatus }}</div>
@@ -57,6 +69,7 @@
 </template>
 
 <script>
+import { WarningOutlined } from '@ant-design/icons-vue'
 import { getAPI } from '@/api'
 import Status from '@/components/widgets/Status'
 
@@ -66,7 +79,8 @@ export default {
   name: 'BackupProgress',
   emits: ['capabilities-change'],
   components: {
-    Status
+    Status,
+    WarningOutlined
   },
   props: {
     record: {
@@ -89,7 +103,8 @@ export default {
       bandwidthLimitMbps: this.normalizeBandwidth(this.record?.bandwidthlimitmbps),
       bandwidthStatus: this.record?.bandwidthstatus || '',
       restoreJobId: this.record?.restorejobid || '',
-      restoreFinished: this.isTerminalJobState(this.record?.restorejobstate)
+      restoreFinished: this.isTerminalJobState(this.record?.restorejobstate),
+      failureDetails: this.record?.restorejobdetails || ''
     }
   },
   computed: {
@@ -110,6 +125,9 @@ export default {
     },
     hasTrackedRestoreJob () {
       return !!this.restoreJobId && !this.restoreFinished
+    },
+    hasRestoreFailure () {
+      return this.isFailureJobState(this.jobState || this.record?.restorejobstate)
     },
     hasProgress () {
       return this.progress !== null
@@ -196,15 +214,16 @@ export default {
     },
     syncFromRecord () {
       this.localStatus = String(this.record?.status || this.statusText || this.localStatus || '')
-      this.restoreJobId = this.record?.restorejobid || this.restoreJobId
-      if (this.isTerminalJobState(this.record?.restorejobstate)) {
-        this.restoreFinished = true
+      if (Object.prototype.hasOwnProperty.call(this.record || {}, 'restorejobid')) {
+        this.restoreJobId = this.record?.restorejobid || ''
       }
+      this.restoreFinished = this.isTerminalJobState(this.record?.restorejobstate)
       const progress = this.normalizeProgress(this.record?.backupjobprogress ?? this.record?.progress)
       if (progress !== null) {
         this.progress = progress
       }
-      this.jobState = this.record?.restorejobstate || this.record?.backupjobstate || this.jobState
+      this.jobState = this.record?.restorejobstate || this.record?.backupjobstate || ''
+      this.failureDetails = this.record?.restorejobdetails || ''
       this.step = this.record?.backupjobstep || this.step
       this.logPath = this.record?.restorejoblogpath || this.record?.backupjoblogpath || this.logPath
       const bandwidthLimitMbps = this.normalizeBandwidth(this.record?.bandwidthlimitmbps)
@@ -275,6 +294,7 @@ export default {
         this.$emit('capabilities-change', response.capabilities || '')
       }
       this.bandwidthStatus = response.bandwidthstatus || this.bandwidthStatus
+      this.failureDetails = response.details || this.failureDetails
       if (wasRestoring && this.isTerminalJobState(response.state)) {
         this.restoreFinished = true
       }
@@ -284,6 +304,9 @@ export default {
     },
     isTerminalJobState (state) {
       return ['completed', 'failed', 'canceled', 'cancelled', 'interrupted'].includes(String(state || '').toLowerCase())
+    },
+    isFailureJobState (state) {
+      return ['failed', 'interrupted'].includes(String(state || '').toLowerCase())
     },
     normalizeProgress (value) {
       const progress = Number.parseInt(value, 10)
@@ -348,5 +371,18 @@ export default {
 
 .backup-progress-tooltip-error span:last-child {
   color: #cf1322;
+}
+
+.backup-progress-failure {
+  align-items: center;
+  color: #cf1322;
+  display: inline-flex;
+  gap: 6px;
+  min-width: 100px;
+}
+
+.backup-progress-failure-details {
+  max-width: 360px;
+  overflow-wrap: anywhere;
 }
 </style>
