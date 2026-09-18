@@ -64,6 +64,11 @@ import com.cloud.vm.VmDiskInfo;
  */
 public interface BackupManager extends BackupService, Configurable, PluggableService, Manager {
 
+    enum RestoreRequestStatus {
+        ACCEPTED,
+        COMPLETED
+    }
+
     ConfigKey<Boolean> BackupFrameworkEnabled = new ConfigKey<>("Advanced", Boolean.class,
             "backup.framework.enabled",
             "false",
@@ -342,6 +347,14 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
      * Restore a backup to a new Instance
      */
     boolean restoreBackupToVM(Long backupId, Long vmId, boolean quickrestore) throws ResourceUnavailableException;
+
+    /**
+     * Starts restoring a backup to a newly allocated Instance. Providers with detached restore
+     * orchestration return {@link RestoreRequestStatus#ACCEPTED}; other providers complete the
+     * restore before returning {@link RestoreRequestStatus#COMPLETED}.
+     */
+    RestoreRequestStatus requestRestoreBackupToVM(Long backupId, Long vmId, boolean quickrestore,
+            boolean startVmAfterRestore) throws ResourceUnavailableException;
 
     /**
      * Restore a backed up volume and attach it to a VM

@@ -2223,7 +2223,7 @@ export default {
               eventBus.emit('projects-updated', { action: action.api, project: this.resource })
             }
             if (action.api === 'restoreBackup') {
-              this.fetchData({ irefresh: true })
+              this.markBackupRestoreStarted(this.resource)
             }
             resolve(true)
           },
@@ -2237,6 +2237,7 @@ export default {
             resolve(true)
           },
           loadingMessage: `${this.$t(action.label)} - ${resourceName}`,
+          successMessage: action.api === 'restoreBackup' ? this.$t(action.successMessage) : undefined,
           showLoading: showLoading,
           catchMessage: this.$t('error.fetching.async.job.result'),
           catchMethod: () => {

@@ -587,7 +587,9 @@ export default {
           icon: 'sync-outlined',
           docHelp: 'adminguide/virtual_machines.html#restoring-instance-backups',
           label: 'label.backup.restore',
+          successMessage: 'label.backup.restore.requested',
           message: 'message.backup.restore',
+          isFetchData: false,
           dataView: true,
           show: (record) => { return ['BackingUp', 'BackedUp', 'Restoring'].includes(record.status) },
           disabled: (record) => { return isBackupOperationInProgress(record) },
@@ -680,10 +682,7 @@ export default {
           label: 'label.delete.backup',
           message: 'message.delete.backup',
           dataView: true,
-          show: (record) => {
-            const provider = (record.provider || '').toLowerCase()
-            return record.state !== 'Destroyed' && provider !== 'ablestack-netbackup' && provider !== 'ablestack-veeam'
-          },
+          show: (record) => { return record.state !== 'Destroyed' },
           disabled: (record) => { return isBackupOperationInProgress(record) },
           tooltip: (record) => getBackupOperationActionTooltip(record, 'label.delete.backup'),
           groupAction: true,

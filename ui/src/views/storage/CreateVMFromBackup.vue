@@ -309,6 +309,7 @@ export default {
             jobId,
             title,
             description,
+            successMessage: this.$t('label.create.instance.from.backup.requested'),
             successMethod: result => {
               const vm = result.jobresult.virtualmachine
               const name = vm.displayname || vm.name || vm.id

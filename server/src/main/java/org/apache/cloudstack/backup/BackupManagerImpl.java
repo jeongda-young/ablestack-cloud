@@ -3051,6 +3051,18 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
 
     @Override
     public boolean restoreBackupToVM(final Long backupId, final Long vmId, boolean quickRestore) throws CloudRuntimeException {
+        return restoreBackupToVMInternal(backupId, vmId, quickRestore, false, false)
+                == BackupManager.RestoreRequestStatus.COMPLETED;
+    }
+
+    @Override
+    public BackupManager.RestoreRequestStatus requestRestoreBackupToVM(final Long backupId, final Long vmId,
+            final boolean quickRestore, final boolean startVmAfterRestore) throws CloudRuntimeException {
+        return restoreBackupToVMInternal(backupId, vmId, quickRestore, true, startVmAfterRestore);
+    }
+
+    private BackupManager.RestoreRequestStatus restoreBackupToVMInternal(final Long backupId, final Long vmId,
+            final boolean quickRestore, final boolean allowDetachedRestore, final boolean startVmAfterRestore) throws CloudRuntimeException {
         final BackupVO backup = backupDao.findById(backupId);
         if (backup == null) {
             throw new CloudRuntimeException("Backup " + backupId + " does not exist");
@@ -3121,6 +3133,15 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
 
             initializeRestoreOperation(backup.getId(), offering, AblestackBackupFrameworkUtils.RESTORE_OPERATION_CREATE_INSTANCE,
                     vm.getId(), null, null);
+            final boolean detachedRestore = allowDetachedRestore && backupProvider.supportsDetachedRestoreOrchestration();
+            if (detachedRestore) {
+                persistBackupDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_START_VM_DETAIL,
+                        String.valueOf(startVmAfterRestore));
+                if (eventId != null) {
+                    persistBackupDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_EVENT_ID_DETAIL,
+                            String.valueOf(eventId));
+                }
+            }
             String host = null;
             String dataStore = null;
             if (!BackupProviderNameUtils.isNasFamily(offering.getProvider()) &&
@@ -3131,7 +3152,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 host = restoreInfo.first().getPrivateIpAddress();
                 dataStore = restoreInfo.second().getUuid();
             }
-            result = backupProvider.restoreBackupToVM(vm, backup, host, dataStore, quickRestore);
+            result = detachedRestore
+                    ? backupProvider.startRestoreBackupToVM(vm, backup, host, dataStore, quickRestore)
+                    : backupProvider.restoreBackupToVM(vm, backup, host, dataStore, quickRestore);
 
         } catch (Exception e) {
             persistRestoreOperationPhase(backup.getId(), "FAILED", "FAILED", null);
@@ -3154,6 +3177,11 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             throw new CloudRuntimeException(error_msg);
         }
 
+        if (allowDetachedRestore && backupProvider.supportsDetachedRestoreOrchestration()) {
+            persistRestoreOperationPhase(backup.getId(), "RUNNING", "QUEUED", 10);
+            return BackupManager.RestoreRequestStatus.ACCEPTED;
+        }
+
         persistRestoreOperationPhase(backup.getId(), "RUNNING", "FINALIZING", 95);
         updateStates(vm, backupProvider, quickRestore);
         ActionEventUtils.onCompletedActionEvent(User.UID_SYSTEM, vm.getAccountId(), EventVO.LEVEL_INFO, EventTypes.EVENT_VM_CREATE_FROM_BACKUP,
@@ -3165,7 +3193,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
         persistRestoreOperationPhase(backup.getId(), "COMPLETED", "COMPLETED", 100);
         cleanupTrackedRestoreJobFilesAndDetails(backup, vm, backupProvider.getName());
-        return true;
+        return BackupManager.RestoreRequestStatus.COMPLETED;
     }
 
     @Override
@@ -4288,7 +4316,12 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                     backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_TARGET_VM_ID_DETAIL), backup.getVmId());
             final VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(targetVmId);
             final boolean volumeAttach = AblestackBackupFrameworkUtils.RESTORE_OPERATION_VOLUME_ATTACH.equals(operationType);
-            if (vm == null || (!volumeAttach && !isRestoreStatePending(vm))) {
+            final boolean createInstance = AblestackBackupFrameworkUtils.RESTORE_OPERATION_CREATE_INSTANCE.equals(operationType);
+            final boolean cleanupRequired = createInstance && "CLEANUP_REQUIRED".equalsIgnoreCase(
+                    backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_STEP_DETAIL));
+            final boolean finalizationRequired = "FINALIZATION_FAILED".equalsIgnoreCase(
+                    backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_STEP_DETAIL));
+            if (vm == null || (!volumeAttach && !isRestoreStatePending(vm) && !cleanupRequired && !finalizationRequired)) {
                 return;
             }
             final HostVO restoreHost = findRestoreJobHost(backup, vm);
@@ -4327,6 +4360,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 markRestoreJobStartFailed(backup.getId());
                 if (!volumeAttach) {
                     failInterruptedRestoreStates(vm);
+                    cleanupFailedDetachedCreateInstance(backup, vm, operationType);
                 }
                 reconcileExternalRestoreTracking(offering, backup, vm, false, "Host-side restore job was not created");
                 logger.warn("Reconciled restore job [{}] for backup [{}], VM [{}] as failed because the host-side job was not created.",
@@ -4353,6 +4387,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 persistRestoreOperationPhase(backup.getId(), "FAILED", "FAILED", null);
                 if (!volumeAttach) {
                     failInterruptedRestoreStates(vm);
+                    cleanupFailedDetachedCreateInstance(backup, vm, operationType);
                 } else {
                     cleanupRestoredVolumeAfterAttachFailure(
                             backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_TARGET_VOLUME_UUID_DETAIL));
@@ -4382,10 +4417,32 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                             "Failed to import Instance [%s] after host-side restore completed", vm.getInstanceName()));
                 }
             } else if (AblestackBackupFrameworkUtils.RESTORE_OPERATION_CREATE_INSTANCE.equals(operationType)) {
+                if (Boolean.parseBoolean(backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_START_VM_DETAIL))
+                        && !VirtualMachine.State.Running.equals(vm.getState())) {
+                    persistRestoreOperationPhase(backup.getId(), "RUNNING", "START_VM", 98);
+                    virtualMachineManager.start(vm.getUuid(), Collections.emptyMap());
+                }
                 ActionEventUtils.onCompletedActionEvent(User.UID_SYSTEM, vm.getAccountId(), EventVO.LEVEL_INFO,
                         EventTypes.EVENT_VM_CREATE_FROM_BACKUP,
                         String.format("Successfully created Instance %s from backup %s", vm.getInstanceName(), backup.getUuid()),
-                        vm.getId(), ApiCommandResourceType.VirtualMachine.toString(), 0);
+                        vm.getId(), ApiCommandResourceType.VirtualMachine.toString(), NumberUtils.toLong(
+                                backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_EVENT_ID_DETAIL), 0));
+            }
+        }
+
+        protected void cleanupFailedDetachedCreateInstance(final BackupVO backup, final VMInstanceVO vm,
+                final String operationType) {
+            if (!AblestackBackupFrameworkUtils.RESTORE_OPERATION_CREATE_INSTANCE.equals(operationType)) {
+                return;
+            }
+            try {
+                persistRestoreOperationPhase(backup.getId(), "FAILED", "CLEANUP", 0);
+                virtualMachineManager.destroy(vm.getUuid(), true);
+                persistRestoreOperationPhase(backup.getId(), "FAILED", "CLEANUP_COMPLETED", 0);
+            } catch (Exception e) {
+                persistRestoreOperationPhase(backup.getId(), "FAILED", "CLEANUP_REQUIRED", 0);
+                logger.warn("Failed to clean up Instance [{}] after detached restore [{}] failed. Cleanup will be retried: {}",
+                        vm.getInstanceName(), backup.getUuid(), e.getMessage(), e);
             }
         }
 
@@ -5235,6 +5292,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         backupDetailsDao.removeDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_TARGET_DATASTORE_UUID_DETAIL);
         backupDetailsDao.removeDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_TARGET_VOLUME_UUID_DETAIL);
         backupDetailsDao.removeDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_EVENT_ID_DETAIL);
+        backupDetailsDao.removeDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_START_VM_DETAIL);
         backupDao.loadDetails(backup);
     }
 
