@@ -2425,7 +2425,7 @@ export default {
         return
       }
       const trackedBackup = this.items.find(item => item.id === backup.id) || backup
-      trackedBackup.status = 'Restoring'
+      trackedBackup.restoreoperationpending = true
       trackedBackup.restorejobstate = 'STARTING'
       trackedBackup.backupjobprogress = 0
       trackedBackup.backupjobstep = 'QUEUED'

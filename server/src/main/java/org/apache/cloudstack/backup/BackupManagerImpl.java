@@ -5803,7 +5803,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         if (backup == null) {
             return;
         }
-        if (backup instanceof BackupVO && backup.getDetails() == null) {
+        if (backup instanceof BackupVO) {
             backupDao.loadDetails((BackupVO) backup);
         }
         final String restoreJobId = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_ID_DETAIL);

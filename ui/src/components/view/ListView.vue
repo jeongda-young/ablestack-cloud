@@ -498,7 +498,8 @@
           v-if="isBackupStatusColumn()"
           :record="record"
           :statusText="text ? text : ''"
-          @capabilities-change="record.capabilities = $event" />
+          @capabilities-change="record.capabilities = $event"
+          @restore-finished="record.restoreoperationpending = false; record.restorejobstate = $event" />
         <status
           v-else
           :text="text ? text : ''"

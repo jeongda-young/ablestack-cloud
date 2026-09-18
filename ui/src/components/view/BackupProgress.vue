@@ -64,7 +64,7 @@ const POLL_INTERVAL_MS = 5000
 
 export default {
   name: 'BackupProgress',
-  emits: ['capabilities-change'],
+  emits: ['capabilities-change', 'restore-finished'],
   components: {
     Status
   },
@@ -83,13 +83,14 @@ export default {
       timer: null,
       localStatus: String(this.record?.status || this.statusText || ''),
       progress: this.normalizeProgress(this.record?.backupjobprogress ?? this.record?.progress),
-      jobState: this.record?.backupjobstate || '',
+      jobState: this.record?.restorejobstate || this.record?.backupjobstate || '',
       step: this.record?.backupjobstep || '',
       logPath: this.record?.backupjoblogpath || this.record?.restorejoblogpath || '',
       bandwidthLimitMbps: this.normalizeBandwidth(this.record?.bandwidthlimitmbps),
       bandwidthStatus: this.record?.bandwidthstatus || '',
       restoreJobId: this.record?.restorejobid || '',
-      restoreFinished: this.isTerminalJobState(this.record?.restorejobstate)
+      restoreFinished: this.isTerminalJobState(this.record?.restorejobstate),
+      restorePending: this.isRestoreJobPending(this.record)
     }
   },
   computed: {
@@ -109,13 +110,13 @@ export default {
       return status === 'restoring' || (this.hasTrackedRestoreJob && status !== 'backingup')
     },
     hasTrackedRestoreJob () {
-      return !!this.restoreJobId && !this.restoreFinished
+      return this.restorePending || (!!this.restoreJobId && !this.restoreFinished)
     },
     hasProgress () {
       return this.progress !== null
     },
     showProgress () {
-      return this.hasProgress && !this.isRestoring
+      return this.hasProgress && this.isActive
     },
     isAwaitingBackupFinalization () {
       return String(this.localStatus || this.record?.status || '').toLowerCase() === 'backingup' &&
@@ -200,6 +201,11 @@ export default {
         this.restoreJobId = this.record?.restorejobid || ''
       }
       this.restoreFinished = this.isTerminalJobState(this.record?.restorejobstate)
+      if (this.restoreFinished) {
+        this.restorePending = false
+      } else if (this.isRestoreJobPending(this.record)) {
+        this.restorePending = true
+      }
       const progress = this.normalizeProgress(this.record?.backupjobprogress ?? this.record?.progress)
       if (progress !== null) {
         this.progress = progress
@@ -234,9 +240,7 @@ export default {
       }).then(json => {
         const response = this.unwrapStatusResponse(json?.[responseKey] || {})
         this.applyStatus(response)
-      }).catch(() => {
-        this.stopPolling()
-      })
+      }).catch(() => {})
     },
     unwrapStatusResponse (response) {
       if (!response || typeof response !== 'object') {
@@ -275,8 +279,13 @@ export default {
         this.$emit('capabilities-change', response.capabilities || '')
       }
       this.bandwidthStatus = response.bandwidthstatus || this.bandwidthStatus
-      if (wasRestoring && this.isTerminalJobState(response.state)) {
+      if (this.isTerminalJobState(response.state)) {
         this.restoreFinished = true
+        this.restorePending = false
+        this.$emit('restore-finished', response.state)
+      } else if (['starting', 'running'].includes(String(response.state || '').toLowerCase())) {
+        this.restoreFinished = false
+        this.restorePending = true
       }
       if (!this.isActive) {
         this.stopPolling()
@@ -284,6 +293,11 @@ export default {
     },
     isTerminalJobState (state) {
       return ['completed', 'failed', 'canceled', 'cancelled', 'interrupted'].includes(String(state || '').toLowerCase())
+    },
+    isRestoreJobPending (record) {
+      const state = String(record?.restorejobstate || '').toLowerCase()
+      return record?.restoreoperationpending === true || ['starting', 'running'].includes(state) ||
+        (!!record?.restorejobid && !this.isTerminalJobState(state))
     },
     normalizeProgress (value) {
       const progress = Number.parseInt(value, 10)

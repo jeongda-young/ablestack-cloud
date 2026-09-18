@@ -47,7 +47,11 @@ const isLiveBandwidthBackup = (record) => {
 }
 
 const isBackupOperationInProgress = (record) => {
-  return ['backingup', 'restoring'].includes(String(record?.status || '').toLowerCase())
+  const restoreState = String(record?.restorejobstate || '').toLowerCase()
+  const restoreFinished = ['completed', 'failed', 'canceled', 'cancelled', 'interrupted'].includes(restoreState)
+  return ['backingup', 'restoring'].includes(String(record?.status || '').toLowerCase()) ||
+    record?.restoreoperationpending === true || ['starting', 'running'].includes(restoreState) ||
+    (!!record?.restorejobid && !restoreFinished)
 }
 
 const getBackupOperationActionTooltip = (record, defaultLabel) => {
