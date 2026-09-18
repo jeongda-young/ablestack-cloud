@@ -581,6 +581,10 @@ final class LibvirtAblestackAsyncBackupRunner {
         if (transferProgress == null) {
             return properties;
         }
+        if (Boolean.parseBoolean(properties.getProperty("liveBandwidthSupported")) && !isRbdBackup(properties)) {
+            properties.setProperty("liveBandwidthActive", Boolean.TRUE.toString());
+            properties.setProperty("capabilities", resolveCapabilities(properties));
+        }
         final int currentProgress = parseInteger(properties.getProperty("progress"), resolveProgress(state));
         final int progress = Math.max(currentProgress, transferProgress);
         properties.setProperty("progress", String.valueOf(progress));
@@ -628,9 +632,9 @@ final class LibvirtAblestackAsyncBackupRunner {
     }
 
     private static Integer calculateTransferProgress(final String domJobInfo) {
-        final Long processed = parseDomJobInfoSize(domJobInfo, "Data processed:");
-        Long total = parseDomJobInfoSize(domJobInfo, "Data total:");
-        final Long remaining = parseDomJobInfoSize(domJobInfo, "Data remaining:");
+        final Long processed = parseDomJobInfoSize(domJobInfo, "Data processed:", "File processed:");
+        Long total = parseDomJobInfoSize(domJobInfo, "Data total:", "File total:");
+        final Long remaining = parseDomJobInfoSize(domJobInfo, "Data remaining:", "File remaining:");
         if ((total == null || total <= 0L) && processed != null && remaining != null && remaining >= 0L) {
             total = processed + remaining;
         }
@@ -660,14 +664,15 @@ final class LibvirtAblestackAsyncBackupRunner {
         }
     }
 
-    private static Long parseDomJobInfoSize(final String domJobInfo, final String label) {
+    private static Long parseDomJobInfoSize(final String domJobInfo, final String... labels) {
         for (String line : domJobInfo.split("\\R")) {
             final String trimmedLine = line.trim();
-            if (!trimmedLine.startsWith(label)) {
-                continue;
+            for (String label : labels) {
+                if (trimmedLine.startsWith(label)) {
+                    final String value = trimmedLine.substring(label.length()).trim();
+                    return parseHumanReadableBytes(value);
+                }
             }
-            final String value = trimmedLine.substring(label.length()).trim();
-            return parseHumanReadableBytes(value);
         }
         return null;
     }
@@ -726,7 +731,8 @@ final class LibvirtAblestackAsyncBackupRunner {
         capabilities.add(AblestackBackupFrameworkUtils.CAPABILITY_PROGRESS);
         if (AblestackBackupFrameworkUtils.OPERATION_RESTORE.equals(properties.getProperty("operation"))) {
             capabilities.add(AblestackBackupFrameworkUtils.CAPABILITY_RESTORE_PROGRESS);
-        } else if (Boolean.parseBoolean(properties.getProperty("liveBandwidthSupported")) && !isRbdBackup(properties)) {
+        } else if (Boolean.parseBoolean(properties.getProperty("liveBandwidthSupported"))
+                && Boolean.parseBoolean(properties.getProperty("liveBandwidthActive")) && !isRbdBackup(properties)) {
             capabilities.add(AblestackBackupFrameworkUtils.CAPABILITY_LIVE_BANDWIDTH);
         }
         return String.join(",", capabilities);
@@ -784,13 +790,14 @@ final class LibvirtAblestackAsyncBackupRunner {
     }
 
     private static String buildBlockJobBandwidthCommand(final String vmName, final int virshLimitMiBps) {
-        return "set -o pipefail; rc=0; active=0; "
+        return "set -o pipefail; rc=0; active=0; info=''; "
                 + "while read -r disk; do "
                 + "[ -z \"$disk\" ] && continue; "
-                + "if virsh -c qemu:///system blockjob " + shellQuote(vmName) + " \"$disk\" --info >/dev/null 2>&1; then "
+                + "info=$(virsh -c qemu:///system blockjob " + shellQuote(vmName) + " \"$disk\" --info 2>&1) || continue; "
+                + "[ -z \"$info\" ] && continue; "
+                + "case \"$info\" in *'No current block job'*|*'does not have an active block job'*) continue;; esac; "
                 + "active=$((active + 1)); "
                 + "virsh -c qemu:///system blockjob " + shellQuote(vmName) + " \"$disk\" --bandwidth " + virshLimitMiBps + " || rc=$?; "
-                + "fi; "
                 + "done < <(virsh -c qemu:///system domblklist " + shellQuote(vmName) + " --details 2>/dev/null | awk '$2 == \"disk\" {print $3}'); "
                 + "if [ \"$active\" -eq 0 ]; then echo 'No active backup block jobs were found' >&2; exit 1; fi; "
                 + "exit $rc";
