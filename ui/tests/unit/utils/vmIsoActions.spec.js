@@ -35,7 +35,7 @@ it('waits for the first terminal job before submitting the second', async () => 
   let finish
   const deps = setup({ poll: jest.fn().mockImplementationOnce(() => new Promise(resolve => { finish = resolve })).mockResolvedValue({ jobstatus: 1 }) })
   const op = startIsoOperation('vm', { items }, deps)
-  await Promise.resolve(); await Promise.resolve(); await Promise.resolve()
+  await new Promise(resolve => setImmediate(resolve))
   expect(deps.submit).toHaveBeenCalledTimes(1)
   finish({ jobstatus: 1 }); await op.done
   expect(deps.submit).toHaveBeenCalledTimes(2)
@@ -69,7 +69,7 @@ it('blocks duplicate begin and double retry while running', async () => {
   const deps = setup({ poll: () => new Promise(resolve => { finish = resolve }) })
   const op = startIsoOperation('vm', { items: [items[0]] }, deps)
   expect(startIsoOperation('vm', { items }, deps)).toBe(op)
-  await op.retry(); await Promise.resolve(); await Promise.resolve()
+  await op.retry(); await new Promise(resolve => setImmediate(resolve))
   finish({ jobstatus: 1 }); await op.done
   expect(deps.submit).toHaveBeenCalledTimes(1)
 })

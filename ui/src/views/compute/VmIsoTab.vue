@@ -26,7 +26,14 @@
     <a-alert v-if="operation" class="iso-spacing" :type="operation.items.every(i => i.status === 'success') ? 'success' : 'info'" show-icon>
       <template #message><a @click="form = 'progress'">{{ $t('label.vmiso.progress') }}: {{ summary }}</a></template>
     </a-alert>
-    <a-table :columns="columns" :data-source="filteredRows" :row-selection="selection" row-key="id" size="small" :loading="loading" :pagination="{ pageSize: 10, hideOnSinglePage: true }"
+    <a-table
+:columns="columns"
+:data-source="filteredRows"
+:row-selection="selection"
+row-key="id"
+size="small"
+:loading="loading"
+:pagination="{ pageSize: 10, hideOnSinglePage: true }"
       :scroll="{ x: 640 }"
       :locale="{ emptyText: $t(listRefreshFailed ? 'message.list.refresh.stale' : 'message.vmiso.empty') }">
       <template #bodyCell="{ column, record }">
