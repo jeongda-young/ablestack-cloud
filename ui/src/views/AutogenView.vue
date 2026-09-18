@@ -2184,7 +2184,7 @@ export default {
           jobId,
           title: this.$t(action.label),
           description: resourceName,
-          name: resourceName,
+          name: action.api === 'restoreBackup' ? '' : resourceName,
           successMethod: result => {
             if (selectedItems === this.selectedItems && selectedItems.length > 0) {
               eventBus.emit('update-resource-state', { selectedItems, resource, state: 'success' })
@@ -2223,8 +2223,11 @@ export default {
               eventBus.emit('projects-updated', { action: action.api, project: this.resource })
             }
             if (action.api === 'restoreBackup') {
-              this.markBackupRestoreStarted(this.resource)
-              this.fetchData({ irefresh: true })
+              const restoringBackup = this.resource
+              this.markBackupRestoreStarted(restoringBackup)
+              Promise.resolve(this.fetchData({ irefresh: true })).finally(() => {
+                this.markBackupRestoreStarted(restoringBackup)
+              })
             }
             resolve(true)
           },
@@ -2419,10 +2422,6 @@ export default {
     },
     markBackupRestoreStarted (backup) {
       if (!backup?.id) {
-        return
-      }
-      const provider = String(backup.provider || '').toLowerCase()
-      if (!['ablestack-nas', 'ablestack-commvault', 'ablestack-netbackup', 'ablestack-veeam'].includes(provider)) {
         return
       }
       const trackedBackup = this.items.find(item => item.id === backup.id) || backup
