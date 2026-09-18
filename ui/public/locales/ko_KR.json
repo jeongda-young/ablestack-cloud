@@ -7766,7 +7766,7 @@
   "label.vmiso.detach.selected": "선택 연결 해제",
   "label.vmiso.attach.count": "{count}개 ISO 연결",
   "label.vmiso.detach.count": "{count}개 연결 해제",
-  "label.vmiso.device": "장치",
+  "label.vmiso.device": "장치 슬롯",
   "label.vmiso.media": "미디어 속성",
   "label.vmiso.data": "데이터 미디어",
   "label.vmiso.unspecified": "정보 없음",

@@ -7805,7 +7805,7 @@
   "label.vmiso.detach.selected": "Detach selected",
   "label.vmiso.attach.count": "Attach {count} ISO(s)",
   "label.vmiso.detach.count": "Detach {count} ISO(s)",
-  "label.vmiso.device": "Device",
+  "label.vmiso.device": "Device slot",
   "label.vmiso.media": "Media attributes",
   "label.vmiso.data": "Data media",
   "label.vmiso.unspecified": "Not provided",

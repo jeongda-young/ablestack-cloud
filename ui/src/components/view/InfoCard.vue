@@ -794,7 +794,7 @@
             </div>
             <div class="resource-detail-item" v-if="attachedIsoRows.length">
               <div class="resource-detail-item__label">{{ $t('label.isoname') }}</div>
-              <div class="resource-detail-item__value" v-for="iso in attachedIsoRows" :key="iso.id">
+              <div class="resource-detail-item__details" v-for="iso in attachedIsoRows" :key="iso.id">
                 <router-link v-if="'listIsos' in $store.getters.apis" :to="{ path: '/iso/' + iso.id }">{{ iso.displaytext || iso.name || iso.id }}</router-link>
                 <span v-else>{{ iso.displaytext || iso.name || iso.id }}</span>
               </div>

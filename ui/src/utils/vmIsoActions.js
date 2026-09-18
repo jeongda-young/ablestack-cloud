@@ -30,7 +30,8 @@ export function isoActionReason (vm, attach = false) {
 }
 export function isoSlot (iso, vm) {
   if (iso.deviceseq == null) return '—'
-  return vm.hypervisor === 'KVM' ? 'hd' + String.fromCharCode(96 + Number(iso.deviceseq)) : String(iso.deviceseq)
+  // The API exposes a slot sequence, not a guest device name (IDE/SCSI differs).
+  return String(iso.deviceseq)
 }
 export const isoOperations = reactive({})
 export function clearIsoOperations () { Object.keys(isoOperations).forEach(key => delete isoOperations[key]) }

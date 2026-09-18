@@ -34,7 +34,7 @@ row-key="id"
 size="small"
 :loading="loading"
 :pagination="{ pageSize: 10, hideOnSinglePage: true }"
-      :scroll="{ x: 640 }"
+      :scroll="{ x: 730 }"
       :locale="{ emptyText: $t(listRefreshFailed ? 'message.list.refresh.stale' : 'message.vmiso.empty') }">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'name'"><router-link :to="'/iso/' + record.id" class="iso-name">{{ name(record) }}</router-link></template>
@@ -124,7 +124,7 @@ export default {
     filteredRows () { return this.rows.filter(i => this.name(i).toLowerCase().includes(this.search.toLowerCase())) },
     filteredCandidates () { return this.candidates.filter(i => (this.name(i) + ' ' + i.name).toLowerCase().includes(this.candidateSearch.toLowerCase())) },
     selection () { return this.allowed('detachIso') ? { selectedRowKeys: this.selected, onChange: keys => { this.selected = keys }, getCheckboxProps: () => ({ disabled: this.busy || !!this.reason(false) }) } : undefined },
-    columns () { return ['name', 'device', 'media', 'state', 'actions'].map(key => ({ key, title: this.$t(['device', 'media'].includes(key) ? 'label.vmiso.' + key : 'label.' + key), ...(key === 'actions' ? { width: 146, fixed: 'right' } : {}) })) },
+    columns () { return ['name', 'device', 'media', 'state', 'actions'].map(key => ({ key, title: this.$t(['device', 'media'].includes(key) ? 'label.vmiso.' + key : 'label.' + key), width: { name: 240, device: 90, media: 120, state: 90, actions: 146 }[key] })) },
     dialogTitle () { return this.$t(this.form === 'details' ? 'label.details' : 'label.vmiso.' + (this.form || 'attach')) },
     summary () { return this.$t('message.vmiso.summary', Object.fromEntries(['success', 'failed', 'unknown', 'pending', 'running'].map(status => [status, this.operation?.items.filter(i => i.status === status).length || 0]))) }
   },
@@ -212,10 +212,16 @@ export default {
 <style lang="scss">
 .vm-iso-modal {
   .ant-modal { top: 0; padding-bottom: 0; max-width: calc(100vw - 32px); }
-  .ant-modal-content { display: flex; flex-direction: column; max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); }
+  .ant-modal-content { display: flex; flex-direction: column; overflow: hidden; max-height: calc(100vh - 48px); max-height: calc(100dvh - 48px); }
   .ant-modal-header, .ant-modal-footer { flex-shrink: 0; }
-  .ant-modal-body { min-height: 0; overflow-y: auto; padding: 24px; }
-  .ant-modal-footer { padding: 12px 24px; }
+  .ant-modal-body { flex: 1 1 auto; min-height: 0; overflow-y: auto; padding: 24px; }
+  .ant-modal-footer { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; padding: 12px 24px; }
+  .ant-modal-footer .ant-btn + .ant-btn { margin-left: 0; }
+  .ant-descriptions-bordered .ant-descriptions-item-label { width: 128px; background: var(--ui-bg-page); color: var(--ui-text-secondary); }
+  .ant-descriptions-bordered .ant-descriptions-item-content { color: var(--ui-text-primary); }
+  .ant-descriptions-bordered .ant-descriptions-view, .ant-descriptions-bordered .ant-descriptions-row, .ant-descriptions-bordered .ant-descriptions-item-label, .ant-descriptions-bordered .ant-descriptions-item-content { border-color: var(--ui-border); }
+  .ant-modal-title { padding-right: 24px; }
+  @media (max-width: 600px) { .ant-modal-body { padding: 16px; } .ant-modal-footer { padding: 12px 16px; } .ant-descriptions-bordered .ant-descriptions-item-label { width: 96px; } }
   .ant-descriptions-item-content { overflow-wrap: anywhere; }
 }
 </style>
