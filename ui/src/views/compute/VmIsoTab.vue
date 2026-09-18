@@ -113,11 +113,11 @@ export default {
   name: 'VmIsoTab',
   props: { resource: { type: Object, required: true } },
   mixins: [listRefreshMixin(['fetchData'], { active: vm => !!vm.resource.id })],
-  data () { return { vm: this.resource, loading: false, selected: [], search: '', form: '', candidates: [], candidatesLoading: false, candidateError: '', candidateSearch: '', attachIds: [], targets: [], detail: null, forced: false, candidateRequest: 0 } },
+  data () { return { vm: this.resource, mediaById: {}, loading: false, selected: [], search: '', form: '', candidates: [], candidatesLoading: false, candidateError: '', candidateSearch: '', attachIds: [], targets: [], detail: null, forced: false, candidateRequest: 0 } },
   computed: {
     security () { return JSON.stringify([this.$store.getters.project?.id, this.$store.getters.userInfo?.id, this.$store.state.user.token]) },
     scopeKey () { return this.security + ':' + this.resource.id },
-    rows () { return attachedIsos(this.vm) },
+    rows () { return attachedIsos(this.vm).map(iso => ({ ...iso, bootable: this.mediaById[iso.id]?.bootable })) },
     capacity () { return isoCapacity(this.vm) },
     operation () { return isoOperations[this.scopeKey] },
     busy () { return !!(this.operation?.running || this.operation?.items.some(i => i.status === 'unknown')) },
@@ -129,7 +129,7 @@ export default {
     summary () { return this.$t('message.vmiso.summary', Object.fromEntries(['success', 'failed', 'unknown', 'pending', 'running'].map(status => [status, this.operation?.items.filter(i => i.status === status).length || 0]))) }
   },
   watch: {
-    scopeKey () { this.vm = this.resource; this.form = ''; this.selected = []; this.candidateRequest++; this.fetchData() },
+    scopeKey () { this.vm = this.resource; this.mediaById = {}; this.form = ''; this.selected = []; this.candidateRequest++; this.fetchData() },
     resource (value) { this.vm = value },
     form () { this.candidateRequest++ }
   },
@@ -147,6 +147,16 @@ export default {
         const vm = json.listvirtualmachinesresponse.virtualmachine?.find(v => v.id === this.resource.id)
         if (!this.isListRequestCurrent('fetchData', request)) return
         if (!vm) throw new Error('VM unavailable')
+        // VM isos[].bootable describes the primary boot slot, not the media's capability.
+        // Read ISO metadata through the existing API instead of labelling secondary media non-bootable.
+        const media = await Promise.all(attachedIsos(vm).map(async iso => {
+          try {
+            const response = await getAPI('listIsos', { id: iso.id, zoneid: vm.zoneid, isofilter: 'executable', listall: true })
+            return [iso.id, response.listisosresponse.iso?.find(item => item.id === iso.id) || {}]
+          } catch (_) { return [iso.id, {}] }
+        }))
+        if (!this.isListRequestCurrent('fetchData', request)) return
+        this.mediaById = Object.fromEntries(media)
         this.vm = vm; this.selected = this.selected.filter(id => attachedIsos(vm).some(i => i.id === id))
       } catch (_) { if (this.isListRequestCurrent('fetchData', request)) { request.failed = true; this.listRefreshFailed = true } } finally { if (this.isListRequestCurrent('fetchData', request)) this.loading = false }
     },
