@@ -1007,6 +1007,10 @@ public class TemplateManagerImplTest {
 
         com.cloud.utils.db.GlobalLock lock = mock(com.cloud.utils.db.GlobalLock.class);
         when(lock.lock(Mockito.anyInt())).thenReturn(true);
+        Mockito.when(vm.getHostId()).thenReturn(7L);
+        DetailVO capacity = Mockito.mock(DetailVO.class);
+        Mockito.when(capacity.getValue()).thenReturn("2");
+        Mockito.when(_hostDetailsDao.findDetail(7L, Host.HOST_CDROM_MAX_COUNT)).thenReturn(capacity);
         boolean result;
         try (org.mockito.MockedStatic<com.cloud.utils.db.GlobalLock> locks = Mockito.mockStatic(com.cloud.utils.db.GlobalLock.class)) {
             locks.when(() -> com.cloud.utils.db.GlobalLock.getInternLock("vm-iso-1")).thenReturn(lock);
