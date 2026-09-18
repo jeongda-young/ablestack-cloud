@@ -46,6 +46,14 @@ const isLiveBandwidthBackup = (record) => {
   return hasBackupCapability(record, 'live-bandwidth')
 }
 
+const isBackupOperationInProgress = (record) => {
+  return ['backingup', 'restoring'].includes(String(record?.status || '').toLowerCase())
+}
+
+const getBackupOperationActionTooltip = (record, defaultLabel) => {
+  return isBackupOperationInProgress(record) ? 'message.backup.operation.action.disabled' : defaultLabel
+}
+
 export default {
   name: 'storage',
   title: 'label.storage',
@@ -581,7 +589,9 @@ export default {
           label: 'label.backup.restore',
           message: 'message.backup.restore',
           dataView: true,
-          show: (record) => { return record.status === 'BackedUp' },
+          show: (record) => { return ['BackingUp', 'BackedUp', 'Restoring'].includes(record.status) },
+          disabled: (record) => { return isBackupOperationInProgress(record) },
+          tooltip: (record) => getBackupOperationActionTooltip(record, 'label.backup.restore'),
           args: () => {
             const fields = []
             fields.push('quickrestore')
@@ -597,7 +607,9 @@ export default {
           label: 'label.backup.attach.restore',
           message: 'message.backup.attach.restore',
           dataView: true,
-          show: (record) => { return record.status === 'BackedUp' },
+          show: (record) => { return ['BackingUp', 'BackedUp', 'Restoring'].includes(record.status) },
+          disabled: (record) => { return isBackupOperationInProgress(record) },
+          tooltip: (record) => getBackupOperationActionTooltip(record, 'label.backup.attach.restore'),
           popup: true,
           component: shallowRef(defineAsyncComponent(() => import('@/views/storage/RestoreAttachBackupVolume.vue')))
         },
@@ -609,7 +621,9 @@ export default {
           message: 'message.backup.restore',
           dataView: true,
           popup: true,
-          show: (record) => { return record.status === 'BackedUp' },
+          show: (record) => { return ['BackingUp', 'BackedUp', 'Restoring'].includes(record.status) },
+          disabled: (record) => { return isBackupOperationInProgress(record) },
+          tooltip: (record) => getBackupOperationActionTooltip(record, 'label.create.instance.from.backup'),
           component: shallowRef(defineAsyncComponent(() => import('@/views/storage/CreateVMFromBackup.vue')))
         },
         {
@@ -648,6 +662,8 @@ export default {
           message: 'message.backup.offering.remove',
           dataView: true,
           show: (record) => { return record.state !== 'Destroyed' && record.vmbackupofferingremoved !== true },
+          disabled: (record) => { return isBackupOperationInProgress(record) },
+          tooltip: (record) => getBackupOperationActionTooltip(record, 'label.backup.offering.remove'),
           args: ['forced', 'virtualmachineid'],
           mapping: {
             forced: {
@@ -668,6 +684,8 @@ export default {
             const provider = (record.provider || '').toLowerCase()
             return record.state !== 'Destroyed' && provider !== 'ablestack-netbackup' && provider !== 'ablestack-veeam'
           },
+          disabled: (record) => { return isBackupOperationInProgress(record) },
+          tooltip: (record) => getBackupOperationActionTooltip(record, 'label.delete.backup'),
           groupAction: true,
           popup: true,
           groupMap: (selection, values) => { return selection.map(x => { return { id: x, forced: values.forced } }) },

@@ -505,6 +505,7 @@
   "label.backup.finalizing": "Finalizing",
   "label.restore.finalizing": "Finalizing restore",
   "label.restore.requested": "Restore requested",
+  "message.backup.operation.action.disabled": "This action is unavailable while a backup or restore operation is in progress.",
   "label.backup.requested": "Backup requested",
   "label.restore.queued": "Waiting to start restore",
   "label.restore.prepare.source": "Preparing restore source",

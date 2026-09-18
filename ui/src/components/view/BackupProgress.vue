@@ -22,7 +22,7 @@
       <template v-if="showJobDetails" #tooltip>
         <div class="backup-progress-tooltip">
           <div class="backup-progress-tooltip-title">{{ displayStatus }}</div>
-          <div v-if="hasProgress" class="backup-progress-tooltip-row">
+          <div v-if="showProgress" class="backup-progress-tooltip-row">
             <span>{{ $t('label.progress') }} :</span>
             <span>{{ progress }}%</span>
           </div>
@@ -45,7 +45,7 @@
         </div>
       </template>
     </status>
-    <div v-if="hasProgress && isActive" class="backup-progress-line">
+    <div v-if="showProgress && isActive" class="backup-progress-line">
       <a-progress
         :percent="progress"
         :showInfo="false"
@@ -113,6 +113,9 @@ export default {
     },
     hasProgress () {
       return this.progress !== null
+    },
+    showProgress () {
+      return this.hasProgress && !this.isRestoring
     },
     isAwaitingBackupFinalization () {
       return String(this.localStatus || this.record?.status || '').toLowerCase() === 'backingup' &&

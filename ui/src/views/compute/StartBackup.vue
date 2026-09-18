@@ -136,7 +136,7 @@ export default {
             description: values.name,
             successMessage: this.$t('label.backup.requested'),
             errorMessage: this.$t('message.create.backup.failed'),
-            loadingMessage: `${this.$t('label.create.backup')}: ${this.resource.name || this.resource.id}`,
+            loadingMessage: `${this.$t('label.backup.requested')}: ${this.resource.name || this.resource.id}`,
             catchMessage: this.$t('error.fetching.async.job.result')
           })
           this.closeModal()

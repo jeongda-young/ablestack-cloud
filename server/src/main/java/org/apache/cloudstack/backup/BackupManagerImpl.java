@@ -5310,9 +5310,20 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         response.setOperation(AblestackBackupFrameworkUtils.OPERATION_RESTORE);
         final String restoreJobId = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_ID_DETAIL);
         if (StringUtils.isBlank(restoreJobId)) {
-            response.setState(StringUtils.defaultIfBlank(netBackupRestoreCoordinator.getRestorePhase(backup), "UNKNOWN"));
-            response.setStep("Restore job has not been tracked for this backup");
-            response.setProgress(null);
+            final String externalRestorePhase = netBackupRestoreCoordinator.getRestorePhase(backup);
+            if (StringUtils.isNotBlank(externalRestorePhase)) {
+                response.setState(externalRestorePhase);
+                response.setStep(externalRestorePhase);
+                response.setProgress(resolveRestoreProgressForResponse(externalRestorePhase, externalRestorePhase, null));
+            } else if (Backup.Status.Restoring.equals(backup.getStatus())) {
+                response.setState("STARTING");
+                response.setStep("QUEUED");
+                response.setProgress(null);
+            } else {
+                response.setState("COMPLETED");
+                response.setStep("COMPLETED");
+                response.setProgress(100);
+            }
             return response;
         }
 
