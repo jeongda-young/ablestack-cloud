@@ -20,6 +20,7 @@ import { clearNicOperations } from '@/utils/vmNicActions'
 import { clearVolumeOperations } from '@/utils/vmVolumeActions'
 import { trackSnapshotJob, finishSnapshotJob, clearSnapshotJobs } from '@/utils/vmSnapshotActions'
 import _ from 'lodash'
+import axios from 'axios'
 import { i18n } from '@/locales'
 import { getAPI } from '@/api'
 import { message, notification, Modal } from 'ant-design-vue'
@@ -140,6 +141,7 @@ export const pollJobPlugin = {
 export const notifierPlugin = {
   install (app) {
     app.config.globalProperties.$notifyError = function (error) {
+      if (axios.isCancel(error)) return
       console.log(error)
       var msg = i18n.global.t('message.request.failed')
       var desc = ''

@@ -84,7 +84,7 @@ export default {
       localStatus: String(this.record?.status || this.statusText || ''),
       progress: this.normalizeProgress(this.record?.backupjobprogress ?? this.record?.progress),
       jobState: this.record?.restorejobstate || this.record?.backupjobstate || '',
-      step: this.record?.backupjobstep || '',
+      step: this.record?.restorejobstep || this.record?.backupjobstep || '',
       logPath: this.record?.backupjoblogpath || this.record?.restorejoblogpath || '',
       bandwidthLimitMbps: this.normalizeBandwidth(this.record?.bandwidthlimitmbps),
       bandwidthStatus: this.record?.bandwidthstatus || '',
@@ -97,7 +97,7 @@ export default {
     displayStatus () {
       const status = this.localStatus || String(this.record?.status || this.statusText || '')
       if (this.isRestoring) {
-        return 'Restoring'
+        return this.displayStep || 'Restoring'
       }
       return status
     },
@@ -116,7 +116,7 @@ export default {
       return this.progress !== null
     },
     showProgress () {
-      return this.hasProgress && this.isActive
+      return this.hasProgress && this.isActive && !this.isRestoring
     },
     isAwaitingBackupFinalization () {
       return String(this.localStatus || this.record?.status || '').toLowerCase() === 'backingup' &&
@@ -158,7 +158,7 @@ export default {
       return this.$t('message.backup.bandwidth.' + this.bandwidthStatus)
     },
     showJobDetails () {
-      return this.isActive && (this.hasProgress || !!this.jobState || !!this.displayStep || !!this.logPath ||
+      return this.isActive && (this.showProgress || !!this.jobState || !!this.displayStep || !!this.logPath ||
         this.bandwidthLimitMbps !== null || !!this.bandwidthStatus)
     }
   },
@@ -211,7 +211,7 @@ export default {
         this.progress = progress
       }
       this.jobState = this.record?.restorejobstate || this.record?.backupjobstate || ''
-      this.step = this.record?.backupjobstep || this.step
+      this.step = this.record?.restorejobstep || this.record?.backupjobstep || this.step
       this.logPath = this.record?.restorejoblogpath || this.record?.backupjoblogpath || this.logPath
       const bandwidthLimitMbps = this.normalizeBandwidth(this.record?.bandwidthlimitmbps)
       if (bandwidthLimitMbps !== null) {
