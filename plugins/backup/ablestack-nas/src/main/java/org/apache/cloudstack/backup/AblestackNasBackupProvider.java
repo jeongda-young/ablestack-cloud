@@ -113,8 +113,6 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
     private static final String DETAIL_FALLBACK_VOLUME_UUIDS = "nas.fallback.volume.uuids";
     private static final String DETAIL_FAILURE_PHASE = "nas.failure.phase";
     private static final String DETAIL_FAILURE_REASON = "nas.failure.reason";
-    private static final String MISSING_PARENT_RBD_SNAPSHOT_ERROR = "Parent RBD snapshot";
-    private static final String MISSING_PARENT_QCOW2_BITMAP_ERROR = "Parent qcow2 bitmap";
     private static final String BACKUP_TRACE = AblestackBackupFrameworkUtils.buildTracePrefix("nas", AblestackBackupFrameworkUtils.OPERATION_BACKUP);
     private static final String RESTORE_TRACE = AblestackBackupFrameworkUtils.buildTracePrefix("nas", AblestackBackupFrameworkUtils.OPERATION_RESTORE);
     private static final long BACKUP_REPOSITORY_SPACE_BUFFER_BYTES = 10L * 1024L * 1024L * 1024L;
@@ -277,13 +275,17 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         final BackupVO latestBackup = getLatestBackedUpBackup(vm, backupScheduleId);
         final boolean incrementalBackup = shouldUseIncrementalBackup(vm, latestBackup, vmVolumes, backupScheduleId);
         BackupExecutionResult result = executeBackup(vm, quiesceVM, host, backupRepository, vmVolumes, volumePoolsAndPaths, latestBackup, incrementalBackup,
-                incrementalBackup && vmVolumes.size() > 1);
-        if (!result.success && incrementalBackup && shouldRetryAsFullAfterIncrementalFailure(result, vmVolumes)) {
-            cleanupFailedBackupForFullRetry(result.backup);
+                incrementalBackup);
+        if (!result.success && incrementalBackup) {
+            final Backup failedIncrementalBackup = result.backup;
+            final String fallbackReason = result.details;
+            cleanupFailedBackupForFullRetry(failedIncrementalBackup);
             LOG.warn("{} phase=[INCREMENTAL_FALLBACK_TO_FULL], vmId=[{}], vmName=[{}], failedBackupUuid=[{}], reason=[{}]",
-                    BACKUP_TRACE, vm.getId(), vm.getInstanceName(), result.backup != null ? result.backup.getUuid() : null, result.details);
-            LOG.warn("Incremental backup failed for VM [{}] due to [{}]. Retrying as full backup.", vm, result.details);
+                    BACKUP_TRACE, vm.getId(), vm.getInstanceName(), failedIncrementalBackup != null ? failedIncrementalBackup.getUuid() : null,
+                    fallbackReason);
+            LOG.warn("Incremental backup failed for VM [{}] due to [{}]. Retrying as full backup.", vm, fallbackReason);
             result = executeBackup(vm, quiesceVM, host, backupRepository, vmVolumes, volumePoolsAndPaths, null, false, false);
+            recordIncrementalFallback(result.backup, failedIncrementalBackup, fallbackReason);
         }
         return new Pair<>(result.success, result.backup);
     }
@@ -300,6 +302,8 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         validateBackupRepositoryCapacity(host, backupRepository, vmVolumes, vm.getInstanceName(), requestedBackupType, backupEngine);
         BackupVO backupVO = createBackupObject(vm, host.getId(), backupPath, requestedBackupType,
                 checkpointName, backupEngine, incrementalBackup ? parentBackup : null, volumePoolsAndPaths.second());
+        updateBackupDetail(backupVO, AblestackBackupFrameworkUtils.BACKUP_QUIESCE_DETAIL,
+                String.valueOf(Boolean.TRUE.equals(quiesceVM)));
         AblestackNasTakeBackupCommand command = new AblestackNasTakeBackupCommand(vm.getInstanceName(), backupPath);
         command.setWait(BackupDataOperationTimeout.value());
         command.setBackupJobId(backupVO.getUuid());
@@ -376,12 +380,12 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
                 backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), requestedBackupType, backupEngine,
                 backupRepository.getId(), backupPath, System.currentTimeMillis() - backupStartTime, details);
         markBackupFailure(backupVO, "agent-answer", details);
-        if (retryAsFullOnFailure) {
-            backupVO.setStatus(Backup.Status.Failed);
-            removeBackupWithDetails(backupVO.getId());
-        } else if (answer != null && answer.getNeedsCleanup()) {
+        if (answer != null && answer.getNeedsCleanup()) {
             logger.error("Backup cleanup failed for VM {}. Leaving the backup in Error state.", vm.getInstanceName());
             backupVO.setStatus(Backup.Status.Error);
+            backupDao.update(backupVO.getId(), backupVO);
+        } else if (retryAsFullOnFailure) {
+            backupVO.setStatus(Backup.Status.Failed);
             backupDao.update(backupVO.getId(), backupVO);
         } else {
             backupVO.setStatus(Backup.Status.Failed);
@@ -399,24 +403,30 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         return BackupExecutionResult.failure(details, backupVO);
     }
 
-    private boolean shouldRetryAsFullAfterIncrementalFailure(BackupExecutionResult result, List<VolumeVO> vmVolumes) {
-        if (result == null || result.success) {
-            return false;
-        }
-        if (StringUtils.contains(result.details, MISSING_PARENT_RBD_SNAPSHOT_ERROR)) {
-            return true;
-        }
-        if (StringUtils.contains(result.details, MISSING_PARENT_QCOW2_BITMAP_ERROR)) {
-            return true;
-        }
-        return vmVolumes.size() > 1;
-    }
-
     private void cleanupFailedBackupForFullRetry(Backup backup) {
         if (backup == null) {
             return;
         }
+        if (Backup.Status.Error.equals(backup.getStatus()) || !cleanupFailedBackupArtifacts(backup)) {
+            if (backup instanceof BackupVO) {
+                ((BackupVO) backup).setStatus(Backup.Status.Error);
+                backupDao.update(backup.getId(), (BackupVO) backup);
+            }
+            return;
+        }
         removeBackupWithDetails(backup.getId());
+    }
+
+    private void recordIncrementalFallback(final Backup fullBackup, final Backup failedIncrementalBackup, final String reason) {
+        if (fullBackup == null) {
+            return;
+        }
+        updateBackupDetail(fullBackup, AblestackBackupFrameworkUtils.INCREMENTAL_FALLBACK_REASON_DETAIL,
+                StringUtils.defaultString(reason, "Incremental backup failed"));
+        if (failedIncrementalBackup != null) {
+            updateBackupDetail(fullBackup, AblestackBackupFrameworkUtils.INCREMENTAL_FALLBACK_BACKUP_UUID_DETAIL,
+                    failedIncrementalBackup.getUuid());
+        }
     }
 
     private static final class BackupExecutionResult {
@@ -898,6 +908,40 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         AblestackBackupFrameworkUtils.validateVolumeChainStates(chainStates);
         LOG.debug("Completed NAS post-restore maintenance for VM [{}], backup [{}], volumeOnly=[{}]", vm != null ? vm.getInstanceName() : null,
                 backup.getUuid(), volumeOnly);
+    }
+
+    @Override
+    public void onVmRestoreCompleted(final VirtualMachine vm, final Backup backup) {
+        sealActiveBackupChainsAfterRestore(vm);
+    }
+
+    private void sealActiveBackupChainsAfterRestore(final VirtualMachine vm) {
+        if (vm == null || vm.getBackupOfferingId() == null) {
+            return;
+        }
+        final Map<Long, Backup> latestBackupsBySchedule = new HashMap<>();
+        for (final Backup candidate : backupDao.listByVmId(vm.getDataCenterId(), vm.getId())) {
+            if (!Backup.Status.BackedUp.equals(candidate.getStatus())
+                    || !Objects.equals(candidate.getBackupOfferingId(), vm.getBackupOfferingId())
+                    || !isBackupManagedByThisProvider(candidate)) {
+                continue;
+            }
+            final Long scheduleId = candidate.getBackupScheduleId();
+            final Backup current = latestBackupsBySchedule.get(scheduleId);
+            if (current == null || candidate.getDate().after(current.getDate())) {
+                latestBackupsBySchedule.put(scheduleId, candidate);
+            }
+        }
+        final String reason = "vm-restore-completed";
+        for (final Backup latestBackup : latestBackupsBySchedule.values()) {
+            loadBackupDetailsIfNeeded(latestBackup);
+            if (Boolean.parseBoolean(getBackupDetail(latestBackup, DETAIL_CHAIN_SEALED))) {
+                continue;
+            }
+            sealBackupChain(latestBackup, reason);
+            LOG.info("Sealed NAS backup chain [{}] for VM [{}] after successful VM restore.",
+                    latestBackup.getUuid(), vm.getInstanceName());
+        }
     }
 
     @Override
@@ -1631,20 +1675,33 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
                             + "backupPath=[{}], jobState=[{}], jobLog=[{}]",
                     BACKUP_TRACE, backup.getId(), backup.getUuid(), vm.getId(), vm.getInstanceName(), host.getId(), host.getName(),
                     backup.getExternalId(), jobState, jobLogPath);
-            if ("FAILED".equals(jobState)) {
-                sealParentBackupChainIfIncremental(backup, "failed-async-child");
-                markBackupFailure((BackupVO) backup, "host-job", "Host backup job failed");
-                removeBackupWithDetails(backup.getId());
+            if ("FAILED".equals(jobState) || "INTERRUPTED".equals(jobState)) {
+                final String defaultFailureReason = "Host backup job " + jobState.toLowerCase(Locale.ROOT);
+                final String failureReason = getHostBackupJobDetails(host.getId(), backup.getUuid(), defaultFailureReason);
+                final BackupVO failedBackup = backupDao.findById(backup.getId());
+                if (failedBackup != null) {
+                    backupDao.loadDetails(failedBackup);
+                    markBackupFailure(failedBackup, "host-job", failureReason);
+                    if (BACKUP_TYPE_INCREMENTAL.equalsIgnoreCase(failedBackup.getType())) {
+                        sealParentBackupChainIfIncremental(failedBackup, "failed-async-child");
+                        if (cleanupFailedBackupArtifacts(failedBackup)) {
+                            removeBackupWithDetails(failedBackup.getId());
+                        } else {
+                            failedBackup.setStatus(Backup.Status.Error);
+                            backupDao.update(failedBackup.getId(), failedBackup);
+                        }
+                        retryFailedAsyncIncrementalAsFull(vm, failedBackup, failureReason);
+                    } else {
+                        failedBackup.setStatus(cleanupFailedBackupArtifacts(failedBackup) ? Backup.Status.Failed : Backup.Status.Error);
+                        backupDao.update(failedBackup.getId(), failedBackup);
+                    }
+                }
+                cleanupBackupJobFiles(host.getId(), backup.getUuid());
                 LOG.warn("{} phase=[ASYNC_FAILED_CLEANUP], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], hostId=[{}], "
                                 + "hostName=[{}], backupPath=[{}], jobLog=[{}]",
                         BACKUP_TRACE, backup.getId(), backup.getUuid(), vm.getId(), vm.getInstanceName(), host.getId(), host.getName(),
                         backup.getExternalId(), jobLogPath);
                 return true;
-            } else if ("INTERRUPTED".equals(jobState)) {
-                LOG.warn("{} phase=[ASYNC_INTERRUPTED], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], hostId=[{}], "
-                                + "hostName=[{}], backupPath=[{}], jobLog=[{}]",
-                        BACKUP_TRACE, backup.getId(), backup.getUuid(), vm.getId(), vm.getInstanceName(), host.getId(), host.getName(),
-                        backup.getExternalId(), jobLogPath);
             } else if ("CANCELED".equals(jobState)) {
                 cleanupBackupJobFiles(host.getId(), backup.getUuid());
                 BackupVO backupVO = backupDao.findById(backup.getId());
@@ -1743,13 +1800,70 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
                 parentBackupUuid, backup.getUuid(), reason);
     }
 
+    private void retryFailedAsyncIncrementalAsFull(final VirtualMachine vm, final BackupVO failedBackup, final String reason) {
+        if (failedBackup == null || !BACKUP_TYPE_INCREMENTAL.equalsIgnoreCase(failedBackup.getType())) {
+            return;
+        }
+        try {
+            final boolean quiesce = Boolean.parseBoolean(
+                    getBackupDetail(failedBackup, AblestackBackupFrameworkUtils.BACKUP_QUIESCE_DETAIL));
+            final Pair<Boolean, Backup> result = takeBackup(vm, quiesce, false, failedBackup.getBackupScheduleId());
+            final Backup fullBackup = result.second();
+            if (fullBackup == null) {
+                LOG.error("Failed to create FULL fallback backup for VM [{}] after asynchronous INCREMENTAL failure [{}]",
+                        vm.getInstanceName(), failedBackup.getUuid());
+                return;
+            }
+            copyFallbackBackupMetadata(failedBackup, fullBackup);
+            recordIncrementalFallback(fullBackup, failedBackup, reason);
+            LOG.warn("Started FULL fallback backup [{}] for VM [{}] after asynchronous INCREMENTAL failure [{}]",
+                    fullBackup.getUuid(), vm.getInstanceName(), failedBackup.getUuid());
+        } catch (Exception e) {
+            LOG.error("Failed to start FULL fallback for VM [{}] after asynchronous INCREMENTAL failure [{}]: {}",
+                    vm.getInstanceName(), failedBackup.getUuid(), e.getMessage(), e);
+        }
+    }
+
+    private boolean cleanupFailedBackupArtifacts(final Backup backup) {
+        try {
+            return deleteBackup(backup, true);
+        } catch (Exception e) {
+            LOG.warn("Failed to clean up NAS backup [{}]: {}",
+                    backup.getUuid(), e.getMessage(), e);
+            return false;
+        }
+    }
+
+    private void copyFallbackBackupMetadata(final BackupVO failedBackup, final Backup fullBackup) {
+        final BackupVO fullBackupVO = backupDao.findById(fullBackup.getId());
+        if (fullBackupVO == null) {
+            return;
+        }
+        fullBackupVO.setBackupScheduleId(failedBackup.getBackupScheduleId());
+        fullBackupVO.setName(failedBackup.getName());
+        fullBackupVO.setDescription(failedBackup.getDescription());
+        backupDao.update(fullBackupVO.getId(), fullBackupVO);
+        if (Boolean.parseBoolean(getBackupDetail(failedBackup, AblestackBackupFrameworkUtils.RESOURCE_COUNT_PENDING_DETAIL))) {
+            updateBackupDetail(fullBackupVO, AblestackBackupFrameworkUtils.RESOURCE_COUNT_PENDING_DETAIL, Boolean.TRUE.toString());
+        }
+    }
+
     private String getHostBackupJobState(final Long hostId, final String backupJobId) {
         try {
             BackupAnswer answer = (BackupAnswer) agentManager.send(hostId, new AblestackBackupJobStatusCommand(backupJobId));
-            return answer != null && answer.getResult() ? answer.getDetails() : null;
+            return answer != null && answer.getResult() ? answer.getState() : null;
         } catch (AgentUnavailableException | OperationTimedoutException e) {
             LOG.debug("Failed to query NAS backup job state for job [{}] on host [{}]", backupJobId, hostId, e);
             return null;
+        }
+    }
+
+    private String getHostBackupJobDetails(final Long hostId, final String backupJobId, final String defaultDetails) {
+        try {
+            final BackupAnswer answer = (BackupAnswer) agentManager.send(hostId, new AblestackBackupJobStatusCommand(backupJobId));
+            return answer != null ? StringUtils.defaultIfBlank(answer.getDetails(), defaultDetails) : defaultDetails;
+        } catch (AgentUnavailableException | OperationTimedoutException e) {
+            return defaultDetails;
         }
     }
 

@@ -331,6 +331,9 @@ public interface BackupProvider {
     default void runPostRestoreMaintenance(VirtualMachine vm, Backup backup, boolean volumeOnly) {
     }
 
+    default void onVmRestoreCompleted(VirtualMachine vm, Backup backup) {
+    }
+
     default boolean supportsBackgroundChainValidation() {
         return false;
     }

@@ -91,6 +91,7 @@ import java.security.NoSuchAlgorithmException;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Date;
 import java.util.LinkedHashMap;
@@ -134,8 +135,6 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
     private static final String DETAIL_PARENT_CHECKPOINT_PATH = "commvault.parent.checkpoint.path";
     private static final String DETAIL_BACKUP_ENGINE = "commvault.backup.engine";
     private static final String DETAIL_RBD_DISK_PATHS = "commvault.rbd.disk.paths";
-    private static final String MISSING_PARENT_RBD_SNAPSHOT_ERROR = "Parent RBD snapshot";
-    private static final String MISSING_PARENT_QCOW2_BITMAP_ERROR = "Parent qcow2 bitmap";
     private static final String BACKUP_TRACE = AblestackBackupFrameworkUtils.buildTracePrefix("commvault", AblestackBackupFrameworkUtils.OPERATION_BACKUP);
     private static final String RESTORE_TRACE = AblestackBackupFrameworkUtils.buildTracePrefix("commvault", AblestackBackupFrameworkUtils.OPERATION_RESTORE);
     private static final String DETAIL_STAGE_HOST = "commvault.stage.host";
@@ -364,16 +363,20 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         final Backup latestBackup = getLatestBackedUpBackup(vm, backupScheduleId);
         final boolean incrementalBackup = shouldUseIncrementalBackup(vm, latestBackup, vmHost, vmVolumes, backupScheduleId);
         BackupExecutionResult result = executeBackup(vm, quiesceVM, vmHost, vmHostVO, client, planId, backupPath, backupContentPath, vmVolumes, volumePoolsAndPaths,
-                latestBackup, incrementalBackup, incrementalBackup && vmVolumes.size() > 1);
-        if (!result.success && incrementalBackup && shouldRetryAsFullAfterIncrementalFailure(result, vmVolumes)) {
-            cleanupFailedBackupForFullRetry(result.backup);
+                latestBackup, incrementalBackup, incrementalBackup);
+        if (!result.success && incrementalBackup) {
+            final Backup failedIncrementalBackup = result.backup;
+            final String fallbackReason = result.details;
+            cleanupFailedBackupForFullRetry(failedIncrementalBackup);
             LOG.warn("{} phase=[INCREMENTAL_FALLBACK_TO_FULL], vmId=[{}], vmName=[{}], failedBackupUuid=[{}], reason=[{}]",
-                    BACKUP_TRACE, vm.getId(), vm.getInstanceName(), result.backup != null ? result.backup.getUuid() : null, result.details);
-            LOG.warn("Incremental backup failed for VM [{}] due to [{}]. Retrying as full backup.", vm, result.details);
+                    BACKUP_TRACE, vm.getId(), vm.getInstanceName(), failedIncrementalBackup != null ? failedIncrementalBackup.getUuid() : null,
+                    fallbackReason);
+            LOG.warn("Incremental backup failed for VM [{}] due to [{}]. Retrying as full backup.", vm, fallbackReason);
             String fallbackBackupPath = buildBackupPath(vm);
             String fallbackBackupContentPath = buildBackupContentPath(vm);
             result = executeBackup(vm, quiesceVM, vmHost, vmHostVO, client, planId, fallbackBackupPath, fallbackBackupContentPath, vmVolumes, volumePoolsAndPaths,
                     null, false, false);
+            recordIncrementalFallback(result.backup, failedIncrementalBackup, fallbackReason);
         }
         return new Pair<>(result.success, result.backup);
     }
@@ -395,6 +398,12 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
             return false;
         }
         loadBackupDetailsIfNeeded(latestBackup);
+
+        if (Boolean.parseBoolean(getBackupDetail(latestBackup, DETAIL_CHAIN_SEALED))) {
+            LOG.info("Commvault backup for VM [{}] will be FULL: backup chain [{}] is sealed ({})",
+                    vm.getInstanceName(), latestBackup.getUuid(), getBackupDetail(latestBackup, DETAIL_CHAIN_SEAL_REASON));
+            return false;
+        }
 
         Long clusterId = getClusterIdFromRootVolume(vm);
         if (clusterId == null) {
@@ -713,6 +722,8 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         final List<String> backupFiles = buildBackupFileNames(vmVolumes, backupEngine, incrementalBackup);
         final Map<String, String> backupDetails = getBackupDetails(vm, backupPath, checkpointName, backupEngine, latestBackup,
                 BACKUP_TYPE_INCREMENTAL.equalsIgnoreCase(requestedBackupType), vmHost.getName());
+        backupDetails.put(AblestackBackupFrameworkUtils.BACKUP_QUIESCE_DETAIL,
+                String.valueOf(Boolean.TRUE.equals(quiesceVM)));
 
         BackupVO backupVO = createBackupObject(vm, vmHost.getId(), backupPath, requestedBackupType, backupDetails);
         AblestackCommvaultTakeBackupCommand command = new AblestackCommvaultTakeBackupCommand(vm.getInstanceName(), backupPath);
@@ -779,12 +790,12 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                     backupPath, System.currentTimeMillis() - backupStartTime, details);
             LOG.error("Failed to take backup for VM {}: {}", vm.getInstanceName(), details);
             markBackupFailure(backupVO, "agent-answer", details);
-            if (retryAsFullOnFailure) {
-                backupVO.setStatus(Backup.Status.Failed);
-                removeBackupWithDetails(backupVO.getId());
-            } else if (answer != null && answer.getNeedsCleanup()) {
+            if (answer != null && answer.getNeedsCleanup()) {
                 LOG.error("Backup cleanup failed for VM {}. Leaving the backup in Error state.", vm.getInstanceName());
                 backupVO.setStatus(Backup.Status.Error);
+                backupDao.update(backupVO.getId(), backupVO);
+            } else if (retryAsFullOnFailure) {
+                backupVO.setStatus(Backup.Status.Failed);
                 backupDao.update(backupVO.getId(), backupVO);
             } else {
                 backupVO.setStatus(Backup.Status.Failed);
@@ -822,24 +833,26 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         return BackupExecutionResult.failure(details, backupVO);
     }
 
-    private boolean shouldRetryAsFullAfterIncrementalFailure(BackupExecutionResult result, List<VolumeVO> vmVolumes) {
-        if (result == null || result.success) {
-            return false;
-        }
-        if (StringUtils.contains(result.details, MISSING_PARENT_RBD_SNAPSHOT_ERROR)) {
-            return true;
-        }
-        if (StringUtils.contains(result.details, MISSING_PARENT_QCOW2_BITMAP_ERROR)) {
-            return true;
-        }
-        return vmVolumes.size() > 1;
-    }
-
     private void cleanupFailedBackupForFullRetry(Backup backup) {
         if (backup == null) {
             return;
         }
+        if (Backup.Status.Error.equals(backup.getStatus())) {
+            return;
+        }
         removeBackupWithDetails(backup.getId());
+    }
+
+    private void recordIncrementalFallback(final Backup fullBackup, final Backup failedIncrementalBackup, final String reason) {
+        if (fullBackup == null) {
+            return;
+        }
+        updateBackupDetail(fullBackup, AblestackBackupFrameworkUtils.INCREMENTAL_FALLBACK_REASON_DETAIL,
+                StringUtils.defaultString(reason, "Incremental backup failed"));
+        if (failedIncrementalBackup != null) {
+            updateBackupDetail(fullBackup, AblestackBackupFrameworkUtils.INCREMENTAL_FALLBACK_BACKUP_UUID_DETAIL,
+                    failedIncrementalBackup.getUuid());
+        }
     }
 
     private static final class BackupExecutionResult {
@@ -966,6 +979,40 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         cleanupTrackedRestoreSourcePaths(backup);
         LOG.debug("Completed Commvault post-restore maintenance for VM [{}], backup [{}], volumeOnly=[{}]", vm != null ? vm.getInstanceName() : null,
                 backup.getUuid(), volumeOnly);
+    }
+
+    @Override
+    public void onVmRestoreCompleted(final VirtualMachine vm, final Backup backup) {
+        sealActiveBackupChainsAfterRestore(vm);
+    }
+
+    private void sealActiveBackupChainsAfterRestore(final VirtualMachine vm) {
+        if (vm == null || vm.getBackupOfferingId() == null) {
+            return;
+        }
+        final Map<Long, Backup> latestBackupsBySchedule = new HashMap<>();
+        for (final Backup candidate : backupDao.listByVmId(vm.getDataCenterId(), vm.getId())) {
+            if (!Backup.Status.BackedUp.equals(candidate.getStatus())
+                    || !Objects.equals(candidate.getBackupOfferingId(), vm.getBackupOfferingId())
+                    || !isBackupManagedByThisProvider(candidate)) {
+                continue;
+            }
+            final Long scheduleId = candidate.getBackupScheduleId();
+            final Backup current = latestBackupsBySchedule.get(scheduleId);
+            if (current == null || candidate.getDate().after(current.getDate())) {
+                latestBackupsBySchedule.put(scheduleId, candidate);
+            }
+        }
+        final String reason = "vm-restore-completed";
+        for (final Backup latestBackup : latestBackupsBySchedule.values()) {
+            loadBackupDetailsIfNeeded(latestBackup);
+            if (Boolean.parseBoolean(getBackupDetail(latestBackup, DETAIL_CHAIN_SEALED))) {
+                continue;
+            }
+            sealBackupChain(latestBackup, reason);
+            LOG.info("Sealed Commvault backup chain [{}] for VM [{}] after successful VM restore.",
+                    latestBackup.getUuid(), vm.getInstanceName());
+        }
     }
 
     private void trackRestoreSourcePaths(final Backup backup, final HostVO restoreHost,
@@ -2334,23 +2381,36 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                         + "hostName=[{}], backupPath=[{}], jobState=[{}], jobLog=[{}]",
                 BACKUP_TRACE, backup.getId(), backup.getUuid(), vm.getId(), vm.getInstanceName(), stageHost.getId(), stageHost.getName(),
                 backupPath, jobState, jobLogPath);
-        if ("FAILED".equals(jobState)) {
+        if ("FAILED".equals(jobState) || "INTERRUPTED".equals(jobState)) {
+            final String defaultFailureReason = "Host backup staging job " + jobState.toLowerCase(Locale.ROOT);
+            final String failureReason = getHostBackupJobDetails(stageHost.getId(), backup.getUuid(), defaultFailureReason);
             BackupVO backupVO = backupDao.findById(backup.getId());
             if (backupVO != null) {
-                sealParentBackupChainIfIncremental(backupVO, "failed-async-child");
-                markBackupFailure(backupVO, "host-job", "Host backup staging job failed");
-                removeBackupWithDetails(backupVO.getId());
+                backupDao.loadDetails(backupVO);
+                markBackupFailure(backupVO, "host-job", failureReason);
+                if (BACKUP_TYPE_INCREMENTAL.equalsIgnoreCase(backupVO.getType())) {
+                    sealParentBackupChainIfIncremental(backupVO, "failed-async-child");
+                    final boolean cleanupSuccessful = cleanupFailedStagingBackup(
+                            stageHostName, backupPath, vm.getInstanceName(), backupVO);
+                    if (cleanupSuccessful) {
+                        removeBackupWithDetails(backupVO.getId());
+                    } else {
+                        backupVO.setStatus(Backup.Status.Error);
+                        backupDao.update(backupVO.getId(), backupVO);
+                    }
+                    retryFailedAsyncIncrementalAsFull(vm, backupVO, failureReason);
+                } else {
+                    backupVO.setStatus(cleanupFailedStagingBackup(stageHostName, backupPath, vm.getInstanceName(), backupVO)
+                            ? Backup.Status.Failed : Backup.Status.Error);
+                    backupDao.update(backupVO.getId(), backupVO);
+                }
             }
+            cleanupBackupJobFiles(stageHost.getId(), backup.getUuid());
             LOG.warn("{} phase=[STAGING_FAILED_CLEANUP], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], hostId=[{}], "
                             + "hostName=[{}], backupPath=[{}], jobLog=[{}]",
                     BACKUP_TRACE, backup.getId(), backup.getUuid(), vm.getId(), vm.getInstanceName(), stageHost.getId(), stageHost.getName(),
                     backupPath, jobLogPath);
             return true;
-        } else if ("INTERRUPTED".equals(jobState)) {
-            LOG.warn("{} phase=[STAGING_INTERRUPTED], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], hostId=[{}], "
-                            + "hostName=[{}], backupPath=[{}], jobLog=[{}]",
-                    BACKUP_TRACE, backup.getId(), backup.getUuid(), vm.getId(), vm.getInstanceName(), stageHost.getId(), stageHost.getName(),
-                    backupPath, jobLogPath);
         } else if ("CANCELED".equals(jobState)) {
             cleanupBackupJobFiles(stageHost.getId(), backup.getUuid());
             BackupVO backupVO = backupDao.findById(backup.getId());
@@ -2474,13 +2534,74 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                 parentBackupUuid, backup.getUuid(), reason);
     }
 
+    private void retryFailedAsyncIncrementalAsFull(final VirtualMachine vm, final BackupVO failedBackup, final String reason) {
+        if (failedBackup == null || !BACKUP_TYPE_INCREMENTAL.equalsIgnoreCase(failedBackup.getType())) {
+            return;
+        }
+        try {
+            final boolean quiesce = Boolean.parseBoolean(
+                    getBackupDetail(failedBackup, AblestackBackupFrameworkUtils.BACKUP_QUIESCE_DETAIL));
+            final Pair<Boolean, Backup> result = takeBackup(vm, quiesce, false, failedBackup.getBackupScheduleId());
+            final Backup fullBackup = result.second();
+            if (fullBackup == null) {
+                LOG.error("Failed to create FULL fallback backup for VM [{}] after asynchronous INCREMENTAL failure [{}]",
+                        vm.getInstanceName(), failedBackup.getUuid());
+                return;
+            }
+            copyFallbackBackupMetadata(failedBackup, fullBackup);
+            recordIncrementalFallback(fullBackup, failedBackup, reason);
+            LOG.warn("Started FULL fallback backup [{}] for VM [{}] after asynchronous INCREMENTAL failure [{}]",
+                    fullBackup.getUuid(), vm.getInstanceName(), failedBackup.getUuid());
+        } catch (Exception e) {
+            LOG.error("Failed to start FULL fallback for VM [{}] after asynchronous INCREMENTAL failure [{}]: {}",
+                    vm.getInstanceName(), failedBackup.getUuid(), e.getMessage(), e);
+        }
+    }
+
+    private boolean cleanupFailedStagingBackup(final String stageHostName, final String backupPath,
+            final String vmName, final Backup backup) {
+        try {
+            cleanupBackupPathOnStageHost(stageHostName, backupPath, false, vmName,
+                    getBackupDetail(backup, DETAIL_CHECKPOINT_NAME),
+                    getUnreferencedQcow2CheckpointNamesAfterDelete(backup),
+                    getBackupDetail(backup, DETAIL_RBD_DISK_PATHS));
+            return true;
+        } catch (Exception e) {
+            LOG.warn("Failed to clean up Commvault backup staging path [{}]: {}", backupPath, e.getMessage(), e);
+            return false;
+        }
+    }
+
+    private void copyFallbackBackupMetadata(final BackupVO failedBackup, final Backup fullBackup) {
+        final BackupVO fullBackupVO = backupDao.findById(fullBackup.getId());
+        if (fullBackupVO == null) {
+            return;
+        }
+        fullBackupVO.setBackupScheduleId(failedBackup.getBackupScheduleId());
+        fullBackupVO.setName(failedBackup.getName());
+        fullBackupVO.setDescription(failedBackup.getDescription());
+        backupDao.update(fullBackupVO.getId(), fullBackupVO);
+        if (Boolean.parseBoolean(getBackupDetail(failedBackup, AblestackBackupFrameworkUtils.RESOURCE_COUNT_PENDING_DETAIL))) {
+            updateBackupDetail(fullBackupVO, AblestackBackupFrameworkUtils.RESOURCE_COUNT_PENDING_DETAIL, Boolean.TRUE.toString());
+        }
+    }
+
     private String getHostBackupJobState(final Long hostId, final String backupJobId) {
         try {
             BackupAnswer answer = (BackupAnswer) agentManager.send(hostId, new AblestackBackupJobStatusCommand(backupJobId));
-            return answer != null && answer.getResult() ? answer.getDetails() : null;
+            return answer != null && answer.getResult() ? answer.getState() : null;
         } catch (AgentUnavailableException | OperationTimedoutException e) {
             LOG.debug("Failed to query Commvault backup job state for job [{}] on host [{}]", backupJobId, hostId, e);
             return null;
+        }
+    }
+
+    private String getHostBackupJobDetails(final Long hostId, final String backupJobId, final String defaultDetails) {
+        try {
+            final BackupAnswer answer = (BackupAnswer) agentManager.send(hostId, new AblestackBackupJobStatusCommand(backupJobId));
+            return answer != null ? StringUtils.defaultIfBlank(answer.getDetails(), defaultDetails) : defaultDetails;
+        } catch (AgentUnavailableException | OperationTimedoutException e) {
+            return defaultDetails;
         }
     }
 

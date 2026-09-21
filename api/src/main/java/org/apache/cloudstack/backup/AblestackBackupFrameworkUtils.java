@@ -31,6 +31,9 @@ import java.util.function.Function;
 public final class AblestackBackupFrameworkUtils {
     public static final long DEFAULT_STALE_BACKING_UP_THRESHOLD_MS = TimeUnit.DAYS.toMillis(1);
     public static final String RESOURCE_COUNT_PENDING_DETAIL = "backup.resource.count.pending";
+    public static final String INCREMENTAL_FALLBACK_REASON_DETAIL = "ablestack.incremental.fallback.reason";
+    public static final String INCREMENTAL_FALLBACK_BACKUP_UUID_DETAIL = "ablestack.incremental.fallback.backup.uuid";
+    public static final String BACKUP_QUIESCE_DETAIL = "ablestack.backup.quiesce";
     public static final String BACKUP_IN_PROGRESS_MARKER = ".backup.inprogress";
     public static final String BACKUP_COMPLETE_MARKER = ".backup.complete";
     public static final String STAGING_IN_PROGRESS_MARKER = ".staging.inprogress";

@@ -119,6 +119,8 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     private static final String BACKUP_TYPE_INCREMENTAL = "INCREMENTAL";
     private static final String BACKUP_ENGINE_QCOW2 = "QCOW2";
     private static final String BACKUP_ENGINE_RBD_DIFF = "RBD_DIFF";
+    private static final String DETAIL_CHAIN_SEALED = "veeam.chain.sealed";
+    private static final String DETAIL_CHAIN_SEAL_REASON = "veeam.chain.seal.reason";
     private static final String BACKUP_TRACE = "[ABLESTACK_VEEAM_BACKUP_TRACE]";
     private static final String RESTORE_TRACE = "[ABLESTACK_VEEAM_RESTORE_TRACE]";
     private static final long STAGE_SPACE_BUFFER_BYTES = 10L * 1024L * 1024L * 1024L;
@@ -140,8 +142,6 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     private static final String DETAIL_RESTORE_CHAIN_JOB_ID = "ablestack.veeam.restore.chain.job.id";
     private static final String DETAIL_FAILURE_PHASE = "ablestack.veeam.failure.phase";
     private static final String DETAIL_FAILURE_REASON = "ablestack.veeam.failure.reason";
-    private static final String MISSING_PARENT_RBD_SNAPSHOT_ERROR = "Parent RBD snapshot";
-    private static final String MISSING_PARENT_QCOW2_BITMAP_ERROR = "Parent qcow2 bitmap";
     private static final long STALE_BACKUP_THRESHOLD_MS = 24L * 60L * 60L * 1000L;
     private static final long VEEAM_SYNC_DELETE_GRACE_MS = 10L * 60L * 1000L;
     private static final long VEEAM_UNSTAMPED_DELETE_GRACE_MS = 24L * 60L * 60L * 1000L;
@@ -279,15 +279,17 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         BackupExecutionResult result = executeBackup(vm, quiesceVM, host, vmVolumes, volumePoolsAndPaths, latestBackup,
                 incrementalBackup, resolvedJobName);
         Backup failedIncrementalBackup = null;
-        if (!result.success && incrementalBackup && canRetryFailedIncrementalAsFull(result) && shouldRetryAsFullAfterIncrementalFailure(result, vmVolumes)) {
+        if (!result.success && incrementalBackup) {
             failedIncrementalBackup = result.backup;
-            cleanupFailedBackupForFullRetry(host, failedIncrementalBackup);
+            final String fallbackReason = result.details;
+            final boolean cleanupSuccessful = cleanupFailedBackupForFullRetry(host, failedIncrementalBackup);
             LOG.warn("{} phase=[INCREMENTAL_FALLBACK_TO_FULL], vmId=[{}], vmName=[{}], failedBackupUuid=[{}], reason=[{}]",
                     BACKUP_TRACE, vm.getId(), vm.getInstanceName(),
-                    failedIncrementalBackup != null ? failedIncrementalBackup.getUuid() : null, result.details);
+                    failedIncrementalBackup != null ? failedIncrementalBackup.getUuid() : null, fallbackReason);
             result = executeBackup(vm, quiesceVM, host, vmVolumes, volumePoolsAndPaths, null, false,
                     resolvedJobName);
-            if (result.success && failedIncrementalBackup != null) {
+            recordIncrementalFallback(result.backup, failedIncrementalBackup, fallbackReason);
+            if (cleanupSuccessful && failedIncrementalBackup != null) {
                 removeFailedBackupAfterSuccessfulFullRetry(failedIncrementalBackup);
             }
         }
@@ -313,6 +315,8 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         final List<String> backupFiles = buildBackupFileNames(vmVolumes, backupEngine, incrementalBackup);
         final Map<String, String> backupDetails = getBackupDetails(vm, backupPath, checkpointName, backupEngine, latestBackup,
                 incrementalBackup, policyName);
+        backupDetails.put(AblestackBackupFrameworkUtils.BACKUP_QUIESCE_DETAIL,
+                String.valueOf(Boolean.TRUE.equals(quiesceVM)));
         if (vmHost != null && StringUtils.isNotBlank(vmHost.getName())) {
             backupDetails.put(DETAIL_SOURCE_HOST, vmHost.getName());
         }
@@ -393,6 +397,12 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         }
         loadBackupDetailsIfNeeded(latestBackup);
 
+        if (Boolean.parseBoolean(getBackupDetail(latestBackup, DETAIL_CHAIN_SEALED))) {
+            LOG.info("Veeam backup for VM [{}] will be FULL: backup chain [{}] is sealed ({})",
+                    vm.getInstanceName(), latestBackup.getUuid(), getBackupDetail(latestBackup, DETAIL_CHAIN_SEAL_REASON));
+            return false;
+        }
+
         if (backupScheduleId != null && !hasBackedUpBackupForSchedule(backupScheduleId)) {
             LOG.info("Veeam backup for VM [{}] will be FULL: first backup for schedule [{}]", vm.getInstanceName(), backupScheduleId);
             return false;
@@ -434,6 +444,10 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             return false;
         }
         loadBackupDetailsIfNeeded(latestBackup);
+
+        if (Boolean.parseBoolean(getBackupDetail(latestBackup, DETAIL_CHAIN_SEALED))) {
+            return false;
+        }
 
         final Long clusterId = getClusterIdFromRootVolume(vm);
         if (clusterId == null) {
@@ -485,37 +499,19 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                 .anyMatch(backup -> Backup.Status.BackedUp.equals(backup.getStatus()));
     }
 
-    private boolean shouldRetryAsFullAfterIncrementalFailure(final BackupExecutionResult result, final List<VolumeVO> vmVolumes) {
-        if (result == null || result.success) {
-            return false;
-        }
-        if (StringUtils.contains(result.details, MISSING_PARENT_RBD_SNAPSHOT_ERROR)) {
-            return true;
-        }
-        if (StringUtils.contains(result.details, MISSING_PARENT_QCOW2_BITMAP_ERROR)) {
-            return true;
-        }
-        // qcow2 INCREMENTAL refused STOPPED/dummy path — fall back to FULL (dummy or running).
-        if (StringUtils.contains(result.details, "INCREMENTAL requires VM")
-                && StringUtils.contains(result.details, "to be Running")) {
-            return true;
-        }
-        return vmVolumes.size() > 1;
-    }
-
-    private boolean canRetryFailedIncrementalAsFull(final BackupExecutionResult result) {
-        return result != null && (result.backup == null || !Backup.Status.Error.equals(result.backup.getStatus()));
-    }
-
-    private void cleanupFailedBackupForFullRetry(final Host host, final Backup backup) {
+    private boolean cleanupFailedBackupForFullRetry(final Host host, final Backup backup) {
         if (backup == null) {
-            return;
+            return true;
         }
-
-        cleanupFailedBackupArtifacts(host, backup);
-
-        LOG.info("Removed failed Veeam backup path [{}] before full retry for backup [{}].",
-                backup.getExternalId(), backup.getUuid());
+        final boolean cleanupSuccessful = !Backup.Status.Error.equals(backup.getStatus());
+        if (cleanupSuccessful) {
+            LOG.info("Cleaned failed Veeam backup path [{}] before full retry for backup [{}].",
+                    backup.getExternalId(), backup.getUuid());
+        } else if (backup instanceof BackupVO) {
+            ((BackupVO) backup).setStatus(Backup.Status.Error);
+            backupDao.update(backup.getId(), (BackupVO) backup);
+        }
+        return cleanupSuccessful;
     }
 
     private boolean cleanupFailedBackupArtifacts(final Host host, final Backup backup) {
@@ -566,6 +562,18 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         } catch (Exception e) {
             LOG.warn("Failed to remove failed Veeam backup row [{}] after successful full retry: {}",
                     backup.getUuid(), e.getMessage(), e);
+        }
+    }
+
+    private void recordIncrementalFallback(final Backup fullBackup, final Backup failedIncrementalBackup, final String reason) {
+        if (fullBackup == null) {
+            return;
+        }
+        updateBackupDetail(fullBackup, AblestackBackupFrameworkUtils.INCREMENTAL_FALLBACK_REASON_DETAIL,
+                StringUtils.defaultString(reason, "Incremental backup failed"));
+        if (failedIncrementalBackup != null) {
+            updateBackupDetail(fullBackup, AblestackBackupFrameworkUtils.INCREMENTAL_FALLBACK_BACKUP_UUID_DETAIL,
+                    failedIncrementalBackup.getUuid());
         }
     }
 
@@ -1691,6 +1699,41 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     }
 
     @Override
+    public void onVmRestoreCompleted(final VirtualMachine vm, final Backup backup) {
+        sealActiveBackupChainsAfterRestore(vm);
+    }
+
+    private void sealActiveBackupChainsAfterRestore(final VirtualMachine vm) {
+        if (vm == null || vm.getBackupOfferingId() == null) {
+            return;
+        }
+        final Map<Long, Backup> latestBackupsBySchedule = new HashMap<>();
+        for (final Backup candidate : backupDao.listByVmId(vm.getDataCenterId(), vm.getId())) {
+            if (!Backup.Status.BackedUp.equals(candidate.getStatus())
+                    || !Objects.equals(candidate.getBackupOfferingId(), vm.getBackupOfferingId())
+                    || !isVeeamBackup(candidate)) {
+                continue;
+            }
+            final Long scheduleId = candidate.getBackupScheduleId();
+            final Backup current = latestBackupsBySchedule.get(scheduleId);
+            if (current == null || candidate.getDate().after(current.getDate())) {
+                latestBackupsBySchedule.put(scheduleId, candidate);
+            }
+        }
+        final String reason = "vm-restore-completed";
+        for (final Backup latestBackup : latestBackupsBySchedule.values()) {
+            loadBackupDetailsIfNeeded(latestBackup);
+            if (Boolean.parseBoolean(getBackupDetail(latestBackup, DETAIL_CHAIN_SEALED))) {
+                continue;
+            }
+            updateBackupDetail(latestBackup, DETAIL_CHAIN_SEALED, Boolean.TRUE.toString());
+            updateBackupDetail(latestBackup, DETAIL_CHAIN_SEAL_REASON, reason);
+            LOG.info("Sealed Veeam backup chain [{}] for VM [{}] after successful VM restore.",
+                    latestBackup.getUuid(), vm.getInstanceName());
+        }
+    }
+
+    @Override
     public boolean supportsMemoryVmSnapshot() {
         return false;
     }
@@ -2131,6 +2174,14 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         removeMoldBackupsForDeletedVeeamJobs(vm);
     }
 
+    @Override
+    public boolean reconcileBackingUpBackup(final VirtualMachine vm, final Backup backup) {
+        if (!isVeeamBackup(backup) || !Backup.Status.BackingUp.equals(backup.getStatus())) {
+            return false;
+        }
+        return completeStartedBackupIfHostJobFinished(vm, backup);
+    }
+
     private void completeStartedBackups(final VirtualMachine vm) {
         for (final Backup backup : backupDao.listByVmId(vm.getDataCenterId(), vm.getId())) {
             if (!Backup.Status.BackingUp.equals(backup.getStatus()) || !isVeeamBackup(backup)) {
@@ -2157,12 +2208,27 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                 BACKUP_TRACE, backup.getId(), backup.getUuid(), vm.getId(), vm.getInstanceName(), host.getId(), host.getName(),
                 backup.getExternalId(), jobState, jobLogPath);
         if ("FAILED".equals(jobState) || "INTERRUPTED".equals(jobState)) {
+            final String defaultFailureReason = "Host Veeam staging job " + jobState.toLowerCase(Locale.ROOT);
+            final String failureReason = getHostBackupJobDetails(host.getId(), backup.getUuid(), defaultFailureReason);
             final BackupVO backupVO = backupDao.findById(backup.getId());
             if (backupVO != null) {
-                markBackupFailure(backupVO, "host-job", "Host Veeam staging job " + jobState.toLowerCase(Locale.ROOT));
-                backupVO.setStatus(Backup.Status.Failed);
-                backupDao.update(backupVO.getId(), backupVO);
+                backupDao.loadDetails(backupVO);
+                markBackupFailure(backupVO, "host-job", failureReason);
+                if (BACKUP_TYPE_INCREMENTAL.equalsIgnoreCase(backupVO.getType())) {
+                    sealParentBackupChainIfIncremental(backupVO, "failed-async-child");
+                    if (cleanupFailedBackupArtifacts(host, backupVO)) {
+                        removeBackupWithDetails(backupVO.getId());
+                    } else {
+                        backupVO.setStatus(Backup.Status.Error);
+                        backupDao.update(backupVO.getId(), backupVO);
+                    }
+                    retryFailedAsyncIncrementalAsFull(vm, backupVO, failureReason);
+                } else {
+                    backupVO.setStatus(cleanupFailedBackupArtifacts(host, backupVO) ? Backup.Status.Failed : Backup.Status.Error);
+                    backupDao.update(backupVO.getId(), backupVO);
+                }
             }
+            cleanupBackupJobFiles(host.getId(), backup.getUuid());
             return true;
         }
         if ("CANCELED".equals(jobState)) {
@@ -2220,6 +2286,17 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         return "UNKNOWN";
     }
 
+    private String getHostBackupJobDetails(final Long hostId, final String backupJobId, final String defaultDetails) {
+        try {
+            final Answer answer = agentManager.send(hostId, new AblestackBackupJobStatusCommand(backupJobId));
+            return answer instanceof BackupAnswer
+                    ? StringUtils.defaultIfBlank(answer.getDetails(), defaultDetails)
+                    : defaultDetails;
+        } catch (AgentUnavailableException | OperationTimedoutException e) {
+            return defaultDetails;
+        }
+    }
+
     private Host findBackupJobHost(final Backup backup, final VirtualMachine vm) {
         final Long backupJobHostId = getBackupJobHostId(backup);
         if (backupJobHostId != null) {
@@ -2240,6 +2317,59 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             return null;
         }
         return backup.getHostId();
+    }
+
+    private void sealParentBackupChainIfIncremental(final Backup backup, final String reason) {
+        if (backup == null || !BACKUP_TYPE_INCREMENTAL.equalsIgnoreCase(backup.getType())) {
+            return;
+        }
+        loadBackupDetailsIfNeeded(backup);
+        final String parentBackupUuid = getBackupDetail(backup, DETAIL_PARENT_BACKUP_UUID);
+        final Backup parentBackup = StringUtils.isBlank(parentBackupUuid) ? null : backupDao.findByUuid(parentBackupUuid);
+        if (parentBackup == null) {
+            return;
+        }
+        updateBackupDetail(parentBackup, DETAIL_CHAIN_SEALED, Boolean.TRUE.toString());
+        updateBackupDetail(parentBackup, DETAIL_CHAIN_SEAL_REASON, reason);
+    }
+
+    private void retryFailedAsyncIncrementalAsFull(final VirtualMachine vm, final BackupVO failedBackup, final String reason) {
+        if (failedBackup == null || !BACKUP_TYPE_INCREMENTAL.equalsIgnoreCase(failedBackup.getType())) {
+            return;
+        }
+        try {
+            final boolean quiesce = Boolean.parseBoolean(
+                    getBackupDetail(failedBackup, AblestackBackupFrameworkUtils.BACKUP_QUIESCE_DETAIL));
+            final String jobName = getBackupDetail(failedBackup, DETAIL_VEEAM_JOB_NAME);
+            final Pair<Boolean, Backup> result = takeBackup(vm, quiesce, failedBackup.getBackupScheduleId(), jobName);
+            final Backup fullBackup = result.second();
+            if (fullBackup == null) {
+                LOG.error("Failed to create FULL fallback backup for VM [{}] after asynchronous INCREMENTAL failure [{}]",
+                        vm.getInstanceName(), failedBackup.getUuid());
+                return;
+            }
+            copyFallbackBackupMetadata(failedBackup, fullBackup);
+            recordIncrementalFallback(fullBackup, failedBackup, reason);
+            LOG.warn("Started FULL fallback backup [{}] for VM [{}] after asynchronous INCREMENTAL failure [{}]",
+                    fullBackup.getUuid(), vm.getInstanceName(), failedBackup.getUuid());
+        } catch (Exception e) {
+            LOG.error("Failed to start FULL fallback for VM [{}] after asynchronous INCREMENTAL failure [{}]: {}",
+                    vm.getInstanceName(), failedBackup.getUuid(), e.getMessage(), e);
+        }
+    }
+
+    private void copyFallbackBackupMetadata(final BackupVO failedBackup, final Backup fullBackup) {
+        final BackupVO fullBackupVO = backupDao.findById(fullBackup.getId());
+        if (fullBackupVO == null) {
+            return;
+        }
+        fullBackupVO.setBackupScheduleId(failedBackup.getBackupScheduleId());
+        fullBackupVO.setName(failedBackup.getName());
+        fullBackupVO.setDescription(failedBackup.getDescription());
+        backupDao.update(fullBackupVO.getId(), fullBackupVO);
+        if (Boolean.parseBoolean(getBackupDetail(failedBackup, AblestackBackupFrameworkUtils.RESOURCE_COUNT_PENDING_DETAIL))) {
+            updateBackupDetail(fullBackupVO, AblestackBackupFrameworkUtils.RESOURCE_COUNT_PENDING_DETAIL, Boolean.TRUE.toString());
+        }
     }
 
     private void cleanupBackupJobFiles(final Long hostId, final String backupJobId) {

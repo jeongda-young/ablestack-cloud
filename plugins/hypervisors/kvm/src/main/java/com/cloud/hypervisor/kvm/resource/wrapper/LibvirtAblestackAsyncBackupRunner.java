@@ -189,7 +189,13 @@ final class LibvirtAblestackAsyncBackupRunner {
             final Logger logger) {
         final String state = getJobState(jobId, logger);
         final Properties properties = ensureCommonJobMetadata(jobId, refreshLiveProgress(jobId, readJob(jobId, logger), state, logger), logger);
-        final String details = properties != null ? properties.getProperty("details", state) : state;
+        String details = properties != null ? properties.getProperty("details", state) : state;
+        if (STATE_FAILED.equals(state) && details.startsWith("Detached backup job exited with code ")) {
+            final Integer exitCode = readExitCode(jobId, logger);
+            if (exitCode != null) {
+                details = resolveDetachedExitDetails(jobId, state, String.valueOf(exitCode), logger);
+            }
+        }
         final BackupAnswer answer = new BackupAnswer(command, true, details);
         answer.setState(state);
         answer.setStep(properties != null ? properties.getProperty("step", state) : state);
@@ -391,9 +397,10 @@ final class LibvirtAblestackAsyncBackupRunner {
             try {
                 final String exitCode = Files.readString(exitCodePath).trim();
                 final String resolvedState = isCancelRequested(properties) ? STATE_CANCELED : "0".equals(exitCode) ? STATE_COMPLETED : STATE_FAILED;
+                final String exitDetails = resolveDetachedExitDetails(jobId, resolvedState, exitCode, logger);
                 writeJobState(logger, jobId, properties.getProperty("provider"), properties.getProperty("vmName"),
                         properties.getProperty("backupPath"), properties.getProperty("backupType"), resolvedState,
-                        "Detached backup job exited with code " + exitCode);
+                        exitDetails);
                 logger.info("{} phase=[DETACHED_EXIT_CODE_RESOLVED], jobId=[{}], exitCode=[{}], state=[{}]",
                         getTracePrefix(properties), jobId, exitCode, resolvedState);
                 return resolvedState;
@@ -412,6 +419,27 @@ final class LibvirtAblestackAsyncBackupRunner {
             return STATE_RUNNING;
         }
         return STATE_INTERRUPTED;
+    }
+
+    private static String resolveDetachedExitDetails(final String jobId, final String state, final String exitCode, final Logger logger) {
+        final String defaultDetails = "Detached backup job exited with code " + exitCode;
+        if (!STATE_FAILED.equals(state)) {
+            return defaultDetails;
+        }
+        final Path logPath = getJobDirectory(jobId).resolve(LOG_FILE);
+        if (!Files.isRegularFile(logPath)) {
+            return defaultDetails;
+        }
+        try (Stream<String> lines = Files.lines(logPath, StandardCharsets.UTF_8)) {
+            return lines.map(String::trim)
+                    .filter(line -> !line.isBlank())
+                    .filter(line -> !line.startsWith(AblestackBackupFrameworkUtils.TRACE_MARKER))
+                    .reduce((previous, current) -> current)
+                    .orElse(defaultDetails);
+        } catch (IOException e) {
+            logger.debug("Failed to extract backup failure details from [{}]", logPath, e);
+            return defaultDetails;
+        }
     }
 
     private static boolean isCancelRequested(final String jobId, final Logger logger) {

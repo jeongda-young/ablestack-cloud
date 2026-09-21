@@ -2379,6 +2379,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                         imported ? RestorePhase.COMPLETED : RestorePhase.FAILED);
             }
             if (imported) {
+                backupProvider.onVmRestoreCompleted(vm, backup);
                 persistRestoreOperationPhase(backup.getId(), "COMPLETED", "COMPLETED", 100);
                 cleanupTrackedRestoreJobFilesAndDetails(backup, vm, backupProvider.getName());
             } else {
@@ -2528,6 +2529,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 final boolean imported = importRestoredVM(vm.getDataCenterId(), vm.getDomainId(), vm.getAccountId(), vm.getUserId(),
                         vm.getInstanceName(), vm.getHypervisorType(), backup, offering);
                 if (imported) {
+                    getBackupProvider(offering.getProvider()).onVmRestoreCompleted(vm, backup);
                     netBackupRestoreCoordinator.persistRestoreState(backup, vm, resolution.getRequestIdentifier(), RestorePhase.COMPLETED);
                     netBackupRestoreCoordinator.completeSession(vm.getId(), resolution.getRequestIdentifier());
                 } else {
@@ -2563,6 +2565,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 final boolean imported = importRestoredVM(vm.getDataCenterId(), vm.getDomainId(), vm.getAccountId(), vm.getUserId(),
                         vm.getInstanceName(), vm.getHypervisorType(), backup, offering);
                 if (imported) {
+                    getBackupProvider(offering.getProvider()).onVmRestoreCompleted(vm, backup);
                     netBackupRestoreCoordinator.persistRestoreState(backup, vm, resolution.getRequestIdentifier(), RestorePhase.COMPLETED);
                     netBackupRestoreCoordinator.completeSession(vm.getId(), resolution.getRequestIdentifier());
                 } else {
@@ -4419,6 +4422,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                     throw new CloudRuntimeException(String.format(
                             "Failed to import Instance [%s] after host-side restore completed", vm.getInstanceName()));
                 }
+                backupProvider.onVmRestoreCompleted(vm, backup);
             } else if (AblestackBackupFrameworkUtils.RESTORE_OPERATION_CREATE_INSTANCE.equals(operationType)) {
                 if (Boolean.parseBoolean(backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_START_VM_DETAIL))
                         && !VirtualMachine.State.Running.equals(vm.getState())) {
