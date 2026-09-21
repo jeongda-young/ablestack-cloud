@@ -210,9 +210,6 @@ mold_backup_load_config() {
   BACKUP_OPERATION="${BACKUP_OPERATION:-seed-import}"
   CLEANUP_STAGING_AFTER_BACKUP="${CLEANUP_STAGING_AFTER_BACKUP:-false}"
   CLEANUP_STAGING_ON_ERROR="${CLEANUP_STAGING_ON_ERROR:-false}"
-  CLEANUP_DURABLE_STAGE_FORCE="${CLEANUP_DURABLE_STAGE_FORCE:-false}"
-  RESTORE_AUTO_START="${RESTORE_AUTO_START:-true}"
-  RESTORE_AUTO_START_WAIT_SECONDS="${RESTORE_AUTO_START_WAIT_SECONDS:-600}"
   BACKUP_OFFERING_NAME="${BACKUP_OFFERING_NAME:-VeeamBackup}"
   BACKUP_REPO_TYPE="${BACKUP_REPO_TYPE:-local}"
   BACKUP_REPO_NAME="${BACKUP_REPO_NAME:-Ablestack Data Disk}"
@@ -1584,7 +1581,7 @@ mold_backup_api_ensure_global_settings() {
   # Align Mold FULL↔incremental switch with host hook VEEAM_MAX_CHAIN when set.
   chain_size="${BACKUP_CHAIN_SIZE:-${VEEAM_MAX_CHAIN:-}}"
   if [[ -n "$chain_size" && "$chain_size" =~ ^[0-9]+$ && "$chain_size" -gt 0 ]]; then
-    mold_backup_api_update_config_if_needed "kvm.backup.chain.size" "$chain_size"
+    mold_backup_api_update_config_if_needed "backup.chain.size" "$chain_size"
   fi
   mold_backup_api_ensure_cluster_incremental_backup
 }
@@ -2390,13 +2387,6 @@ mold_backup_api_get_vm_state() {
   mold_backup_api_json_field "$json" "listvirtualmachinesresponse.virtualmachine.state"
 }
 
-mold_backup_api_get_vm_state_by_id() {
-  local vm_id="$1" json
-  [[ -n "$vm_id" ]] || return 1
-  json=$(mold_backup_cmk_run listVirtualMachines "id=${vm_id}" 2>/dev/null) || return 1
-  mold_backup_api_json_field "$json" "listvirtualmachinesresponse.virtualmachine.state"
-}
-
 mold_backup_api_ensure_vm_stopped_for_restore() {
   local vm_name="${1:-${VM_NAME:-}}"
   local auto_stop="${RESTORE_AUTO_STOP:-true}"
@@ -2444,57 +2434,6 @@ mold_backup_api_ensure_vm_stopped_for_restore() {
     elapsed=$((elapsed + 5))
   done
   mold_backup_notify_log err "ensure-stopped: timeout waiting for ${vm_name} Stopped (last=${state:-unknown})"
-  return 1
-}
-
-mold_backup_api_start_vm_after_restore() {
-  local vm_name="${1:-${VM_NAME:-}}"
-  local auto_start="${RESTORE_AUTO_START:-true}"
-  local vm_id state json job_id elapsed max_wait="${RESTORE_AUTO_START_WAIT_SECONDS:-600}"
-  [[ "$auto_start" == "true" ]] || {
-    mold_backup_notify_log info "restore auto-start disabled (RESTORE_AUTO_START=${auto_start})"
-    return 0
-  }
-  if [[ "${MOLD_RESTORE_ASYNC_SUBMITTED:-false}" == "true" ]]; then
-    mold_backup_notify_log warn "restore async job was detached; skip VM auto-start because restore completion is not known"
-    return 0
-  fi
-  vm_id="${VM_UUID:-}"
-  if [[ -n "$vm_name" ]]; then
-    vm_id="$(mold_backup_api_get_vm_id "$vm_name" 2>/dev/null || echo "$vm_id")"
-  fi
-  [[ -n "$vm_id" ]] || {
-    mold_backup_notify_log warn "restore auto-start: cannot resolve VM id for ${vm_name:-unknown}"
-    return 1
-  }
-  state="$(mold_backup_api_get_vm_state_by_id "$vm_id" 2>/dev/null || true)"
-  if [[ "$state" == "Running" ]]; then
-    mold_backup_notify_log info "restore auto-start: VM ${vm_name:-${vm_id}} is already Running"
-    return 0
-  fi
-  if [[ -n "$state" && "$state" != "Stopped" ]]; then
-    mold_backup_notify_log warn "restore auto-start: VM ${vm_name:-${vm_id}} state is ${state}; trying startVirtualMachine anyway"
-  fi
-  mold_backup_notify_log info "restore auto-start: starting VM ${vm_name:-${vm_id}}"
-  json=$(mold_backup_cmk_run startVirtualMachine "id=${vm_id}" 2>/dev/null) || {
-    mold_backup_notify_log err "restore auto-start: startVirtualMachine failed for ${vm_name:-${vm_id}}"
-    return 1
-  }
-  job_id="$(mold_backup_api_json_field "$json" "startvirtualmachineresponse.jobid")"
-  if [[ -n "$job_id" ]]; then
-    mold_backup_api_wait_async_job "$job_id" "$max_wait" >/dev/null || return 1
-  fi
-  elapsed=0
-  while [[ "$elapsed" -lt "$max_wait" ]]; do
-    state="$(mold_backup_api_get_vm_state_by_id "$vm_id" 2>/dev/null || true)"
-    if [[ "$state" == "Running" ]]; then
-      mold_backup_notify_log info "restore auto-start: VM ${vm_name:-${vm_id}} is Running"
-      return 0
-    fi
-    sleep 5
-    elapsed=$((elapsed + 5))
-  done
-  mold_backup_notify_log err "restore auto-start: timeout waiting for ${vm_name:-${vm_id}} Running (last=${state:-unknown})"
   return 1
 }
 
@@ -3494,13 +3433,6 @@ mold_backup_publish_for_veeam_agent() {
 
 mold_backup_cleanup_host_path() {
   [[ -d "${VEEAM_HOST_BACKUP_PATH}" ]] || return 0
-  # Datadisk mode uses VEEAM_HOST_BACKUP_PATH as durable Mold restore/export state.
-  # Do not prune qcow2/raw/rbdiff stage data from a backup-complete path unless an
-  # operator explicitly opts into the stronger destructive guard.
-  if mold_backup_is_datadisk_mode && [[ "${CLEANUP_DURABLE_STAGE_FORCE:-false}" != "true" ]]; then
-    mold_backup_notify_log info "Skip host-path wipe (datadisk durable stage; set CLEANUP_DURABLE_STAGE_FORCE=true to prune)"
-    return 0
-  fi
   # File-level Veeam Agent jobs track /tmp/mold/veeam via SyncDirs CBT.
   # Wiping the whole tree (or racing deletes) causes:
   #   "Failed to delete directory [...]; Failed to backup files /tmp/mold/veeam"
@@ -6790,10 +6722,6 @@ mold_backup_restore_notify() {
       mold_backup_veeam_restore_chain_to_host "$BACKUP_ID"
     fi
     mold_backup_api_restore || return 1
-  fi
-
-  if [[ -n "${VM_NAME:-}${VM_UUID:-}" ]]; then
-    mold_backup_api_start_vm_after_restore "${VM_NAME:-}" || return 1
   fi
 
   # Mold → Veeam Guest Files (FLR): when Mold restored (not reflecting an existing FLR).
