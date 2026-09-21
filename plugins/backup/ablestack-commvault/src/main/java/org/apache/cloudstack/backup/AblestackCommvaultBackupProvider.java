@@ -110,7 +110,7 @@ import java.util.regex.Pattern;
 import java.util.concurrent.TimeUnit;
 import javax.inject.Inject;
 
-import static org.apache.cloudstack.backup.BackupManager.BackupChainSize;
+import static org.apache.cloudstack.backup.BackupManager.KvmBackupChainSize;
 import static org.apache.cloudstack.backup.BackupManager.BackupDataOperationTimeout;
 import static org.apache.cloudstack.backup.BackupManager.BackupQosBandwidthLimitMbps;
 import static org.apache.cloudstack.backup.BackupManager.KvmIncrementalBackup;
@@ -413,7 +413,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
             sealBackupChain(latestBackup, "stage-host-mismatch");
             return false;
         }
-        if (getBackupChainSize(vm, latestBackup) >= BackupChainSize.value()) {
+        if (getBackupChainSize(vm, latestBackup) >= KvmBackupChainSize.value()) {
             sealBackupChain(latestBackup, "chain-size-limit");
             return false;
         }

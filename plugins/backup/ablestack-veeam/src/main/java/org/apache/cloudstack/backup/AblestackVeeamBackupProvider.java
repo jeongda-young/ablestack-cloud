@@ -104,7 +104,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-import static org.apache.cloudstack.backup.BackupManager.BackupChainSize;
+import static org.apache.cloudstack.backup.BackupManager.KvmBackupChainSize;
 import static org.apache.cloudstack.backup.BackupManager.BackupDataOperationTimeout;
 import static org.apache.cloudstack.backup.BackupManager.BackupFrameworkEnabled;
 import static org.apache.cloudstack.backup.BackupManager.KvmIncrementalBackup;
@@ -419,9 +419,9 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             return false;
         }
 
-        if (getBackupChainSize(vm, latestBackup) >= BackupChainSize.value()) {
+        if (getBackupChainSize(vm, latestBackup) >= KvmBackupChainSize.value()) {
             LOG.info("Veeam backup for VM [{}] will be FULL: incremental chain size reached limit [{}]",
-                    vm.getInstanceName(), BackupChainSize.value());
+                    vm.getInstanceName(), KvmBackupChainSize.value());
             return false;
         }
         LOG.info("Veeam backup for VM [{}] will be INCREMENTAL from parent [{}] engine={}",
@@ -447,7 +447,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             return false;
         }
 
-        if (getBackupChainSize(vm, latestBackup) >= BackupChainSize.value()) {
+        if (getBackupChainSize(vm, latestBackup) >= KvmBackupChainSize.value()) {
             return false;
         }
         return true;

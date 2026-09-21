@@ -299,12 +299,12 @@ def ensure_backup_framework_configuration(zone_id: str, cluster_id: str, args: a
 
     if args.backup_chain_size is not None:
         desired_chain_size = str(args.backup_chain_size)
-        log_info("Checking global configuration: backup.chain.size")
-        current = get_configuration_value("backup.chain.size", args.mold_url, args.admin_apikey, args.admin_secretkey)
+        log_info("Checking global configuration: kvm.backup.chain.size")
+        current = get_configuration_value("kvm.backup.chain.size", args.mold_url, args.admin_apikey, args.admin_secretkey)
         if current != desired_chain_size:
-            log_info(f"Updating global configuration: backup.chain.size={desired_chain_size}")
-            update_configuration_value("backup.chain.size", desired_chain_size, args.mold_url, args.admin_apikey, args.admin_secretkey)
-            print(f"Updated global configuration: backup.chain.size={desired_chain_size}")
+            log_info(f"Updating global configuration: kvm.backup.chain.size={desired_chain_size}")
+            update_configuration_value("kvm.backup.chain.size", desired_chain_size, args.mold_url, args.admin_apikey, args.admin_secretkey)
+            print(f"Updated global configuration: kvm.backup.chain.size={desired_chain_size}")
 
     desired_stage_root = str(BACKUP_STAGING_ROOT)
     log_info(f"Checking global configuration: {NETBACKUP_STAGE_ROOT_CONFIG_NAME}")
@@ -801,7 +801,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--vm-include")
     parser.add_argument("--vm-exclude", default="")
     parser.add_argument("--backup-chain-size", type=int,
-                        help="Update global backup.chain.size.")
+                        help="Update global kvm.backup.chain.size.")
     parser.add_argument("--backup-staging-root", default=str(BACKUP_STAGING_ROOT),
                         help="Local NetBackup staging directory used by host hooks and Mold backup.plugin.netbackup.stage.root.path.")
     parser.add_argument("--mold-url", required=True)

@@ -102,7 +102,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-import static org.apache.cloudstack.backup.BackupManager.BackupChainSize;
+import static org.apache.cloudstack.backup.BackupManager.KvmBackupChainSize;
 import static org.apache.cloudstack.backup.BackupManager.BackupDataOperationTimeout;
 import static org.apache.cloudstack.backup.BackupManager.BackupQosBandwidthLimitMbps;
 import static org.apache.cloudstack.backup.BackupManager.BackupFrameworkEnabled;
@@ -395,7 +395,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
             return false;
         }
 
-        return getBackupChainSize(vm, latestBackup) < BackupChainSize.value();
+        return getBackupChainSize(vm, latestBackup) < KvmBackupChainSize.value();
     }
 
     private boolean shouldUseIncrementalBackupForNetBackup(final VirtualMachine vm, final Backup latestBackup) {
@@ -413,7 +413,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
             return false;
         }
 
-        return getBackupChainSize(vm, latestBackup) < BackupChainSize.value();
+        return getBackupChainSize(vm, latestBackup) < KvmBackupChainSize.value();
     }
 
     private boolean hasHealthyIncrementalSource(final Backup latestBackup) {

@@ -117,8 +117,8 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
             ConfigKey.Scope.Cluster,
             null);
 
-    ConfigKey<Integer> BackupChainSize = new ConfigKey<>(Integer.class,
-            "backup.chain.size",
+    ConfigKey<Integer> KvmBackupChainSize = new ConfigKey<>(Integer.class,
+            "kvm.backup.chain.size",
             "Advanced",
             "10",
             "Max incremental backup chain size before switching back to a full backup for KVM backup providers.",

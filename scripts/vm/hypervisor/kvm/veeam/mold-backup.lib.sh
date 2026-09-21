@@ -1581,7 +1581,7 @@ mold_backup_api_ensure_global_settings() {
   # Align Mold FULL↔incremental switch with host hook VEEAM_MAX_CHAIN when set.
   chain_size="${BACKUP_CHAIN_SIZE:-${VEEAM_MAX_CHAIN:-}}"
   if [[ -n "$chain_size" && "$chain_size" =~ ^[0-9]+$ && "$chain_size" -gt 0 ]]; then
-    mold_backup_api_update_config_if_needed "backup.chain.size" "$chain_size"
+    mold_backup_api_update_config_if_needed "kvm.backup.chain.size" "$chain_size"
   fi
   mold_backup_api_ensure_cluster_incremental_backup
 }

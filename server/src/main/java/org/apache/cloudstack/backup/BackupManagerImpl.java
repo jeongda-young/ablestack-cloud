@@ -3841,7 +3841,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 BackupQosBandwidthLimitMbps,
                 BackupEnableAttachDetachVolumes,
                 KvmIncrementalBackup,
-                BackupChainSize,
+                KvmBackupChainSize,
                 DefaultMaxAccountBackups,
                 DefaultMaxAccountBackupStorage,
                 DefaultMaxProjectBackups,

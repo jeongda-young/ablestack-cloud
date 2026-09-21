@@ -87,7 +87,7 @@ import java.util.Objects;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-import static org.apache.cloudstack.backup.BackupManager.BackupChainSize;
+import static org.apache.cloudstack.backup.BackupManager.KvmBackupChainSize;
 import static org.apache.cloudstack.backup.BackupManager.BackupDataOperationTimeout;
 import static org.apache.cloudstack.backup.BackupManager.BackupFrameworkEnabled;
 import static org.apache.cloudstack.backup.BackupManager.BackupQosBandwidthLimitMbps;
@@ -547,7 +547,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
                     vm.getInstanceName(), latestBackup.getUuid());
             return false;
         }
-        if (getBackupChainSize(vm, latestBackup) >= BackupChainSize.value()) {
+        if (getBackupChainSize(vm, latestBackup) >= KvmBackupChainSize.value()) {
             sealBackupChain(latestBackup, "chain-size-limit");
             LOG.info("NAS backup for VM [{}] will be FULL: incremental chain size limit reached for backup [{}].",
                     vm.getInstanceName(), latestBackup.getUuid());
