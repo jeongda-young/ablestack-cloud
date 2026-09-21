@@ -552,8 +552,11 @@ backup_rbd_volumes() {
     build_rbd_cmd
     log -ne "Built RBD command: ${RBD_CMD[*]}"
 
-    local output_file="$dest/$(get_backup_file_by_index "$index" "${RBD_IMAGE##*/}.raw")"
-    log -ne "Starting RBD backup for disk path [$disk_path], resolved image [$RBD_IMAGE], output [$output_file]"
+    # Mold restore uses rbd snap rollback. Do not export 100GiB .raw/.rbdiff to /tmp —
+    # Veeam Agent only gets a marker, and file export is wiped by catalog sync / tmp cleanup.
+    local backup_file
+    backup_file="$(get_backup_file_by_index "$index" "${RBD_IMAGE##*/}.raw")"
+    log -ne "Starting RBD snap-only backup for disk path [$disk_path], resolved image [$RBD_IMAGE], logical file [$backup_file]"
 
   if ! timeout 30s "${RBD_CMD[@]}" info "$RBD_IMAGE" >> "$logFile" 2>&1; then
     log -ne "FAILED RBD image access check image=[$RBD_IMAGE] timeout=[30s]"
@@ -578,28 +581,7 @@ backup_rbd_volumes() {
     cleanup
   fi
     record_created_rbd_snapshot "$disk_path" "$CHECKPOINT_NAME"
-
-    if [[ "$BACKUP_TYPE" == "INCREMENTAL" && -n "$PARENT_CHECKPOINT_NAME" ]]; then
-      local export_start
-      export_start=$(date +%s)
-      if ! timeout "${DATA_OPERATION_TIMEOUT_SECONDS}s" "${RBD_CMD[@]}" export-diff --from-snap "$PARENT_CHECKPOINT_NAME" "${RBD_IMAGE}@${CHECKPOINT_NAME}" "$output_file" >> "$logFile" 2>&1; then
-        log -ne "FAILED RBD export-diff image=[$RBD_IMAGE] snapshot=[$CHECKPOINT_NAME] output=[$output_file] elapsedSeconds=[$(($(date +%s) - export_start))] timeoutSeconds=[$DATA_OPERATION_TIMEOUT_SECONDS]"
-        echo "Failed to export incremental RBD diff for ${RBD_IMAGE}@${CHECKPOINT_NAME}"
-        cleanup_created_rbd_snapshots
-        cleanup
-      fi
-    else
-      local export_start
-      export_start=$(date +%s)
-      if ! timeout "${DATA_OPERATION_TIMEOUT_SECONDS}s" "${RBD_CMD[@]}" export "${RBD_IMAGE}@${CHECKPOINT_NAME}" "$output_file" >> "$logFile" 2>&1; then
-        log -ne "FAILED RBD export image=[$RBD_IMAGE] snapshot=[$CHECKPOINT_NAME] output=[$output_file] elapsedSeconds=[$(($(date +%s) - export_start))] timeoutSeconds=[$DATA_OPERATION_TIMEOUT_SECONDS]"
-        echo "Failed to export full RBD snapshot ${RBD_IMAGE}@${CHECKPOINT_NAME}"
-        cleanup_created_rbd_snapshots
-        cleanup
-      fi
-    fi
-
-    log -ne "Finished exporting backup file [$output_file] size=[$(stat -c %s "$output_file" 2>/dev/null)]"
+    log -ne "Created RBD checkpoint snapshot [${RBD_IMAGE}@${CHECKPOINT_NAME}] (snap-only; no file export)"
     index=$((index + 1))
   done < <(split_csv "$DISK_PATHS")
 

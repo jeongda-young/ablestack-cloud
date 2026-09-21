@@ -210,6 +210,9 @@ mold_backup_load_config() {
   BACKUP_OPERATION="${BACKUP_OPERATION:-seed-import}"
   CLEANUP_STAGING_AFTER_BACKUP="${CLEANUP_STAGING_AFTER_BACKUP:-false}"
   CLEANUP_STAGING_ON_ERROR="${CLEANUP_STAGING_ON_ERROR:-false}"
+  CLEANUP_DURABLE_STAGE_FORCE="${CLEANUP_DURABLE_STAGE_FORCE:-false}"
+  RESTORE_AUTO_START="${RESTORE_AUTO_START:-true}"
+  RESTORE_AUTO_START_WAIT_SECONDS="${RESTORE_AUTO_START_WAIT_SECONDS:-600}"
   BACKUP_OFFERING_NAME="${BACKUP_OFFERING_NAME:-VeeamBackup}"
   BACKUP_REPO_TYPE="${BACKUP_REPO_TYPE:-local}"
   BACKUP_REPO_NAME="${BACKUP_REPO_NAME:-Ablestack Data Disk}"
@@ -2387,6 +2390,13 @@ mold_backup_api_get_vm_state() {
   mold_backup_api_json_field "$json" "listvirtualmachinesresponse.virtualmachine.state"
 }
 
+mold_backup_api_get_vm_state_by_id() {
+  local vm_id="$1" json
+  [[ -n "$vm_id" ]] || return 1
+  json=$(mold_backup_cmk_run listVirtualMachines "id=${vm_id}" 2>/dev/null) || return 1
+  mold_backup_api_json_field "$json" "listvirtualmachinesresponse.virtualmachine.state"
+}
+
 mold_backup_api_ensure_vm_stopped_for_restore() {
   local vm_name="${1:-${VM_NAME:-}}"
   local auto_stop="${RESTORE_AUTO_STOP:-true}"
@@ -2434,6 +2444,57 @@ mold_backup_api_ensure_vm_stopped_for_restore() {
     elapsed=$((elapsed + 5))
   done
   mold_backup_notify_log err "ensure-stopped: timeout waiting for ${vm_name} Stopped (last=${state:-unknown})"
+  return 1
+}
+
+mold_backup_api_start_vm_after_restore() {
+  local vm_name="${1:-${VM_NAME:-}}"
+  local auto_start="${RESTORE_AUTO_START:-true}"
+  local vm_id state json job_id elapsed max_wait="${RESTORE_AUTO_START_WAIT_SECONDS:-600}"
+  [[ "$auto_start" == "true" ]] || {
+    mold_backup_notify_log info "restore auto-start disabled (RESTORE_AUTO_START=${auto_start})"
+    return 0
+  }
+  if [[ "${MOLD_RESTORE_ASYNC_SUBMITTED:-false}" == "true" ]]; then
+    mold_backup_notify_log warn "restore async job was detached; skip VM auto-start because restore completion is not known"
+    return 0
+  fi
+  vm_id="${VM_UUID:-}"
+  if [[ -n "$vm_name" ]]; then
+    vm_id="$(mold_backup_api_get_vm_id "$vm_name" 2>/dev/null || echo "$vm_id")"
+  fi
+  [[ -n "$vm_id" ]] || {
+    mold_backup_notify_log warn "restore auto-start: cannot resolve VM id for ${vm_name:-unknown}"
+    return 1
+  }
+  state="$(mold_backup_api_get_vm_state_by_id "$vm_id" 2>/dev/null || true)"
+  if [[ "$state" == "Running" ]]; then
+    mold_backup_notify_log info "restore auto-start: VM ${vm_name:-${vm_id}} is already Running"
+    return 0
+  fi
+  if [[ -n "$state" && "$state" != "Stopped" ]]; then
+    mold_backup_notify_log warn "restore auto-start: VM ${vm_name:-${vm_id}} state is ${state}; trying startVirtualMachine anyway"
+  fi
+  mold_backup_notify_log info "restore auto-start: starting VM ${vm_name:-${vm_id}}"
+  json=$(mold_backup_cmk_run startVirtualMachine "id=${vm_id}" 2>/dev/null) || {
+    mold_backup_notify_log err "restore auto-start: startVirtualMachine failed for ${vm_name:-${vm_id}}"
+    return 1
+  }
+  job_id="$(mold_backup_api_json_field "$json" "startvirtualmachineresponse.jobid")"
+  if [[ -n "$job_id" ]]; then
+    mold_backup_api_wait_async_job "$job_id" "$max_wait" >/dev/null || return 1
+  fi
+  elapsed=0
+  while [[ "$elapsed" -lt "$max_wait" ]]; do
+    state="$(mold_backup_api_get_vm_state_by_id "$vm_id" 2>/dev/null || true)"
+    if [[ "$state" == "Running" ]]; then
+      mold_backup_notify_log info "restore auto-start: VM ${vm_name:-${vm_id}} is Running"
+      return 0
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+  mold_backup_notify_log err "restore auto-start: timeout waiting for ${vm_name:-${vm_id}} Running (last=${state:-unknown})"
   return 1
 }
 
@@ -3106,8 +3167,8 @@ mold_backup_process_vm_pre_notify() {
   chain_count="$(mold_backup_api_veeam_backup_count "$vm_id")"
 
   # Host Agent file-level:
-  #  - RBD (any chain): Mold-native createAblestackVeeamBackup (snap + export/diff for Mold
-  #    restore). Veeam Agent gets a tiny marker only — never SyncDirs sparse .raw/.rbdiff.
+  #  - RBD (any chain): Mold-native createAblestackVeeamBackup (rbd snap + meta; Veeam marker
+  #    only). Restore uses snap rollback — never SyncDirs sparse .raw/.rbdiff.
   #  - qcow2 first (no BackedUp): host export → importSeed → FULL (BackedUp)
   #  - qcow2 next: createAblestackVeeamBackup → agent TakeBackup → INCREMENTAL
   #    Do NOT call importSeed again (always FULL) and do NOT race a second host export.
@@ -3121,7 +3182,7 @@ mold_backup_process_vm_pre_notify() {
       mold_backup_state_write_line "$state_file" "vm=${vm_name} id=${vm_id} status=fail reason=offering-repo-mismatch"
       return 1
     }
-    mold_backup_notify_log info "File-level RBD: Mold-native createAblestackVeeamBackup (snap/diff; Veeam marker only; chain=${chain_count})"
+    mold_backup_notify_log info "File-level RBD: Mold-native createAblestackVeeamBackup (snap-only; Veeam marker; chain=${chain_count})"
     backup_result="$(mold_backup_api_create_veeam_and_wait "$vm_id" "$vm_name" || true)"
     if [[ -z "$backup_result" ]]; then
       mold_backup_notify_log err "Mold RBD backup failed for ${vm_name} (agent TakeBackup / BackedUp wait)"
@@ -3134,8 +3195,8 @@ mold_backup_process_vm_pre_notify() {
     [[ -z "$host_path" ]] && host_path="${VEEAM_HOST_BACKUP_PATH}/${vm_name}"
     mold_backup_state_write_line "$state_file" \
       "vm=${vm_name} id=${vm_id} backup_id=${backup_id} type=${backup_type} path=${host_path} status=success"
-    mold_backup_publish_for_veeam_agent "$vm_name" "$host_path"
-    mold_backup_notify_log info "Pre-notify OK vm=${vm_name} backup_id=${backup_id} type=${backup_type} path=${host_path} (mold-native RBD)"
+    mold_backup_publish_for_veeam_agent "$vm_name" "$host_path" "$backup_id"
+    mold_backup_notify_log info "Pre-notify OK vm=${vm_name} backup_id=${backup_id} type=${backup_type} path=${host_path} (mold-native RBD snap-only)"
     return 0
   fi
 
@@ -3172,7 +3233,7 @@ mold_backup_process_vm_pre_notify() {
     backup_type="${backup_result#*|}"
     mold_backup_state_write_line "$state_file" \
       "vm=${vm_name} id=${vm_id} backup_id=${backup_id} type=${backup_type} path=${host_path} status=success"
-    mold_backup_publish_for_veeam_agent "$vm_name" "$host_path"
+    mold_backup_publish_for_veeam_agent "$vm_name" "$host_path" "$backup_id"
     mold_backup_notify_log info "Pre-notify OK vm=${vm_name} backup_id=${backup_id} type=${backup_type} path=${host_path} (seed import)"
     return 0
   fi
@@ -3199,7 +3260,7 @@ mold_backup_process_vm_pre_notify() {
     [[ -z "$host_path" ]] && host_path="${VEEAM_HOST_BACKUP_PATH}/${vm_name}"
     mold_backup_state_write_line "$state_file" \
       "vm=${vm_name} id=${vm_id} backup_id=${backup_id} type=${backup_type} path=${host_path} status=success"
-    mold_backup_publish_for_veeam_agent "$vm_name" "$host_path"
+    mold_backup_publish_for_veeam_agent "$vm_name" "$host_path" "$backup_id"
     mold_backup_notify_log info "Pre-notify OK vm=${vm_name} backup_id=${backup_id} type=${backup_type} path=${host_path} (agent incremental)"
     return 0
   fi
@@ -3367,11 +3428,12 @@ mold_backup_host_path_is_rbd() {
 }
 
 # Publish Mold backup artifacts for Veeam Agent SyncDirs under VEEAM_AGENT_PAYLOAD_PATH.
-# RBD: marker + tiny meta only (Mold keeps .raw/.rbdiff under VEEAM_HOST_BACKUP_PATH for restore).
+# RBD: marker + tiny meta only (Mold restore uses rbd snap rollback; no .raw/.rbdiff export).
 # QCOW2: hardlink/copy disk files into <vm>/current so Agent sees a stable tree.
+# Optional $3 = Mold backup UUID (stamped into marker + checkpoint registry for Veeam FLR→Mold).
 mold_backup_publish_for_veeam_agent() {
-  local vm_name="$1" host_path="$2"
-  local publish legacy meta_f
+  local vm_name="$1" host_path="$2" backup_id="${3:-}"
+  local publish legacy meta_f ckpt=""
   [[ "${VEEAM_BACKUP_MODE:-}" == "filelevel" ]] || return 0
   [[ -n "$vm_name" && -n "$host_path" && -d "$host_path" ]] || return 0
 
@@ -3387,20 +3449,29 @@ mold_backup_publish_for_veeam_agent() {
   fi
 
   if mold_backup_host_path_is_rbd "$host_path"; then
-    cat > "${publish}/mold-rbd-native.marker" <<EOF
-vm=${vm_name}
-mode=mold-native-rbd
-stage_path=${host_path}
-published_at=$(date -Iseconds)
-EOF
+    ckpt="$(mold_backup_meta_field "${host_path}/rbd-backup.meta" checkpoint_name 2>/dev/null || true)"
+    [[ -z "$ckpt" ]] && ckpt="$(basename "$host_path")"
+    [[ "$ckpt" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}\. ]] || ckpt=""
+    {
+      echo "vm=${vm_name}"
+      echo "mode=mold-native-rbd"
+      echo "stage_path=${host_path}"
+      [[ -n "$ckpt" ]] && echo "checkpoint_name=${ckpt}"
+      [[ -n "$backup_id" ]] && echo "backup_id=${backup_id}"
+      echo "published_at=$(date -Iseconds)"
+    } > "${publish}/mold-rbd-native.marker"
     for meta_f in rbd-backup.meta domain-config.xml domain.xml veeam-seed.meta staging.complete; do
       [[ -f "${host_path}/${meta_f}" ]] || continue
       cp -a "${host_path}/${meta_f}" "${publish}/" 2>/dev/null || true
     done
+    if [[ -n "$backup_id" && -n "$ckpt" ]]; then
+      mold_backup_registry_index_checkpoint_backup "$vm_name" "$ckpt" "$backup_id"
+      mold_backup_registry_set_vm_backup_id "$vm_name" "$backup_id" "" "${VEEAM_JOB_NAME:-}"
+    fi
     # FLR watch ignores agent-payload mtime changes shortly after our own publish.
     date +%s > "${publish}/.mold-agent-publish" 2>/dev/null || true
     chmod -R a+rX "$publish" 2>/dev/null || true
-    mold_backup_notify_log info "Published RBD native marker for Veeam Agent (no .raw/.rbdiff SyncDirs): ${host_path} -> ${publish}"
+    mold_backup_notify_log info "Published RBD native marker for Veeam Agent (no .raw/.rbdiff SyncDirs): ${host_path} -> ${publish} ckpt=${ckpt:-n/a} backup_id=${backup_id:-n/a}"
     # Do NOT Start-VBR/Active Full here — we are already inside the Veeam job
     # that invoked pre-notify. Auto-start caused a second backup after one UI Start.
     return 0
@@ -3423,6 +3494,13 @@ EOF
 
 mold_backup_cleanup_host_path() {
   [[ -d "${VEEAM_HOST_BACKUP_PATH}" ]] || return 0
+  # Datadisk mode uses VEEAM_HOST_BACKUP_PATH as durable Mold restore/export state.
+  # Do not prune qcow2/raw/rbdiff stage data from a backup-complete path unless an
+  # operator explicitly opts into the stronger destructive guard.
+  if mold_backup_is_datadisk_mode && [[ "${CLEANUP_DURABLE_STAGE_FORCE:-false}" != "true" ]]; then
+    mold_backup_notify_log info "Skip host-path wipe (datadisk durable stage; set CLEANUP_DURABLE_STAGE_FORCE=true to prune)"
+    return 0
+  fi
   # File-level Veeam Agent jobs track /tmp/mold/veeam via SyncDirs CBT.
   # Wiping the whole tree (or racing deletes) causes:
   #   "Failed to delete directory [...]; Failed to backup files /tmp/mold/veeam"
@@ -4146,8 +4224,9 @@ function Get-RpInfoFromSession {
       } catch {}
     }
   } catch {}
-  if (-not \$rpId) {
-    \$opt = [string]\$Session.Options
+  # Agent Host FLR: RestorePoint object is often null; Options FlrInfo carries OibId + OibCreationTimeUtc.
+  \$opt = [string]\$Session.Options
+  if (-not \$rpId -and \$opt) {
     foreach (\$pat in @(
       'RestorePointId="([^"]+)"',
       'ObjectRestorePointId="([^"]+)"',
@@ -4159,6 +4238,25 @@ function Get-RpInfoFromSession {
     )) {
       \$m = [regex]::Match(\$opt, \$pat)
       if (\$m.Success) { \$rpId = \$m.Groups[1].Value; break }
+    }
+  }
+  if (-not \$rpEpoch -and \$opt) {
+    foreach (\$pat in @(
+      'OibCreationTimeUtc="([^"]+)"',
+      'OibDT="([^"]+)"',
+      'CreationTimeUtc="([^"]+)"'
+    )) {
+      \$m = [regex]::Match(\$opt, \$pat)
+      if (-not \$m.Success) { continue }
+      try {
+        \$ct = [datetime]::Parse(\$m.Groups[1].Value, [System.Globalization.CultureInfo]::InvariantCulture)
+        # FlrInfo OibCreationTimeUtc is wall-clock UTC without Kind.
+        if (\$ct.Kind -eq [DateTimeKind]::Unspecified) {
+          \$ct = [DateTime]::SpecifyKind(\$ct, [DateTimeKind]::Utc)
+        }
+        \$rpEpoch = Rp-ToEpoch \$ct
+        if (\$rpEpoch) { break }
+      } catch {}
     }
   }
   if (-not \$rpId -and \$null -ne \$Session.RestorePointId) {
@@ -4214,6 +4312,18 @@ function Get-RpInfoFromSession {
           }
         }
         if (\$rpEpoch) { break }
+      }
+      if (-not \$rpEpoch) {
+        foreach (\$cand in @(Get-VBRObjectRestorePoint -ErrorAction SilentlyContinue)) {
+          \$id = \$cand.Id; if (\$id -is [guid]) { \$id = \$id.Guid }
+          if (([string]\$id).Trim('{}').ToLower() -eq \$want) {
+            \$ct = \$null
+            try { if (\$null -ne \$cand.CreationTimeUTC) { \$ct = \$cand.CreationTimeUTC } } catch {}
+            if (\$null -eq \$ct) { try { \$ct = \$cand.CreationTime } catch {} }
+            \$rpEpoch = Rp-ToEpoch \$ct
+            if (\$rpEpoch) { break }
+          }
+        }
       }
     } catch {}
   }
@@ -4377,7 +4487,9 @@ mold_backup_restore_preflight() {
       mold_backup_notify_log warn "restore preflight: ${vm} not on this host (Mold hostname=${owner}); run restore on owner KVM"
     fi
     d="${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}/${vm}"
-    if [[ -d "$d" ]] && [[ -n "$(find "$d" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
+    if mold_backup_vm_is_rbd_native "$vm" 2>/dev/null; then
+      mold_backup_notify_log info "restore preflight: ${vm} RBD snap-only — Veeam session maps to Mold restoreBackup (no FLR file drop required)"
+    elif [[ -d "$d" ]] && [[ -n "$(find "$d" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
       mold_backup_notify_log info "restore preflight: ${vm} staging=${d} has files (FLR or backup staging)"
     else
       mold_backup_notify_log info "restore preflight: ${vm} staging=${d} empty — Veeam FLR must complete within restore-watch --since-min window"
@@ -4385,6 +4497,117 @@ mold_backup_restore_preflight() {
     bid="$(mold_backup_registry_get_vm_backup_id "$vm" 2>/dev/null || true)"
     mold_backup_notify_log info "restore preflight: ${vm} registry backup_id=${bid:-none}"
   done
+}
+
+# Host FLR (FLR_[ablecubeN] / hypervisor IP): which guests to stop+restore.
+# - VEEAM_RESTORE_VM set → that guest only
+# - else every VM in VM_TARGETS that exists in Mold with a Veeam backup offering
+#   (or a live BackedUp row). Skip stray libvirt domains without Mold backups.
+mold_backup_vm_is_veeam_restore_candidate() {
+  local vm="$1" vm_id json offering provider
+  [[ -n "$vm" ]] || return 1
+  vm_id="$(mold_backup_api_get_vm_id "$vm" 2>/dev/null || true)"
+  [[ -n "$vm_id" ]] || return 1
+  json="$(mold_backup_api_get_vm_record "$vm" "${ZONE_ID:-}" 2>/dev/null || true)"
+  offering="$(mold_backup_api_json_field "$json" "listvirtualmachinesresponse.virtualmachine.backupofferingid" 2>/dev/null || true)"
+  [[ -n "$offering" && "$offering" != "null" ]] || return 1
+  # Prefer provider name when present; otherwise accept any VM with a backup offering
+  # that also has (or can resolve) a Mold backup id.
+  return 0
+}
+
+mold_backup_host_flr_target_vms() {
+  local pair vmn
+  if [[ -n "${VEEAM_RESTORE_VM:-}" ]]; then
+    echo "${VEEAM_RESTORE_VM}"
+    return 0
+  fi
+  local _seen="|"
+  IFS=',' read -ra _pairs <<<"${VM_TARGETS:-}"
+  for pair in "${_pairs[@]}"; do
+    pair="${pair// /}"
+    vmn="${pair%%:*}"
+    [[ -n "$vmn" ]] || continue
+    mold_backup_vm_is_veeam_restore_candidate "$vmn" 2>/dev/null || continue
+    [[ "$_seen" == *"|${vmn}|"* ]] && continue
+    _seen="${_seen}${vmn}|"
+    echo "$vmn"
+  done
+  # Also pull Mold inventory on this KVM (covers Starting / brief libvirt gaps that miss virsh).
+  while IFS= read -r vmn; do
+    [[ -n "$vmn" ]] || continue
+    mold_backup_vm_in_filter "$vmn" 2>/dev/null || continue
+    mold_backup_vm_is_veeam_restore_candidate "$vmn" 2>/dev/null || continue
+    [[ "$_seen" == *"|${vmn}|"* ]] && continue
+    _seen="${_seen}${vmn}|"
+    echo "$vmn"
+  done < <(mold_backup_list_local_veeam_instance_names 2>/dev/null || true)
+}
+
+# Mold VMs with a backup offering that belong on this hypervisor (Running/Stopped/Starting).
+mold_backup_list_local_veeam_instance_names() {
+  local json local_host
+  local_host="$(mold_backup_local_kvm_name)"
+  json="$(mold_backup_cmk_run listVirtualMachines "listall=true" 2>/dev/null || true)"
+  [[ -n "$json" ]] || return 0
+  python3 -c "
+import json, sys
+local = sys.argv[1]
+try:
+    d = json.load(sys.stdin)
+except Exception:
+    sys.exit(0)
+vms = d.get('listvirtualmachinesresponse', {}).get('virtualmachine', [])
+if isinstance(vms, dict):
+    vms = [vms]
+for v in vms:
+    if not v.get('backupofferingid'):
+        continue
+    name = v.get('instancename') or ''
+    if not name.startswith('i-') or not name.endswith('-VM'):
+        continue
+    hn = (v.get('hostname') or '').strip()
+    st = (v.get('state') or '')
+    # Running/Starting on this host, or Stopped with empty host (last host often cleared)
+    if hn and hn != local:
+        continue
+    if st in ('Destroyed', 'Expunging', 'Error'):
+        continue
+    print(name)
+" "$local_host" <<<"$json" 2>/dev/null
+}
+
+# Guess the target VM from recent browser FLR / agent payload activity.
+mold_backup_guess_host_flr_vm() {
+  local since_min="${1:-${VEEAM_RESTORE_WATCH_WINDOW_MIN:-60}}"
+  local now cutoff best_vm="" best_epoch=0 vm d epoch
+  now=$(date +%s)
+  cutoff=$((now - since_min * 60))
+  for d in /tmp/veeam/i-*-VM; do
+    [[ -d "$d" ]] || continue
+    vm="$(basename "$d")"
+    epoch="$(find "$d" -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1 | cut -d. -f1 || true)"
+    [[ "$epoch" =~ ^[0-9]+$ ]] || continue
+    (( epoch >= cutoff )) || continue
+    if (( epoch > best_epoch )); then
+      best_epoch=$epoch
+      best_vm="$vm"
+    fi
+  done
+  for d in "${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}"/i-*-VM/current; do
+    [[ -d "$d" ]] || continue
+    vm="$(basename "$(dirname "$d")")"
+    epoch="$(find "$d" -type f ! -name '.mold-agent-publish' ! -name 'mold-rbd-native.marker' \
+      -printf '%T@\n' 2>/dev/null | sort -rn | head -1 | cut -d. -f1 || true)"
+    [[ "$epoch" =~ ^[0-9]+$ ]] || continue
+    (( epoch >= cutoff )) || continue
+    if (( epoch > best_epoch )); then
+      best_epoch=$epoch
+      best_vm="$vm"
+    fi
+  done
+  [[ -n "$best_vm" ]] || return 1
+  echo "$best_vm"
 }
 
 mold_backup_query_local_host_flr() {
@@ -4463,17 +4686,120 @@ mold_backup_local_flr_mark_epoch() {
 
 # Resolve which job conf owns a libvirt VM name (for agent-payload FLR watch).
 mold_backup_conf_for_vm() {
-  local vm="$1" f
+  local vm="$1" f include
   [[ -n "$vm" ]] || return 1
   local etc="${ABLESTACK_VEEAM_ETC_DIR:-/etc/ablestack/veeam}"
   for f in "${etc}"/"$(hostname -s)".conf "${etc}"/*.conf; do
     [[ -f "$f" ]] || continue
     [[ "$(basename "$f")" == mold-backup.conf ]] && continue
+    # Explicit include of this VM name.
     if grep -Eq "^[[:space:]]*VM_INCLUDE=.*${vm}" "$f" 2>/dev/null; then
       echo "$f"
       return 0
     fi
+    # VM_INCLUDE="*" / '*' owns every non-excluded guest on this host job.
+    include="$(grep -E '^[[:space:]]*VM_INCLUDE=' "$f" 2>/dev/null | tail -1 || true)"
+    if [[ "$include" == *'VM_INCLUDE="*"'* || "$include" == *"VM_INCLUDE='*'"* || "$include" == *'VM_INCLUDE=*' ]]; then
+      # Still respect VM_EXCLUDE in that conf when evaluating ownership.
+      if grep -Eq "^[[:space:]]*VM_EXCLUDE=.*${vm}" "$f" 2>/dev/null; then
+        continue
+      fi
+      echo "$f"
+      return 0
+    fi
   done
+  return 1
+}
+
+# True if this guest is Mold-native RBD (snap-only; no Veeam disk payload).
+mold_backup_vm_is_rbd_native() {
+  local vm="$1"
+  local base stage publish
+  [[ -n "$vm" ]] || return 1
+  if mold_backup_domain_has_rbd_disk "$vm" 2>/dev/null; then
+    return 0
+  fi
+  publish="${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}/${vm}/current"
+  [[ -f "${publish}/mold-rbd-native.marker" || -f "${publish}/rbd-backup.meta" ]] && return 0
+  base="${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}/${vm}"
+  [[ -d "$base" ]] || return 1
+  stage="$(find "$base" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2- || true)"
+  [[ -n "$stage" && -f "${stage}/rbd-backup.meta" ]] && return 0
+  return 1
+}
+
+# Resolve Mold backup UUID for a Veeam restore session on an RBD-native VM.
+# Order: explicit ckpt → RP/time map → marker → latest stage rbd-backup.meta → latest BackedUp.
+# Host FLR often has OibId without Get-VBRRestorePoint; marker-only trees have no FLR file drop.
+mold_backup_resolve_rbd_backup_for_veeam_session() {
+  local vm="$1" job="${2:-${VEEAM_JOB_NAME:-}}" rp_id="${3:-}" rp_epoch="${4:-}" ckpt="${5:-}"
+  local backup_id publish base stage stage_ckpt vm_id
+  [[ -n "$vm" ]] || return 1
+
+  if [[ -z "$ckpt" ]]; then
+    ckpt="$(mold_backup_agent_payload_selected_checkpoint "$vm" 2>/dev/null || true)"
+  fi
+  if [[ -z "$ckpt" ]]; then
+    publish="${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}/${vm}/current"
+    if [[ -f "${publish}/mold-rbd-native.marker" ]]; then
+      ckpt="$(sed -n 's/^checkpoint_name=//p' "${publish}/mold-rbd-native.marker" 2>/dev/null | head -1 || true)"
+      backup_id="$(sed -n 's/^backup_id=//p' "${publish}/mold-rbd-native.marker" 2>/dev/null | head -1 || true)"
+      # Prefer RP/time match when epoch is known; marker only when RP is absent.
+      if [[ -n "$backup_id" && -z "$rp_id" && -z "$rp_epoch" ]]; then
+        mold_backup_notify_log info "rbd-restore: vm=${vm} backup_id=${backup_id} (marker)"
+        echo "$backup_id"
+        return 0
+      fi
+    fi
+  fi
+
+  backup_id="$(mold_backup_resolve_backup_id_for_vm "$vm" "$job" "$rp_id" "$ckpt" "$rp_epoch" 2>/dev/null || true)"
+  if [[ -n "$backup_id" ]]; then
+    echo "$backup_id"
+    return 0
+  fi
+  # Fallback: marker stamped at publish / post-notify.
+  publish="${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}/${vm}/current"
+  if [[ -f "${publish}/mold-rbd-native.marker" ]]; then
+    backup_id="$(sed -n 's/^backup_id=//p' "${publish}/mold-rbd-native.marker" 2>/dev/null | head -1 || true)"
+    if [[ -n "$backup_id" ]]; then
+      mold_backup_notify_log info "rbd-restore: vm=${vm} backup_id=${backup_id} (marker fallback)"
+      [[ -n "$rp_id" ]] && mold_backup_registry_index_rp_backup "$vm" "$rp_id" "$backup_id" "$job" 2>/dev/null || true
+      echo "$backup_id"
+      return 0
+    fi
+  fi
+  # Fallback: newest local RBD stage → Mold checkpoint / registry.
+  base="${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}/${vm}"
+  if [[ -d "$base" ]]; then
+    stage="$(find "$base" -mindepth 1 -maxdepth 1 -type d -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -1 | cut -d' ' -f2- || true)"
+    if [[ -n "$stage" && -f "${stage}/rbd-backup.meta" ]]; then
+      stage_ckpt="$(mold_backup_meta_field "${stage}/rbd-backup.meta" checkpoint_name 2>/dev/null || true)"
+      [[ -z "$stage_ckpt" ]] && stage_ckpt="$(basename "$stage")"
+      backup_id="$(mold_backup_registry_get_backup_id_by_checkpoint "$vm" "$stage_ckpt" 2>/dev/null || true)"
+      if [[ -z "$backup_id" ]]; then
+        backup_id="$(mold_backup_api_find_backup_by_checkpoint "$vm" "$stage_ckpt" 2>/dev/null || true)"
+      fi
+      if [[ -n "$backup_id" ]]; then
+        mold_backup_notify_log info "rbd-restore: vm=${vm} backup_id=${backup_id} (latest stage ckpt=${stage_ckpt})"
+        [[ -n "$rp_id" ]] && mold_backup_registry_index_rp_backup "$vm" "$rp_id" "$backup_id" "$job" 2>/dev/null || true
+        mold_backup_registry_index_checkpoint_backup "$vm" "$stage_ckpt" "$backup_id" 2>/dev/null || true
+        echo "$backup_id"
+        return 0
+      fi
+    fi
+  fi
+  # Last resort: per-VM latest BackedUp (Oib time may be outside snap match window).
+  vm_id="$(mold_backup_api_get_vm_id "$vm" 2>/dev/null || true)"
+  if [[ -n "$vm_id" ]]; then
+    backup_id="$(mold_backup_api_find_latest_backed_up_backup_for_vm "$vm_id" 2>/dev/null || true)"
+    if [[ -n "$backup_id" ]]; then
+      mold_backup_notify_log warn "rbd-restore: vm=${vm} backup_id=${backup_id} (latest BackedUp; rp=${rp_id:-n/a} epoch=${rp_epoch:-n/a} unmatched)"
+      [[ -n "$rp_id" ]] && mold_backup_registry_index_rp_backup "$vm" "$rp_id" "$backup_id" "$job" 2>/dev/null || true
+      echo "$backup_id"
+      return 0
+    fi
+  fi
   return 1
 }
 
@@ -5001,7 +5327,31 @@ foreach (\$b in \$backups) {
 if (-not \$rp) {
   \$rp = Get-VBRRestorePoint -ErrorAction SilentlyContinue | Where-Object { Rp-IdMatch \$_ } | Select-Object -First 1
 }
-if (-not \$rp) { exit 1 }
+if (-not \$rp) {
+  foreach (\$cand in @(Get-VBRObjectRestorePoint -ErrorAction SilentlyContinue)) {
+    if (Rp-IdMatch \$cand) { \$rp = \$cand; break }
+  }
+}
+# Host FLR sessions keep OibId + OibCreationTimeUtc in Options even when the OIB was pruned.
+if (-not \$rp) {
+  foreach (\$s in @(Get-VBRRestoreSession -ErrorAction SilentlyContinue)) {
+    \$opt = [string]\$s.Options
+    if (-not \$opt) { continue }
+    \$m = [regex]::Match(\$opt, 'OibId="([^"]+)"')
+    if (-not \$m.Success) { continue }
+    if (\$m.Groups[1].Value.Trim('{}').ToLower() -ne \$want) { continue }
+    \$tm = [regex]::Match(\$opt, 'OibCreationTimeUtc="([^"]+)"')
+    if (-not \$tm.Success) { \$tm = [regex]::Match(\$opt, 'OibDT="([^"]+)"') }
+    if (-not \$tm.Success) { continue }
+    try {
+      \$ct = [datetime]::Parse(\$tm.Groups[1].Value, [System.Globalization.CultureInfo]::InvariantCulture)
+      if (\$ct.Kind -eq [DateTimeKind]::Unspecified) { \$ct = [DateTime]::SpecifyKind(\$ct, [DateTimeKind]::Utc) }
+      \$ep = Rp-Epoch \$ct
+      if (\$null -ne \$ep) { Write-Output \$ep; exit 0 }
+    } catch {}
+  }
+  exit 1
+}
 \$ep = Rp-Epoch \$rp
 if (\$null -eq \$ep) { exit 1 }
 Write-Output \$ep
@@ -5187,10 +5537,26 @@ mold_backup_resolve_backup_id_for_vm() {
   fi
 
   if [[ -n "${BACKUP_ID:-}" ]]; then
-    echo "$BACKUP_ID"
-    return 0
+    # Do not reuse a sibling's BACKUP_ID from a previous host-FLR iteration.
+    local _owner=""
+    _owner="$(mold_backup_api_backup_vm_id "$BACKUP_ID" 2>/dev/null || true)"
+    local _want=""
+    _want="$(mold_backup_api_get_vm_id "$vm_name" 2>/dev/null || true)"
+    if [[ -n "$_owner" && -n "$_want" && "$_owner" == "$_want" ]]; then
+      echo "$BACKUP_ID"
+      return 0
+    fi
   fi
   backup_id="$(mold_backup_registry_get_vm_backup_id "$vm_name" 2>/dev/null || true)"
+  if [[ -n "$backup_id" ]]; then
+    local _owner2=""
+    _owner2="$(mold_backup_api_backup_vm_id "$backup_id" 2>/dev/null || true)"
+    local _want2=""
+    _want2="$(mold_backup_api_get_vm_id "$vm_name" 2>/dev/null || true)"
+    if [[ -z "$_owner2" || -z "$_want2" || "$_owner2" != "$_want2" ]]; then
+      backup_id=""
+    fi
+  fi
   if [[ -n "$backup_id" ]]; then
     if [[ "$selected" == "true" ]]; then
       mold_backup_notify_log warn "restore-watch: using latest backup_id=${backup_id} (RESTORE_ALLOW_LATEST_FALLBACK=true)"
@@ -5205,6 +5571,13 @@ mold_backup_resolve_backup_id_for_vm() {
   if [[ -d "$reg_dir" ]]; then
     line="$(grep -h "vm=${vm_name}.*backup_id=" "${reg_dir}"/*.log 2>/dev/null | tail -1 || true)"
     backup_id="$(sed -n 's/.*backup_id=\([^ ]*\).*/\1/p' <<<"$line" | tail -1)"
+    if [[ -n "$backup_id" ]]; then
+      local _owner3=""
+      _owner3="$(mold_backup_api_backup_vm_id "$backup_id" 2>/dev/null || true)"
+      local _want3=""
+      _want3="$(mold_backup_api_get_vm_id "$vm_name" 2>/dev/null || true)"
+      [[ -n "$_owner3" && -n "$_want3" && "$_owner3" == "$_want3" ]] || backup_id=""
+    fi
     [[ -n "$backup_id" ]] && { echo "$backup_id"; return 0; }
   fi
   vm_id="$(mold_backup_api_get_vm_id "$vm_name" 2>/dev/null || true)"
@@ -5260,10 +5633,9 @@ mold_backup_handle_veeam_restore_session() {
     return 0
   fi
   if mold_backup_trigger_active "mold-restore-active" "$vm"; then
-    mold_backup_trigger_clear "mold-restore-active" "$vm"
-    mold_backup_restore_session_mark_seen "$sid"
-    mold_backup_emit_restore_event "mold.restore.skipped.mold-active" "$vm" "session=${sid}"
-    return 0
+    # Stale mark from a previous failed sibling restore must not skip this VM permanently.
+    mold_backup_notify_log warn "restore-watch: clearing stale mold-restore-active for ${vm} and continuing"
+    mold_backup_trigger_clear "mold-restore-active" "$vm" || true
   fi
   if [[ "$trigger_mold" != "true" ]]; then
     mold_backup_reflect_one_restore "$job" "$vm" "$sid" "$detail"
@@ -5282,16 +5654,44 @@ mold_backup_handle_veeam_restore_session() {
     return 0
   fi
   local backup_id rc=0
-  backup_id="$(mold_backup_resolve_backup_id_for_vm "$vm" "$job" "$rp_id" "$ckpt" "$rp_epoch" 2>/dev/null || true)"
+  # Clear leftover BACKUP_ID/VM_UUID from a previous host-FLR sibling iteration.
+  unset BACKUP_ID VM_UUID || true
+  # Host FLR / mixed RBD+QCOW2: one Veeam RP for the job; map each guest by RP GUID +
+  # OibCreationTimeUtc epoch (±TZ) to that VM's Mold checkpoint. RBD has no file drop.
+  if mold_backup_vm_is_rbd_native "$vm" 2>/dev/null; then
+    export RESTORE_SOURCE="${RESTORE_SOURCE:-mold-only}"
+    export RESTORE_AUTO_STOP="${RESTORE_AUTO_STOP:-true}"
+    backup_id="$(mold_backup_resolve_rbd_backup_for_veeam_session "$vm" "$job" "$rp_id" "$rp_epoch" "$ckpt" 2>/dev/null || true)"
+  else
+    # QCOW2 (and host_flr_all): keep rp_id + rp_epoch so stamped siblings resolve per-VM by time.
+    backup_id="$(mold_backup_resolve_backup_id_for_vm "$vm" "$job" "$rp_id" "$ckpt" "$rp_epoch" 2>/dev/null || true)"
+  fi
   if [[ -z "$backup_id" ]]; then
     mold_backup_emit_restore_event "mold.restore.failed" "$vm" "session=${sid};reason=no-backup-id;rp=${rp_id:-n/a};ckpt=${ckpt:-n/a};rp_epoch=${rp_epoch:-n/a}"
-    mold_backup_restore_lock_release
+    mold_backup_restore_lock_release || true
     return 1
   fi
-  export BACKUP_ID="$backup_id" VM_NAME="$vm" VEEAM_RESTORE_SESSION_ID="$sid"
+  export BACKUP_ID="$backup_id" VM_NAME="$vm" VEEAM_RESTORE_SESSION_ID="${sid%%#*}"
+  VM_UUID="$(mold_backup_api_get_vm_id "$vm" 2>/dev/null || true)"
+  export VM_UUID
+  [[ -n "$VM_UUID" ]] || {
+    mold_backup_notify_log err "restore-watch: cannot resolve Mold UUID for ${vm}"
+    mold_backup_restore_lock_release || true
+    return 1
+  }
+  if ! mold_backup_api_verify_backup_for_vm "$backup_id" "$VM_UUID" 2>/dev/null; then
+    mold_backup_emit_restore_event "mold.restore.failed" "$vm" "session=${sid};reason=backup-owner-mismatch;backup_id=${backup_id}"
+    mold_backup_restore_lock_release || true
+    return 1
+  fi
   [[ -n "$rp_id" ]] && export VEEAM_RESTORE_POINT_ID="$rp_id"
   export RESTORE_SOURCE="${RESTORE_SOURCE:-${VEEAM_UI_RESTORE_SOURCE:-mold-only}}"
-  mold_backup_notify_log info "Veeam UI restore session=${sid} vm=${vm} rp=${rp_id:-n/a} ckpt=${ckpt:-n/a} → Mold datadisk restore backup_id=${backup_id} (RESTORE_SOURCE=${RESTORE_SOURCE})"
+  export RESTORE_AUTO_STOP="${RESTORE_AUTO_STOP:-true}"
+  if mold_backup_vm_is_rbd_native "$vm" 2>/dev/null; then
+    mold_backup_notify_log info "Veeam UI RBD restore session=${sid} vm=${vm} rp=${rp_id:-n/a} ckpt=${ckpt:-n/a} → Mold snap-rollback backup_id=${backup_id} (no FLR file drop)"
+  else
+    mold_backup_notify_log info "Veeam UI restore session=${sid} vm=${vm} rp=${rp_id:-n/a} ckpt=${ckpt:-n/a} → Mold datadisk restore backup_id=${backup_id} (RESTORE_SOURCE=${RESTORE_SOURCE} AUTO_STOP=${RESTORE_AUTO_STOP})"
+  fi
   mold_backup_emit_restore_event "veeam.restore.completed" "$vm" "session=${sid};rp=${rp_id:-n/a};ckpt=${ckpt:-n/a};backup_id=${backup_id};${detail}"
   mold_backup_emit_restore_event "mold.restore.requested" "$vm" "session=${sid};rp=${rp_id:-n/a};ckpt=${ckpt:-n/a};backup_id=${backup_id};source=${RESTORE_SOURCE}"
   mold_backup_trigger_mark "mold-restore-active" "$vm"
@@ -5307,6 +5707,7 @@ mold_backup_handle_veeam_restore_session() {
       mold_backup_registry_save_restore "$job" "$vm" "veeam" "$sid" "${detail};backup_id=${backup_id}" "mold-restored"
       mold_backup_emit_restore_event "mold.restore.completed" "$vm" "session=${sid};backup_id=${backup_id}"
     fi
+    rc=0
   else
     # Always mark seen on failure so restore-watch does not re-stop the same VM every 3min.
     # Set RESTORE_WATCH_RETRY_FAILED=true to allow retries of failed sessions.
@@ -5316,9 +5717,9 @@ mold_backup_handle_veeam_restore_session() {
     mold_backup_emit_restore_event "mold.restore.failed" "$vm" "session=${sid};backup_id=${backup_id}"
     rc=1
   fi
-  mold_backup_trigger_clear "mold-restore-active" "$vm"
-  mold_backup_trigger_clear "veeam-restore-active" "$vm"
-  mold_backup_restore_lock_release
+  mold_backup_trigger_clear "mold-restore-active" "$vm" || true
+  mold_backup_trigger_clear "veeam-restore-active" "$vm" || true
+  mold_backup_restore_lock_release || true
   return "$rc"
 }
 
@@ -5328,24 +5729,47 @@ mold_backup_watch_veeam_restores() {
   local job="${1:-${VEEAM_JOB_NAME:-}}"
   local since_min="${2:-${VEEAM_RESTORE_WATCH_WINDOW_MIN:-60}}"
   local trigger_mold="${3:-${RESTORE_WATCH_TRIGGER_MOLD:-false}}"
-  if [[ -z "${VM_TARGETS:-}" && "${BACKUP_MODE:-host}" == "host" && -n "${VM_INCLUDE:-}" && "${VM_INCLUDE}" != "*" ]]; then
   # Host mode: build name:ip pairs from libvirt when VM_TARGETS unset.
-  # Stopped VMs have no libvirt domain — virsh fails; keep going with name-only targets.
+  # VM_INCLUDE=* (host-wide ablecubeN jobs) must expand to running domains — otherwise
+  # restore-watch exits every poll with "VM_TARGETS empty" and never auto-stops / restores.
+  if [[ -z "${VM_TARGETS:-}" && "${BACKUP_MODE:-host}" == "host" ]]; then
     local _vm _ip
     VM_TARGETS=""
-    for _vm in ${VM_INCLUDE//,/ }; do
-      _vm="$(echo "$_vm" | xargs)"
-      [[ -n "$_vm" ]] || continue
-      _ip="$(virsh -c qemu:///system domifaddr "$_vm" 2>/dev/null | awk '/ipv4/ {print $4; exit}' | cut -d/ -f1 || true)"
-      VM_TARGETS+="${VM_TARGETS:+,}${_vm}:${_ip:-${_vm}}"
-    done
+    if [[ -n "${VM_INCLUDE:-}" && "${VM_INCLUDE}" != "*" ]]; then
+      for _vm in ${VM_INCLUDE//,/ }; do
+        _vm="$(echo "$_vm" | xargs)"
+        [[ -n "$_vm" ]] || continue
+        _ip="$(virsh -c qemu:///system domifaddr "$_vm" 2>/dev/null | awk '/ipv4/ {print $4; exit}' | cut -d/ -f1 || true)"
+        VM_TARGETS+="${VM_TARGETS:+,}${_vm}:${_ip:-${_vm}}"
+      done
+    else
+      local _seen="|"
+      while IFS= read -r _vm; do
+        [[ -n "$_vm" ]] || continue
+        [[ "$_seen" == *"|${_vm}|"* ]] && continue
+        _seen="${_seen}${_vm}|"
+        _ip="$(virsh -c qemu:///system domifaddr "$_vm" 2>/dev/null | awk '/ipv4/ {print $4; exit}' | cut -d/ -f1 || true)"
+        VM_TARGETS+="${VM_TARGETS:+,}${_vm}:${_ip:-${_vm}}"
+      done < <(mold_backup_list_target_domains 2>/dev/null || true)
+      # Include Shut Off guests that still belong to this Veeam job (Mold VM + offering).
+      while IFS= read -r _vm; do
+        [[ -n "$_vm" ]] || continue
+        mold_backup_vm_in_filter "$_vm" 2>/dev/null || continue
+        mold_backup_vm_is_veeam_restore_candidate "$_vm" 2>/dev/null || continue
+        [[ "$_seen" == *"|${_vm}|"* ]] && continue
+        _seen="${_seen}${_vm}|"
+        VM_TARGETS+="${VM_TARGETS:+,}${_vm}:${_vm}"
+      done < <(virsh -c qemu:///system list --name --inactive 2>/dev/null || true)
+    fi
   fi
   [[ -n "${VM_TARGETS:-}" ]] || {
     mold_backup_notify_log warn "Veeam→Mold(restore): VM_TARGETS empty; set VM_INCLUDE or VM_TARGETS"
     return 0
   }
+  # Agent SelectedFiles / browser FLR markers under payload paths (does not need Veeam session list).
+  mold_backup_scan_agent_payload_flr 2>/dev/null || true
   [[ "${trigger_mold}" == "true" ]] && mold_backup_restore_preflight
-  mold_backup_notify_log info "=== restore-watch job=${job} window=${since_min}min trigger_mold=${trigger_mold} host=$(mold_backup_local_kvm_name) ==="
+  mold_backup_notify_log info "=== restore-watch job=${job} window=${since_min}min trigger_mold=${trigger_mold} host=$(mold_backup_local_kvm_name) targets=${VM_TARGETS} ==="
   mold_backup_initialize_restore_watch_baseline "$since_min"
   local sid sip et result nm bn rp_id rp_epoch matched_ip vm
   local processed=0 handled=0
@@ -5406,9 +5830,17 @@ mold_backup_watch_veeam_restores() {
       fi
     fi
     processed=$((processed+1))
+    # Host FLR may finish only a subset (some guests still Starting). Do not skip the
+    # whole session forever — per-VM sid (${sid}#vm) tracks what is already done.
+    local _host_flr_retry=false
     if mold_backup_restore_session_seen "$sid"; then
-      mold_backup_notify_log info "restore-watch: session ${sid} already processed (skip duplicate)"
-      continue
+      if [[ "${BACKUP_MODE:-host}" == "host" && ( "$nm" == FLR_* || "$nm" == *FLR* || "$nm" == *"$(hostname -s)"* ) ]]; then
+        _host_flr_retry=true
+        mold_backup_notify_log info "restore-watch: session ${sid} previously marked done — retry any remaining host FLR targets"
+      else
+        mold_backup_notify_log info "restore-watch: session ${sid} already processed (skip duplicate)"
+        continue
+      fi
     fi
     # Match: prefer the IP parsed from the session Options; fall back to scanning
     # VM_TARGETS IPs (dots or dashes form) against the session name / backup name.
@@ -5425,8 +5857,6 @@ mold_backup_watch_veeam_restores() {
         ip="${pair#*:}"
         [[ -n "$ip" && "$ip" != "$vmn" ]] || continue
         ipd="${ip//./-}"
-        # Match by IP (dots/dashes) for legacy "Mold VM <ip>" jobs, or by the
-        # libvirt internal name (e.g. i-2-51-VM) for jobs named by internal name.
         if [[ "$sip" == "$ip" || "$nm" == *"$ip"* || "$nm" == *"$ipd"* || "$bn" == *"$ip"* || "$bn" == *"$ipd"* \
               || ( -n "$vmn" && ( "$nm" == *"$vmn"* || "$bn" == *"$vmn"* ) ) ]]; then
           matched_ip="$ip"
@@ -5441,8 +5871,6 @@ mold_backup_watch_veeam_restores() {
       [[ -z "$kvm_ip" && -n "${KVM_HOST:-}" && "$KVM_HOST" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]] && kvm_ip="${KVM_HOST}"
       [[ -z "$kvm_ip" ]] && kvm_ip="$(hostname -I 2>/dev/null | awk '{print $1}')"
       local kvm_hn="${KVM_HOSTNAME:-$(hostname -s)}"
-      # Require hypervisor identity in session — do NOT match on job name alone
-      # (that falsely treated backup sessions as FLR and auto-stopped VMs).
       if [[ -n "$kvm_ip" && ( "$sip" == "$kvm_ip" || "$nm" == *"$kvm_ip"* || "$bn" == *"$kvm_ip"* ) ]]; then
         host_hit=true
       elif [[ -n "$kvm_hn" && ( "$nm" == *"$kvm_hn"* || "$bn" == *"$kvm_hn"* || "$nm" == FLR_* ) ]]; then
@@ -5461,41 +5889,59 @@ mold_backup_watch_veeam_restores() {
             break
           fi
         done
-        if [[ -z "$matched_ip" && -n "${VM_INCLUDE:-}" && "${VM_INCLUDE}" != "*" ]]; then
-          local _one
-          if [[ -n "${VEEAM_RESTORE_VM:-}" ]]; then
-            _one="${VEEAM_RESTORE_VM}"
-            mold_backup_notify_log info "restore-watch: host FLR session ${sid} → VEEAM_RESTORE_VM=${_one}"
+        # No guest name in FLR_[ablecubeN] session → stop+restore EVERY target VM
+        if [[ -z "$matched_ip" ]]; then
+          local _v _sid_vm _ok=0 _fail=0 _skip=0 _pending=0 _targets=()
+          while IFS= read -r _v; do
+            [[ -n "$_v" ]] && _targets+=("$_v")
+          done < <(mold_backup_host_flr_target_vms)
+          if [[ ${#_targets[@]} -eq 0 ]]; then
+            mold_backup_notify_log warn "restore-watch: host FLR ${sid} — no target VMs in VM_TARGETS/VM_INCLUDE"
+            [[ "$_host_flr_retry" != "true" ]] && mold_backup_restore_session_mark_seen "$sid"
+            continue
+          fi
+          mold_backup_notify_log info "restore-watch: host FLR session ${sid} → restore all targets (${#_targets[@]}): ${_targets[*]} (RESTORE_AUTO_STOP=${RESTORE_AUTO_STOP:-true})"
+          export RESTORE_AUTO_STOP="${RESTORE_AUTO_STOP:-true}"
+          for _v in "${_targets[@]}"; do
+            _sid_vm="${sid}#${_v}"
+            if mold_backup_restore_session_seen "$_sid_vm"; then
+              mold_backup_notify_log info "restore-watch: host FLR ${_v} already restored for session (skip)"
+              continue
+            fi
+            if ! mold_backup_vm_restorable_on_local_host "$_v" 2>/dev/null; then
+              # Still Starting / not on host yet — leave parent session open for retry.
+              mold_backup_notify_log info "restore-watch: host FLR defer ${_v} (not ready on this host yet)"
+              _pending=$((_pending + 1))
+              continue
+            fi
+            [[ -n "$rp_id" ]] && mold_backup_notify_log info "restore-watch: session ${sid} vm=${_v} veeam_rp=${rp_id} rp_epoch=${rp_epoch:-n/a}"
+            if mold_backup_handle_veeam_restore_session "$job" "$_v" "$_sid_vm" \
+              "name=${nm};end=${et};result=${result};backup=${bn};ip=${_v};rp=${rp_id};rp_epoch=${rp_epoch:-};host_flr_all=1" \
+              "$trigger_mold" "$rp_id"; then
+              _ok=$((_ok + 1))
+              handled=$((handled + 1))
+            else
+              _fail=$((_fail + 1))
+              mold_backup_notify_log warn "restore-watch: host FLR vm=${_v} restore failed (continue remaining targets)"
+            fi
+          done
+          if [[ "$_pending" -eq 0 ]]; then
+            mold_backup_restore_session_mark_seen "$sid"
+            mold_backup_notify_log info "restore-watch: host FLR ${sid} done ok=${_ok} fail=${_fail} skip=${_skip}"
           else
-            _one="$(echo "${VM_INCLUDE}" | tr ',' ' ' | awk '{print $1}')"
-            mold_backup_notify_log info "restore-watch: host FLR session ${sid} → VM_INCLUDE=${_one} (set VEEAM_RESTORE_VM for explicit target)"
+            mold_backup_notify_log info "restore-watch: host FLR ${sid} partial ok=${_ok} fail=${_fail} pending=${_pending} (will retry)"
           fi
-          if [[ -n "$_one" ]]; then
-            matched_ip="$_one"
-            for pair in "${_pairs[@]}"; do
-              pair="${pair// /}"
-              vmn="${pair%%:*}"
-              ip="${pair#*:}"
-              [[ "$vmn" == "$_one" && -n "$ip" && "$ip" != "$vmn" ]] && matched_ip="$ip" && break
-            done
-          fi
+          continue
         fi
       fi
     fi
-    # Agent FLR to hypervisor: only when session already identified as host FLR.
+    # If we only entered because of host FLR retry but this is not a host FLR session, skip.
+    if [[ "$_host_flr_retry" == "true" && "$host_hit" != "true" ]]; then
+      continue
+    fi
+    # Agent FLR to hypervisor with explicit single-VM override still set but session already named a guest.
     if [[ -z "$matched_ip" && "$host_hit" == "true" && "${BACKUP_MODE:-host}" == "host" && -n "${VEEAM_RESTORE_VM:-}" ]]; then
-      local _pair _vmn _ip
-      IFS=',' read -ra _pairs <<<"${VM_TARGETS}"
-      for _pair in "${_pairs[@]}"; do
-        _pair="${_pair// /}"
-        _vmn="${_pair%%:*}"
-        _ip="${_pair#*:}"
-        [[ "$_vmn" == "${VEEAM_RESTORE_VM}" ]] || continue
-        matched_ip="${_ip:-$_vmn}"
-        [[ "$matched_ip" == "$_vmn" ]] && matched_ip="$_vmn"
-        break
-      done
-      [[ -z "$matched_ip" ]] && matched_ip="${VEEAM_RESTORE_VM}"
+      matched_ip="${VEEAM_RESTORE_VM}"
       mold_backup_notify_log info "restore-watch: session ${sid} name='${nm}' → host FLR fallback VEEAM_RESTORE_VM=${VEEAM_RESTORE_VM}"
     fi
     if [[ -z "$matched_ip" ]]; then
@@ -5511,6 +5957,7 @@ mold_backup_watch_veeam_restores() {
     if ! mold_backup_domain_exists "$vm" 2>/dev/null; then
       mold_backup_notify_log info "restore-watch: vm=${vm} Mold Stopped (no libvirt) — triggering Mold restoreBackup via API"
     fi
+    export RESTORE_AUTO_STOP="${RESTORE_AUTO_STOP:-true}"
     [[ -n "$rp_id" ]] && mold_backup_notify_log info "restore-watch: session ${sid} vm=${vm} veeam_rp=${rp_id} rp_epoch=${rp_epoch:-n/a}"
     mold_backup_handle_veeam_restore_session "$job" "$vm" "$sid" \
       "name=${nm};end=${et};result=${result};backup=${bn};ip=${matched_ip};rp=${rp_id};rp_epoch=${rp_epoch:-}" "$trigger_mold" "$rp_id" \
@@ -6212,9 +6659,22 @@ mold_backup_post_notify() {
         mold_backup_notify_log warn "post-notify: pending vm=${vm_name} but BACKUP_MODE=${BACKUP_MODE:-host} (expected guest)"
       fi
       [[ "$status" == "success" && -n "$backup_id" ]] || continue
-      mold_backup_registry_save_backup "$job" "$vm_name" "$backup_id" "veeam-backed-up rp=${host_rp_id:-n/a}" "$host_rp_id"
+      local _ckpt=""
+      _ckpt="$(mold_backup_state_parse_field "$line" "path")"
+      [[ -n "$_ckpt" ]] && _ckpt="$(basename "$_ckpt")"
+      [[ "$_ckpt" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}\. ]] || _ckpt=""
+      if [[ -z "$_ckpt" ]]; then
+        _ckpt="$(mold_backup_api_backup_detail_field "$backup_id" "ablestack.veeam.checkpoint.name" 2>/dev/null || true)"
+      fi
+      mold_backup_registry_save_backup "$job" "$vm_name" "$backup_id" "veeam-backed-up rp=${host_rp_id:-n/a} ckpt=${_ckpt:-}" "$host_rp_id" "$_ckpt"
       if [[ -n "$host_rp_id" || -n "$job" ]]; then
         mold_backup_api_update_veeam_backup "$backup_id" "$host_rp_id" "$job"
+      fi
+      # Re-publish RBD marker with stamped backup_id/ckpt so Veeam FLR→Mold can resolve without file drop.
+      if [[ -n "$_ckpt" ]] && mold_backup_vm_is_rbd_native "$vm_name" 2>/dev/null; then
+        local _stage="${VEEAM_HOST_BACKUP_PATH}/${vm_name}/${_ckpt}"
+        [[ -d "$_stage" ]] || _stage="$(mold_backup_api_backup_external_id "$vm_id" "$backup_id" 2>/dev/null || true)"
+        [[ -d "$_stage" ]] && mold_backup_publish_for_veeam_agent "$vm_name" "$_stage" "$backup_id"
       fi
     done < "$state_file"
   else
@@ -6296,7 +6756,7 @@ mold_backup_restore_notify() {
   local client="${1:-$(hostname -s)}"
   local job="${2:-${VEEAM_JOB_NAME:-}}"
   export MOLD_BACKUP_HOOK="restore-notify"
-  mold_backup_load_config || exit 1
+  mold_backup_load_config || return 1
   mold_backup_apply_datadisk_profile
   local restore_source="${RESTORE_SOURCE:-auto}"
   if mold_backup_is_datadisk_mode; then
@@ -6304,12 +6764,18 @@ mold_backup_restore_notify() {
     RESTORE_SOURCE="mold-only"
   fi
   mold_backup_notify_log info "=== restore-notify client=${client} job=${job} backup_id=${BACKUP_ID:-} vm=${VM_NAME:-} source=${restore_source} ==="
-  mold_backup_require_var BACKUP_ID
+  [[ -n "${BACKUP_ID:-}" ]] || {
+    mold_backup_notify_log err "restore-notify: BACKUP_ID required"
+    return 1
+  }
   [[ -n "${VM_UUID:-}" ]] || {
     [[ -n "${VM_NAME:-}" ]] && VM_UUID="$(mold_backup_api_get_vm_id "$VM_NAME" 2>/dev/null || true)"
   }
-  [[ -n "${VM_UUID:-}" ]] || mold_backup_die "restore requires VM_NAME or VM_UUID (individual VM restore)"
-  mold_backup_api_verify_backup_for_vm "$BACKUP_ID" "$VM_UUID" || exit 1
+  [[ -n "${VM_UUID:-}" ]] || {
+    mold_backup_notify_log err "restore requires VM_NAME or VM_UUID (individual VM restore)"
+    return 1
+  }
+  mold_backup_api_verify_backup_for_vm "$BACKUP_ID" "$VM_UUID" || return 1
 
   # Loop guard for reverse restore-sync: mark this VM so the Veeam->Mold restore
   # watcher skips reflecting a restore that Mold itself initiated.
@@ -6326,6 +6792,10 @@ mold_backup_restore_notify() {
     mold_backup_api_restore || return 1
   fi
 
+  if [[ -n "${VM_NAME:-}${VM_UUID:-}" ]]; then
+    mold_backup_api_start_vm_after_restore "${VM_NAME:-}" || return 1
+  fi
+
   # Mold → Veeam Guest Files (FLR): when Mold restored (not reflecting an existing FLR).
   if [[ -n "${VM_NAME:-}" ]] \
     && [[ "${VEEAM_TRIGGER_FLR_ON_MOLD_RESTORE:-true}" == "true" ]] \
@@ -6335,6 +6805,7 @@ mold_backup_restore_notify() {
   fi
 
   mold_backup_notify_log info "=== restore-notify done ==="
+  return 0
 }
 
 # Start Veeam Guest Files (FLR) for the restore point mapped to this VM/backup.

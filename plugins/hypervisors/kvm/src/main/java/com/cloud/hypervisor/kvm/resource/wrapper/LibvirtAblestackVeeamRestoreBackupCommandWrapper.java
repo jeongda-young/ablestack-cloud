@@ -139,6 +139,12 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
             if (tryRestoreVolumesWithRbdSnapRollback(storagePoolMgr, restoreVolumePools, restoreVolumePaths, checkpointName, timeout)) {
                 return;
             }
+            if (isRbdSnapRestoreExpected(restoreVolumePools, checkpointName)) {
+                throw new CloudRuntimeException(String.format(
+                        "RBD checkpoint snapshot [%s] is missing for restore. Mold RBD_DIFF restore uses snap rollback "
+                                + "(no .raw/.rbdiff). Re-run backup so the checkpoint snap exists, then restore again.",
+                        checkpointName));
+            }
             final List<List<String>> localBackupPathsByVolume = getLocalBackupPathsForVolumes(backupPath, backupFiles, backupFileChains, volumeChainStates,
                     restoreVolumePaths, backedVolumesUUIDs);
             validatePrimaryStorageSpaceForFileRestorePlan(restoreVolumePaths, localBackupPathsByVolume, restoreVolumePools);
@@ -157,6 +163,13 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
         } finally {
             cleanupBackupDirectory(backupPath, restorePlan);
         }
+    }
+
+    private boolean isRbdSnapRestoreExpected(final List<PrimaryDataStoreTO> restoreVolumePools, final String checkpointName) {
+        if (StringUtils.isBlank(checkpointName) || CollectionUtils.isEmpty(restoreVolumePools)) {
+            return false;
+        }
+        return restoreVolumePools.stream().allMatch(pool -> pool != null && pool.getPoolType() == Storage.StoragePoolType.RBD);
     }
 
     private void restoreVolumesOfDestroyedVMs(final KVMStoragePoolManager storagePoolMgr, final List<PrimaryDataStoreTO> restoreVolumePools,
