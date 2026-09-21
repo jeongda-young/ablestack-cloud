@@ -3106,8 +3106,9 @@ mold_backup_process_vm_pre_notify() {
   chain_count="$(mold_backup_api_veeam_backup_count "$vm_id")"
 
   # Host Agent file-level:
-  #  - RBD (any chain): Mold-native createAblestackVeeamBackup (rbd snap + meta; Veeam marker
-  #    only). Restore uses snap rollback — never SyncDirs sparse .raw/.rbdiff.
+  #  - RBD (any chain): Mold-native createAblestackVeeamBackup creates the Ceph
+  #    checkpoint and exports .raw/.rbdiff files. Veeam must back up those files;
+  #    the snapshot/meta alone is not a valid backup chain.
   #  - qcow2 first (no BackedUp): host export → importSeed → FULL (BackedUp)
   #  - qcow2 next: createAblestackVeeamBackup → agent TakeBackup → INCREMENTAL
   #    Do NOT call importSeed again (always FULL) and do NOT race a second host export.
@@ -3121,7 +3122,7 @@ mold_backup_process_vm_pre_notify() {
       mold_backup_state_write_line "$state_file" "vm=${vm_name} id=${vm_id} status=fail reason=offering-repo-mismatch"
       return 1
     }
-    mold_backup_notify_log info "File-level RBD: Mold-native createAblestackVeeamBackup (snap-only; Veeam marker; chain=${chain_count})"
+    mold_backup_notify_log info "File-level RBD: Mold-native createAblestackVeeamBackup (export .raw/.rbdiff; chain=${chain_count})"
     backup_result="$(mold_backup_api_create_veeam_and_wait "$vm_id" "$vm_name" || true)"
     if [[ -z "$backup_result" ]]; then
       mold_backup_notify_log err "Mold RBD backup failed for ${vm_name} (agent TakeBackup / BackedUp wait)"
@@ -3132,10 +3133,15 @@ mold_backup_process_vm_pre_notify() {
     backup_type="${backup_result#*|}"
     host_path="$(mold_backup_api_backup_external_id "$vm_id" "$backup_id" 2>/dev/null || true)"
     [[ -z "$host_path" ]] && host_path="${VEEAM_HOST_BACKUP_PATH}/${vm_name}"
+    if ! mold_backup_host_path_has_rbd_payload "$host_path"; then
+      mold_backup_notify_log err "File-level RBD: ${vm_name} backup_id=${backup_id} has no .raw/.rbdiff payload under ${host_path}; refusing backup without file-chain payload"
+      mold_backup_state_write_line "$state_file" "vm=${vm_name} id=${vm_id} backup_id=${backup_id} type=${backup_type} path=${host_path} status=fail reason=rbd-payload-missing"
+      return 1
+    fi
     mold_backup_state_write_line "$state_file" \
       "vm=${vm_name} id=${vm_id} backup_id=${backup_id} type=${backup_type} path=${host_path} status=success"
     mold_backup_publish_for_veeam_agent "$vm_name" "$host_path" "$backup_id"
-    mold_backup_notify_log info "Pre-notify OK vm=${vm_name} backup_id=${backup_id} type=${backup_type} path=${host_path} (mold-native RBD snap-only)"
+    mold_backup_notify_log info "Pre-notify OK vm=${vm_name} backup_id=${backup_id} type=${backup_type} path=${host_path} (mold-native RBD file-chain)"
     return 0
   fi
 
@@ -3358,16 +3364,22 @@ mold_backup_run_host_export() {
   echo "${backup_subdir}"
 }
 
-# True if host_path looks like an RBD Mold stage (must not be SyncDirs'd as sparse .raw).
+mold_backup_host_path_has_rbd_payload() {
+  local host_path="${1:-}"
+  [[ -n "$host_path" && -d "$host_path" ]] || return 1
+  find "$host_path" -maxdepth 1 -type f \( -name '*.raw' -o -name '*.rbdiff' \) -print -quit 2>/dev/null | grep -q .
+}
+
+# True if host_path looks like an RBD Mold stage.
 mold_backup_host_path_is_rbd() {
   local host_path="${1:-}"
   [[ -n "$host_path" && -d "$host_path" ]] || return 1
   [[ -f "${host_path}/rbd-backup.meta" ]] && return 0
-  find "$host_path" -maxdepth 1 -type f \( -name '*.raw' -o -name '*.rbdiff' \) -print -quit 2>/dev/null | grep -q .
+  mold_backup_host_path_has_rbd_payload "$host_path"
 }
 
 # Publish Mold backup artifacts for Veeam Agent SyncDirs under VEEAM_AGENT_PAYLOAD_PATH.
-# RBD: marker + tiny meta only (Mold restore uses rbd snap rollback; no .raw/.rbdiff export).
+# RBD: publish .raw/.rbdiff file-chain just like qcow2; metadata-only payload is refused by pre-notify.
 # QCOW2: hardlink/copy disk files into <vm>/current so Agent sees a stable tree.
 # Optional $3 = Mold backup UUID (stamped into marker + checkpoint registry for Veeam FLR→Mold).
 mold_backup_publish_for_veeam_agent() {
@@ -3391,32 +3403,17 @@ mold_backup_publish_for_veeam_agent() {
     ckpt="$(mold_backup_meta_field "${host_path}/rbd-backup.meta" checkpoint_name 2>/dev/null || true)"
     [[ -z "$ckpt" ]] && ckpt="$(basename "$host_path")"
     [[ "$ckpt" =~ ^[0-9]{4}\.[0-9]{2}\.[0-9]{2}\. ]] || ckpt=""
-    {
-      echo "vm=${vm_name}"
-      echo "mode=mold-native-rbd"
-      echo "stage_path=${host_path}"
-      [[ -n "$ckpt" ]] && echo "checkpoint_name=${ckpt}"
-      [[ -n "$backup_id" ]] && echo "backup_id=${backup_id}"
-      echo "published_at=$(date -Iseconds)"
-    } > "${publish}/mold-rbd-native.marker"
-    for meta_f in rbd-backup.meta domain-config.xml domain.xml veeam-seed.meta staging.complete; do
-      [[ -f "${host_path}/${meta_f}" ]] || continue
-      cp -a "${host_path}/${meta_f}" "${publish}/" 2>/dev/null || true
-    done
     if [[ -n "$backup_id" && -n "$ckpt" ]]; then
       mold_backup_registry_index_checkpoint_backup "$vm_name" "$ckpt" "$backup_id"
       mold_backup_registry_set_vm_backup_id "$vm_name" "$backup_id" "" "${VEEAM_JOB_NAME:-}"
     fi
-    # FLR watch ignores agent-payload mtime changes shortly after our own publish.
-    date +%s > "${publish}/.mold-agent-publish" 2>/dev/null || true
-    chmod -R a+rX "$publish" 2>/dev/null || true
-    mold_backup_notify_log info "Published RBD native marker for Veeam Agent (no .raw/.rbdiff SyncDirs): ${host_path} -> ${publish} ckpt=${ckpt:-n/a} backup_id=${backup_id:-n/a}"
-    # Do NOT Start-VBR/Active Full here — we are already inside the Veeam job
-    # that invoked pre-notify. Auto-start caused a second backup after one UI Start.
-    return 0
+    if ! mold_backup_host_path_has_rbd_payload "$host_path"; then
+      mold_backup_notify_log err "RBD stage has no .raw/.rbdiff payload; not publishing metadata-only backup: ${host_path}"
+      return 1
+    fi
   fi
 
-  # QCOW2 / file-backed: prefer hardlinks over a full copy before Veeam SnapshotRequired.
+  # QCOW2 / RBD file-chain: prefer hardlinks over a full copy before Veeam SnapshotRequired.
   if command -v cp >/dev/null 2>&1 && cp -al "${host_path}/." "$publish/" 2>/dev/null; then
     mold_backup_notify_log info "Published staging (hardlink) for Veeam Agent: ${host_path} -> ${publish}"
   elif command -v rsync >/dev/null 2>&1; then
@@ -4420,7 +4417,7 @@ mold_backup_restore_preflight() {
     fi
     d="${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}/${vm}"
     if mold_backup_vm_is_rbd_native "$vm" 2>/dev/null; then
-      mold_backup_notify_log info "restore preflight: ${vm} RBD snap-only — Veeam session maps to Mold restoreBackup (no FLR file drop required)"
+      mold_backup_notify_log info "restore preflight: ${vm} RBD file-chain backup — Veeam session maps to Mold restoreBackup and requires restored .raw/.rbdiff payload"
     elif [[ -d "$d" ]] && [[ -n "$(find "$d" -mindepth 1 -print -quit 2>/dev/null)" ]]; then
       mold_backup_notify_log info "restore preflight: ${vm} staging=${d} has files (FLR or backup staging)"
     else
@@ -4643,7 +4640,7 @@ mold_backup_conf_for_vm() {
   return 1
 }
 
-# True if this guest is Mold-native RBD (snap-only; no Veeam disk payload).
+# True if this guest is Mold-native RBD (Veeam payload must still contain .raw/.rbdiff files).
 mold_backup_vm_is_rbd_native() {
   local vm="$1"
   local base stage publish
@@ -4662,7 +4659,7 @@ mold_backup_vm_is_rbd_native() {
 
 # Resolve Mold backup UUID for a Veeam restore session on an RBD-native VM.
 # Order: explicit ckpt → RP/time map → marker → latest stage rbd-backup.meta → latest BackedUp.
-# Host FLR often has OibId without Get-VBRRestorePoint; marker-only trees have no FLR file drop.
+# Host FLR often has OibId without Get-VBRRestorePoint; RBD metadata helps map the selected restore point.
 mold_backup_resolve_rbd_backup_for_veeam_session() {
   local vm="$1" job="${2:-${VEEAM_JOB_NAME:-}}" rp_id="${3:-}" rp_epoch="${4:-}" ckpt="${5:-}"
   local backup_id publish base stage stage_ckpt vm_id
@@ -4676,7 +4673,7 @@ mold_backup_resolve_rbd_backup_for_veeam_session() {
     if [[ -f "${publish}/mold-rbd-native.marker" ]]; then
       ckpt="$(sed -n 's/^checkpoint_name=//p' "${publish}/mold-rbd-native.marker" 2>/dev/null | head -1 || true)"
       backup_id="$(sed -n 's/^backup_id=//p' "${publish}/mold-rbd-native.marker" 2>/dev/null | head -1 || true)"
-      # Prefer RP/time match when epoch is known; marker only when RP is absent.
+      # Prefer RP/time match when epoch is known; metadata fallback only when RP is absent.
       if [[ -n "$backup_id" && -z "$rp_id" && -z "$rp_epoch" ]]; then
         mold_backup_notify_log info "rbd-restore: vm=${vm} backup_id=${backup_id} (marker)"
         echo "$backup_id"
@@ -4744,7 +4741,7 @@ mold_backup_agent_payload_fingerprint() {
 
 # Immediate host FLR: Veeam UI restore rewrites /tmp/mold/veeam-agent/<vm>/current.
 # Skips our own backup publish (.mold-agent-publish) and active backup/restore markers.
-# RBD native marker-only trees are NEVER FLR — pre-notify publishes them after every backup.
+# RBD metadata-only trees are never FLR; real RBD backup payloads must include .raw/.rbdiff files.
 mold_backup_agent_payload_is_rbd_native_only() {
   local publish="$1"
   local f
@@ -5620,7 +5617,7 @@ mold_backup_handle_veeam_restore_session() {
   export RESTORE_SOURCE="${RESTORE_SOURCE:-${VEEAM_UI_RESTORE_SOURCE:-mold-only}}"
   export RESTORE_AUTO_STOP="${RESTORE_AUTO_STOP:-true}"
   if mold_backup_vm_is_rbd_native "$vm" 2>/dev/null; then
-    mold_backup_notify_log info "Veeam UI RBD restore session=${sid} vm=${vm} rp=${rp_id:-n/a} ckpt=${ckpt:-n/a} → Mold snap-rollback backup_id=${backup_id} (no FLR file drop)"
+    mold_backup_notify_log info "Veeam UI RBD restore session=${sid} vm=${vm} rp=${rp_id:-n/a} ckpt=${ckpt:-n/a} → Mold file-chain restore backup_id=${backup_id} (requires restored .raw/.rbdiff payload)"
   else
     mold_backup_notify_log info "Veeam UI restore session=${sid} vm=${vm} rp=${rp_id:-n/a} ckpt=${ckpt:-n/a} → Mold datadisk restore backup_id=${backup_id} (RESTORE_SOURCE=${RESTORE_SOURCE} AUTO_STOP=${RESTORE_AUTO_STOP})"
   fi

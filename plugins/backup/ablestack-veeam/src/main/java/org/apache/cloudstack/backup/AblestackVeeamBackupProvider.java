@@ -747,12 +747,6 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
 
     private void validateBackupStageCapacity(final Host stageHost, final String stageRootPath, final List<VolumeVO> vmVolumes,
             final String vmName, final String backupType, final String backupEngine) {
-        // RBD_DIFF is Mold-native snap + tiny meta only (no .raw/.rbdiff export to stage).
-        if (BACKUP_ENGINE_RBD_DIFF.equals(backupEngine)) {
-            LOG.info("{} phase=[STAGE_SPACE_CHECK_SKIPPED], vm=[{}], host=[{}], backupType=[{}], backupEngine=[{}], reason=[rbd-snap-only]",
-                    BACKUP_TRACE, vmName, stageHost != null ? stageHost.getName() : null, backupType, backupEngine);
-            return;
-        }
         final long requiredBytes = estimateRequiredStageBytesForBackup(vmVolumes);
         final long bufferBytes = Math.max(STAGE_SPACE_BUFFER_BYTES, requiredBytes / 5L);
         final long minimumAvailableBytes = requiredBytes + bufferBytes;
@@ -802,12 +796,6 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     private void ensureStageHostHasCapacityForRestore(final Host stageHost, final List<Backup> restoreChain,
             final Set<String> requiredVolumeUuids, final String vmName, final String backupUuid, final String volumeUuid) {
         if (stageHost == null || CollectionUtils.isEmpty(restoreChain)) {
-            return;
-        }
-        // RBD_DIFF restore uses rbd snap rollback on primary; no .raw/.rbdiff rehydrate under stage root.
-        if (isRbdDiffRestoreChain(restoreChain)) {
-            LOG.info("{} phase=[STAGE_SPACE_CHECK_SKIPPED], vm=[{}], backupUuid=[{}], volumeUuid=[{}], host=[{}], reason=[rbd-snap-rollback]",
-                    RESTORE_TRACE, vmName, backupUuid, volumeUuid, stageHost.getName());
             return;
         }
         final String stageRootPath = getBackupStageRootPath();
