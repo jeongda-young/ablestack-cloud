@@ -97,7 +97,7 @@ export default {
     displayStatus () {
       const status = this.localStatus || String(this.record?.status || this.statusText || '')
       if (this.isRestoring) {
-        return this.displayStep || 'Restoring'
+        return 'Restoring'
       }
       return status
     },
