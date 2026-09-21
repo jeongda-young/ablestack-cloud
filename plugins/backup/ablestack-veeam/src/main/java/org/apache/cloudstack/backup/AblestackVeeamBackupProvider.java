@@ -104,9 +104,9 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-import static org.apache.cloudstack.backup.BackupManager.BackupChainSize;
 import static org.apache.cloudstack.backup.BackupManager.BackupDataOperationTimeout;
 import static org.apache.cloudstack.backup.BackupManager.BackupFrameworkEnabled;
+import static org.apache.cloudstack.backup.BackupManager.KvmBackupChainSize;
 import static org.apache.cloudstack.backup.BackupManager.KvmIncrementalBackup;
 
 public class AblestackVeeamBackupProvider extends AdapterBase implements BackupProvider, Configurable {
@@ -419,9 +419,9 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             return false;
         }
 
-        if (getBackupChainSize(vm, latestBackup) >= BackupChainSize.value()) {
+        if (getBackupChainSize(vm, latestBackup) >= KvmBackupChainSize.value()) {
             LOG.info("Veeam backup for VM [{}] will be FULL: incremental chain size reached limit [{}]",
-                    vm.getInstanceName(), BackupChainSize.value());
+                    vm.getInstanceName(), KvmBackupChainSize.value());
             return false;
         }
         LOG.info("Veeam backup for VM [{}] will be INCREMENTAL from parent [{}] engine={}",
@@ -447,7 +447,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             return false;
         }
 
-        if (getBackupChainSize(vm, latestBackup) >= BackupChainSize.value()) {
+        if (getBackupChainSize(vm, latestBackup) >= KvmBackupChainSize.value()) {
             return false;
         }
         return true;
@@ -812,19 +812,6 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                     "Insufficient stage space on host [%s] for Veeam restore. Required at least [%d] bytes including buffer, but only [%d] bytes are available under [%s].",
                     stageHost.getName(), minimumAvailableBytes, availableBytes, stageRootPath));
         }
-    }
-
-    private boolean isRbdDiffRestoreChain(final List<Backup> restoreChain) {
-        if (CollectionUtils.isEmpty(restoreChain)) {
-            return false;
-        }
-        for (final Backup chainBackup : restoreChain) {
-            loadBackupDetailsIfNeeded(chainBackup);
-            if (!BACKUP_ENGINE_RBD_DIFF.equalsIgnoreCase(getBackupDetail(chainBackup, DETAIL_BACKUP_ENGINE))) {
-                return false;
-            }
-        }
-        return true;
     }
 
     private long estimateRequiredStageBytesForRestore(final List<Backup> restoreChain, final Set<String> requiredVolumeUuids) {

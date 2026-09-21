@@ -1581,7 +1581,7 @@ mold_backup_api_ensure_global_settings() {
   # Align Mold FULL↔incremental switch with host hook VEEAM_MAX_CHAIN when set.
   chain_size="${BACKUP_CHAIN_SIZE:-${VEEAM_MAX_CHAIN:-}}"
   if [[ -n "$chain_size" && "$chain_size" =~ ^[0-9]+$ && "$chain_size" -gt 0 ]]; then
-    mold_backup_api_update_config_if_needed "backup.chain.size" "$chain_size"
+    mold_backup_api_update_config_if_needed "kvm.backup.chain.size" "$chain_size"
   fi
   mold_backup_api_ensure_cluster_incremental_backup
 }
@@ -2391,6 +2391,7 @@ mold_backup_api_ensure_vm_stopped_for_restore() {
   local vm_name="${1:-${VM_NAME:-}}"
   local auto_stop="${RESTORE_AUTO_STOP:-true}"
   local vm_id state json job_id elapsed max_wait=300
+  MOLD_RESTORE_AUTO_STOPPED=false
   [[ -n "$vm_name" ]] || return 0
   # Safety: refuse if caller is clearly in a backup hook path.
   if [[ "${MOLD_BACKUP_HOOK:-}" == "pre-notify" || "${MOLD_BACKUP_HOOK:-}" == "post-notify" ]]; then
@@ -2427,6 +2428,7 @@ mold_backup_api_ensure_vm_stopped_for_restore() {
   while [[ "$elapsed" -lt "$max_wait" ]]; do
     state="$(mold_backup_api_get_vm_state "$vm_name" 2>/dev/null || true)"
     if [[ "$state" == "Stopped" ]]; then
+      MOLD_RESTORE_AUTO_STOPPED=true
       mold_backup_notify_log info "ensure-stopped: ${vm_name} is Stopped"
       return 0
     fi
@@ -2434,6 +2436,62 @@ mold_backup_api_ensure_vm_stopped_for_restore() {
     elapsed=$((elapsed + 5))
   done
   mold_backup_notify_log err "ensure-stopped: timeout waiting for ${vm_name} Stopped (last=${state:-unknown})"
+  return 1
+}
+
+mold_backup_api_start_vm_after_restore() {
+  local vm_name="${1:-${VM_NAME:-}}"
+  local auto_start="${RESTORE_AUTO_START:-true}"
+  local wait_seconds="${RESTORE_AUTO_START_WAIT_SECONDS:-600}"
+  local vm_id state json job_id elapsed
+  [[ -n "$vm_name" ]] || return 0
+  case "$auto_start" in
+    true|always) ;;
+    *)
+      mold_backup_notify_log info "restore auto-start disabled for ${vm_name} (RESTORE_AUTO_START=${auto_start})"
+      return 0
+      ;;
+  esac
+  if [[ "$auto_start" != "always" && "${MOLD_RESTORE_AUTO_STOPPED:-false}" != "true" ]]; then
+    mold_backup_notify_log info "restore auto-start skipped for ${vm_name}; VM was already stopped before restore"
+    return 0
+  fi
+  vm_id="$(mold_backup_api_get_vm_id "$vm_name" 2>/dev/null || true)"
+  [[ -n "$vm_id" ]] || {
+    mold_backup_notify_log err "restore auto-start: cannot resolve Mold id for ${vm_name}"
+    return 1
+  }
+  state="$(mold_backup_api_get_vm_state "$vm_name" 2>/dev/null || true)"
+  if [[ "$state" == "Running" ]]; then
+    mold_backup_notify_log info "restore auto-start: ${vm_name} already Running"
+    return 0
+  fi
+  mold_backup_notify_log info "restore auto-start: starting ${vm_name} after successful restore"
+  json=$(mold_backup_cmk_run startVirtualMachine "id=${vm_id}" 2>/dev/null) || {
+    mold_backup_notify_log err "restore auto-start: startVirtualMachine failed for ${vm_name}"
+    return 1
+  }
+  job_id="$(mold_backup_api_json_field "$json" "startvirtualmachineresponse.jobid")"
+  if [[ -z "$job_id" ]]; then
+    return 0
+  fi
+  [[ "$wait_seconds" =~ ^[0-9]+$ ]] || wait_seconds=600
+  if [[ "$wait_seconds" -eq 0 ]]; then
+    mold_backup_notify_log info "restore auto-start job=${job_id}; not waiting (RESTORE_AUTO_START_WAIT_SECONDS=0)"
+    return 0
+  fi
+  mold_backup_api_wait_async_job "$job_id" "$wait_seconds" >/dev/null || return 1
+  elapsed=0
+  while [[ "$elapsed" -lt "$wait_seconds" ]]; do
+    state="$(mold_backup_api_get_vm_state "$vm_name" 2>/dev/null || true)"
+    if [[ "$state" == "Running" ]]; then
+      mold_backup_notify_log info "restore auto-start: ${vm_name} is Running"
+      return 0
+    fi
+    sleep 5
+    elapsed=$((elapsed + 5))
+  done
+  mold_backup_notify_log err "restore auto-start: timeout waiting for ${vm_name} Running (last=${state:-unknown})"
   return 1
 }
 
@@ -6719,6 +6777,10 @@ mold_backup_restore_notify() {
       mold_backup_veeam_restore_chain_to_host "$BACKUP_ID"
     fi
     mold_backup_api_restore || return 1
+  fi
+
+  if [[ -n "${VM_NAME:-}" ]]; then
+    mold_backup_api_start_vm_after_restore "$VM_NAME" || return 1
   fi
 
   # Mold → Veeam Guest Files (FLR): when Mold restored (not reflecting an existing FLR).

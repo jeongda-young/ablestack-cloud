@@ -362,9 +362,7 @@ public class ResourceLimitManagerImpl extends ManagerBase implements ResourceLim
             return;
         }
 
-        // Callers sometimes pass Long... {null} (e.g. backup.getSize() before size is known).
-        // Empty varargs → count by 1; explicit null → 0 (no-op) rather than NPE.
-        final long numToIncrement = (delta.length == 0) ? 1L : (delta[0] == null ? 0L : delta[0]);
+        final long numToIncrement = (delta.length == 0) ? 1 : delta[0];
         removeResourceReservationIfNeededAndIncrementResourceCount(accountId, type, tag, numToIncrement);
     }
 
@@ -380,7 +378,7 @@ public class ResourceLimitManagerImpl extends ManagerBase implements ResourceLim
             logger.trace("Not decrementing resource count for system accounts, returning");
             return;
         }
-        long numToDecrement = (delta.length == 0) ? 1L : (delta[0] == null ? 0L : delta[0]);
+        long numToDecrement = (delta.length == 0) ? 1 : delta[0];
 
         if (!updateResourceCountForAccount(accountId, type, tag, false, numToDecrement)) {
             _alertMgr.sendAlert(AlertManager.AlertType.ALERT_TYPE_UPDATE_RESOURCE_COUNT, 0L, 0L, "Failed to decrement resource count of type " + type + " for account id=" + accountId,
