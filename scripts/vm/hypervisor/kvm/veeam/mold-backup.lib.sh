@@ -6779,7 +6779,9 @@ mold_backup_restore_notify() {
     mold_backup_api_restore || return 1
   fi
 
-  if [[ -n "${VM_NAME:-}" ]]; then
+  if [[ "${MOLD_RESTORE_ASYNC_SUBMITTED:-false}" == "true" ]]; then
+    mold_backup_notify_log info "restore auto-start deferred: Mold restore async job ${MOLD_RESTORE_ASYNC_JOB_ID:-unknown} is still running"
+  elif [[ -n "${VM_NAME:-}" ]]; then
     mold_backup_api_start_vm_after_restore "$VM_NAME" || return 1
   fi
 

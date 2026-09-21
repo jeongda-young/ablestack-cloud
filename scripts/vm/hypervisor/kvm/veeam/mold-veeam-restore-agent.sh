@@ -69,9 +69,14 @@ run_restore_watch() {
   export MOLD_BACKUP_CONF="$conf"
   export VEEAM_JOB_NAME="$job"
   export RESTORE_WATCH_TRIGGER_MOLD=true
-  # The timer service only bridges completed Veeam restores into Mold. The
-  # management async job and detached host restore own the long-running work.
-  export MOLD_RESTORE_ASYNC_DETACH=true
+  # If restore auto-start is enabled, wait for the Mold restore job so the VM is
+  # started only after the disk restore is complete. Operators can still detach
+  # long-running restore jobs by setting RESTORE_AUTO_START=false in the job conf.
+  if [[ "${RESTORE_AUTO_START:-true}" == "false" ]]; then
+    export MOLD_RESTORE_ASYNC_DETACH=true
+  else
+    export MOLD_RESTORE_ASYNC_DETACH=false
+  fi
   export RESTORE_RP_TIME_MATCH="${RESTORE_RP_TIME_MATCH:-true}"
   # Ensure stop-before-restore unless the job conf explicitly disables it.
   if ! grep -qE '^RESTORE_AUTO_STOP=' "$conf" 2>/dev/null; then
