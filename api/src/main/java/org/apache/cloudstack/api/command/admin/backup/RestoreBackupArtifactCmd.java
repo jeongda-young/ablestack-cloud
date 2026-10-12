@@ -31,7 +31,7 @@ import org.apache.cloudstack.backup.BackupManager;
 import org.apache.cloudstack.context.CallContext;
 import com.cloud.event.EventTypes;
 
-@APICommand(name = "restoreBackupArtifact", description = "Claim an external QCOW2 metadata restore callback and restore its logical backup through Mold",
+@APICommand(name = "restoreBackupArtifact", description = "Claim an external RBD or QCOW2 metadata restore callback and restore its logical backup through Mold",
         responseObject = SuccessResponse.class, since = "4.23.0", authorized = {RoleType.Admin})
 public class RestoreBackupArtifactCmd extends BaseAsyncCmd implements AdminCmd {
     @Inject private BackupManager backupManager;

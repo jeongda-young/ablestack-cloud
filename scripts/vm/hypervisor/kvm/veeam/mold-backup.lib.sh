@@ -5315,7 +5315,7 @@ mold_backup_handle_volume_restore_session() {
   local -a params=("provider=ablestack-veeam" "jobid=${sid%%#*}")
   [[ -z "$rp_id" || "$rp_id" == "n/a" ]] || params+=("externalid=${rp_id}")
   json="$(mold_backup_cmk_run resolveBackupArtifact "${params[@]}" 2>/dev/null)" || return 2
-  matched="$(mold_backup_api_json_field "$json" "resolvebackupartifactresponse.matched")"
+  matched="$(mold_backup_api_json_field "$json" "resolvebackupartifactresponse.backupartifact.matched")"
   [[ -n "$matched" ]] || return 2
   if [[ "${matched,,}" != "true" ]]; then
     if [[ "$job" == ABLESTACK-* || "$job" == *ABLESTACK-* ]]; then
@@ -5324,10 +5324,10 @@ mold_backup_handle_volume_restore_session() {
     fi
     return 1
   fi
-  vm="$(mold_backup_api_json_field "$json" "resolvebackupartifactresponse.vmname")"
-  tracked="$(mold_backup_api_json_field "$json" "resolvebackupartifactresponse.tracked")"
-  allowed="$(mold_backup_api_json_field "$json" "resolvebackupartifactresponse.restoreallowed")"
-  reason="$(mold_backup_api_json_field "$json" "resolvebackupartifactresponse.reason")"
+  vm="$(mold_backup_api_json_field "$json" "resolvebackupartifactresponse.backupartifact.vmname")"
+  tracked="$(mold_backup_api_json_field "$json" "resolvebackupartifactresponse.backupartifact.tracked")"
+  allowed="$(mold_backup_api_json_field "$json" "resolvebackupartifactresponse.backupartifact.restoreallowed")"
+  reason="$(mold_backup_api_json_field "$json" "resolvebackupartifactresponse.backupartifact.reason")"
   if [[ "${tracked,,}" == "true" || "${allowed,,}" != "true" ]]; then
     mold_backup_emit_restore_event "mold.restore.skipped.volume-pipeline" "$vm" "session=${sid};rp=${rp_id};reason=${reason}"
     mold_backup_restore_session_mark_seen "$sid"

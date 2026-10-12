@@ -18,132 +18,151 @@
 <template>
   <div class="staging-management">
     <a-alert type="info" show-icon :message="$t('message.backup.staging.management')" class="staging-alert" />
-    <a-space class="staging-toolbar">
+    <a-space class="staging-toolbar" wrap>
       <a-select v-model:value="operation" :disabled="busy || loading" style="width: 140px">
-        <a-select-option value="BACKUP">BACKUP</a-select-option>
-        <a-select-option value="RESTORE">RESTORE</a-select-option>
+        <a-select-option value="BACKUP">{{ $t('label.backup') }}</a-select-option>
+        <a-select-option value="RESTORE">{{ $t('label.restore') }}</a-select-option>
       </a-select>
       <a-select
         v-if="operation === 'RESTORE' && info?.restoreattempt?.length"
         v-model:value="selectedRestoreJobId"
         :disabled="busy || loading"
-        style="min-width: 360px"
+        style="max-width: 100%; min-width: 280px"
         @change="changeRestoreAttempt">
         <a-select-option v-for="attempt in info.restoreattempt" :key="attempt.stagingjobid" :value="attempt.current ? '' : attempt.stagingjobid">
-          {{ attempt.current ? 'CURRENT' : 'HISTORY' }} · {{ attempt.stagingjobid }} · {{ attempt.hostname || 'UNKNOWN' }} · {{ attempt.vmrestoreoutcome || 'NOT_RECORDED' }}
+          {{ $t(attempt.current ? 'label.backup.staging.current.attempt' : 'label.backup.staging.past.attempt') }} · {{ attempt.createdat ? $toLocaleDate(attempt.createdat) : attempt.stagingjobid }} · {{ attempt.hostname || $t('label.backup.staging.not.recorded') }}
         </a-select-option>
       </a-select>
-      <a-button :loading="loading" :disabled="busy" @click="load">{{ $t('label.refresh') }}</a-button>
-      <a-button v-if="canManage" :disabled="!canMutate || busy || loading" @click="run('RECHECK')">Recheck external jobs and files</a-button>
+      <a-button :loading="loading" :disabled="busy" @click="load">{{ $t('label.backup.staging.refresh') }}</a-button>
+      <a-tooltip :title="$t('message.backup.staging.recheck')">
+        <a-button v-if="canManage" :disabled="!canMutate || busy || loading" @click="run('RECHECK')">{{ $t('label.backup.staging.recheck') }}</a-button>
+      </a-tooltip>
     </a-space>
     <a-alert v-if="error" type="warning" show-icon :message="error" class="staging-alert" />
+    <a-alert
+      v-if="!loading && !error && !info"
+      type="info"
+      show-icon
+      :message="$t('message.backup.staging.no.details')"
+      class="staging-alert" />
     <template v-if="info">
-      <a-alert v-if="info.historical" type="info" show-icon message="Recorded restore history. Host state is the last confirmed state; management actions are available only for the current attempt." class="staging-alert" />
+      <a-alert
+        :type="situation.type"
+        show-icon
+        :message="$t(situation.title)"
+        :description="$t(situation.description)"
+        class="staging-alert" />
       <a-descriptions bordered :column="1" size="small">
-        <a-descriptions-item label="Staging Job ID">{{ info.stagingjobid }}</a-descriptions-item>
-        <a-descriptions-item :label="$t('label.vm')">{{ info.vmname }} · {{ info.timestamp }}</a-descriptions-item>
-        <a-descriptions-item v-if="operation === 'RESTORE'" label="Restore target VM">{{ info.targetvmname || 'NOT_RECORDED' }}</a-descriptions-item>
-        <a-descriptions-item v-if="info.startstate || operation === 'RESTORE'" :label="operation === 'RESTORE' ? 'Restore start' : 'Backup start'">{{ info.startstate || 'NOT_RECORDED' }} · {{ info.startreason || '—' }}<div v-if="info.startsubmittedat">Dispatch intent: {{ $toLocaleDate(info.startsubmittedat) }}</div><div v-if="info.startcheckedat">Confirmed: {{ $toLocaleDate(info.startcheckedat) }}</div></a-descriptions-item>
-        <a-descriptions-item v-if="info.cancelrequestedat" :label="operation === 'RESTORE' ? 'Restore cancellation' : 'Backup cancellation'">
-          {{ info.cancelreason || 'Cancellation requested; termination and cleanup must be confirmed' }}
-          <div>Requested: {{ $toLocaleDate(info.cancelrequestedat) }}</div>
-          <div v-if="info.cancelconfirmedat">Host acknowledged: {{ $toLocaleDate(info.cancelconfirmedat) }}</div>
-        </a-descriptions-item>
-        <a-descriptions-item :label="$t('label.host')">{{ info.hostname || 'UNKNOWN' }}</a-descriptions-item>
-        <a-descriptions-item label="Destination">{{ info.destination }}</a-descriptions-item>
-        <a-descriptions-item label="Host state / step">{{ info.hoststate }} / {{ info.step || '—' }} <span v-if="info.progress != null">({{ info.progress }}%)</span></a-descriptions-item>
-        <a-descriptions-item v-if="info.hostcheckedat" label="Host state confirmed">{{ $toLocaleDate(info.hostcheckedat) }}</a-descriptions-item>
-        <a-descriptions-item label="Current / last volume">{{ info.volumeindex || '—' }} / {{ info.volumecount || '—' }} · {{ info.currentvolumeid || '—' }}</a-descriptions-item>
-        <a-descriptions-item v-if="!info.historical" label="Reserved capacity">{{ bytes(info.reservedbytes) }} · {{ info.reservationstate }}</a-descriptions-item>
-        <a-descriptions-item v-if="!info.historical" label="Admission">{{ info.stagingqueue?.state || '—' }} · {{ info.stagingqueue?.reason || '—' }}</a-descriptions-item>
-        <a-descriptions-item v-if="!info.historical" label="Required / effective available">{{ bytes(info.stagingqueue?.requiredbytes) }} / {{ bytes(info.stagingqueue?.effectiveavailablebytes) }}</a-descriptions-item>
-        <a-descriptions-item v-if="!info.historical && info.stagingqueue?.primarystorage?.length" label="Primary storage reservations">
-          <div v-for="claim in info.stagingqueue.primarystorage" :key="claim.storagekey">
-            {{ claim.storagekey }} · Required: {{ bytes(claim.requiredbytes) }} · Effective available: {{ bytes(claim.effectiveavailablebytes) }}
-            · {{ ['ADMITTING', 'ADMITTED', 'CANCEL_PENDING'].includes(info.stagingqueue.state) ? 'HELD' : info.stagingqueue.state === 'RELEASED' ? 'RELEASED' : 'NOT_RESERVED' }}
-          </div>
-        </a-descriptions-item>
-        <a-descriptions-item :label="$t('label.backup.cleanup.state')">{{ info.cleanupstate || '—' }} · {{ info.cleanupreason || '—' }}</a-descriptions-item>
-        <a-descriptions-item v-if="operation === 'BACKUP' && info.sourcecleanupstate" :label="$t('label.backup.source.cleanup.state')">{{ info.sourcecleanupstate }} · {{ info.sourcecleanupreason || '—' }}</a-descriptions-item>
-        <a-descriptions-item v-if="operation === 'BACKUP' && info.jobcleanupstate" label="Host job record cleanup">{{ info.jobcleanupstate }} · {{ info.jobcleanupreason || '—' }}</a-descriptions-item>
-        <a-descriptions-item v-if="operation === 'BACKUP' && info.finalizationstate" label="Backup finalization">{{ info.finalizationstate }} · {{ info.finalizationreason || '—' }}</a-descriptions-item>
-        <a-descriptions-item v-if="operation === 'RESTORE'" :label="$t('label.backup.vm.restore.result')">{{ info.vmrestore?.outcome || 'NOT_RECORDED' }} · {{ info.vmrestore?.phase || 'NOT_RECORDED' }}</a-descriptions-item>
-        <a-descriptions-item v-if="operation === 'RESTORE'" :label="$t('label.backup.primary.cleanup.state')">{{ info.vmrestore?.primarycleanupstate || 'NOT_RECORDED' }}</a-descriptions-item>
-        <a-descriptions-item v-if="operation === 'RESTORE' && info.vmrestore?.transactionid" label="VM transaction">{{ info.vmrestore.transactionid }} · Revision {{ info.vmrestore.revision }}</a-descriptions-item>
-        <a-descriptions-item v-if="operation === 'RESTORE' && info.vmrestore?.updatedat" label="VM result times">
-          <div>Updated: {{ $toLocaleDate(info.vmrestore.updatedat) }}</div>
-          <div v-if="info.vmrestore.preparedat">All volumes prepared: {{ $toLocaleDate(info.vmrestore.preparedat) }}</div>
-          <div v-if="info.vmrestore.switchstartedat">Switch started: {{ $toLocaleDate(info.vmrestore.switchstartedat) }}</div>
-          <div v-if="info.vmrestore.committedat">Committed: {{ $toLocaleDate(info.vmrestore.committedat) }}</div>
-          <div v-if="info.vmrestore.rollbackstartedat">Rollback started: {{ $toLocaleDate(info.vmrestore.rollbackstartedat) }}</div>
-          <div v-if="info.vmrestore.rolledbackat">Rolled back: {{ $toLocaleDate(info.vmrestore.rolledbackat) }}</div>
-          <div v-if="info.vmrestore.primarycleanupcompletedat">Primary cleanup completed: {{ $toLocaleDate(info.vmrestore.primarycleanupcompletedat) }}</div>
-          <div v-if="info.vmrestore.checkedat">Result checked: {{ $toLocaleDate(info.vmrestore.checkedat) }}</div>
-        </a-descriptions-item>
+        <a-descriptions-item :label="$t('label.vm')">{{ info.vmname || resource.vmname || '—' }}<span v-if="info.timestamp"> · {{ info.timestamp }}</span></a-descriptions-item>
+        <a-descriptions-item v-if="operation === 'RESTORE' && info.targetvmname" :label="$t('label.backup.staging.restore.target')">{{ info.targetvmname }}</a-descriptions-item>
+        <a-descriptions-item :label="$t('label.backup.staging.worker.host')">{{ info.hostname || $t('label.backup.staging.not.confirmed') }}</a-descriptions-item>
+        <a-descriptions-item v-if="info.destination" :label="$t('label.backup.staging.destination')">{{ info.destination }}</a-descriptions-item>
+        <a-descriptions-item :label="$t('label.operation.status')">{{ info.hoststate || 'UNKNOWN' }}</a-descriptions-item>
+        <a-descriptions-item v-if="info.step" :label="$t('label.step')">{{ info.step }}</a-descriptions-item>
+        <a-descriptions-item v-if="info.volumecount" :label="$t('label.backup.staging.volume.progress')">{{ info.volumeindex || '—' }} / {{ info.volumecount }}</a-descriptions-item>
+        <a-descriptions-item v-if="info.stagingqueue" :label="$t('label.backup.staging.state')">{{ info.stagingqueue.state }}<div v-if="info.stagingqueue.reason">{{ info.stagingqueue.reason }}</div></a-descriptions-item>
+        <a-descriptions-item v-if="info.cleanupstate" :label="$t('label.backup.cleanup.state')">{{ info.cleanupstate }}<div v-if="info.cleanupreason">{{ info.cleanupreason }}</div></a-descriptions-item>
+        <a-descriptions-item v-if="operation === 'RESTORE' && info.vmrestore" :label="$t('label.backup.vm.restore.result')">{{ info.vmrestore.outcome }} · {{ info.vmrestore.phase }}</a-descriptions-item>
       </a-descriptions>
-      <a-alert
-        v-if="operation === 'RESTORE' && (info.vmrestore?.failure || info.vmrestore?.recoveryerror || info.vmrestore?.queryerror)"
-        type="warning"
-        show-icon
-        :message="[info.vmrestore.failure, info.vmrestore.recoveryerror, info.vmrestore.queryerror].filter(Boolean).join(' · ')"
-        class="staging-alert" />
-      <a-table
-        v-if="operation === 'RESTORE' && info.vmrestore?.volume?.length"
-        :columns="vmColumns"
-        :data-source="info.vmrestore.volume"
-        row-key="volumeid"
-        :pagination="false"
-        :scroll="{ x: 1500 }"
-        size="small"
-        class="staging-artifacts">
-        <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'volume'"><div>{{ record.index }} · {{ record.volumeid }}</div><small>{{ record.destination || 'NOT_RECORDED' }}</small><small v-if="record.poolid">Pool: {{ record.poolid }}</small><small v-if="record.hadoriginal != null">Original existed: {{ record.hadoriginal }}</small></template>
-          <template v-else-if="column.key === 'prepare'"><div>{{ record.preparestate }}</div><small v-if="record.preparestartedat">Started: {{ $toLocaleDate(record.preparestartedat) }}</small><small v-if="record.preparedat">Prepared: {{ $toLocaleDate(record.preparedat) }}</small></template>
-          <template v-else-if="column.key === 'switch'"><div>{{ record.switchstate }}</div><small v-if="record.switchstartedat">Started: {{ $toLocaleDate(record.switchstartedat) }}</small><small v-if="record.switchedat">Switched: {{ $toLocaleDate(record.switchedat) }}</small></template>
-          <template v-else-if="column.key === 'rollback'"><div>{{ record.rollbackstate }}</div><small v-if="record.rollbackstartedat">Started: {{ $toLocaleDate(record.rollbackstartedat) }}</small><small v-if="record.rolledbackat">Rolled back: {{ $toLocaleDate(record.rolledbackat) }}</small></template>
-          <template v-else-if="column.key === 'cleanup'"><div>{{ record.cleanupstate }}</div><small v-if="record.cleanedat">Cleaned: {{ $toLocaleDate(record.cleanedat) }}</small><small v-if="record.failure">Failure: {{ record.failure }}</small></template>
-        </template>
-      </a-table>
-      <a-alert
-        v-if="info.hosterror || info.reservationerror || info.reconciliationerror"
-        type="warning"
-        show-icon
-        :message="[info.hosterror, info.reservationerror, info.reconciliationerror].filter(Boolean).join(' · ')"
-        class="staging-alert" />
-      <a-table
-        :columns="columns"
-        :data-source="info.artifact || []"
-        :row-key="row => row.path"
-        :pagination="{ pageSize: 20, hideOnSinglePage: true }"
-        :row-selection="canMutate ? rowSelection : undefined"
-        :scroll="{ x: operation === 'RESTORE' ? 1600 : 1100 }"
-        size="small"
-        class="staging-artifacts">
-        <template #bodyCell="{ column, record }">
-          <template v-if="column.key === 'volume'"><div>{{ record.metadata ? 'METADATA' : record.volumeid }}</div><small v-if="operation === 'RESTORE'">Sequence {{ record.index }}<span v-if="record.chainindex != null"> · Chain {{ record.chainindex }}</span></small><small>{{ record.path }}</small><small v-if="record.destination">Destination: {{ record.destination }}</small><small v-if="!record.owned">Inherited: {{ record.backupid }}</small></template>
-          <template v-else-if="column.key === 'job'"><div>{{ record.externaljobid || (record.submissionpending ? 'UNCONFIRMED' : '—') }}</div><small>{{ record.externalid || '—' }}</small><small>{{ record.backuptime || '—' }}</small></template>
-          <template v-else-if="column.key === 'state'">{{ record.restorestate || (record.completed ? 'COMPLETED' : record.terminal ? 'TERMINAL' : record.submissionpending ? 'UNCONFIRMED' : record.externaljobid ? 'RUNNING / UNKNOWN' : '—') }}<small v-if="record.failure">Failure: {{ record.failure }}</small><small v-if="record.queryerror">Query: {{ record.queryerror }}</small></template>
-          <template v-else-if="column.key === 'history'">
-            <small v-if="record.recordedat">Recorded: {{ $toLocaleDate(record.recordedat) }}</small>
-            <small v-if="record.submittedat">Submission intent: {{ $toLocaleDate(record.submittedat) }}</small>
-            <small v-if="record.completedat">Completed: {{ $toLocaleDate(record.completedat) }}</small>
-            <small v-if="record.terminalat">Terminal: {{ $toLocaleDate(record.terminalat) }}</small>
-            <small v-if="record.acknowledgedat">Acknowledged: {{ $toLocaleDate(record.acknowledgedat) }}</small>
-            <small v-if="record.checkedat">Checked: {{ $toLocaleDate(record.checkedat) }}</small>
-            <span v-if="!record.recordedat && !record.checkedat">—</span>
-          </template>
-          <template v-else-if="column.key === 'availability'"><a-tooltip :title="record.availabilityerror"><span>{{ record.availability || 'UNKNOWN' }}</span></a-tooltip><small v-if="record.availabilitycheckedat">{{ $toLocaleDate(record.availabilitycheckedat) }}</small></template>
-        </template>
-      </a-table>
-      <a-form v-if="canMutate" layout="vertical">
-        <a-form-item label="External Job ID" :extra="linkGuide">
-          <a-input v-model:value="externalJobId" :disabled="busy || loading" />
-        </a-form-item>
-        <a-space>
-          <a-button :disabled="busy || loading || !selected || !externalJobId.trim()" @click="run('LINK_JOB')">Connect verified Job ID</a-button>
-          <a-button :disabled="busy || loading || !canCleanup" @click="run('RETRY_CLEANUP')">Retry cleanup</a-button>
-        </a-space>
-      </a-form>
+      <a-alert v-if="diagnosticErrors" type="warning" show-icon :message="diagnosticErrors" class="staging-alert" />
+      <div v-if="canCleanup" class="staging-actions">
+        <p>{{ $t('message.backup.staging.cleanup') }}</p>
+        <a-button :disabled="busy || loading" @click="run('RETRY_CLEANUP')">{{ $t('label.backup.staging.retry.cleanup') }}</a-button>
+      </div>
+      <a-collapse class="staging-details">
+        <a-collapse-panel v-if="info.artifact?.length" key="files" :header="$t('label.backup.staging.files')">
+          <p>{{ $t('message.backup.staging.files') }}</p>
+          <a-table
+            :columns="columns"
+            :data-source="info.artifact"
+            :row-key="row => row.path"
+            :pagination="{ pageSize: 20, hideOnSinglePage: true }"
+            :scroll="{ x: 1000 }"
+            size="small">
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'volume'">
+                <div>{{ record.metadata ? $t('label.metadata') : record.volumeid }}</div>
+                <small>{{ record.path }}</small>
+                <small v-if="record.destination">{{ $t('label.backup.staging.destination') }}: {{ record.destination }}</small>
+                <small v-if="!record.owned">{{ $t('label.backup.staging.parent.backup') }}: {{ record.backupid }}</small>
+              </template>
+              <template v-else-if="column.key === 'job'">
+                <div>{{ record.externaljobid || (record.submissionpending ? 'UNCONFIRMED' : '—') }}</div>
+                <small v-if="record.externalid">{{ $t('label.backup.staging.catalog.reference') }}: {{ record.externalid }}</small>
+                <small v-if="record.backuptime">{{ record.backuptime }}</small>
+              </template>
+              <template v-else-if="column.key === 'state'">
+                {{ record.restorestate || (record.completed ? 'COMPLETED' : record.terminal ? 'TERMINAL' : record.submissionpending ? 'UNCONFIRMED' : record.externaljobid ? 'UNKNOWN' : 'NOT_STARTED') }}
+                <small v-if="record.failure">{{ record.failure }}</small><small v-if="record.queryerror">{{ record.queryerror }}</small>
+              </template>
+              <template v-else-if="column.key === 'availability'">
+                <a-tooltip :title="record.availabilityerror"><span>{{ record.availability || 'UNKNOWN' }}</span></a-tooltip>
+                <small v-if="record.availabilitycheckedat">{{ $toLocaleDate(record.availabilitycheckedat) }}</small>
+              </template>
+            </template>
+          </a-table>
+        </a-collapse-panel>
+        <a-collapse-panel key="details" :header="$t('label.backup.staging.details')">
+          <a-descriptions bordered :column="1" size="small">
+            <a-descriptions-item :label="$t('label.backup.staging.job.id')">{{ info.stagingjobid }}</a-descriptions-item>
+            <a-descriptions-item v-if="info.checkedat" :label="$t('label.backup.staging.checked.at')">{{ $toLocaleDate(info.checkedat) }}</a-descriptions-item>
+            <a-descriptions-item v-if="info.startstate" :label="$t('label.backup.staging.start.state')">{{ info.startstate }}<div v-if="info.startreason">{{ info.startreason }}</div></a-descriptions-item>
+            <a-descriptions-item v-if="info.cancelrequestedat" :label="$t('label.backup.staging.cancel.requested')">{{ $toLocaleDate(info.cancelrequestedat) }}<div v-if="info.cancelreason">{{ info.cancelreason }}</div></a-descriptions-item>
+            <a-descriptions-item v-if="info.hostcheckedat" :label="$t('label.backup.staging.host.checked.at')">{{ $toLocaleDate(info.hostcheckedat) }}</a-descriptions-item>
+            <a-descriptions-item v-if="info.currentvolumeid" :label="$t('label.backup.staging.volume.id')">{{ info.currentvolumeid }}</a-descriptions-item>
+            <a-descriptions-item v-if="!info.historical && (info.reservedbytes != null || info.reservationstate)" :label="$t('label.backup.staging.reserved.capacity')">{{ bytes(info.reservedbytes) }}<span v-if="info.reservationstate"> · {{ info.reservationstate }}</span></a-descriptions-item>
+            <a-descriptions-item v-if="!info.historical && info.stagingqueue" :label="$t('label.backup.staging.capacity')">{{ bytes(info.stagingqueue.requiredbytes) }} / {{ bytes(info.stagingqueue.effectiveavailablebytes) }}</a-descriptions-item>
+            <a-descriptions-item v-if="!info.historical && info.stagingqueue?.primarystorage?.length" :label="$t('label.backup.staging.primary.reservations')">
+              <div v-for="claim in info.stagingqueue.primarystorage" :key="claim.storagekey">{{ claim.storagekey }} · {{ bytes(claim.requiredbytes) }} / {{ bytes(claim.effectiveavailablebytes) }}</div>
+            </a-descriptions-item>
+            <a-descriptions-item v-if="info.sourcecleanupstate" :label="$t('label.backup.source.cleanup.state')">{{ info.sourcecleanupstate }}<div v-if="info.sourcecleanupreason">{{ info.sourcecleanupreason }}</div></a-descriptions-item>
+            <a-descriptions-item v-if="info.jobcleanupstate" :label="$t('label.backup.staging.job.cleanup')">{{ info.jobcleanupstate }}<div v-if="info.jobcleanupreason">{{ info.jobcleanupreason }}</div></a-descriptions-item>
+            <a-descriptions-item v-if="info.finalizationstate" :label="$t('label.backup.staging.finalization')">{{ info.finalizationstate }}<div v-if="info.finalizationreason">{{ info.finalizationreason }}</div></a-descriptions-item>
+            <a-descriptions-item v-if="info.vmrestore?.primarycleanupstate" :label="$t('label.backup.primary.cleanup.state')">{{ info.vmrestore.primarycleanupstate }}</a-descriptions-item>
+            <a-descriptions-item v-if="info.vmrestore?.transactionid" :label="$t('label.backup.staging.vm.transaction')">{{ info.vmrestore.transactionid }}</a-descriptions-item>
+            <a-descriptions-item v-if="info.vmrestore?.updatedat" :label="$t('label.backup.staging.checked.at')">{{ $toLocaleDate(info.vmrestore.updatedat) }}</a-descriptions-item>
+          </a-descriptions>
+          <a-table
+            v-if="operation === 'RESTORE' && info.vmrestore?.volume?.length"
+            :columns="vmColumns"
+            :data-source="info.vmrestore.volume"
+            row-key="volumeid"
+            :pagination="false"
+            :scroll="{ x: 1200 }"
+            size="small"
+            class="staging-artifacts">
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'volume'"><div>{{ record.index }} · {{ record.volumeid }}</div><small>{{ record.destination }}</small></template>
+              <template v-else-if="column.key === 'cleanup'">{{ record.cleanupstate }}<small v-if="record.failure">{{ record.failure }}</small></template>
+              <template v-else>{{ record[column.key + 'state'] || 'NOT_RECORDED' }}</template>
+            </template>
+          </a-table>
+        </a-collapse-panel>
+        <a-collapse-panel v-if="canMutate && unresolvedArtifacts.length" key="link" :header="$t('label.backup.staging.manual.link')">
+          <a-alert type="warning" show-icon :message="linkGuide" class="staging-alert" />
+          <a-table
+            :columns="columns.slice(0, 3)"
+            :data-source="unresolvedArtifacts"
+            :row-key="row => row.path"
+            :pagination="false"
+            :row-selection="rowSelection"
+            :scroll="{ x: 900 }"
+            size="small"
+            class="staging-artifacts">
+            <template #bodyCell="{ column, record }">
+              <template v-if="column.key === 'volume'"><div>{{ record.metadata ? $t('label.metadata') : record.volumeid }}</div><small>{{ record.path }}</small></template>
+              <template v-else-if="column.key === 'job'">{{ record.externaljobid || 'UNCONFIRMED' }}</template>
+              <template v-else>{{ record.restorestate || 'UNCONFIRMED' }}</template>
+            </template>
+          </a-table>
+          <a-form layout="vertical">
+            <a-form-item :label="$t('label.backup.staging.external.job.id')" :extra="$t('message.backup.staging.job.id')">
+              <a-input v-model:value="externalJobId" :disabled="busy || loading" />
+            </a-form-item>
+            <a-button :disabled="busy || loading || !selected || !externalJobId.trim()" @click="run('LINK_JOB')">{{ $t('label.backup.staging.connect.job') }}</a-button>
+          </a-form>
+        </a-collapse-panel>
+      </a-collapse>
     </template>
     <div class="staging-footer"><a-button :disabled="busy" @click="$emit('close-action')">{{ $t('label.close') }}</a-button></div>
   </div>
@@ -161,15 +180,38 @@ export default {
   },
   computed: {
     canManage () { return 'reconcileBackupStagingJob' in this.$store.getters.apis },
-    canMutate () { return this.canManage && !!this.info && !this.info.historical },
-    selected () { return this.info?.artifact?.find(row => this.selectedKeys.includes(row.path)) },
+    canMutate () { return this.canManage && typeof this.info?.stagingjobid === 'string' && !!this.info.stagingjobid.trim() && !this.info.historical },
+    unresolvedArtifacts () {
+      return (this.info?.artifact || []).filter(row => row.index != null && !row.completed && !row.terminal &&
+        (row.submissionpending || row.externaljobid) && (this.operation !== 'BACKUP' || row.owned) &&
+        (this.operation !== 'RESTORE' || row.requestrecorded))
+    },
+    selected () { return this.unresolvedArtifacts.find(row => this.selectedKeys.includes(row.path)) },
     linkGuide () {
-      const base = 'Select an unresolved operation. The provider must verify the exact VM, volume, timestamp and operation before connecting it.'
-      return this.operation === 'RESTORE' && ['ablestack-netbackup', 'ablestack-veeam'].includes(this.info?.provider)
-        ? base + ' A matching saved restore request is required for NetBackup/Veeam; an unverified Job ID cannot be connected.' : base
+      return this.$t(this.operation === 'RESTORE' && ['ablestack-netbackup', 'ablestack-veeam'].includes(this.info?.provider)
+        ? 'message.backup.staging.link.restore' : 'message.backup.staging.link')
+    },
+    diagnosticErrors () {
+      return [this.info?.hosterror, this.info?.reservationerror, this.info?.reconciliationerror,
+        this.info?.vmrestore?.failure, this.info?.vmrestore?.recoveryerror, this.info?.vmrestore?.queryerror].filter(Boolean).join(' · ')
+    },
+    situation () {
+      let key = 'inspect'
+      let type = 'info'
+      if (this.info?.historical) {
+        key = 'history'
+      } else if (this.diagnosticErrors) {
+        key = 'query.failed'; type = 'warning'
+      } else if (this.unresolvedArtifacts.some(row => row.submissionpending)) {
+        key = 'unconfirmed'; type = 'warning'
+      } else if (this.canCleanup || ['WAITING', 'RUNNING'].includes(this.info?.cleanupstate) ||
+        ['WAITING', 'RUNNING'].includes(this.info?.sourcecleanupstate) || ['WAITING', 'RUNNING'].includes(this.info?.jobcleanupstate)) {
+        key = 'cleanup.pending'; type = 'warning'
+      } else if (this.info?.cleanupstate === 'COMPLETED') key = 'cleanup.completed'
+      return { type, title: 'message.backup.staging.' + key + '.title', description: 'message.backup.staging.' + key }
     },
     canCleanup () {
-      if (!this.info || this.info.historical) return false
+      if (!this.canMutate) return false
       const failedBackup = ['Failed', 'Canceled', 'Error'].includes(this.resource.status)
       if (this.info.cleanupstate === 'COMPLETED') {
         // Finished staging removal is durable proof for retrying the remaining records/slot release.
@@ -182,21 +224,24 @@ export default {
       return (terminal || unstarted) && (this.operation === 'RESTORE' || failedBackup)
     },
     columns () {
-      const columns = [{ key: 'volume', title: 'Volume / path', width: 400 }, { key: 'job', title: 'External job / catalog / point', width: 300 }, { key: 'state', title: 'External state', width: 220 }]
-      if (this.operation === 'RESTORE') columns.push({ key: 'history', title: 'Recorded times', width: 280 })
-      columns.push({ key: 'availability', title: 'Artifact availability', width: 180 })
-      return columns
+      return [{ key: 'volume', title: this.$t('label.backup.staging.volume.file'), width: 350 },
+        { key: 'job', title: this.$t('label.backup.staging.external.job'), width: 300 },
+        { key: 'state', title: this.$t('label.backup.staging.external.state'), width: 200 },
+        { key: 'availability', title: this.$t('label.backup.staging.file.availability'), width: 150 }]
     },
     vmColumns () {
-      return [{ key: 'volume', title: 'VM volume / destination', width: 400 }, { key: 'prepare', title: 'Primary preparation', width: 250 },
-        { key: 'switch', title: 'Volume switch', width: 250 }, { key: 'rollback', title: 'Rollback', width: 250 }, { key: 'cleanup', title: 'Primary cleanup', width: 300 }]
+      return [{ key: 'volume', title: this.$t('label.backup.staging.volume.destination'), width: 400 },
+        { key: 'prepare', title: this.$t('label.backup.staging.volume.prepare'), width: 200 },
+        { key: 'switch', title: this.$t('label.backup.staging.volume.switch'), width: 200 },
+        { key: 'rollback', title: this.$t('label.backup.staging.volume.rollback'), width: 200 },
+        { key: 'cleanup', title: this.$t('label.backup.primary.cleanup.state'), width: 200 }]
     },
     rowSelection () {
       return {
         type: 'radio',
         selectedRowKeys: this.selectedKeys,
         onChange: keys => { this.selectedKeys = keys },
-        getCheckboxProps: row => ({ disabled: this.busy || this.loading || row.index == null || row.completed || row.terminal || (!row.submissionpending && !row.externaljobid) || (this.operation === 'BACKUP' && !row.owned) || (this.operation === 'RESTORE' && !row.requestrecorded) })
+        getCheckboxProps: () => ({ disabled: this.busy || this.loading })
       }
     }
   },
@@ -212,22 +257,24 @@ export default {
   mounted () { this.load() },
   beforeUnmount () { this.disposed = true; this.requestToken++ },
   methods: {
-    bytes (value) { return value == null ? 'UNKNOWN' : (Number(value) / 1073741824).toFixed(2) + ' GiB' },
+    bytes (value) { return value == null ? this.$t('label.backup.staging.not.confirmed') : (Number(value) / 1073741824).toFixed(2) + ' GiB' },
     current (token) { return !this.disposed && token === this.requestToken },
+    stagingInfo (result) {
+      const info = result?.backupstaginginfo || result
+      return typeof info?.stagingjobid === 'string' && info.stagingjobid.trim() ? info : null
+    },
     changeRestoreAttempt () { this.selectedKeys = []; this.externalJobId = ''; this.load() },
     async load () {
       if (this.busy || this.disposed) return
       const token = ++this.requestToken
-      this.loading = true; this.error = ''
+      this.loading = true; this.error = ''; this.info = null; this.selectedKeys = []; this.externalJobId = ''
       try {
         const params = { id: this.resource.id, operation: this.operation }
         if (this.operation === 'RESTORE' && this.selectedRestoreJobId) params.stagingjobid = this.selectedRestoreJobId
         const response = await getAPI('getBackupStagingInfo', params)
-        if (this.current(token)) { this.info = response.getbackupstaginginforesponse; this.selectedKeys = [] }
+        if (this.current(token)) this.info = this.stagingInfo(response.getbackupstaginginforesponse)
       } catch (error) {
-        if (this.current(token)) {
-          this.info = null; this.error = error.response?.data?.getbackupstaginginforesponse?.errortext || error.message || String(error)
-        }
+        if (this.current(token)) this.error = error.response?.data?.getbackupstaginginforesponse?.errortext || error.message || String(error)
       } finally {
         if (this.current(token)) this.loading = false
       }
@@ -235,17 +282,22 @@ export default {
     async run (action) {
       if (!this.canMutate || this.busy || this.loading) return
       if (action === 'LINK_JOB' && (!this.selected || !this.externalJobId.trim())) return
+      if (action === 'RETRY_CLEANUP' && !this.canCleanup) return
+      if (!['RECHECK', 'LINK_JOB', 'RETRY_CLEANUP'].includes(action)) return
       const token = ++this.requestToken
       const params = { id: this.resource.id, operation: this.operation, stagingjobid: this.info.stagingjobid, action }
       if (action === 'LINK_JOB') { params.artifactindex = this.selected.index; params.externaljobid = this.externalJobId.trim() }
       this.busy = true; this.error = ''
       const failed = result => {
-        if (this.current(token)) { this.busy = false; this.error = result?.jobresult?.errortext || result?.message || 'Staging reconciliation was not confirmed. Refresh the operation before retrying.' }
+        if (this.current(token)) {
+          this.busy = false
+          this.error = result?.jobresult?.errortext || result?.response?.data?.reconcilebackupstagingjobresponse?.errortext || result?.message || this.$t('message.backup.staging.action.unconfirmed')
+        }
       }
       try {
         const response = await postAPI('reconcileBackupStagingJob', params)
         const jobId = response.reconcilebackupstagingjobresponse?.jobid
-        if (!jobId) throw new Error('Staging reconciliation acceptance is unconfirmed. Refresh before retrying.')
+        if (!jobId) throw new Error(this.$t('message.backup.staging.action.unconfirmed'))
         await this.$pollJob({
           jobId,
           originalPage: this.$route.path,
@@ -257,12 +309,9 @@ export default {
           successMethod: result => {
             if (!this.current(token)) return
             this.busy = false; this.selectedKeys = []; this.externalJobId = ''
-            const info = result.jobresult?.backupstaginginfo || result.jobresult
-            if (!info?.stagingjobid) {
-              this.error = 'The result does not include staging details. Refresh to inspect the operation.'
-            } else {
-              this.info = info
-            }
+            const info = this.stagingInfo(result.jobresult)
+            this.info = info
+            if (!info) this.error = this.$t('message.backup.staging.result.missing')
             this.$emit('refresh')
           },
           errorMethod: failed,
@@ -275,7 +324,9 @@ export default {
 </script>
 
 <style scoped>
-.staging-toolbar, .staging-alert, .staging-artifacts { margin-bottom: 16px; }
-.staging-artifacts small { display: block; overflow-wrap: anywhere; }
+.staging-toolbar, .staging-alert, .staging-artifacts, .staging-actions { margin-bottom: 16px; }
+.staging-actions, .staging-details { margin-top: 16px; }
+.staging-management { overflow-wrap: anywhere; }
+.staging-management small { display: block; }
 .staging-footer { display: flex; justify-content: flex-end; margin-top: 16px; }
 </style>

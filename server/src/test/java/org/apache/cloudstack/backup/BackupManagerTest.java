@@ -421,6 +421,72 @@ public class BackupManagerTest {
     }
 
     @Test
+    public void testExternalMetadataRestoreSupportsRbdAndQcow2WithExistingSafetyChecks() {
+        overrideBackupFrameworkConfigValue();
+        ConfigDepotImpl depot = (ConfigDepotImpl) ReflectionTestUtils.getField(BackupManager.ThirdPartyStagingEnable, "s_depot");
+        when(depot.getConfigStringValue(eq(BackupManager.ThirdPartyStagingEnable.key()), eq(ConfigKey.Scope.Global), Mockito.isNull()))
+                .thenReturn("true");
+        BackupVO backup = mock(BackupVO.class);
+        VMInstanceVO vm = mock(VMInstanceVO.class);
+        Map<String, String> details = new HashMap<>();
+        when(backup.getId()).thenReturn(1L);
+        when(backup.getUuid()).thenReturn("backup-1");
+        when(backup.getVmId()).thenReturn(2L);
+        when(backup.getStatus()).thenReturn(Backup.Status.BackedUp);
+        when(backup.getDetail(anyString())).thenAnswer(invocation -> details.get(invocation.getArgument(0)));
+        when(backupDao.findById(1L)).thenReturn(backup);
+        when(backupDetailsDao.findDetails(ThirdPartyBackupManifest.MODE_KEY, ThirdPartyBackupManifest.VOLUME_MODE, false))
+                .thenReturn(List.of(new BackupDetailVO(1L, ThirdPartyBackupManifest.MODE_KEY, ThirdPartyBackupManifest.VOLUME_MODE, false)));
+        when(backupDetailsDao.listDetails(1L)).thenReturn(Collections.emptyList());
+        when(vmInstanceDao.findByIdIncludingRemoved(2L)).thenReturn(vm);
+        when(vm.getUuid()).thenReturn("vm-2");
+        when(vm.getState()).thenReturn(VirtualMachine.State.Stopped);
+        for (String provider : List.of("ablestack-netbackup", "ablestack-veeam")) {
+            for (String engine : List.of("RBD_DIFF", "QCOW2")) {
+                for (String type : List.of("FULL", "INCREMENTAL")) {
+                    ThirdPartyBackupManifest manifest = ThirdPartyBackupManifest.create(provider, "backup-1", "i-2-25-VM",
+                            "2026.10.12.15.00.00.000", type, "host-1", "/staging/" + provider + "/i-2-25-VM/point",
+                            engine, List.of(new Backup.VolumeInfo("volume-1", "ROOT.volume-1" + (engine.startsWith("RBD") ? ".raw" : ".qcow2"),
+                                    Volume.Type.ROOT, 1073741824L, 0L, null, null, null)), null, null);
+                    ThirdPartyBackupManifest.Artifact volume = manifest.getCurrentArtifacts().get(0);
+                    volume.completed = true;
+                    volume.jobId = "volume-job";
+                    volume.externalId = "volume-point";
+                    if ("INCREMENTAL".equals(type)) {
+                        ThirdPartyBackupManifest.Artifact base = gson.fromJson(gson.toJson(volume), ThirdPartyBackupManifest.Artifact.class);
+                        base.backupUuid = "parent-backup";
+                        base.path = "/staging/parent/ROOT.volume-1" + (engine.startsWith("RBD") ? ".raw" : ".qcow2");
+                        base.externalId = "parent-point";
+                        manifest.getVolumes().get(0).chain.add(0, base);
+                        volume.path = volume.path.replace(".raw", ".rbdiff");
+                    }
+                    ThirdPartyBackupManifest.Artifact metadata = new ThirdPartyBackupManifest.Artifact();
+                    metadata.backupUuid = backup.getUuid();
+                    metadata.path = "/staging/" + provider + "/i-2-25-VM/point";
+                    metadata.jobId = "metadata-job";
+                    metadata.externalId = "metadata-point";
+                    metadata.completed = true;
+                    manifest.setMetadata(metadata);
+                    manifest.setComplete(true);
+                    details.clear();
+                    details.put(ThirdPartyBackupManifest.DETAIL_KEY, manifest.toJson());
+                    org.apache.cloudstack.api.response.BackupArtifactResolutionResponse resolved = backupManager.resolveBackupArtifact(
+                            provider, metadata.externalId, "ablestack-netbackup".equals(provider) ? "123"
+                                    : "b81acbeb-6cfa-424b-95b2-f4d26280a8c0", null);
+                    assertTrue(provider + " " + engine + " " + type, resolved.restoreallowed);
+                    assertEquals("METADATA", resolved.artifacttype);
+                    assertFalse(backupManager.resolveBackupArtifact(provider, volume.externalId, null, null).restoreallowed);
+                    when(vm.getState()).thenReturn(VirtualMachine.State.Running);
+                    assertFalse(backupManager.resolveBackupArtifact(provider, metadata.externalId, null, null).restoreallowed);
+                    when(vm.getState()).thenReturn(VirtualMachine.State.Stopped);
+                    details.put(ThirdPartyBackupManifest.CATALOG_FAILURE_KEY, "Required Full artifact expired");
+                    assertFalse(backupManager.resolveBackupArtifact(provider, metadata.externalId, null, null).restoreallowed);
+                }
+            }
+        }
+    }
+
+    @Test
     public void testExceptionWhenUpdateWithNullId() {
         try {
             Long id = null;

@@ -19,411 +19,431 @@ under the License.
 
 # ABLESTACK 백업 및 복원 운영 안내
 
-백업 관련 운영·개발 문서는 이 파일에서 관리한다.
-신규 기능은 해당 항목에 추가하며 백업 기능별 Markdown 파일을 별도로 만들지 않는다.
-Kubernetes 등 백업 이외 기능의 문서는 이 통합 대상에 포함하지 않는다.
+이 문서는 인프라 관리자가 ABLESTACK 백업 환경을 구성하고 백업·복원을 운영하기 위한 안내다.
+솔루션별 구성, 사용 절차와 동작 흐름을 이 파일에서 함께 관리한다.
 
 ## 목차
 
-- [공통 Staging과 볼륨별 백업 및 복원](#공통-staging과-볼륨별-백업-및-복원)
-- [NetBackup 및 Veeam 인증정보 보호](#netbackup-및-veeam-인증정보-보호)
+- [운영자용 백업 구성 요약](#운영자용-백업-구성-요약)
+- [백업 솔루션별 준비와 실행 순서](#백업-솔루션별-준비와-실행-순서)
+- [Full 및 증분 백업 운영](#full-및-증분-백업-운영)
+- [작업 상태와 제어](#작업-상태와-제어)
+- [복원 절차](#복원-절차)
+- [임시 파일 정리와 실패한 백업 삭제](#임시-파일-정리와-실패한-백업-삭제)
+- [NetBackup 및 Veeam 인증정보 관리](#netbackup-및-veeam-인증정보-관리)
 - [Veeam Host 구성과 배포](#veeam-host-구성과-배포)
 
-## 공통 Staging과 볼륨별 백업 및 복원
+## 운영자용 백업 구성 요약
 
-대상 Provider는 `ablestack-commvault`, `ablestack-netbackup`, `ablestack-veeam`이다.
-Staging은 글로벌 설정의 GFS2/NFS/LOCAL 파일시스템을 사용한다.
+이 절은 백업 기능을 사용하는 인프라 관리자를 위한 안내다.
+Provider는 Mold가 사용할 백업 연동 종류이며, 아래의 `ablestack-*` 이름을 설정한다.
+백업 오퍼링은 VM에 연결하는 백업 정책이다. 스테이징은 외부 백업 솔루션으로 보내기 전에
+백업 파일을 잠시 두는 저장 공간이며, 장기 보관용 백업 저장소와 역할이 다르다.
 
-### 기본스토리지를 Staging으로 사용할 때의 경로와 Cleanup
+### VM 스토리지와 스테이징 스토리지 구분
 
-GFS2 기본스토리지의 마운트 지점이 `/mnt/glue-gfs`이면 `mount.path`와 `root.path`를
-모두 `/mnt/glue-gfs`로 지정할 수 있다. 실제 작업은 provider 하위에서 수행한다.
+| 구분 | 종류 | 운영자가 확인할 내용 |
+| --- | --- | --- |
+| VM 기본스토리지 | RBD | VM 디스크가 Ceph RBD 이미지로 저장된다. 백업할 시점의 데이터를 읽어 파일로 내보낸다. 원본 VM 디스크를 Host에 별도 마운트할 필요는 없다. |
+| VM 기본스토리지 | QCOW2, GFS2 환경 등 | VM 디스크가 QCOW2 파일로 저장된다. 해당 시점의 디스크 데이터를 백업 파일로 복사한다. |
+| 공통 스테이징 | GFS2 | Host에서 사용하는 GFS2 경로를 지정한다. 기본스토리지 경로인 `/mnt/glue-gfs`도 사용할 수 있다. |
+| 공통 스테이징 | NFS | NFS 서버의 공유 경로와 Host의 마운트 경로를 지정한다. |
+| 공통 스테이징 | LOCAL | Host에 연결한 별도 디스크의 마운트 경로를 지정한다. 백업을 수행할 각 Host에 경로와 용량을 준비한다. |
 
-- 백업: `/mnt/glue-gfs/ablestack-commvault/<VM명>/<타임스탬프>`
-- 복원: `/mnt/glue-gfs/ablestack-commvault/restore/<restore-job-id>`
-- NetBackup/Veeam도 각각 `ablestack-netbackup`, `ablestack-veeam` 하위 경로를 사용한다.
-- 용량 예약 정보는 `root.path/.volume-reservations`에서 관리하며 개별 Job 예약만 해제한다.
+RBD VM도 NFS 또는 GFS2 스테이징을 사용할 수 있다.
+스테이징 종류를 VM 기본스토리지의 종류와 동일하게 맞출 필요는 없다.
+현재 공통 스테이징은 파일시스템 경로를 사용하며, 스테이징용 RBD 이미지를 생성·map하는 방식은 사용하지 않는다.
 
-Cleanup은 개별 백업 시점 또는 복원 Job 디렉터리만 삭제한다.
-기본스토리지 마운트 지점, Staging root, provider 디렉터리와 VM 상위 디렉터리는 삭제하지 않는다.
-삭제 대상과 그 상위 경로의 심볼릭 링크, 삭제 대상 내부의 추가 마운트와 bind mount를 검사하여
-운영 데이터 경로로 이어지는 경우 정리를 중단한다. 볼륨별 작업의 소유 marker와
-기존 파일시스템 확인도 유지하며, 정리가 확인되지 않으면 용량 예약을 유지한다.
-이 검사는 KVM Agent와 공통 scripts에 함께 배포한다.
+### 솔루션과 VM 스토리지별 백업 방식
 
-### 용량과 실행
+| 백업 솔루션 | VM 스토리지 | Full 백업 | 증분 백업 | 최종 보관 위치 |
+| --- | --- | --- | --- | --- |
+| `ablestack-nas` | RBD | 백업 시점의 전체 디스크를 NAS에 직접 내보낸다. | 이전 백업 시점 이후 변경된 데이터를 NAS에 직접 내보낸다. | Mold에 등록한 NAS 백업 저장소 |
+| `ablestack-nas` | QCOW2 | 전체 디스크 백업 파일을 NAS에 직접 생성한다. | 변경된 디스크 데이터로 증분 파일을 NAS에 생성한다. | Mold에 등록한 NAS 백업 저장소 |
+| `ablestack-commvault` | RBD | 볼륨 하나의 전체 데이터를 스테이징에 내보낸 후 Commvault로 전송한다. | 볼륨 하나의 변경분을 스테이징에 내보낸 후 Commvault로 전송한다. | Commvault의 백업 저장소 |
+| `ablestack-commvault` | QCOW2 | 볼륨 하나의 전체 데이터를 스테이징에 복사한 후 Commvault로 전송한다. | 볼륨 하나의 변경분을 스테이징에 복사한 후 Commvault로 전송한다. | Commvault의 백업 저장소 |
+| `ablestack-netbackup` | RBD | 볼륨 하나의 전체 데이터를 스테이징에 내보낸 후 NetBackup 작업으로 저장한다. | 볼륨 하나의 변경분을 스테이징에 내보낸 후 NetBackup 작업으로 저장한다. | NetBackup 정책의 백업 저장소 |
+| `ablestack-netbackup` | QCOW2 | 볼륨 하나의 전체 데이터를 스테이징에 복사한 후 NetBackup 작업으로 저장한다. | 볼륨 하나의 변경분을 스테이징에 복사한 후 NetBackup 작업으로 저장한다. | NetBackup 정책의 백업 저장소 |
+| `ablestack-veeam` | RBD | 볼륨 하나의 전체 데이터를 스테이징에 내보낸 후 Veeam 작업으로 저장한다. | 볼륨 하나의 변경분을 스테이징에 내보낸 후 Veeam 작업으로 저장한다. | Veeam Job의 백업 저장소 |
+| `ablestack-veeam` | QCOW2 | 볼륨 하나의 전체 데이터를 스테이징에 복사한 후 Veeam 작업으로 저장한다. | 볼륨 하나의 변경분을 스테이징에 복사한 후 Veeam 작업으로 저장한다. | Veeam Job의 백업 저장소 |
 
-- 활성화 시 기준: 현재 VM 목록에서 가장 큰 볼륨의 provisioned size에
-  `backup.thirdparty.staging.capacity.buffer.percent`를 더한 용량.
-- 실제 백업/복원: 작업에 포함된 가장 큰 볼륨을 기준으로 같은 buffer를 적용한다.
-  볼륨 하나를 외부 솔루션에 전송하거나 복원하여 처리한 후 다음 볼륨으로 진행한다.
-- QCOW2 백업은 일관된 시점의 데이터를 유지하는 기존 pull/scratch 엔진을 사용한다.
-  원본 primary 파일시스템별로 해당 볼륨 크기의 합 + `max(20%, 10 GiB)`를 별도로 예약한다.
-  Staging이 NFS로 분리되어 있어도 이 primary 용량은 필요하다.
-- 복원은 모든 새 볼륨 준비 후 VM 볼륨을 교체하므로 primary에도 원본을 보호할 추가 공간이 필요하다.
-  같은 physical storage identity를 사용하는 Backup/Restore 예약은 합산한다.
-- Host/Cluster 동시 작업 제한과 용량 검사를 통과한 작업이 진행한다.
-  부족하면 `WAITING`에 남고, 설정된 queue timeout 이후 취소된다.
-- Running RBD VM은 현재 Host에서, Stopped RBD VM은 pool 접근이 가능한 정상 Host 중
-  현재 작업 수와 Staging 여유 공간을 고려하여 백업한다.
+Commvault·NetBackup·Veeam은 `볼륨 1 생성 → 외부 저장 완료 → 해당 임시 파일 정리 → 볼륨 2 처리` 순서로 진행한다.
+모든 볼륨을 처리한 뒤 VM 구성과 디스크 순서, 백업 연결 관계를 담은 메타데이터도 마지막으로 저장한다.
+Mold에서는 이 전체 묶음이 VM 백업 하나로 표시되지만, 외부 솔루션에는 여러 작업이 보일 수 있다.
+NAS는 NAS 자체가 최종 저장소이므로 공통 스테이징 설정을 사용하지 않는다.
 
-### QCOW2 대역폭 조정과 백업 취소
+### Commvault·NetBackup·Veeam 공통 준비
 
-Commvault/NetBackup/Veeam의 볼륨별 QCOW2 백업은 Running/Stopped VM 모두
-`backup.qos.bandwidth.limit.mbps`를 최초 제한값으로 사용한다. `0`은 무제한이다.
-Stopped VM도 임시 paused domain을 통해 같은 NBD pull 복사 루프를 사용하므로 실시간 조정이 가능하다.
-`updateBackupJobBandwidth`는 `QCOW2_BACKUP` 단계에서 Job의 `volume-bandwidth-mbps`를 갱신하며,
-복사 루프는 처리 블록마다 제한값을 다시 읽는다. 변경값은 다음 볼륨에도 유지된다.
-제한 대상은 원본 QCOW2 데이터를 Staging 파일로 복사하는 작업이며,
-외부 솔루션 전송(`COMMVAULT_TRANSFER`, `NETBACKUP_TRANSFER`, `VEEAM_TRANSFER`)과
-`METADATA_TRANSFER`/`FINALIZING`에서는 조정할 수 없다. RBD export/export-diff는 대역폭 조정 대상이 아니다.
+1. 백업에 사용할 Host에 해당 솔루션의 백업 에이전트 또는 클라이언트를 설치하고 외부 서버와 통신을 확인한다.
+   VM 이동이나 정지 VM 백업에 대비하여 백업을 수행할 수 있는 Host 모두에 준비한다.
+2. Mold의 Zone 설정에서 `backup.framework.enabled=true`와 사용할 `backup.framework.provider.plugin`을 설정한다.
+3. 글로벌 설정에서 공통 스테이징 종류와 경로를 입력한다.
 
-세 솔루션 모두 용량 대기 중에는 해당 대기 Job을 취소할 수 있고,
-`PREPARING`, `QCOW2_BACKUP`, `RBD_EXPORT`, `RBD_EXPORT_DIFF`에서는 백업 취소를 제공한다.
-진행 중이거나 미확정인 외부 child Job과 최종 완료 처리는 취소할 수 없다.
-이미 전송 완료된 볼륨이 있어도 다음 볼륨 생성 중에 활성/미확정 외부 전송이 없으면 취소할 수 있다.
-취소 후에는 Running VM의 source backup job과 Stopped VM의 임시 domain을 포함하여 종료를 확인하고,
-공통 정리 절차로 Scratch/Snapshot, Staging, 예약 및 Host Job 기록을 정리한다.
-종료나 정리가 확인되지 않으면 취소/정리 대기를 유지하며 재조정한다.
+   | 글로벌 설정 | 입력 내용 |
+   | --- | --- |
+   | `backup.thirdparty.staging.storage.type` | `GFS2`, `NFS`, `LOCAL` 중 실제 스테이징 구성 |
+   | `backup.thirdparty.staging.mount.path` | Host에서 스테이징 스토리지를 마운트하는 절대 경로 |
+   | `backup.thirdparty.staging.root.path` | 임시 백업·복원 디렉터리를 만들 경로. 마운트 경로와 같거나 그 하위여야 한다. |
+   | `backup.thirdparty.staging.nfs.source` | NFS 사용 시 `서버주소:/공유경로` |
+   | `backup.thirdparty.staging.capacity.buffer.percent` | 최대 볼륨 크기에 추가할 여유 공간 비율. 기본 `20` |
+4. `backup.thirdparty.staging.enable=true`로 활성화한다.
+   Mold가 대상 Host의 마운트, 쓰기 가능 여부와 여유 공간을 확인한다.
+   실패하면 활성화되지 않으므로 표시된 Host·경로·용량 문제를 해결하고 다시 활성화한다.
+5. 백업 오퍼링을 가져오거나 구성 스크립트로 등록하고 대상 VM에 연결한다.
+   외부 서버 연결과 스테이징 검증을 완료한 뒤 첫 백업을 실행한다.
 
-이 변경은 Management Server와 KVM Agent 및 scripts를 함께 배포한다.
-NAS와 일반 CloudStack provider의 실행 흐름은 유지한다.
+GFS2 기본스토리지를 사용한다면 `mount.path=/mnt/glue-gfs`, `root.path=/mnt/glue-gfs`로 모두 입력할 수 있다.
+실제 임시 파일은 `ablestack-commvault`, `ablestack-netbackup`, `ablestack-veeam` 하위에 생성된다.
+백업 후 정리는 개별 작업의 임시 파일을 대상으로 하며 기본스토리지 경로 자체를 삭제하지 않는다.
 
-### QCOW2 NBD 실행 전 검사와 오류 확인
+스테이징 준비 용량은 현재 VM들 중 **가장 큰 단일 볼륨의 할당 크기 + 설정한 여유 비율**을 기준으로 한다.
+예를 들어 최대 볼륨이 1 TiB이고 여유 비율이 20%이면 활성화 검사 기준은 1.2 TiB이다.
+동시 작업은 각각 용량을 사용하며, QCOW2 백업은 원래 기본스토리지에도 별도 임시 작업 공간이 필요하다.
+QCOW2 기본스토리지의 임시 공간은 백업 대상 볼륨의 할당 크기 합에
+그 합의 20% 또는 10 GiB 중 큰 여유 공간을 더하여 확인한다.
+기본스토리지와 스테이징이 같은 파일시스템이면 두 용량 예약을 합산한다.
+스테이징 활성화가 성공해도 실제 작업 시작 시 공간·동시 작업 수를 다시 검사한다. 부족하면 `WAITING`으로 대기한다.
 
-Commvault/NetBackup/Veeam 공통 볼륨 백업은 Host 용량 예약과 원본 준비 전에 다음을 확인한다.
+실행 중인 VM의 백업은 해당 VM을 실행하는 Host에서 처리한다.
+정지 VM도 백업할 수 있으며, RBD는 원본 디스크와 스테이징에 접근할 수 있는 Host를 Mold가 선택한다.
+QCOW2 정지 VM은 게스트 OS를 실행하지 않는 임시 백업 환경을 사용한다.
+공통 스테이징은 작업 후에도 마운트를 유지하며, 외부 UI에서 복원 파일을 쓰는 시점에도 접근 가능해야 한다.
+마운트가 빠져 있으면 NFS는 글로벌 설정의 공유 주소로 연결한다.
+GFS2·LOCAL은 Host의 `/etc/fstab`에 마운트 정보가 있어야 자동으로 다시 연결할 수 있으므로
+각 Host에서 파일시스템과 마운트 설정을 먼저 준비한다.
 
-- 실행 중인 Python에서 `nbd`를 import하고 필요한 libnbd API를 사용할 수 있는지 확인한다.
-  RPM이 설치되어 있어도 Python 경로나 native library 문제로 import가 실패하면 백업을 중단한다.
-- `virsh`, `qemu-img`, `qemu-nbd` 실행 파일과 버전 명령을 확인한다.
-- 증분 백업은 dirty bitmap 조회 API와 각 볼륨의 부모 Artifact 연결 정보를 확인한다.
+## 백업 솔루션별 준비와 실행 순서
 
-이 단계에서 실패하면 원본 준비 기록은 `NOT_STARTED`로 유지하며 Host 용량을 예약하지 않는다.
-연결 후에는 원본/출력 NBD의 virtual size가 계획된 볼륨 크기와 일치하는지,
-출력에서 쓰기와 flush가 가능한지 확인한다. 읽기 응답이 요청한 길이보다 짧거나
-최종 flush가 실패하면 해당 볼륨을 외부 솔루션으로 전송하지 않는다.
+### NAS: `ablestack-nas`
 
-Full 백업은 `base:allocation`에서 ZERO로 확인된 범위의 읽기를 생략한다.
-HOLE만 표시된 범위는 읽으며, allocation 정보가 없거나 유효하지 않으면 전체 읽기로 진행한다.
-증분 백업은 classic/64-bit block status 응답을 지원하되 dirty bitmap이 없거나 응답이 잘못되면 실패한다.
-변경된 0 데이터도 출력 이미지에 기록하여 부모 이미지의 예전 데이터를 가린다.
-상태 정보는 최대 32 MiB, 데이터는 최대 4 MiB 단위로 처리하며 NBD 서버의 IO 제한도 적용한다.
+**사전 준비**
 
-실행 Python·libnbd·도구 버전과 예외 원인은 Host Job의 `job.log`에서 확인한다.
-도구 실행 오류는 `qcow2-preflight.log`, 볼륨별 `qemu-nbd` stderr와 예외는
-`qcow2-volume-<volume-index>.log`에 보관한다. UI 실패 사유에는 볼륨과 실패 구간을 표시한다.
-연결·이미지 생성·복사 중 실패해도 열린 연결과 출력 프로세스의 정리를 시도한다.
-원본 reader 종료가 확인되지 않으면 기존 정책에 따라 용량 예약을 유지한다.
-`thirdparty_qcow2_nbd.py`는 `thirdparty_volume_backup.py`와 함께 배포해야 한다.
+1. NAS 공유와 백업 Host의 접근 권한을 준비하고 Mold에 백업 저장소를 등록한다.
+2. Zone의 백업 프레임워크와 `ablestack-nas`를 설정한다.
+3. NAS 백업 오퍼링을 등록하여 VM에 연결한다. 주기 백업을 사용할 때는 Mold에 백업 스케줄을 설정한다.
 
-### Mold UI 복원
+**백업 순서**
 
-Mold가 Worker Host와 `restore/<restore-job-id>`를 정하고 용량을 예약한다.
-메타데이터와 필요한 Full/증분 파일을 한 단계씩 외부 솔루션에서 받아 새 볼륨을 준비한다.
-모든 볼륨의 준비가 성공한 뒤 교체하며, 실패하면 기존 볼륨 보호 및 rollback 절차를 수행한다.
+1. Mold에서 백업을 실행하거나 설정한 스케줄을 기다린다.
+2. NAS 저장소의 여유 공간을 확인한 후 Host에서 작업에 사용할 공유를 연결한다.
+3. RBD VM은 백업 시점의 전체 데이터 또는 변경분을 NAS에 내보낸다.
+   QCOW2 VM은 전체 또는 증분 디스크 파일을 NAS에 직접 생성한다.
+4. 복원에 필요한 VM 구성 정보와 디스크 정보를 함께 저장한다.
+5. Mold의 백업 결과를 확인한다. 작업용 NAS 연결과 임시 작업 자료는 후처리에서 정리한다.
 
-### NetBackup/Veeam 외부 UI의 QCOW2 복원
+NAS에서는 스테이징에서 외부 솔루션으로 다시 전송하는 단계가 없다.
+백업 파일과 필요한 이전 Full·증분 파일은 NAS 백업 저장소에 남아 있어야 한다.
 
-볼륨별 Job 구조에서는 VM 디렉토리를 한 번 복원해 전체 VM을 가져오는 방식으로 사용할 수 없다.
-Mold가 각 볼륨 파일을 개별 Full child Job으로 전송하고 마지막에 metadata Job을 생성한다.
+### Commvault: `ablestack-commvault`
+
+**사전 준비**
+
+1. Commvault 서버의 백업 저장소와 Plan을 준비한다.
+2. Mold에 Commvault 서버 접속 정보를 설정하고 백업 Host의 에이전트 설치·등록을 확인한다.
+3. 공통 스테이징을 활성화한 후 Commvault 백업 오퍼링을 가져와 VM에 연결한다.
+
+**백업 순서**
+
+1. Mold의 VM 백업 기능 또는 Mold 백업 스케줄에서 백업을 시작한다.
+2. 실행 Host와 여유 공간을 확인한 뒤 VM의 백업 시점을 준비한다.
+3. RBD는 볼륨의 전체 데이터 또는 변경분을 내보내고, QCOW2는 해당 데이터를 스테이징 파일로 복사한다.
+4. Commvault로 해당 볼륨 파일을 보내고 저장 완료를 확인한 뒤 임시 파일을 정리한다.
+5. 다음 볼륨에 같은 절차를 반복하고 마지막에 메타데이터를 저장한다.
+6. Mold에서 VM 백업이 `BackedUp`으로 표시되는지 확인한다.
+
+`COMMVAULT_TRANSFER`는 Host에서 만든 파일을 Commvault로 보내는 단계다.
+Host 측 디스크 복사가 끝났더라도 이 전송과 마지막 메타데이터 저장이 끝나야 전체 백업이 완료된다.
+
+### NetBackup: `ablestack-netbackup`
+
+**사전 구성 흐름**
+
+1. NetBackup Primary Server와 백업 저장소를 준비하고 백업 Host에 NetBackup Client를 설치한다.
+   서버에서 각 Host를 Client로 인식하며 이름 또는 IP로 연결할 수 있는지 확인한다.
+2. NetBackup에 기준 정책을 준비한다. 정책 종류는 **`Standard`**, 스케줄에는 **`Full Backup`**이 필요하다.
+   실제 백업 Host가 정책의 Client에 등록되어 있어야 한다.
+   현재 구성 스크립트의 정책 이름은 Mold에 등록된 Host 이름과 맞춰 사용하는 것이 좋다.
+3. NetBackup REST API 주소와 API key, 대상 Mold 서버의 관리자 API key·secret key를 준비한다.
+   NetBackup API 계정에는 정책 조회·복제, 백업 실행, 상태 조회 및 복원 작업에 필요한 권한을 부여한다.
+4. 위의 공통 준비 절차에 따라 Mold의 Zone 설정과 스테이징을 활성화한다.
+5. 해당 Host에서 [netbackup-host-config.py](netbackup-host-config.py)를 실행한다.
+
+   ```bash
+   python3 /usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/netbackup-host-config.py \
+     --policy-name "<Mold Host 이름과 맞춘 NetBackup 정책 이름>" \
+     --vm-include "<대상 VM의 i-계열 인스턴스 이름>" \
+     --mold-url "<Mold API 주소>" \
+     --admin-apikey "<Mold 관리자 API key>" \
+     --admin-secretkey "<Mold 관리자 secret key>" \
+     --netbackup-url "<NetBackup REST API 주소>" \
+     --netbackup-apikey "<NetBackup API key>" \
+     --backup-chain-size 10
+   ```
+
+   `--vm-include`는 여러 VM을 쉼표로 지정할 수 있으며, 미지정 시 `*`를 사용한다.
+   VM의 표시 이름과 Host에서 사용하는 `i-...-VM` 인스턴스 이름을 구분하여 입력한다.
+   실제 키를 명령행에 입력할 때는 Shell history와 명령행 접근 권한을 관리한다.
+6. 스크립트는 Mold의 Zone·Cluster 설정을 확인하고 NetBackup 오퍼링을 등록한다.
+   현재 스크립트는 해당 Cluster의 `kvm.incremental.backup`을 `true`로 설정한다.
+   관리 서버 재기동 안내와 함께 중단되면 Mold를 재기동하고 같은 명령을 다시 실행한다.
+7. 사전·사후 백업 스크립트, 암호화된 Mold 인증정보와 복원 감시 서비스를 Host에 구성한다.
+   신규 Host 키는 자동 준비하지만 Mold API key 자체를 발급하는 기능은 아니므로 3번의 키는 필요하다.
+8. NetBackup 연결 설정과 서비스 상태를 확인하고, 등록된 오퍼링을 대상 VM에 연결한다.
+   이 구성은 각 백업 Host에서 수행한다. VM이 이동할 수 있다면 이동 대상 Host도 준비한다.
+
+구성 스크립트는 `/usr/openv/netbackup/bp.conf`가 있으면 기존 파일을 백업하고
+사전·사후 작업 및 Client 읽기 timeout을 24시간으로 설정한 후 NetBackup 서비스를 재시작한다.
+진행 중인 NetBackup 작업이 없는 시간에 구성한다. NetBackup Client 자체를 설치하는 스크립트는 아니다.
+
+**백업 순서**
+
+1. NetBackup UI 또는 정책 스케줄에서 기준 정책을 실행한다.
+2. Host의 사전 백업 스크립트가 대상 VM을 찾아 Mold에 백업을 요청한다.
+3. 기준 정책의 작업이 종료된 뒤 Mold가 실제 볼륨별 백업과 외부 저장을 진행한다.
+4. RBD는 전체 데이터 또는 변경분을 내보내고, QCOW2는 해당 데이터를 스테이징에 복사한다.
+5. Mold가 기준 정책을 바탕으로 볼륨별 정책·작업을 만들어 해당 파일을 NetBackup에 저장한다.
+   저장 완료를 확인한 뒤 임시 파일을 정리하고 다음 볼륨을 처리한다.
+6. 마지막으로 메타데이터를 저장하고 Mold의 VM 백업 결과를 확정한다.
+
+기준 정책은 유지되며 볼륨별 작업의 대상 파일은 Mold가 지정한다.
+기준 정책 하나의 성공만으로 VM 백업 완료를 판단하지 않고, Mold에서 `BackedUp`을 확인한다.
+구성 스크립트가 등록하는 NetBackup 오퍼링은 사용자 수동 백업을 허용하지 않으므로,
+기본 운영 시작점은 NetBackup 정책과 사전 백업 스크립트이다.
+
+### Veeam: `ablestack-veeam`
+
+**사전 준비**
+
+1. Veeam 백업 저장소와 Linux Agent를 준비하고 백업 Host가 Veeam에서 발견·등록되는지 확인한다.
+2. 파일 단위 백업을 사용하는 기준 Linux Agent Job을 준비한다. Mold는 이 Job을 복제해 볼륨별 파일을 저장한다.
+3. Mold에 Veeam 접속 정보를 설정하고 서버 측 작업 명령을 실행할 수 있는 연결을 확인한다.
+   공통 볼륨별 백업은 Veeam 서버의 PowerShell 작업을 SSH로 실행하는 경로를 사용한다.
+4. 공통 스테이징을 활성화하고 Host에 Veeam 연동 스크립트를 설치한다.
+   Host의 Mold 인증정보를 구성하고 Veeam 오퍼링을 등록하여 VM에 연결한다.
+5. 기준 Job의 Pre/Post에 설치된 Veeam 연동 스크립트를 지정한다.
+   실행 파일과 구성 도구는 아래의 [Veeam Host 구성과 배포](#veeam-host-구성과-배포)를 참고한다.
+
+**백업 순서**
+
+1. Veeam UI 또는 Job 스케줄에서 기준 Job을 실행한다.
+2. Pre 스크립트가 Mold에 대상 VM의 백업을 요청한다.
+3. 기준 Job이 종료된 뒤 Mold가 RBD 또는 QCOW2 데이터를 볼륨별 스테이징 파일로 생성한다.
+4. Mold가 기준 Linux Agent Job을 복제하여 해당 볼륨 파일을 Veeam에 저장한다.
+5. 저장 완료를 확인한 파일을 정리하고 다음 볼륨을 처리한다.
+6. 마지막 메타데이터 Job까지 완료한 후 Mold에서 VM 백업이 `BackedUp`인지 확인한다.
+
+기준 Job과 Mold가 만든 볼륨별 Job을 구분한다.
+외부 UI 복원에서 선택해야 하는 마지막 메타데이터 Job과 실제 VM 복원 절차는
+아래의 [외부 UI 복원 안내](#netbackupveeam-외부-ui의-rbdqcow2-복원)를 따른다.
+
+## Full 및 증분 백업 운영
+
+### 설정과 백업 선택
+
+- **Full**: 해당 백업 시점의 볼륨 전체 데이터를 보관한다. 최초 백업은 Full로 시작한다.
+- **증분**: 이전 정상 백업 이후 변경된 데이터만 보관한다. 복원 시 기준 Full과 필요한 이전 증분 백업도 사용한다.
+- `kvm.incremental.backup`: VM이 속한 Cluster의 증분 백업 사용 여부이다.
+- `kvm.backup.chain.size`: Full과 후속 증분이 연결된 백업 체인의 길이 상한이다. 기본값은 `10`이다.
+
+Mold가 이전 성공 백업과 설정을 확인하여 Full 또는 증분을 선택한다.
+증분 기능을 켰다고 모든 요청이 증분이 되는 것은 아니며,
+첫 백업, 체인 길이 상한 도달, 이전 연결 정보 누락·사용 불가, 볼륨 구성 변경 등에서는 새 Full이 필요하다.
+기존 VM 단위 백업에서 새 볼륨별 방식으로 전환하는 첫 백업도 Full로 시작한다.
+호스트 이동 후 이전 정보를 이어 쓸 수 없는 경우에도 Full로 바뀔 수 있다.
+
+RBD 증분은 이전 RBD 백업 시점과 현재 시점의 변경분을 파일로 내보낸다.
+QCOW2 증분은 디스크의 변경 기록을 이용해 변경된 부분만 파일로 만든다.
+이전 기록이 유효하지 않아 증분이 실패하면, 기존 작업과 임시 자료의 정리가 확인된 경우 Full로 재시도한다.
+외부 작업이나 정리가 미확정이면 즉시 재시도하지 않고 대기하므로 실패 사유와 정리 상태를 확인한다.
+
+### 외부 솔루션의 Full 표시와 보관 정책
+
+Commvault·NetBackup·Veeam에 보내는 파일은 Mold가 먼저 전체 또는 변경분으로 생성한다.
+**Mold의 VM 백업은 증분이어도 외부 솔루션의 파일 저장 작업은 Full로 표시될 수 있다.**
+이는 VM 전체를 다시 내보냈다는 의미가 아니라, 이번에 생성한 파일을 외부 솔루션이 보관했다는 의미이다.
+Mold의 백업 유형과 외부 작업의 유형을 각각 확인한다.
+
+Commvault·NetBackup·Veeam의 보관·만료는 외부 솔루션 정책을 따른다.
+Mold는 만료 결과를 동기화하며, 필요한 Full이나 증분 파일이 사라진 복원 시점은 복원 불가로 표시한다.
+외부 솔루션에서 볼륨별 작업이나 마지막 메타데이터를 임의로 삭제하면 전체 VM 복원에 영향을 줄 수 있다.
+NAS는 NAS에 남은 기준 Full·증분 파일과 Mold 백업 목록을 함께 관리한다.
+
+### 백업 후 확인할 항목
+
+1. Mold에서 해당 VM 백업의 최종 상태가 `BackedUp`인지 확인한다.
+2. 외부 솔루션에서 볼륨별 작업과 마지막 메타데이터 작업이 완료됐는지 확인한다. NAS는 저장소의 백업 결과를 확인한다.
+3. `WAITING`이면 여유 공간과 동시 작업 제한을, 전송 중이면 해당 외부 솔루션의 작업 상태를 확인한다.
+4. 실패했다면 화면의 실패 사유와 정리 상태를 확인한다. 임시 파일이 남았다는 이유로 기본스토리지나 스테이징 상위 경로를 직접 삭제하지 않는다.
+5. 첫 Full과 후속 증분을 각각 실행하여 백업 유형을 확인하고, 운영 전 별도 VM으로 복원 결과를 확인한다.
+
+## 작업 상태와 제어
+
+### 상태와 단계 읽기
+
+Mold의 백업 상태는 VM 백업 전체의 결과다. 단계는 현재 처리 중인 작업을 나타낸다.
+볼륨 파일이 생성되었더라도 외부 전송과 마지막 메타데이터 저장이 끝나야 `BackedUp`이 된다.
+
+| 표시 | 의미 |
+| --- | --- |
+| `BackingUp` | VM 백업을 진행 중이다. 현재 볼륨과 단계를 확인한다. |
+| `BackedUp` | 필요한 볼륨과 메타데이터 저장을 완료했다. |
+| `Restoring` | 복원 파일을 가져오거나 실제 VM 볼륨을 복원 중이다. |
+| `Failed` | 작업이 실패했다. 실패 사유와 임시 파일 정리 상태를 함께 확인한다. |
+| `QCOW2_BACKUP` | QCOW2 볼륨의 데이터를 백업 파일로 복사 중이다. |
+| `RBD_EXPORT` / `RBD_EXPORT_DIFF` | RBD 볼륨의 전체 데이터 또는 변경분을 내보내는 중이다. |
+| `COMMVAULT_TRANSFER` / `NETBACKUP_TRANSFER` / `VEEAM_TRANSFER` | 생성한 볼륨 파일을 해당 솔루션의 저장소로 전송 중이다. |
+| `METADATA_TRANSFER` | 모든 볼륨을 연결하는 VM 정보와 복원용 메타데이터를 저장 중이다. |
+| `FINALIZING` | 전체 백업 결과를 확정하고 후처리를 진행 중이다. |
+
+스테이징의 `WAITING`은 용량이나 동시 실행 수 때문에 대기하는 상태다.
+작업별 공간을 예약하므로 이미 사용 중인 작업의 예약을 제외한 공간으로 다음 작업의 실행 여부를 판단한다.
+활성화 시 검사와 별개로 실제 백업·복원 시작 시 다시 검사한다.
+동시 실행 수는 `backup.thirdparty.staging.concurrent.jobs.per.host`(기본 1),
+`backup.thirdparty.staging.concurrent.jobs.per.cluster`(기본 4),
+`backup.thirdparty.staging.concurrent.jobs.total`(기본 4)로 조정한다.
+대기 제한은 `backup.thirdparty.staging.queue.timeout`이며 기본 3600초다.
+
+### 대역폭 조정과 백업 취소
+
+Commvault·NetBackup·Veeam의 QCOW2 백업은 실행 중인 VM과 정지 VM 모두
+`backup.qos.bandwidth.limit.mbps`를 초기 제한값으로 사용한다. `0`은 무제한이다.
+`QCOW2_BACKUP` 단계에서는 Mold에서 대역폭을 변경할 수 있으며 변경값은 다음 볼륨에도 적용된다.
+이 제한은 원본 디스크에서 스테이징 파일로 복사하는 작업에 적용한다.
+외부 솔루션 전송 단계와 메타데이터 전송·최종 완료 처리에는 적용하지 않는다.
+RBD export/export-diff의 실시간 대역폭 조정은 제공하지 않는다.
+
+용량 대기 중인 작업과 `PREPARING`, `QCOW2_BACKUP`, `RBD_EXPORT`, `RBD_EXPORT_DIFF` 단계에서는
+백업 취소를 제공한다. 외부 작업이 실행 중이거나 종료 여부를 확인하지 못한 경우에는 취소할 수 없다.
+이미 일부 볼륨 전송을 완료했더라도 다음 볼륨 생성 중 외부 전송이 없는 상태라면 취소할 수 있다.
+취소 요청 후 실제 작업 종료와 임시 파일 정리가 확인되어야 공간 예약이 해제된다.
+
+## 복원 절차
+
+### Mold UI에서 복원
+
+NAS·Commvault·NetBackup·Veeam의 복원은 대상 백업 시점과 VM을 선택하여 진행한다.
+기존 VM에 복원할 때에는 VM을 정지한 뒤 실행한다.
+
+**NAS**는 백업 저장소를 연결하여 선택한 시점의 파일을 읽는다.
+**Commvault·NetBackup·Veeam**은 Mold가 복원 Host와 공통 스테이징 경로를 준비한 뒤
+외부 솔루션에서 필요한 파일을 가져온다. 백업 당시 Host나 임시 경로가 남아 있을 필요는 없다.
+
+1. Mold에서 원하는 VM 백업 시점을 선택하고 복원을 요청한다.
+2. 실행 Host, 스테이징 및 기본스토리지의 공간을 확인한다.
+3. 필요한 Full·증분 파일을 볼륨별로 가져와 새 볼륨을 준비한다.
+4. 모든 볼륨의 준비가 성공한 뒤 실제 VM 볼륨을 교체한다.
+5. VM 복원 결과와 후처리 완료를 확인한 뒤 VM을 시작한다.
+
+볼륨 준비 중 실패하면 기존 VM 볼륨을 교체하지 않는다.
+교체 도중 실패하면 기존 볼륨으로 되돌리는 절차를 수행하며, 복구가 완료되지 않은 경우에는 관리자 확인이 필요하다.
+원본을 보호하면서 새 볼륨을 준비하므로 기본스토리지에 추가 공간이 필요하다.
+QCOW2 백업도 원본 기본스토리지에 별도 임시 작업 공간을 사용하므로 스테이징 여유 공간만 확인해서는 안 된다.
+
+### NetBackup/Veeam 외부 UI의 RBD·QCOW2 복원
+
+NetBackup·Veeam은 **RBD와 QCOW2 모두 외부 UI에서 복원을 시작할 수 있다.**
+볼륨별 백업에서는 해당 시점의 **메타데이터 백업 작업**을 선택한다.
+Commvault는 Mold UI에서 복원을 시작한다.
 
 1. Mold에서 대상 VM을 **Stopped**로 둔다.
-2. 관리자의 Staging Job 조회에서 원하는 logical backup UUID와 metadata Job/catalog ID를 확인한다.
-3. 외부 UI에서 **`ABLESTACK-<logical-backup-UUID>-metadata`** Job/Policy의 restore point를 선택한다.
-4. 메타데이터만 작업 Host에서 접근 가능한 마운트된 경로로 복원한다.
-   공유 Staging의 다른 Host/경로로 복원해도 source catalog ID로 연결한다.
-5. NetBackup post/watcher 또는 Veeam restore agent가 완료 세션을 확인한다.
-   `resolveBackupArtifact`가 정확한 catalog ID/restore point UUID를 logical backup에 연결한다.
-6. `restoreBackupArtifact`가 외부 restore Job ID를 DB에 먼저 기록하고 Mold 복원을 요청한다.
-   Mold가 별도 Worker Host를 선택하고 용량 예약 후 필요한 볼륨을 순차 복원한다.
-7. Mold의 실제 VM 복원 완료를 확인한 뒤 VM을 시작한다.
+2. 원하는 Mold 백업 시점에 연결된 메타데이터 작업을 확인한다.
+   외부 작업 이름은 **`ABLESTACK-<Mold 백업 UUID>-metadata`**이다.
+3. NetBackup/Veeam UI에서 해당 작업의 복원 시점을 선택한다.
+4. 메타데이터를 복원 감시 서비스가 접근할 수 있는 마운트된 경로로 복원한다.
+   Host의 복원 감시 설정에 등록된 경로를 사용하고, 외부 복원 전에 마운트 상태를 확인한다.
+5. NetBackup 사후 스크립트·복원 감시 서비스 또는 Veeam 복원 에이전트가 완료된 작업을 확인하여
+   해당 Mold 백업 시점의 VM 복원을 요청한다.
+6. Mold가 복원 Host와 용량을 준비하고 필요한 볼륨을 순서대로 가져와 VM을 복원한다.
+7. Mold에서 실제 VM 복원 완료를 확인한 뒤 VM을 시작한다.
 
-주의 사항:
+볼륨별 파일 작업을 외부 UI에서 직접 복원해도 VM 복원은 시작되지 않는다.
+메타데이터 작업의 정확한 백업 시점을 선택해야 하며, 여러 볼륨의 파일과 메타데이터를 서로 다른 시점에서 섞지 않는다.
+외부 UI의 파일 복원 완료와 Mold의 VM 복원 완료는 별도 단계다.
+외부 복원 완료 알림이 반복되어도 같은 작업으로 새 VM 복원을 반복 요청하지 않는다.
 
-- 이 외부 UI 연결은 **QCOW2 metadata Job**에만 적용한다. RBD는 Mold에서 복원한다.
-- 볼륨 child Job을 직접 복원한 완료 알림은 VM 복원을 시작하지 않는다.
-- Veeam의 child restore point UUID가 확인되지 않으면 timestamp/latest 추정으로 다른 백업을 선택하지 않는다.
-- Mold가 제출한 외부 restore Job과 같은 외부 UI 완료 알림의 반복은 새 복원을 시작하지 않는다.
-- `restoreBackupArtifact`의 async Job 완료는 요청 접수 결과이며 실제 VM 복원 완료는 Mold 복원 진행 상태로 확인한다.
-- 모든 파일과 API를 같은 버전으로 배포하고 watcher를 시작한 뒤 새 UI 복원을 수행한다.
-  기존 운영자 설정 파일의 Staging root, 외부 솔루션 연결, 관리 API 권한도 함께 확인한다.
-- 외부 UI가 메타데이터를 쓰기 전에는 Mold의 사전 용량 예약이 실행되지 않는다.
-  대용량 볼륨 전송은 Mold가 예약한 경로에서 수행하며, 메타데이터 목적지는 운영 환경에서 마운트를 유지한다.
+외부 UI에서 메타데이터를 쓰는 시점에는 Mold의 사전 용량 예약이 실행되지 않는다.
+따라서 해당 경로의 마운트와 접근 권한을 운영 환경에서 유지해야 한다.
+대용량 볼륨 파일은 이후 Mold가 용량을 예약한 스테이징 경로에서 처리한다.
+RBD는 기준 Full 파일과 필요한 증분 파일을 순서대로 적용하여 새 RBD 볼륨을 준비한다.
+QCOW2도 동일한 백업 시점의 Full·증분 파일을 사용한다.
+두 방식 모두 모든 볼륨 준비가 성공한 뒤 실제 VM 볼륨을 교체한다.
 
-### 불확실한 Job과 정리
+## 임시 파일 정리와 실패한 백업 삭제
 
-호출 전에 실패한 것이 확인되면 `NOT_SUBMITTED`/실패를 기록하고 engine 종료 확인 후 예약을 해제한다.
-외부 요청의 전송 여부나 reader/writer 종료가 불확실하면 예약과 Artifact를 유지한다.
-관리자는 Staging Job 조회/재조회/외부 Job 연결 기능으로 정확한 Job을 확인할 수 있다.
+### 임시 경로와 보존 범위
 
-UI의 **스테이징 관리** 메뉴는 정리 대기·실패, 미확정 실행 요청, 외부 카탈로그 조회 오류나
-복원 복구 오류 등 관리자의 확인이 필요한 기록이 있을 때 표시한다.
-정상적인 백업·복원과 용량 대기, 카탈로그 기본값 `PENDING`만으로는 표시하지 않는다.
-실패한 백업도 Staging 정리, 용량 예약 해제와 Host 작업 기록 정리가 끝나면 메뉴를 숨긴다.
-Staging 정리가 `COMPLETED`여도 용량 예약이나 Host 기록 정리가 남아 있으면 메뉴를 표시하며,
-실패한 백업의 남은 정리를 재시도할 수 있다. 과거 복원 이력은 조회만 가능하며 정리를 재시도하지 않는다.
+GFS2 기본스토리지의 `/mnt/glue-gfs`를 마운트 경로와 스테이징 root로 함께 사용할 수 있다.
+실제 파일은 다음과 같이 provider 아래의 개별 작업 경로에 저장한다.
 
-Commvault/NetBackup/Veeam 볼륨 백업의 최초 Host 실행 요청도 같은 원칙을 적용한다.
-DB에 원래 Job UUID·Worker Host·경로·manifest를 먼저 저장하고 Host의 시작 준비 응답을 확인한 뒤,
-`SUBMISSION_PENDING` 의도를 저장하고 실행 명령을 한 번만 보낸다.
-Agent 접속 실패, timeout, 실패 응답 또는 응답 유실만으로 DB 행을 삭제하거나 강제 정리·즉시 Full 재시도를 하지 않는다.
-같은 Job UUID의 시작 기록을 재조회하며, 확인 중 화면은 `RUNNING`/`START_CONFIRMATION`으로 표시한다.
-시작 상태·대기 사유·제출/확인 시각은 Staging Job 관리 화면에서도 확인할 수 있다.
+- 백업: `<root.path>/<provider>/<VM 인스턴스 이름>/<타임스탬프>`
+- 복원: `<root.path>/<provider>/restore/<restore-job-id>`
+- 예: `/mnt/glue-gfs/ablestack-commvault/i-2-25-VM/2026.10.12.15.00.00.000`
 
-Host 시작 기록은 `/var/lib/ablestack/backup/backup-start/<job-id>.json`에 별도로 보관하며
-`PREPARED` → `DISPATCHED` → `STARTED` 순서로 갱신한다.
-Agent의 FileLock과 Python의 lockf가 같은 POSIX 잠금을 사용하여 실행 접수, 최초 engine 시작, 미시작 확정을 직렬화한다.
-Python은 Staging/source IO 전에 `STARTED`를 기록한다.
-시작 오류가 기록되었거나 60초 안에 시작이 확인되지 않으면 Host에서 미시작 상태를 다시 확인하고
-`START_FAILED`와 admission 종료 기록을 영구 저장하여 늦게 도착한 실행 명령까지 차단한다.
-Host가 이미 `STARTED`를 기록했다면 정상 진행 추적을 이어가고, Host 응답이 없으면 예약과 작업 정보를 유지한다.
-systemd가 작업을 수락한 뒤 Agent 시작 응답만 실패한 경우에도 실제 실행 중인 unit을 재확인하여 `RUNNING` 추적을 이어간다.
-미시작 차단 응답이 확인된 뒤에만 DB 실패 상태, 예약 해제, Host Job 기록 정리를 진행한다.
-작은 시작 기록과 잠금 파일은 Job 정리 후에도 유지한다. 기존 시작 기록이 없는 작업은 기존 engine 추적 절차를 사용한다.
-같은 VM의 이전 볼륨 백업이 진행 중이거나 실패 후 Staging/예약/Job 기록 정리가 남아 있으면 새 백업을 차단한다.
-이 시작 절차를 적용할 때는 Management Server, KVM Agent와 `thirdparty_volume_backup.py`를 함께 배포한다.
+볼륨 백업 파일은 외부 저장 완료를 확인한 뒤 정리한다.
+복원 파일은 VM 복원 과정에서 필요한 처리가 끝난 뒤 정리한다.
+정리 대상은 해당 작업의 임시 파일이며, 기본스토리지 마운트 경로·스테이징 root·provider 상위 경로를 삭제하지 않는다.
+작업 종료나 파일 정리를 확인하지 못하면 용량 예약을 유지한다.
 
-볼륨 백업의 조회·취소·재조정·정리는 DB에 기록된 Worker Host ID를 기준으로 처리한다.
-시작 plan과 admission에 Host ID가 있으면 서로 일치해야 하며, 해당 Host가 없어졌더라도 VM의 현재 Host로 대체하지 않는다.
-ID가 없는 기존 볼륨 작업만 manifest에 기록된 원래 Host 이름/주소를 사용한다.
-Worker Host가 없거나 기록이 충돌하면 작업과 예약을 유지하여 잘못된 Host에 취소·삭제 요청을 보내지 않는다.
+### 실패한 백업 삭제 순서
 
-최초 Host 시작 확인 중에도 DB 대기열이 `WAITING`이면 취소 의도를 먼저 저장할 수 있다.
-Host의 admission 파일 생성이나 응답을 취소 접수의 전제 조건으로 삼지 않는다.
-DB 대기열은 `CANCEL_PENDING`, 백업 화면은 `RUNNING`/`CANCEL_PENDING`으로 표시한다.
-같은 취소 요청은 중복 접수할 수 있으며, 새 admission 승인과 외부 child Job 전송은 차단한다.
-불확실한 작업은 동시 실행 슬롯과 이미 확보한 용량 예약을 유지한다.
-Host가 응답하면 미시작 작업은 시작 잠금 안에서 차단하고, 이미 시작된 engine에는 반복 가능한 취소 marker를 전달한다.
-응답 유실이나 Management Server 재시작 후에도 같은 Job UUID의 취소 의도를 이어서 처리한다.
-미시작 차단 또는 engine 종료 확인 후 `Canceled`로 변경하고, 공통 정리가 끝난 뒤 예약과 Host Job 기록을 해제한다.
-Staging Job 관리 화면은 취소 요청/Host 확인 시각과 정리 대기 사유를 별도로 표시한다.
+1. Mold에서 실패 사유와 정리 상태를 확인한다.
+2. 외부 작업이 실행 중이거나 정리가 대기 중이면 먼저 해당 작업의 종료 여부와 연결 상태를 확인한다.
+3. 필요한 경우 **스테이징 관리**에서 작업 상태를 다시 확인하거나 정리를 재시도한다.
+4. 정리 완료 후 Mold의 일반 **백업 삭제**를 실행한다.
 
-볼륨 복원도 동일하게 plan의 Worker Host ID만 사용하여 조회·재조정·정리를 진행한다.
-기록된 Host가 삭제되면 Host 이름이나 VM의 현재/마지막 Host로 대체하지 않는다.
-Host Job 기록 삭제도 해당 복원 plan의 UUID만 사용하며 VM 정보로 만든 기존 작업 ID를 삭제 대상으로 추가하지 않는다.
-복원 plan, 현재 추적 정보와 같은 Job의 admission 정보가 충돌하면 Host 요청과 정리를 중단하고 예약을 유지한다.
-정리된 이전 복원의 `RELEASED` admission은 새 plan의 Worker Host 선택에 사용하지 않는다.
+정리 상태가 `COMPLETED`이고 UI의 일반 삭제가 정상 완료되면 추가 수동 파일 삭제는 필요하지 않다.
+카탈로그의 `PENDING` 표시만으로 Host의 디렉터리를 수동 삭제하지 않는다.
+정리가 `WAITING`이면 실행 Host, 스테이징 마운트와 외부 서버 연결을 확인한다.
+증분 백업이 참조하는 Full·이전 증분 파일은 후속 복원 시점에 필요하므로 개별적으로 삭제하지 않는다.
 
-새 시작 프로토콜을 사용하는 복원이 `WAITING`이고 외부 복원 요청 기록이 없으면,
-Host admission 파일 준비 여부나 접속 상태와 관계없이 취소 의도를 복원 이력에 저장한다.
-대기열은 `CANCEL_PENDING`, 화면 상태/단계는 `RUNNING`/`CANCEL_PENDING`으로 표시한다.
-취소 요청 후 시작 명령, 용량 승인과 외부 복원 전송을 차단하며 동시 실행 슬롯 및 용량 예약을 유지한다.
-Host가 응답하면 같은 시작 잠금 안에서 미시작을 확정하거나,
-초기화된 정확한 Host plan을 대조한 뒤 `volume-restore-cancel` marker로 엔진 종료를 요청한다.
-엔진은 admission 대기, 승인 직후 및 외부 파일 요청 전에 취소를 검사한다.
-시작 검사와 초기화는 JVM 내부 잠금과 Host 파일 잠금을 함께 사용하여 지연된 시작을 차단한다.
-미시작 차단 또는 엔진 종료가 확인되면 `CANCELED`로 표시하고,
-원본 볼륨 상태·외부 writer 종료·Staging 정리가 확인된 뒤 예약을 해제한다.
-취소된 대기열에 외부 요청 기록이 없으면 외부 솔루션의 receipt 정리 호출도 생략한다.
-rollback이 필요한 결과는 취소 완료로 바꾸지 않으며 원본 복구와 정리 확인을 계속 요구한다.
-Management Server 재시작, Host 응답 유실과 관리자의 재조회도 같은 Job의 취소 의도를 이어서 처리한다.
-취소 요청/Host 확인 시각과 정리 사유는 현재 복원 및 과거 복원 이력에서 확인할 수 있다.
-시작 기록이 없는 기존 복원은 기존 대기열 취소 절차를 사용한다.
-이 취소 절차를 적용할 때는 Management Server와 KVM Agent를 함께 배포한다.
+**스테이징 관리**는 자동 처리만으로 작업 결과나 정리를 확정하지 못한 경우 사용하는 관리자 화면이다.
+작업 상태 다시 확인은 외부 작업과 파일을 조회하며, 새 백업을 시작하는 기능이 아니다.
+정리 재시도는 종료가 확인된 작업의 남은 임시 파일과 작업 기록 정리를 시도한다.
+외부 작업 번호의 수동 연결은 실제 솔루션에서 해당 VM·볼륨·시점의 작업임을 확인한 경우에만 사용한다.
+확인되지 않은 작업을 완료로 간주하거나 강제로 삭제하는 기능은 아니다.
 
-`START_FAILED`로 미시작 차단이 확인된 백업은 원래 manifest가 그대로이고 외부 전송 시도가 없으며,
-Staging 정리·DB 예약 해제·Host Job 기록 삭제가 모두 완료된 경우 저장된 증거만으로 삭제할 수 있다.
-집계 대기 기록으로 해당 백업이 건수·용량 집계 전 실패/취소되었는지도 확인한다.
-이 경우에는 원래 Host가 삭제되었거나 Staging 설정이 변경되어도 mount/외부 솔루션/Ceph/libvirt를 다시 조회하지 않는다.
-증거가 없거나 일부 정리가 남은 작업은 기존 종료·정리 확인 절차를 유지한다.
+백업 하나의 실패를 정리할 때 공통 스테이징, 다른 VM의 파일이나 백업 정책을 직접 삭제하지 않는다.
+Host 작업 기록도 Mold의 정리 결과를 확인하기 전에 수동으로 지우지 않는다.
 
-원본 준비 단계 전에 외부 솔루션 설정 오류나 대기 timeout으로 실패한 경우,
-종료된 Host engine의 `volume-source-start.json`이 `NOT_STARTED`이고 외부 전송 시도가 없으면
-외부 솔루션과 Ceph/libvirt 조회 없이 Staging 파일과 예약을 정리한다.
-시작 기록은 원본 작업 전에 디스크에 저장하며, 원본 작업을 시작한 경우 `STARTED`로 변경한다.
-기록이 없는 기존 작업이나 기록이 불확실한 작업은 기존 종료 확인 절차와 예약 유지 정책을 따른다.
-물리적 정리 후 DB 예약을 해제한 다음 정리 완료를 표시하여 서버 재시작 시 해제 재시도를 유지한다.
-정리 시 용량 잠금 안에서 admission 종료 기록을 저장하여 지연된 용량 승인 요청이 예약을 다시 생성하지 못하게 한다.
-Backup/Restore 승인 종료 기록은 Host의
-`/var/lib/ablestack/backup/staging-admission-closed/<job-id>.closed`에 저장한다.
-이 작은 기록은 Job 디렉토리 삭제 대상에 포함되지 않으며, 이미 실행 중인 지연 승인도 계속 차단한다.
-기존 Job 디렉토리 안의 `staging-admission-closed` 기록도 읽어 이전 종료 상태를 유지한다.
-복원도 같은 용량 잠금 안에서 승인 종료 기록을 저장한 뒤 예약을 삭제한다.
-종료된 복원 Job은 지연된 승인이나 `prepare`/`reserve` 요청으로 다시 용량을 확보할 수 없으며,
-정리 도중 중단되면 같은 Job의 예약 해제를 재시도할 수 있다. 새 복원은 새 Job ID를 사용한다.
+## NetBackup 및 Veeam 인증정보 관리
 
-볼륨별 백업 취소는 기존 Provider의 강제 삭제 경로 대신 공통 정리 절차를 사용한다.
-Host engine 및 외부 reader 종료 확인 → 원본 Scratch/Snapshot과 Staging 정리 → 물리적/DB 예약 해제
-→ Host Job 기록 삭제 순서로 처리한다. 대기열 취소에도 같은 절차를 적용한다.
-Job 기록 삭제가 실패하거나 응답이 유실되면 `jobcleanupstate=WAITING`으로 기록하고 별도로 재시도한다.
-이때 이미 확인한 Staging 정리 완료 상태는 유지하여 삭제된 원본 Job 기록을 다시 요구하지 않는다.
+Host의 사전·사후 스크립트와 복원 감시 서비스는 Mold API key와 secret key로 Mold에 요청한다.
+이 API 인증정보는 대상 Mold 서버에서 발급받아야 한다.
+Host의 `/root/.ssh/ablestack.key`는 API secret을 보호하는 암호화 키이며 API 계정의 secret key와 구분한다.
 
-외부 전송 전에 submission intent를 `backup_details`에 직접 저장하고, 확인한 child Job ID와 catalog reference도
-개별 detail key로 저장한다. `backups` 행에 변경 사항이 없어도 상세 정보 저장은 정상적으로 진행한다.
-전체 상세 정보 교체로 다른 작업의 용량 예약·복원·정리 기록을 덮어쓰지 않는다.
-마지막 metadata 전송 완료 시 manifest와 provider의 복원 시점 reference를 같은 DB 트랜잭션으로 저장한 후 Host에 ACK한다.
-저장에 실패한 요청 의도를 메모리에 완료된 저장으로 남기지 않으며, 외부 Job 복구 조회 오류는
-미확정 상태로 유지하여 같은 요청을 재조회한다. 미확정 요청을 중복 제출하거나 조회 오류만으로 Host를 중단하지 않는다.
-기존 버전에서 `Unable to persist external artifact submission intent`로 실패한 작업은 Host 종료 확인 후,
-외부 Job/복원 시점 참조가 없는 단일 미확정 요청에 한해 미전송으로 확정하여 공통 정리를 이어간다.
-이미 확인된 외부 Job, 다른 실패 원인과 불명확한 여러 요청은 이 복구 대상에서 제외한다.
+- 신규 구성은 Host별 임의 키를 자동 생성하고 NetBackup·Veeam이 같은 Host 키를 함께 사용한다.
+- 새 API secret 저장에는 두 솔루션 모두 AES-256-GCM을 사용한다.
+- 키와 암호화된 인증정보 파일은 root 전용으로 관리한다. 파일 권한은 `600`, 보호 디렉터리는 `700`이다.
+- 필요한 Python 암호화 라이브러리는 `python3-cryptography`이다.
+- 키와 암호화된 인증정보는 함께 보호된 위치에 보관한다.
+  키만 삭제하거나 다른 Host의 암호문만 복사하면 인증정보를 읽을 수 없다.
 
-모든 child Job과 metadata 전송이 완료된 뒤 checkpoint 정보 저장, DB 예약 해제 또는 완료 상태 저장이
-일시적으로 실패하면 백업을 `Failed`로 바꾸지 않고 `BackingUp`을 유지하여 완료 처리만 재시도한다.
-Host 완료 후 Mold 완료 확정 전 화면 상태/단계는 `RUNNING`/`FINALIZING`, 진행률은 99%로 표시한다.
-관리자의 Staging Job 조회에서 `finalizationstate`/`finalizationreason`으로 대기 사유를 확인할 수 있다.
-재시도와 Management Server 재시작 후 복구는 완료된 파일을 다시 전송하지 않는다.
-
-최종 metadata Job의 정확한 catalog 완료 정보는 Host의 `volume-transfer-complete.json`에도 저장한다.
-이후 원본 reader/Scratch 정리, 승인 종료 기록 저장 또는 물리적 예약 해제에서 실패해도
-Mold는 DB의 전체 전송 완료 증거를 기준으로 `BackingUp`/`FINALIZING`을 유지한다.
-Host engine 종료 후 `FINALIZE_BACKUP`으로 같은 Job의 정리만 재시도하고,
-`volume-finalization.json`에 정리 완료를 저장한 뒤 DB 예약 해제와 logical backup 완료를 확정한다.
-각 재시도는 별도의 응답 기록을 사용하여 이전 성공 응답을 현재 요청의 성공으로 오인하지 않는다.
-Host 재시작이나 마지막 ACK 유실로 전송 완료 기록이 저장되지 못했어도,
-DB의 모든 volume/metadata catalog 완료 정보를 원래 Host plan과 대조한 뒤 완료 처리를 이어간다.
-실패 종료 직후 Host가 RBD snapshot을 바로 삭제하지 않으며, 외부 작업 결과를 확인한 공통 정리가 삭제 여부를 결정한다.
-완료 처리에서는 현재 RBD/QCOW2 checkpoint와 metadata를 보존하고, 이전 RBD snapshot은 별도 재시도 정리에서 처리한다.
-Host 연결이 끊겨도 DB에 전체 전송 완료 증거가 있으면 화면은 `RUNNING`/`FINALIZING`/99%와 대기 사유를 표시한다.
-이 단계의 백업 취소와 대역폭 변경은 허용하지 않는다.
-
-성공한 RBD 백업의 이전 checkpoint snapshot 정리가 실패하면 `sourcecleanupstate=WAITING`으로 표시하고 재시도한다.
-Snapshot 정리 상태와 실패 사유는 일반 백업 정보 저장에서 제외하여 기존 상태로 덮어쓰거나 삭제하지 않는다.
-현재 checkpoint snapshot은 다음 증분 백업을 위해 유지한다.
-Host의 Job 기록 삭제도 성공한 RBD 증분 백업의 `source-cleanup.json` 완료 증거를 검사한다.
-기록이 없거나 정리 중/실패 상태이면 `volume-plan.json` 등 재시도에 필요한 기록을 삭제하지 않는다.
-새 완료 증거에는 version, backup UUID와 현재/이전 checkpoint 이름을 저장하여 원래 Host plan과 대조한다.
-기존 UUID/state 형식의 완료 기록도 같은 Job의 기록인 경우 사용할 수 있다.
-Management Server가 정리 완료 응답을 받지 못하면 DB의 `sourcecleanupstate=WAITING`을 유지하여
-삭제 요청을 차단하고 같은 작업의 정리 완료 확인을 재시도한다.
-
-NetBackup의 `updateNetBackup` 전체 백업 완료 API는 볼륨 방식 백업에 대한 요청을 거부한다.
-백업 상태, timestamp, catalog ID 및 정책 정보를 쓰기 전에 거부하여 기존 callback이 child/metadata 정보를 덮어쓰지 못하게 한다.
-볼륨별 catalog와 logical backup 완료는 공통 volume coordinator에서 확정한다.
-이 API의 Host 기록 삭제도 볼륨 방식 백업에는 실행하지 않는다.
-최신 NetBackup post hook의 `.volume-bootstrap`/child Policy 확인과 함께 서버에서도 같은 경계를 보호한다.
-
-Veeam의 기존 하루 경과 `BackingUp` 자동 정리는 볼륨 방식 백업에 적용하지 않는다.
-`WAITING`, 외부 전송 또는 `FINALIZING` 대기 시간이 길어져도 작업 정보와 예약을 보존하며,
-공통 coordinator가 실제 종료와 정리를 확인한 뒤 처리한다.
-
-### 백업 자원 집계
-
-볼륨 방식 백업은 Host에 명령을 보내기 전에 초기 manifest와
-`backup.resource.count.pending=true`를 하나의 DB 트랜잭션으로 저장한다.
-Logical backup을 `BackedUp`으로 확정할 때 같은 트랜잭션 안에서 백업 건수와 용량을 집계하고 pending 기록을 해제한다.
-집계는 해당 백업 행을 잠근 뒤 현재 상태와 pending 기록을 다시 확인하여,
-동시 처리나 서버 재시작 후 재시도에서도 한 번만 반영한다.
-집계 중 실패하면 전체 트랜잭션이 취소되며 `FINALIZING`에서 완료 처리를 재시도한다.
-
-이미 `BackedUp`이지만 pending 기록이 남은 기존 작업도 백그라운드에서 별도로 조회하여 집계한다.
-이 집계에는 VM이나 Host 연결이 필요하지 않다.
-일반 백업 정보 저장은 pending 기록을 삭제하거나 이미 해제된 기록을 다시 생성하지 않는다.
-지연된 백업 시작 API 응답이나 기존 restore-point 동기화는 볼륨 방식의 건수·용량을 중복 집계하지 않는다.
-Full fallback도 자신의 초기 집계 대기 기록을 사용하며, 실패한 증분 작업의 pending 기록을 뒤늦게 복사하지 않는다.
-완료 전에 실패하거나 취소된 백업은 pending 기록을 유지하며, 이후 삭제 시 집계되지 않은 건수·용량을 차감하지 않는다.
-
-필수 checksum 검사는 추가하지 않는다. 기존 파일 존재, 크기, manifest 및 볼륨 구성 검사는 유지한다.
-
-## NetBackup 및 Veeam 인증정보 보호
-
-대상은 `ablestack-netbackup`, `ablestack-veeam`의 Host 측 Mold API 인증정보다.
-VM 백업 데이터의 암호화, Commvault 인증정보, DR 인증정보에는 적용하지 않는다.
-
-### 신규 구성
-
-| 항목 | 구현 |
+| 기존 Host 구성 | 구성·갱신 시 동작 |
 | --- | --- |
-| 공통 Host 키 | `/root/.ssh/ablestack.key`; Host별로 생성하고 두 솔루션이 함께 사용 |
-| 키 생성 | Python `secrets`를 통한 OS 암호학적 난수, 256비트 |
-| 키 형식 | `format=ablestack-backup-host-key`, `version=1`, `encoding=hex`, 64자리 소문자 HEX |
-| 암호화 | 공통 `ablestack_backup_secret.py`의 AES-256-GCM, Python `cryptography` 사용 |
-| nonce / 인증 태그 | 암호화마다 96비트 난수 nonce, 128비트 인증 태그; 태그를 절단하지 않음 |
-| 암호문 | `format=ablestack-backup-secret`, `version=2`; nonce, 태그를 포함한 ciphertext를 Base64 인코딩 |
-| 부가 인증 데이터 | 형식, 버전, 알고리즘, 용도, 키 식별자에 대한 AAD 검증 |
-| 변조·잘못된 키 | 복호화 실패; 평문 반환과 기존 알고리즘으로의 재시도 없음 |
-| 권한 | Host 키·암호화 파일 `600`, 키·secret 디렉터리 `700`; 키 소유자와 일반 파일 여부 검증 |
-| 파일 게시 | 잠금 아래 키 준비, 완전한 임시 파일을 원자적으로 게시; 기존 암호문을 먼저 삭제하지 않음 |
+| 키와 암호화 파일 모두 없음 | 신규 키를 생성하여 인증정보를 저장한다. |
+| 기존 키만 있고 암호화 파일 없음 | 설치 시 키를 보존하고 솔루션 구성 시 미사용 키를 신규 형식으로 전환한다. |
+| 기존 키와 암호화 파일 있음 | 키를 보존하며 기존 인증정보를 읽을 수 있다. |
+| 암호화 파일은 있는데 키 없음 | 새 키 생성을 차단한다. 원래 키를 복구하거나 인증정보를 다시 구성해야 한다. |
+| 신규 형식 키가 이미 있음 | 동일한 키를 재사용한다. |
 
-키를 읽고 암호화하는 작업은 Python에서 처리한다. 신규 암호화에서는 Shell의 Base64 추측,
-바이너리 키 문자열 처리, 평문 passphrase 임시 파일을 사용하지 않는다.
-Veeam 구성의 내부 암호화 호출은 API secret을 stdin으로 전달하고, 신규 bootstrap env에는 평문 API secret을 저장하지 않는다.
-기존 CLI `--api-secret`/`--admin-secretkey`와 환경변수 입력은 호환을 위해 남아 있으므로
-운영 명령행·Shell history·프로세스 환경으로의 인증정보 노출은 별도로 관리해야 한다.
-
-RPM Agent 의존성은 `python3-cryptography`이다. `centos7`/`centos8` spec과 현재 EL9 spec에 반영한다.
-기존 패키징 경로는 유지한다: `el9`는 `el9/cloud.spec`, `rocky9`는 `centos8/cloud.spec`을 읽는다.
-`packaging/el9`는 저장소의 ignore 대상이므로 별도 빌드 서버의 EL9 spec에도 해당 의존성이 있는지 확인한다.
-Veeam을 별도로 배포하면 두 공통 Python 모듈과 Veeam의 Python/Shell 진입점을 함께 갱신해야 한다.
-배포용 `install.sh`와 `push-to-kvm.sh`에 공통 모듈 배포를 포함한다.
-
-### 기존 배포와 테스트 서버
-
-| Host 상태 | 처리 |
-| --- | --- |
-| 키와 암호문 모두 없음 | 설치·구성 시 신규 키 생성 |
-| 기존 키만 있고 암호문 없음 | 설치 시 키 보존; 솔루션 구성 시 미사용 기존 키를 임의 키로 전환 |
-| 기존 키와 기존 암호문 있음 | 기존 키 보존, 기존 암호문 복호화 지원 |
-| 암호문은 있는데 키 없음 | 키 생성 차단; 원래 키 복구 또는 두 솔루션 인증정보 재등록 필요 |
-| 신규 형식 키 존재 | 업데이트·재설치·구성에서 동일한 키 재사용 |
-
-기존 NetBackup version 1은 원래 키 문자열과 PBKDF2/HMAC 스트림·MAC으로 **복호화만** 지원한다.
-기존 Veeam OpenSSL 형식은 원래 passphrase 해석과 AES-256-CBC/PBKDF2로 **복호화만** 지원한다.
-`ablestack.key.default`는 소스에서 제거하며, 기존 Host의 실제 키 파일은 삭제하지 않는다.
-신규 암호화에서는 임의 키와 AES-256-GCM만 사용하며, 평문 신규 저장 옵션은 허용하지 않는다.
-
-기존 키를 신규 키로 교체하려면 두 솔루션의 암호문과 해당 참조를 함께 전환해야 한다.
-기존 암호문이 남아 있는 Host에서는 자동 키 교체를 차단한다.
-테스트 서버를 초기화할 때도 기존 데이터가 필요하면 먼저 키와 암호화 파일을 **함께** 별도 보호된 위치에 보관한다.
-`secrets/*.enc*` 백업 파일 및 conf/env의 암호문 참조도 키 교체 판단에 포함한다.
-커스텀 경로는 `ensure --existing-secret PATH` / `--secret-dir PATH`로 추가하며,
-표준 구성 밖에 수동으로 저장한 파일은 운영자가 함께 확인해야 한다.
-실제 백업·복원 또는 복호화 중에는 키를 생성·교체하지 않는다.
-기존 Veeam CBC 파일에는 GCM의 인증 태그가 없으므로 신규 형식과 같은 변조 검증을 제공하지 않는다.
-
-### 보안기능확인서 준비 시 확인할 범위
-
-이 변경은 보안기능확인서 획득 또는 특정 제품유형 보안요구사항 충족을 선언하지 않는다.
-백업 기능을 시험 범위에서 제외하더라도 다음 구현 정보와 한계는 시험 환경 명세에서 구분한다.
-
-- Python `cryptography`와 연결된 OpenSSL의 실제 배포 버전·운영 환경을 기록한다.
-  일반 라이브러리 사용을 KCMVP 검증필 암호모듈 사용으로 표시하지 않는다.
-- Host 키는 root 전용 파일에 저장된다. HEX/JSON은 인코딩이며 키 암호화가 아니다.
-  시험 요구사항에서 별도 KEK/TPM/HSM 등 키 저장 보호를 요구하면 해당 구현과 평가가 추가로 필요하다.
-- Python 불변 객체와 암호 라이브러리 내부 복사본의 완전한 메모리 제로화를 보장하지 않는다.
-  프로세스 수명 제한을 안전한 메모리 파기 인증으로 해석하지 않는다.
-- 파일 삭제·원자적 교체는 SSD, snapshot, journaling 영역의 키 흔적 완전삭제를 보장하지 않는다.
-- OS 난수원을 사용하며 별도의 KCMVP 난수발생기 검증을 주장하지 않는다.
-- Mold API 전송의 HTTPS/TLS, 권한 최소화, 감사기록, 제품 전체 자체시험은 이 저장 암호화 변경과 별도로 확인한다.
-
-참조한 자료는 다음과 같다. 제품유형별 최신 시험 기준은 시험기관과 확인해야 한다.
-
-- [NIST SP 800-38D: GCM](https://csrc.nist.gov/pubs/sp/800/38/d/final)
-- [Cryptography AESGCM API](https://cryptography.io/en/stable/hazmat/primitives/aead/)
-- [국가사이버안보센터: 보안적합성 자료실](https://www.ncsc.go.kr/ko/main/PageLink.html?token=MDEyMzQ1Njc4OWFiY2RlZrBvBnCd4cC_Aqu-HrYk1bhIIWt4LUv-A-u74qIMxLAPMJs5RcAEdu156oXC71P6zg)
-- [국가용 웹 방화벽 보호프로파일 V3.0 보조문서](https://www.itscc.kr/file/download.do?file=KPR100000002169):
-  서버 공통 요구사항에 대한 키 생성·보관·파기 해설 참고; 이 제품유형의 요구사항을 HCI에 그대로 적용하지 않는다.
-
-### 확인용 회귀 테스트
-
-테스트에는 공통 암호문을 두 CLI가 함께 읽는지, 변조/잘못된 키 차단,
-기존 두 암호문 형식 호환, 병렬 키 준비, 기존 암호문이 있을 때의 교체 차단을 포함한다.
-개발 작업에서는 빌드와 테스트를 실행하지 않았으며, 통합 환경에서 다음과 같이 실행할 수 있다.
-
-```bash
-python3 -m unittest discover -s scripts/vm/hypervisor/kvm -p test_ablestack_backup_secret.py
-```
+키를 바꿀 때에는 NetBackup·Veeam의 인증정보 파일과 설정을 함께 전환한다.
+암호화된 인증정보가 남아 있으면 자동 키 교체를 차단하므로 키 파일만 수동 삭제하지 않는다.
+실제 백업·복원이나 복호화 과정에서는 키를 새로 생성하거나 교체하지 않는다.
+구성 명령에 실제 API secret을 입력할 때는 명령행·Shell history 접근 권한을 관리한다.
 
 ## Veeam Host 구성과 배포
 
-신규 볼륨별 백업과 복원에는 위의 공통 Staging 안내를 적용한다.
-기존 host/datadisk 안내에 있던 `/tmp/mold/veeam`·`/data/backup` 고정 경로를
-신규 공통 Staging 설정으로 사용하지 않는다. 실제 경로는 Mold 글로벌 설정에서 읽는다.
-
-| 목적 | 스크립트 |
+| 목적 | 구성 도구 |
 | --- | --- |
 | Host 스크립트 설치 | [install.sh](veeam/install.sh) |
 | 원격 Host 배포 | [push-to-kvm.sh](veeam/push-to-kvm.sh) |
 | 최초 환경 구성 | [bootstrap-host-veeam-env.sh](veeam/bootstrap-host-veeam-env.sh) |
 | Job 및 API 인증정보 구성 | [veeam_config.sh](veeam/veeam_config.sh) |
-| Veeam Pre hook | [ablestack_veeam_pre_notify.sh](veeam/ablestack_veeam_pre_notify.sh) |
-| Veeam Post hook | [ablestack_veeam_post_notify.sh](veeam/ablestack_veeam_post_notify.sh) |
+| Veeam 사전 백업 스크립트 | [ablestack_veeam_pre_notify.sh](veeam/ablestack_veeam_pre_notify.sh) |
+| Veeam 사후 백업 스크립트 | [ablestack_veeam_post_notify.sh](veeam/ablestack_veeam_post_notify.sh) |
 
-Host 설치 경로는 기본 `/etc/ablestack/veeam`이며 공통 암호화 모듈도 함께 배포한다.
-API key와 secret은 대상 Mold 서버에서 발급받아야 하며 자동으로 생성할 수 없다.
-설치 후 Host에서 `veeam_config.sh --help`와 기존 conf/env 설정을 확인한 뒤 구성한다.
-신규 bootstrap은 env에 API secret 평문을 남기지 않고 암호화 파일의 경로를 기록한다.
-
-Veeam Job의 Pre/Post hook은 설치된 Host 스크립트 경로를 지정한다.
-외부 UI 복원은 위의 메타데이터 Job 및 `restoreBackupArtifact` 절차를 따른다.
-기존 전체 Host/datadisk 방식의 FLR→`restoreBackup` 절차는 해당 기존 구성에서만 사용한다.
+Host 설치 경로는 기본 `/etc/ablestack/veeam`이다.
+Mold API key와 secret을 준비한 뒤 구성 도구의 `--help`와 운영 환경의 conf/env 설정을 확인하여 적용한다.
+신규 구성은 API secret을 암호화 파일에 저장하고 설정 파일에는 해당 파일의 경로를 기록한다.
+Veeam 기준 Job의 Pre/Post에는 설치한 사전·사후 스크립트 경로를 지정한다.
+스테이징 경로는 Mold의 공통 글로벌 설정을 사용한다.

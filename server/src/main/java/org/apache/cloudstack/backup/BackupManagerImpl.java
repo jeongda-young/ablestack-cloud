@@ -2050,7 +2050,6 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             match.virtualmachineid = vm == null ? null : vm.getUuid();
             if (tracked) { match.reason = "External restore is already owned by Mold"; }
             else if (!"METADATA".equals(match.artifacttype)) { match.reason = "Restore the logical backup's metadata Job in the external UI; Mold restores its volumes sequentially"; }
-            else if (manifest.getVolumes().stream().anyMatch(volume -> volume.engine.startsWith("RBD"))) { match.reason = "RBD volume backups must be restored from Mold UI"; }
             else if (!Backup.Status.BackedUp.equals(backup.getStatus()) || !manifest.isComplete()
                     || StringUtils.isNotBlank(backup.getDetail(ThirdPartyBackupManifest.CATALOG_FAILURE_KEY))
                     || StringUtils.isNotBlank(backup.getDetail(ThirdPartyBackupManifest.DELETE_PROGRESS_KEY))) { match.reason = "The logical backup is incomplete, expired or being deleted"; }
