@@ -24,7 +24,6 @@ import json
 import os
 import re
 import shutil
-import stat
 import subprocess
 import sys
 import time
@@ -33,6 +32,8 @@ from typing import Optional
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 from urllib.error import URLError, HTTPError
+
+from ablestack_backup_secret_key import SecretKeyError, ensure_key, read_key_material
 
 
 HOOK_OUTPUT_DIR = Path(os.environ.get("HOOK_OUTPUT_DIR", "/usr/openv/netbackup/bin"))
@@ -52,7 +53,7 @@ POST_HELPER_PATH = os.environ.get("POST_HELPER_PATH", "/usr/share/cloudstack-com
 HOOK_LOG_PATH = os.environ.get("HOOK_LOG_PATH", "/var/log/netbackup-mold-hook.log")
 WATCHER_LOG_PATH = os.environ.get("WATCHER_LOG_PATH", "/var/log/netbackup-mold-restore-watcher.log")
 RESTORE_LOG_PATH = os.environ.get("RESTORE_LOG_PATH", "/var/log/netbackup-mold-restore.log")
-SECRET_KEY_FILE = Path(os.environ.get("SECRET_KEY_FILE", "/root/.ssh/ablestack.key"))
+SECRET_KEY_FILE = Path(os.environ.get("SECRET_KEY_FILE", os.environ.get("ABLESTACK_SECRET_KEY_FILE", "/root/.ssh/ablestack.key")))
 NETBACKUP_BP_CONF_PATH = Path(os.environ.get("NETBACKUP_BP_CONF_PATH", "/usr/openv/netbackup/bp.conf"))
 NETBACKUP_SERVICE_NAME = os.environ.get("NETBACKUP_SERVICE_NAME", "netbackup")
 MOLD_API_RESPONSE_FORMAT = "json"
@@ -104,19 +105,14 @@ def copy_existing_file_backup(target: Path) -> None:
 
 
 def validate_secret_key_file() -> None:
-    if not SECRET_KEY_FILE.is_file():
-        fail(f"Secret key file not found: {SECRET_KEY_FILE}")
-    mode = stat.S_IMODE(SECRET_KEY_FILE.stat().st_mode)
-    if mode != 0o600:
-        fail(f"Secret key file must have permission 600: {SECRET_KEY_FILE} (current: {oct(mode)[2:]})")
+    validate_custom_secret_key_file(SECRET_KEY_FILE)
 
 
 def validate_custom_secret_key_file(secret_key_file: Path) -> None:
-    if not secret_key_file.is_file():
-        fail(f"Secret key file not found: {secret_key_file}")
-    mode = stat.S_IMODE(secret_key_file.stat().st_mode)
-    if mode != 0o600:
-        fail(f"Secret key file must have permission 600: {secret_key_file} (current: {oct(mode)[2:]})")
+    try:
+        read_key_material(secret_key_file, "netbackup")
+    except (SecretKeyError, OSError) as exc:
+        fail(str(exc))
 
 
 def sanitize_name(value: str) -> str:
@@ -634,17 +630,9 @@ def enable_watcher_service() -> None:
 
 def write_encrypted_secret_file(path: Path, secret: str, secret_key_file: Path = SECRET_KEY_FILE,
                                 skip_permission_validation: bool = False) -> None:
-    if not skip_permission_validation:
-        if secret_key_file == SECRET_KEY_FILE:
-            validate_secret_key_file()
-        else:
-            validate_custom_secret_key_file(secret_key_file)
-    elif not secret_key_file.is_file():
-        fail(f"Secret key file not found: {secret_key_file}")
-    backup_existing_file(path)
+    # Retain the argument for existing callers, but never bypass common Host key validation.
+    validate_custom_secret_key_file(secret_key_file)
     helper_env = {**os.environ, "SECRET_KEY_FILE": str(secret_key_file)}
-    if skip_permission_validation:
-        helper_env["SKIP_SECRET_KEY_PERMISSION_VALIDATION"] = "1"
     proc = subprocess.run(
         [sys.executable, str(SCRIPT_DIR / "netbackup-host-secret-helper.py"), "encrypt", str(path)],
         input=secret.encode(),
@@ -705,7 +693,7 @@ def ensure_backup_staging_root() -> None:
 
 
 def apply_permissions() -> None:
-    for directory in (HOOK_OUTPUT_DIR, CONFIG_OUTPUT_DIR, SECRET_OUTPUT_DIR, BACKUP_STAGING_ROOT):
+    for directory in (HOOK_OUTPUT_DIR, CONFIG_OUTPUT_DIR, BACKUP_STAGING_ROOT):
         if not directory.exists():
             continue
         try:
@@ -719,6 +707,9 @@ def apply_permissions() -> None:
                 path.chmod(0o755)
             except PermissionError:
                 pass
+
+    if SECRET_OUTPUT_DIR.exists():
+        SECRET_OUTPUT_DIR.chmod(0o700)
 
     for path in HOOK_OUTPUT_DIR.glob("bpend_notify.*"):
         if path.is_file():
@@ -766,7 +757,8 @@ def generate_host_outputs(zone_id: str, args: argparse.Namespace) -> None:
     log_info("Generating host-side NetBackup hook/config/watcher files")
     HOOK_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     CONFIG_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-    SECRET_OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    SECRET_OUTPUT_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
+    SECRET_OUTPUT_DIR.chmod(0o700)
     WATCHER_SERVICE_PATH.parent.mkdir(parents=True, exist_ok=True)
     LOGROTATE_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
@@ -843,7 +835,11 @@ def validate_args(args: argparse.Namespace) -> None:
         fail("--netbackup-url is required")
     if not args.netbackup_apikey:
         fail("--netbackup-apikey is required")
-    validate_secret_key_file()
+    try:
+        ensure_key(SECRET_KEY_FILE, secret_files=(SECRET_OUTPUT_DIR / "secret.enc",),
+                   secret_directories=(SECRET_OUTPUT_DIR,), upgrade_unused_legacy=True)
+    except (SecretKeyError, OSError) as exc:
+        fail(str(exc))
 
 
 def main() -> None:

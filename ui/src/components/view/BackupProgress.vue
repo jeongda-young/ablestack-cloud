@@ -19,8 +19,12 @@
 <template>
   <div class="backup-progress">
     <div class="backup-progress-status">
-      <status :text="displayStatus" displayText :styles="{ 'min-width': '80px' }"
-        tooltip-color="#333333" tooltip-overlay-class-name="backup-progress-tooltip-overlay">
+      <status
+        :text="displayStatus"
+        displayText
+        :styles="{ 'min-width': '80px' }"
+        tooltip-color="#333333"
+        tooltip-overlay-class-name="backup-progress-tooltip-overlay">
         <template v-if="showJobDetails" #tooltip>
           <div class="backup-progress-tooltip">
             <div class="backup-progress-tooltip-title">{{ displayStatus }}</div>

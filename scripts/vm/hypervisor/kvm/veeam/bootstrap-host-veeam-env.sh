@@ -123,7 +123,8 @@ fi
 
 [[ -n "$VEEAM_HOST" ]] || VEEAM_HOST="192.168.1.240"
 
-install -d -m 0755 "$ETC_DIR" "${ETC_DIR}/secrets" "${ETC_DIR}/state"
+install -d -m 0755 "$ETC_DIR" "${ETC_DIR}/state"
+install -d -m 0700 "${ETC_DIR}/secrets"
 mkdir -p "${VEEAM_HOST_BACKUP_PATH}" "${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}"
 
 # Quote every value so `source` is safe (spaces, !, etc.)
@@ -137,7 +138,9 @@ MS_HOST='$(_q "root@${MS_IP}")'
 KVM_HOST='$(_q "root@${KVM_IP}")'
 MOLD_API_URL='$(_q "${MOLD_API_URL}")'
 MOLD_API_KEY='$(_q "${MOLD_API_KEY}")'
-MOLD_API_SECRET='$(_q "${MOLD_API_SECRET}")'
+MOLD_API_SECRET=''
+MOLD_API_SECRET_ENC_FILE='$(_q "${ETC_DIR}/secrets/secret.enc")'
+MOLD_SECRET_KEY_FILE='$(_q "${ABLESTACK_SECRET_KEY_FILE:-/root/.ssh/ablestack.key}")'
 ZONE_ID='$(_q "${ZONE_ID}")'
 
 JOB_NAME='$(_q "${JOB_NAME}")'

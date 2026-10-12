@@ -17,12 +17,24 @@ specific language governing permissions and limitations
 under the License.
 -->
 
-# ABLESTACK 볼륨별 백업과 공통 Staging 운영
+# ABLESTACK 백업 및 복원 운영 안내
+
+백업 관련 운영·개발 문서는 이 파일에서 관리한다.
+신규 기능은 해당 항목에 추가하며 백업 기능별 Markdown 파일을 별도로 만들지 않는다.
+Kubernetes 등 백업 이외 기능의 문서는 이 통합 대상에 포함하지 않는다.
+
+## 목차
+
+- [공통 Staging과 볼륨별 백업 및 복원](#공통-staging과-볼륨별-백업-및-복원)
+- [NetBackup 및 Veeam 인증정보 보호](#netbackup-및-veeam-인증정보-보호)
+- [Veeam Host 구성과 배포](#veeam-host-구성과-배포)
+
+## 공통 Staging과 볼륨별 백업 및 복원
 
 대상 Provider는 `ablestack-commvault`, `ablestack-netbackup`, `ablestack-veeam`이다.
 Staging은 글로벌 설정의 GFS2/NFS/LOCAL 파일시스템을 사용한다.
 
-## 기본스토리지를 Staging으로 사용할 때의 경로와 Cleanup
+### 기본스토리지를 Staging으로 사용할 때의 경로와 Cleanup
 
 GFS2 기본스토리지의 마운트 지점이 `/mnt/glue-gfs`이면 `mount.path`와 `root.path`를
 모두 `/mnt/glue-gfs`로 지정할 수 있다. 실제 작업은 provider 하위에서 수행한다.
@@ -39,7 +51,7 @@ Cleanup은 개별 백업 시점 또는 복원 Job 디렉터리만 삭제한다.
 기존 파일시스템 확인도 유지하며, 정리가 확인되지 않으면 용량 예약을 유지한다.
 이 검사는 KVM Agent와 공통 scripts에 함께 배포한다.
 
-## 용량과 실행
+### 용량과 실행
 
 - 활성화 시 기준: 현재 VM 목록에서 가장 큰 볼륨의 provisioned size에
   `backup.thirdparty.staging.capacity.buffer.percent`를 더한 용량.
@@ -55,7 +67,7 @@ Cleanup은 개별 백업 시점 또는 복원 Job 디렉터리만 삭제한다.
 - Running RBD VM은 현재 Host에서, Stopped RBD VM은 pool 접근이 가능한 정상 Host 중
   현재 작업 수와 Staging 여유 공간을 고려하여 백업한다.
 
-## QCOW2 대역폭 조정과 백업 취소
+### QCOW2 대역폭 조정과 백업 취소
 
 Commvault/NetBackup/Veeam의 볼륨별 QCOW2 백업은 Running/Stopped VM 모두
 `backup.qos.bandwidth.limit.mbps`를 최초 제한값으로 사용한다. `0`은 무제한이다.
@@ -77,7 +89,7 @@ Stopped VM도 임시 paused domain을 통해 같은 NBD pull 복사 루프를 �
 이 변경은 Management Server와 KVM Agent 및 scripts를 함께 배포한다.
 NAS와 일반 CloudStack provider의 실행 흐름은 유지한다.
 
-## QCOW2 NBD 실행 전 검사와 오류 확인
+### QCOW2 NBD 실행 전 검사와 오류 확인
 
 Commvault/NetBackup/Veeam 공통 볼륨 백업은 Host 용량 예약과 원본 준비 전에 다음을 확인한다.
 
@@ -104,13 +116,13 @@ HOLE만 표시된 범위는 읽으며, allocation 정보가 없거나 유효하�
 원본 reader 종료가 확인되지 않으면 기존 정책에 따라 용량 예약을 유지한다.
 `thirdparty_qcow2_nbd.py`는 `thirdparty_volume_backup.py`와 함께 배포해야 한다.
 
-## Mold UI 복원
+### Mold UI 복원
 
 Mold가 Worker Host와 `restore/<restore-job-id>`를 정하고 용량을 예약한다.
 메타데이터와 필요한 Full/증분 파일을 한 단계씩 외부 솔루션에서 받아 새 볼륨을 준비한다.
 모든 볼륨의 준비가 성공한 뒤 교체하며, 실패하면 기존 볼륨 보호 및 rollback 절차를 수행한다.
 
-## NetBackup/Veeam 외부 UI의 QCOW2 복원
+### NetBackup/Veeam 외부 UI의 QCOW2 복원
 
 볼륨별 Job 구조에서는 VM 디렉토리를 한 번 복원해 전체 VM을 가져오는 방식으로 사용할 수 없다.
 Mold가 각 볼륨 파일을 개별 Full child Job으로 전송하고 마지막에 metadata Job을 생성한다.
@@ -138,7 +150,7 @@ Mold가 각 볼륨 파일을 개별 Full child Job으로 전송하고 마지막�
 - 외부 UI가 메타데이터를 쓰기 전에는 Mold의 사전 용량 예약이 실행되지 않는다.
   대용량 볼륨 전송은 Mold가 예약한 경로에서 수행하며, 메타데이터 목적지는 운영 환경에서 마운트를 유지한다.
 
-## 불확실한 Job과 정리
+### 불확실한 Job과 정리
 
 호출 전에 실패한 것이 확인되면 `NOT_SUBMITTED`/실패를 기록하고 engine 종료 확인 후 예약을 해제한다.
 외부 요청의 전송 여부나 reader/writer 종료가 불확실하면 예약과 Artifact를 유지한다.
@@ -285,7 +297,7 @@ Veeam의 기존 하루 경과 `BackingUp` 자동 정리는 볼륨 방식 백업�
 `WAITING`, 외부 전송 또는 `FINALIZING` 대기 시간이 길어져도 작업 정보와 예약을 보존하며,
 공통 coordinator가 실제 종료와 정리를 확인한 뒤 처리한다.
 
-## 백업 자원 집계
+### 백업 자원 집계
 
 볼륨 방식 백업은 Host에 명령을 보내기 전에 초기 manifest와
 `backup.resource.count.pending=true`를 하나의 DB 트랜잭션으로 저장한다.
@@ -302,3 +314,116 @@ Full fallback도 자신의 초기 집계 대기 기록을 사용하며, 실패�
 완료 전에 실패하거나 취소된 백업은 pending 기록을 유지하며, 이후 삭제 시 집계되지 않은 건수·용량을 차감하지 않는다.
 
 필수 checksum 검사는 추가하지 않는다. 기존 파일 존재, 크기, manifest 및 볼륨 구성 검사는 유지한다.
+
+## NetBackup 및 Veeam 인증정보 보호
+
+대상은 `ablestack-netbackup`, `ablestack-veeam`의 Host 측 Mold API 인증정보다.
+VM 백업 데이터의 암호화, Commvault 인증정보, DR 인증정보에는 적용하지 않는다.
+
+### 신규 구성
+
+| 항목 | 구현 |
+| --- | --- |
+| 공통 Host 키 | `/root/.ssh/ablestack.key`; Host별로 생성하고 두 솔루션이 함께 사용 |
+| 키 생성 | Python `secrets`를 통한 OS 암호학적 난수, 256비트 |
+| 키 형식 | `format=ablestack-backup-host-key`, `version=1`, `encoding=hex`, 64자리 소문자 HEX |
+| 암호화 | 공통 `ablestack_backup_secret.py`의 AES-256-GCM, Python `cryptography` 사용 |
+| nonce / 인증 태그 | 암호화마다 96비트 난수 nonce, 128비트 인증 태그; 태그를 절단하지 않음 |
+| 암호문 | `format=ablestack-backup-secret`, `version=2`; nonce, 태그를 포함한 ciphertext를 Base64 인코딩 |
+| 부가 인증 데이터 | 형식, 버전, 알고리즘, 용도, 키 식별자에 대한 AAD 검증 |
+| 변조·잘못된 키 | 복호화 실패; 평문 반환과 기존 알고리즘으로의 재시도 없음 |
+| 권한 | Host 키·암호화 파일 `600`, 키·secret 디렉터리 `700`; 키 소유자와 일반 파일 여부 검증 |
+| 파일 게시 | 잠금 아래 키 준비, 완전한 임시 파일을 원자적으로 게시; 기존 암호문을 먼저 삭제하지 않음 |
+
+키를 읽고 암호화하는 작업은 Python에서 처리한다. 신규 암호화에서는 Shell의 Base64 추측,
+바이너리 키 문자열 처리, 평문 passphrase 임시 파일을 사용하지 않는다.
+Veeam 구성의 내부 암호화 호출은 API secret을 stdin으로 전달하고, 신규 bootstrap env에는 평문 API secret을 저장하지 않는다.
+기존 CLI `--api-secret`/`--admin-secretkey`와 환경변수 입력은 호환을 위해 남아 있으므로
+운영 명령행·Shell history·프로세스 환경으로의 인증정보 노출은 별도로 관리해야 한다.
+
+RPM Agent 의존성은 `python3-cryptography`이다. `centos7`/`centos8` spec과 현재 EL9 spec에 반영한다.
+기존 패키징 경로는 유지한다: `el9`는 `el9/cloud.spec`, `rocky9`는 `centos8/cloud.spec`을 읽는다.
+`packaging/el9`는 저장소의 ignore 대상이므로 별도 빌드 서버의 EL9 spec에도 해당 의존성이 있는지 확인한다.
+Veeam을 별도로 배포하면 두 공통 Python 모듈과 Veeam의 Python/Shell 진입점을 함께 갱신해야 한다.
+배포용 `install.sh`와 `push-to-kvm.sh`에 공통 모듈 배포를 포함한다.
+
+### 기존 배포와 테스트 서버
+
+| Host 상태 | 처리 |
+| --- | --- |
+| 키와 암호문 모두 없음 | 설치·구성 시 신규 키 생성 |
+| 기존 키만 있고 암호문 없음 | 설치 시 키 보존; 솔루션 구성 시 미사용 기존 키를 임의 키로 전환 |
+| 기존 키와 기존 암호문 있음 | 기존 키 보존, 기존 암호문 복호화 지원 |
+| 암호문은 있는데 키 없음 | 키 생성 차단; 원래 키 복구 또는 두 솔루션 인증정보 재등록 필요 |
+| 신규 형식 키 존재 | 업데이트·재설치·구성에서 동일한 키 재사용 |
+
+기존 NetBackup version 1은 원래 키 문자열과 PBKDF2/HMAC 스트림·MAC으로 **복호화만** 지원한다.
+기존 Veeam OpenSSL 형식은 원래 passphrase 해석과 AES-256-CBC/PBKDF2로 **복호화만** 지원한다.
+`ablestack.key.default`는 소스에서 제거하며, 기존 Host의 실제 키 파일은 삭제하지 않는다.
+신규 암호화에서는 임의 키와 AES-256-GCM만 사용하며, 평문 신규 저장 옵션은 허용하지 않는다.
+
+기존 키를 신규 키로 교체하려면 두 솔루션의 암호문과 해당 참조를 함께 전환해야 한다.
+기존 암호문이 남아 있는 Host에서는 자동 키 교체를 차단한다.
+테스트 서버를 초기화할 때도 기존 데이터가 필요하면 먼저 키와 암호화 파일을 **함께** 별도 보호된 위치에 보관한다.
+`secrets/*.enc*` 백업 파일 및 conf/env의 암호문 참조도 키 교체 판단에 포함한다.
+커스텀 경로는 `ensure --existing-secret PATH` / `--secret-dir PATH`로 추가하며,
+표준 구성 밖에 수동으로 저장한 파일은 운영자가 함께 확인해야 한다.
+실제 백업·복원 또는 복호화 중에는 키를 생성·교체하지 않는다.
+기존 Veeam CBC 파일에는 GCM의 인증 태그가 없으므로 신규 형식과 같은 변조 검증을 제공하지 않는다.
+
+### 보안기능확인서 준비 시 확인할 범위
+
+이 변경은 보안기능확인서 획득 또는 특정 제품유형 보안요구사항 충족을 선언하지 않는다.
+백업 기능을 시험 범위에서 제외하더라도 다음 구현 정보와 한계는 시험 환경 명세에서 구분한다.
+
+- Python `cryptography`와 연결된 OpenSSL의 실제 배포 버전·운영 환경을 기록한다.
+  일반 라이브러리 사용을 KCMVP 검증필 암호모듈 사용으로 표시하지 않는다.
+- Host 키는 root 전용 파일에 저장된다. HEX/JSON은 인코딩이며 키 암호화가 아니다.
+  시험 요구사항에서 별도 KEK/TPM/HSM 등 키 저장 보호를 요구하면 해당 구현과 평가가 추가로 필요하다.
+- Python 불변 객체와 암호 라이브러리 내부 복사본의 완전한 메모리 제로화를 보장하지 않는다.
+  프로세스 수명 제한을 안전한 메모리 파기 인증으로 해석하지 않는다.
+- 파일 삭제·원자적 교체는 SSD, snapshot, journaling 영역의 키 흔적 완전삭제를 보장하지 않는다.
+- OS 난수원을 사용하며 별도의 KCMVP 난수발생기 검증을 주장하지 않는다.
+- Mold API 전송의 HTTPS/TLS, 권한 최소화, 감사기록, 제품 전체 자체시험은 이 저장 암호화 변경과 별도로 확인한다.
+
+참조한 자료는 다음과 같다. 제품유형별 최신 시험 기준은 시험기관과 확인해야 한다.
+
+- [NIST SP 800-38D: GCM](https://csrc.nist.gov/pubs/sp/800/38/d/final)
+- [Cryptography AESGCM API](https://cryptography.io/en/stable/hazmat/primitives/aead/)
+- [국가사이버안보센터: 보안적합성 자료실](https://www.ncsc.go.kr/ko/main/PageLink.html?token=MDEyMzQ1Njc4OWFiY2RlZrBvBnCd4cC_Aqu-HrYk1bhIIWt4LUv-A-u74qIMxLAPMJs5RcAEdu156oXC71P6zg)
+- [국가용 웹 방화벽 보호프로파일 V3.0 보조문서](https://www.itscc.kr/file/download.do?file=KPR100000002169):
+  서버 공통 요구사항에 대한 키 생성·보관·파기 해설 참고; 이 제품유형의 요구사항을 HCI에 그대로 적용하지 않는다.
+
+### 확인용 회귀 테스트
+
+테스트에는 공통 암호문을 두 CLI가 함께 읽는지, 변조/잘못된 키 차단,
+기존 두 암호문 형식 호환, 병렬 키 준비, 기존 암호문이 있을 때의 교체 차단을 포함한다.
+개발 작업에서는 빌드와 테스트를 실행하지 않았으며, 통합 환경에서 다음과 같이 실행할 수 있다.
+
+```bash
+python3 -m unittest discover -s scripts/vm/hypervisor/kvm -p test_ablestack_backup_secret.py
+```
+
+## Veeam Host 구성과 배포
+
+신규 볼륨별 백업과 복원에는 위의 공통 Staging 안내를 적용한다.
+기존 host/datadisk 안내에 있던 `/tmp/mold/veeam`·`/data/backup` 고정 경로를
+신규 공통 Staging 설정으로 사용하지 않는다. 실제 경로는 Mold 글로벌 설정에서 읽는다.
+
+| 목적 | 스크립트 |
+| --- | --- |
+| Host 스크립트 설치 | [install.sh](veeam/install.sh) |
+| 원격 Host 배포 | [push-to-kvm.sh](veeam/push-to-kvm.sh) |
+| 최초 환경 구성 | [bootstrap-host-veeam-env.sh](veeam/bootstrap-host-veeam-env.sh) |
+| Job 및 API 인증정보 구성 | [veeam_config.sh](veeam/veeam_config.sh) |
+| Veeam Pre hook | [ablestack_veeam_pre_notify.sh](veeam/ablestack_veeam_pre_notify.sh) |
+| Veeam Post hook | [ablestack_veeam_post_notify.sh](veeam/ablestack_veeam_post_notify.sh) |
+
+Host 설치 경로는 기본 `/etc/ablestack/veeam`이며 공통 암호화 모듈도 함께 배포한다.
+API key와 secret은 대상 Mold 서버에서 발급받아야 하며 자동으로 생성할 수 없다.
+설치 후 Host에서 `veeam_config.sh --help`와 기존 conf/env 설정을 확인한 뒤 구성한다.
+신규 bootstrap은 env에 API secret 평문을 남기지 않고 암호화 파일의 경로를 기록한다.
+
+Veeam Job의 Pre/Post hook은 설치된 Host 스크립트 경로를 지정한다.
+외부 UI 복원은 위의 메타데이터 Job 및 `restoreBackupArtifact` 절차를 따른다.
+기존 전체 Host/datadisk 방식의 FLR→`restoreBackup` 절차는 해당 기존 구성에서만 사용한다.
