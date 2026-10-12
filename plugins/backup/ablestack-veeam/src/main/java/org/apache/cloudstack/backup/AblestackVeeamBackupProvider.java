@@ -108,6 +108,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.cloudstack.backup.BackupManager.KvmBackupChainSize;
 import static org.apache.cloudstack.backup.BackupManager.BackupDataOperationTimeout;
+import static org.apache.cloudstack.backup.BackupManager.BackupQosBandwidthLimitMbps;
 import static org.apache.cloudstack.backup.BackupManager.BackupFrameworkEnabled;
 import static org.apache.cloudstack.backup.BackupManager.KvmIncrementalBackup;
 
@@ -364,6 +365,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             command.setCheckpointName(checkpointName);
             command.setBackupFiles(backupFiles);
             command.setWaitForCompletion(false);
+            command.setBandwidthLimitMbps(BackupQosBandwidthLimitMbps.value());
             if (incrementalBackup && latestBackup != null) {
                 command.setParentBackupPath(getBackupDetail(latestBackup, DETAIL_PARENT_BACKUP_PATH,
                         latestBackup.getExternalId()));

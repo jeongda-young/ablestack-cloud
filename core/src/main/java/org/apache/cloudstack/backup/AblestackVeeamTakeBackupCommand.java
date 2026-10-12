@@ -56,6 +56,7 @@ public class AblestackVeeamTakeBackupCommand extends Command {
     private Map<String, String> parentCheckpointXmlChain;
     private List<String> backupFiles;
     private boolean waitForCompletion = true;
+    private Integer bandwidthLimitMbps;
 
     public AblestackVeeamTakeBackupCommand(final String vmName, final String backupPath) {
         super();
@@ -181,6 +182,14 @@ public class AblestackVeeamTakeBackupCommand extends Command {
 
     public void setWaitForCompletion(final boolean waitForCompletion) {
         this.waitForCompletion = waitForCompletion;
+    }
+
+    public Integer getBandwidthLimitMbps() {
+        return bandwidthLimitMbps == null ? 0 : bandwidthLimitMbps;
+    }
+
+    public void setBandwidthLimitMbps(final Integer bandwidthLimitMbps) {
+        this.bandwidthLimitMbps = bandwidthLimitMbps;
     }
 
     @Override

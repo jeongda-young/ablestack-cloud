@@ -17,12 +17,71 @@
 package com.cloud.hypervisor.kvm.resource.wrapper;
 
 import com.cloud.utils.Pair;
+import com.google.gson.Gson;
+import java.util.Arrays;
+import java.util.Properties;
+import java.util.Set;
+import org.apache.cloudstack.backup.AblestackVeeamTakeBackupCommand;
 import org.junit.Test;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public class LibvirtAblestackAsyncBackupRunnerTest {
+    @Test
+    public void qcow2VolumeControlsAreCommonToAllProviders() {
+        for (String provider : Arrays.asList("ablestack-commvault", "ablestack-netbackup", "ablestack-veeam")) {
+            Properties properties = volumeJob(provider, "QCOW2_BACKUP");
+            Set<String> capabilities = Set.copyOf(Arrays.asList(LibvirtAblestackAsyncBackupRunner.resolveCapabilities(properties).split(",")));
+            assertTrue(capabilities.contains("live-bandwidth"));
+            assertTrue(capabilities.contains("cancel"));
+        }
+    }
+
+    @Test
+    public void externalTransferAndFinalizationDoNotExposeSourceControls() {
+        for (String step : Arrays.asList("COMMVAULT_TRANSFER", "NETBACKUP_TRANSFER", "VEEAM_TRANSFER", "METADATA_TRANSFER", "FINALIZING")) {
+            Properties properties = volumeJob("ablestack-commvault", step);
+            properties.setProperty("liveBandwidthActive", "false");
+            Set<String> capabilities = Set.copyOf(Arrays.asList(LibvirtAblestackAsyncBackupRunner.resolveCapabilities(properties).split(",")));
+            assertFalse(capabilities.contains("live-bandwidth"));
+            assertFalse(capabilities.contains("cancel"));
+        }
+    }
+
+    @Test
+    public void rbdExportsSupportCancelWithoutLiveBandwidth() {
+        for (String step : Arrays.asList("RBD_EXPORT", "RBD_EXPORT_DIFF")) {
+            Properties properties = volumeJob("ablestack-netbackup", step);
+            properties.setProperty("liveBandwidthSupported", "false");
+            properties.setProperty("liveBandwidthActive", "false");
+            Set<String> capabilities = Set.copyOf(Arrays.asList(LibvirtAblestackAsyncBackupRunner.resolveCapabilities(properties).split(",")));
+            assertFalse(capabilities.contains("live-bandwidth"));
+            assertTrue(capabilities.contains("cancel"));
+        }
+    }
+
+    @Test
+    public void veeamBandwidthSurvivesCommandSerializationAndDefaultsToUnlimited() {
+        Gson gson = new Gson();
+        AblestackVeeamTakeBackupCommand command = new AblestackVeeamTakeBackupCommand("vm", "/staging");
+        command.setBandwidthLimitMbps(128);
+        assertEquals(Integer.valueOf(128), gson.fromJson(gson.toJson(command), AblestackVeeamTakeBackupCommand.class).getBandwidthLimitMbps());
+        assertEquals(Integer.valueOf(0), gson.fromJson("{}", AblestackVeeamTakeBackupCommand.class).getBandwidthLimitMbps());
+    }
+
+    private Properties volumeJob(String provider, String step) {
+        Properties properties = new Properties();
+        properties.setProperty("jobId", "qcow2-control-test");
+        properties.setProperty("provider", provider);
+        properties.setProperty("operation", "BACKUP");
+        properties.setProperty("volumePipeline", "true");
+        properties.setProperty("step", step);
+        properties.setProperty("liveBandwidthSupported", "true");
+        properties.setProperty("liveBandwidthActive", "true");
+        return properties;
+    }
+
     @Test
     public void hungControlCommandReturnsUnconfirmed() {
         long started = System.nanoTime();

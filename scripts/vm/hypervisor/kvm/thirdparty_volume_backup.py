@@ -344,7 +344,9 @@ class Backup:
         except RuntimeError:
             domain_xml = ET.Element("domain", type="kvm")
             active = False
-        self.live_bandwidth = active and self.manifest["provider"] == "ablestack-commvault"
+        # Both Running and Stopped VM volumes use the same throttled NBD copy loop.
+        self.live_bandwidth = self.manifest["provider"] in (
+            "ablestack-commvault", "ablestack-netbackup", "ablestack-veeam")
         if not active:
             self.domain = "DUMMY-VOLUME-" + self.manifest["backupUuid"]
             dummy = ET.Element("domain", type="kvm")

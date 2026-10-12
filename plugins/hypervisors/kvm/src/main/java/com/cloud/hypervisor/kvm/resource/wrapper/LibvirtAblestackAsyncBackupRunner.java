@@ -461,7 +461,7 @@ final class LibvirtAblestackAsyncBackupRunner {
         if (Boolean.parseBoolean(properties.getProperty("volumePipeline"))) {
             if (!Boolean.parseBoolean(properties.getProperty("liveBandwidthSupported"))
                     || !"QCOW2_BACKUP".equals(properties.getProperty("step"))) {
-                return new BackupAnswer(command, false, "Live bandwidth changes are only available while exporting a Running QCOW2 VM volume");
+                return new BackupAnswer(command, false, "Live bandwidth changes are only available while exporting a QCOW2 VM volume");
             }
             try {
                 final Path target = getJobDirectory(jobId).resolve("volume-bandwidth-mbps");
@@ -998,7 +998,7 @@ final class LibvirtAblestackAsyncBackupRunner {
         return resolveProgress(state, null);
     }
 
-    private static String resolveCapabilities(final Properties properties) {
+    static String resolveCapabilities(final Properties properties) {
         final List<String> capabilities = new ArrayList<>();
         if (!Boolean.parseBoolean(properties.getProperty("volumePipeline"))
                 || java.util.Set.of("PREPARING", "QCOW2_BACKUP", "RBD_EXPORT", "RBD_EXPORT_DIFF").contains(properties.getProperty("step", ""))) {

@@ -263,6 +263,104 @@ class NbdCopyTest(unittest.TestCase):
             self.assertFalse(worker.engine.exists())
 
 
+class Qcow2BackupControlTest(unittest.TestCase):
+    def worker(self, directory, provider="ablestack-commvault", limit=8):
+        root = Path(directory)
+        job, staging_root = root / "job", root / "staging"
+        job.mkdir()
+        staging_root.mkdir()
+        plan = {"manifest": {"backupUuid": "backup-id", "provider": provider, "volumes": [{}]},
+                "vmName": "source-vm", "backupPath": str(staging_root), "timeout": 300,
+                "diskPaths": [str(root / "source.qcow2")], "checkpointName": "checkpoint",
+                "bandwidthLimitMbps": limit}
+        file = job / "volume-plan.json"
+        backup.atomic(file, plan)
+        return backup.Backup(file)
+
+    def test_all_providers_support_running_and_stopped_qcow2_controls(self):
+        for provider in ("ablestack-commvault", "ablestack-netbackup", "ablestack-veeam"):
+            for state in ("running", "shut off"):
+                with self.subTest(provider=provider, state=state), tempfile.TemporaryDirectory() as directory:
+                    worker = self.worker(directory, provider, 64)
+                    source = worker.plan["diskPaths"][0]
+                    xml = ('<domain><devices><disk device="disk"><source file="%s"/>'
+                           '<target dev="vda"/></disk></devices></domain>') % source
+                    backup.atomic(worker.job / "backup-primary-capacity.json", {})
+
+                    def virsh(args):
+                        return {"dumpxml": xml, "domstate": state,
+                                "checkpoint-dumpxml": "<domaincheckpoint/>"}.get(args[3], "")
+
+                    with patch("thirdparty_primary_capacity.backup_capacity", return_value={"primaryClaims": []}), \
+                            patch.object(backup, "run", side_effect=virsh) as run, \
+                            patch.object(backup, "qcow2_command", return_value='{"format":"qcow2"}'), \
+                            patch.object(worker, "thaw_guest"):
+                        worker.begin_qcow2()
+                    self.assertTrue(worker.live_bandwidth)
+                    self.assertTrue(worker.pull)
+                    if state == "shut off":
+                        self.assertTrue(worker.dummy)
+                        self.assertEqual("DUMMY-VOLUME-backup-id", worker.domain)
+                        run.assert_any_call(["virsh", "-c", "qemu:///system", "create",
+                                             str(worker.job / "dummy.xml"), "--paused"])
+                    else:
+                        self.assertFalse(worker.dummy)
+                        self.assertEqual("source-vm", worker.domain)
+                    worker.progress("QCOW2_BACKUP", 0)
+                    progress = (worker.job / "volume-progress.properties").read_text()
+                    self.assertIn("liveBandwidthSupported=true", progress)
+                    self.assertIn("bandwidthLimitMbps=64", progress)
+
+    def test_throttle_applies_live_changes_before_finishing_a_block(self):
+        for limit, elapsed in ((16, 0.5), (0, 0.25)):
+            with self.subTest(limit=limit), tempfile.TemporaryDirectory() as directory:
+                worker = self.worker(directory)
+                clock = [0.0]
+
+                def sleep(delay):
+                    clock[0] += delay
+                    backup.atomic(worker.bandwidth_file, str(limit))
+
+                with patch.object(backup.time, "monotonic", side_effect=lambda: clock[0]), \
+                        patch.object(backup.time, "sleep", side_effect=sleep):
+                    worker.throttle(1000000, 0.0)
+                self.assertAlmostEqual(elapsed, clock[0])
+
+    def test_cancel_during_throttle_stops_copy_before_the_next_block(self):
+        for marker in ("volume-cancel", "staging-admission-cancel"):
+            with self.subTest(marker=marker), tempfile.TemporaryDirectory() as directory:
+                worker = self.worker(directory)
+                source = MemoryExport(bytes([0xa5]) * (3 * SECTOR), metadata=False)
+                output = MemoryExport(bytes(3 * SECTOR))
+                clock = [0.0]
+
+                def sleep(delay):
+                    clock[0] += delay
+                    backup.atomic(worker.job / marker, "cancelled")
+
+                with staging.Connection(module_for(source), "source.sock", 3 * SECTOR) as reader, \
+                        staging.Connection(module_for(output), "output.sock", 3 * SECTOR, writable=True) as writer, \
+                        patch.object(backup.time, "monotonic", side_effect=lambda: clock[0]), \
+                        patch.object(backup.time, "sleep", side_effect=sleep):
+                    with self.assertRaisesRegex(RuntimeError, "cancelled"):
+                        staging.copy_volume(reader, writer, False, worker.check_cancel, worker.throttle,
+                                            lambda fraction: None, 10)
+                self.assertEqual(1, len(source.reads))
+                self.assertEqual(1, len(output.writes))
+                self.assertFalse(output.flushed)
+
+    def test_stopped_vm_cancellation_aborts_and_destroys_its_owned_domain(self):
+        with tempfile.TemporaryDirectory() as directory:
+            worker = self.worker(directory)
+            worker.domain, worker.dummy, worker.pull = "DUMMY-VOLUME-backup-id", True, True
+            with patch.object(worker, "thaw_guest"), \
+                    patch.object(backup, "run", return_value="Job type: None") as run:
+                worker.close()
+            run.assert_any_call(["virsh", "-c", "qemu:///system", "domjobabort", worker.domain], 30)
+            run.assert_any_call(["virsh", "-c", "qemu:///system", "destroy", worker.domain], 30)
+            self.assertFalse(worker.pull)
+
+
 @unittest.skipUnless(all(shutil.which(tool) for tool in ("qemu-img", "qemu-nbd", "qemu-io")),
                      "Real QCOW2 regression requires qemu-img, qemu-nbd and qemu-io")
 class RealQcow2ZeroOverrideTest(unittest.TestCase):

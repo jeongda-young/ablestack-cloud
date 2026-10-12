@@ -55,6 +55,28 @@ Cleanup은 개별 백업 시점 또는 복원 Job 디렉터리만 삭제한다.
 - Running RBD VM은 현재 Host에서, Stopped RBD VM은 pool 접근이 가능한 정상 Host 중
   현재 작업 수와 Staging 여유 공간을 고려하여 백업한다.
 
+## QCOW2 대역폭 조정과 백업 취소
+
+Commvault/NetBackup/Veeam의 볼륨별 QCOW2 백업은 Running/Stopped VM 모두
+`backup.qos.bandwidth.limit.mbps`를 최초 제한값으로 사용한다. `0`은 무제한이다.
+Stopped VM도 임시 paused domain을 통해 같은 NBD pull 복사 루프를 사용하므로 실시간 조정이 가능하다.
+`updateBackupJobBandwidth`는 `QCOW2_BACKUP` 단계에서 Job의 `volume-bandwidth-mbps`를 갱신하며,
+복사 루프는 처리 블록마다 제한값을 다시 읽는다. 변경값은 다음 볼륨에도 유지된다.
+제한 대상은 원본 QCOW2 데이터를 Staging 파일로 복사하는 작업이며,
+외부 솔루션 전송(`COMMVAULT_TRANSFER`, `NETBACKUP_TRANSFER`, `VEEAM_TRANSFER`)과
+`METADATA_TRANSFER`/`FINALIZING`에서는 조정할 수 없다. RBD export/export-diff는 대역폭 조정 대상이 아니다.
+
+세 솔루션 모두 용량 대기 중에는 해당 대기 Job을 취소할 수 있고,
+`PREPARING`, `QCOW2_BACKUP`, `RBD_EXPORT`, `RBD_EXPORT_DIFF`에서는 백업 취소를 제공한다.
+진행 중이거나 미확정인 외부 child Job과 최종 완료 처리는 취소할 수 없다.
+이미 전송 완료된 볼륨이 있어도 다음 볼륨 생성 중에 활성/미확정 외부 전송이 없으면 취소할 수 있다.
+취소 후에는 Running VM의 source backup job과 Stopped VM의 임시 domain을 포함하여 종료를 확인하고,
+공통 정리 절차로 Scratch/Snapshot, Staging, 예약 및 Host Job 기록을 정리한다.
+종료나 정리가 확인되지 않으면 취소/정리 대기를 유지하며 재조정한다.
+
+이 변경은 Management Server와 KVM Agent 및 scripts를 함께 배포한다.
+NAS와 일반 CloudStack provider의 실행 흐름은 유지한다.
+
 ## QCOW2 NBD 실행 전 검사와 오류 확인
 
 Commvault/NetBackup/Veeam 공통 볼륨 백업은 Host 용량 예약과 원본 준비 전에 다음을 확인한다.
