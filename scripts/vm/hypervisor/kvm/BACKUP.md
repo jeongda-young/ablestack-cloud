@@ -30,6 +30,7 @@ under the License.
 - [작업 상태와 제어](#작업-상태와-제어)
 - [복원 절차](#복원-절차)
 - [임시 파일 정리와 실패한 백업 삭제](#임시-파일-정리와-실패한-백업-삭제)
+- [NetBackup 및 Veeam 서비스 운영](#netbackup-및-veeam-서비스-운영)
 - [NetBackup 및 Veeam 인증정보 관리](#netbackup-및-veeam-인증정보-관리)
 - [Veeam Host 구성과 배포](#veeam-host-구성과-배포)
 
@@ -404,6 +405,101 @@ GFS2 기본스토리지의 `/mnt/glue-gfs`를 마운트 경로와 스테이징 r
 
 백업 하나의 실패를 정리할 때 공통 스테이징, 다른 VM의 파일이나 백업 정책을 직접 삭제하지 않는다.
 Host 작업 기록도 Mold의 정리 결과를 확인하기 전에 수동으로 지우지 않는다.
+
+## NetBackup 및 Veeam 서비스 운영
+
+백업 솔루션의 Client·Agent는 데이터 전송을 담당한다.
+아래 Mold 연동 서비스는 외부 UI에서 완료된 복원을 확인하여 해당 VM의 Mold 복원을 요청한다.
+카탈로그 동기화와 실제 백업·복원 작업 상태 확인은 Management Server가 별도로 수행한다.
+
+### 서비스별 역할과 준비
+
+| 실행 위치 | 서비스 또는 작업 | 역할 | 기본 실행 방식 |
+| --- | --- | --- | --- |
+| NetBackup Client Host | `netbackup-host-restore-watcher.service` | NetBackup의 완료된 외부 UI 복원을 확인하고 복원 알림 스크립트로 Mold에 연결 | 상시 실행, 조회 사이에 기본 60초 대기 |
+| Veeam Agent Host | `mold-veeam-restore-agent.timer` | Veeam 복원 감시 프로그램을 주기적으로 실행 | 기본 3분 주기 |
+| Veeam Agent Host | `mold-veeam-restore-agent.service` | 완료된 Veeam 복원 세션의 정확한 복원 시점을 Mold 백업과 연결 | 타이머가 호출할 때 한 번 실행 후 종료 |
+| Management Server | 백업 목록·카탈로그 동기화 | 외부 백업 파일의 존재 여부와 만료 결과를 Mold에 반영 | `backup.framework.sync.interval`, 기본 300초 |
+| Management Server | 진행 중인 작업 동기화 | 백업·복원 상태와 완료 후처리를 확인 | `backup.framework.active.job.sync.interval`, 기본 10초 |
+
+외부 UI 복원을 사용할 Host마다 해당 솔루션의 감시 서비스를 준비한다.
+RBD·QCOW2 모두 같은 서비스를 통해 메타데이터 복원 완료를 Mold에 연결한다.
+볼륨별 파일 전송과 실제 VM 볼륨 복원은 이후 Mold가 관리하며, 감시 서비스가 직접 수행하지 않는다.
+
+**NetBackup**
+
+- [netbackup-host-config.py](netbackup-host-config.py)가 감시 프로그램과 서비스 파일을 생성하고 활성화한다.
+- 기본 서비스 파일은 `/etc/systemd/system/netbackup-host-restore-watcher.service`이다.
+  별도의 timer 파일은 사용하지 않는다.
+- 감시 설정은 `/etc/ablestack/netbackup/restore-watcher.conf`,
+  Mold 복원 요청 설정은 `/etc/ablestack/netbackup/restore.conf`이다.
+- 감시 주기는 `restore-watcher.conf`의 `POLL_INTERVAL_SECONDS`로 조정한다. 기본값은 `60`이다.
+- NetBackup Client의 `netbackup` 서비스는 별도이다. 구성 스크립트는 Client를 설치하지 않으며,
+  기존 `bp.conf`를 갱신한 경우 Client 서비스를 재시작한다.
+
+**Veeam**
+
+- [install.sh](veeam/install.sh)가 복원 감시 service·timer를 설치하고 timer 활성화를 시도한다.
+  설치 후 실제 활성 상태를 확인한다.
+- 기본 서비스 파일은 `/etc/systemd/system/mold-veeam-restore-agent.service`,
+  타이머 파일은 `/etc/systemd/system/mold-veeam-restore-agent.timer`이다.
+- Host의 `/etc/ablestack/veeam/mold-backup.env`와 Job별 `.conf`에 Mold 인증정보,
+  Veeam 접속 정보와 감시 대상 Job을 구성한다.
+- Veeam Linux Agent 설치·등록은 별도로 필요하며 Mold 감시 서비스가 이를 대신하지 않는다.
+- 평상시에는 **timer가 `active`**인지 확인한다.
+  service는 한 번 조회한 뒤 종료하므로 조회 사이에 `inactive`로 보이는 것은 정상이다.
+
+외부 UI에서 복원을 시작하기 전에 감시 서비스를 활성화한다.
+서비스 시작 시 이미 존재하는 복원 작업은 중복 요청 방지를 위해 처리 대상으로 제외할 수 있다.
+서비스 활성화만으로 스테이징이 마운트되는 것은 아니므로 공통 스테이징 설정을 준비하고,
+외부 솔루션이 메타데이터를 쓸 경로의 마운트와 접근 권한을 유지한다.
+
+### 활성 상태와 로그 확인
+
+각 명령은 해당 솔루션을 구성한 Host에서 실행한다.
+
+**NetBackup**
+
+```bash
+systemctl is-enabled netbackup-host-restore-watcher.service
+systemctl status netbackup-host-restore-watcher.service --no-pager
+journalctl -u netbackup-host-restore-watcher.service -n 100 --no-pager
+tail -n 100 /var/log/netbackup-mold-restore-watcher.log
+tail -n 100 /var/log/netbackup-mold-restore.log
+```
+
+**Veeam**
+
+```bash
+systemctl is-enabled mold-veeam-restore-agent.timer
+systemctl status mold-veeam-restore-agent.timer --no-pager
+systemctl list-timers --all mold-veeam-restore-agent.timer
+journalctl -u mold-veeam-restore-agent.service -n 100 --no-pager
+tail -n 100 /etc/ablestack/veeam/events/restore.log
+tail -n 100 /var/log/mold/veeam-hook.log
+```
+
+기본 경로를 변경한 구성은 해당 conf/env에 지정된 설정·로그 경로를 확인한다.
+감시 로그의 요청 접수와 실제 VM 복원 완료는 별도 결과이므로 최종 완료는 Mold에서 확인한다.
+
+### 기존 Host 갱신 시 서비스 확인
+
+현재 구성에서는 `mold-veeam-catalog-sync.service/.timer`와
+`mold-veeam-flr-watch.service`를 사용하지 않는다.
+카탈로그는 Management Server에서 동기화하고 외부 UI 복원은 `restore-agent.timer`로 감시한다.
+
+소스 파일이 없어도 이전에 Host에 설치한 서비스는 남아 있을 수 있다.
+백업·복원이 진행 중이지 않은 시간에 아래 명령으로 기존 서비스를 확인한다.
+
+```bash
+systemctl list-unit-files 'mold-veeam-*'
+systemctl list-units --all 'mold-veeam-*'
+```
+
+이전 `catalog-sync`·`flr-watch` 서비스가 실행 중이면 현재 감시 구성으로 전환한 뒤 사용을 중지한다.
+현재 설치 도구는 이전 `mold-veeam-restore-watch.timer`만 자동 중지하므로
+`catalog-sync`·`flr-watch`가 남아 있는 Host는 별도로 확인해야 한다.
+현재 사용하는 `mold-veeam-restore-agent.service/.timer`는 유지한다.
 
 ## NetBackup 및 Veeam 인증정보 관리
 
