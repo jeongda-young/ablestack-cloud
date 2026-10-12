@@ -36,13 +36,13 @@
               <span>{{ displayStep }}</span>
             </div>
             <div v-if="volumeIndex && volumeCount" class="backup-progress-tooltip-row">
-              <span>Volume :</span>
+              <span>{{ $t('label.volume') }} :</span>
               <span>{{ volumeIndex }}/{{ volumeCount }}</span>
             </div>
             <template v-if="stagingQueue && stagingQueue.state !== 'RELEASED'">
-              <div class="backup-progress-tooltip-row"><span>Staging :</span><span>{{ stagingQueue.state }}</span></div>
-              <div v-if="stagingQueue.reason" class="backup-progress-tooltip-row"><span>Waiting reason :</span><span>{{ stagingQueue.reason }}</span></div>
-              <div v-if="stagingQueue.state === 'WAITING' && stagingQueue.deadline" class="backup-progress-tooltip-row"><span>Queue deadline :</span><span>{{ $toLocaleDate(stagingQueue.deadline) }}</span></div>
+              <div class="backup-progress-tooltip-row"><span>{{ $t('label.backup.staging.state') }} :</span><span>{{ stagingQueue.state }}</span></div>
+              <div v-if="stagingQueue.reason" class="backup-progress-tooltip-row"><span>{{ $t('label.backup.staging.wait.reason') }} :</span><span>{{ stagingQueue.reason }}</span></div>
+              <div v-if="stagingQueue.state === 'WAITING' && stagingQueue.deadline" class="backup-progress-tooltip-row"><span>{{ $t('label.backup.staging.queue.deadline') }} :</span><span>{{ $toLocaleDate(stagingQueue.deadline) }}</span></div>
             </template>
             <div v-if="bandwidthLimitMbps !== null" class="backup-progress-tooltip-row">
               <span>{{ $t('label.bandwidth') }} :</span>
@@ -63,35 +63,35 @@
               <span>{{ failureDetails }}</span>
             </div>
             <div v-if="record.catalogstate" class="backup-progress-tooltip-row">
-              <span>Catalog :</span><span>{{ record.catalogstate }}</span>
+              <span>{{ $t('label.backup.catalog.state') }} :</span><span>{{ record.catalogstate }}</span>
             </div>
             <div v-if="record.catalogchecked" class="backup-progress-tooltip-row">
-              <span>Catalog checked :</span><span>{{ $toLocaleDate(record.catalogchecked) }}</span>
+              <span>{{ $t('label.backup.catalog.checked') }} :</span><span>{{ $toLocaleDate(record.catalogchecked) }}</span>
             </div>
             <div v-if="record.catalogdetails" class="backup-progress-tooltip-row backup-progress-tooltip-error">
               <span>{{ record.catalogdetails }}</span>
             </div>
             <div v-if="record.cleanupstate && record.cleanupstate !== 'NONE'" class="backup-progress-tooltip-row">
-              <span>Cleanup :</span><span>{{ record.cleanupstate }}</span>
+              <span>{{ $t('label.backup.cleanup.state') }} :</span><span>{{ record.cleanupstate }}</span>
             </div>
             <div v-if="record.cleanupdetails" class="backup-progress-tooltip-row">
               <span>{{ record.cleanupdetails }}</span>
             </div>
             <div v-if="record.sourcecleanupstate && record.sourcecleanupstate !== 'NONE'" class="backup-progress-tooltip-row">
-              <span>Previous RBD snapshot cleanup :</span><span>{{ record.sourcecleanupstate }}</span>
+              <span>{{ $t('label.backup.source.cleanup.state') }} :</span><span>{{ record.sourcecleanupstate }}</span>
             </div>
             <div v-if="record.sourcecleanupdetails" class="backup-progress-tooltip-row">
               <span>{{ record.sourcecleanupdetails }}</span>
             </div>
             <div v-if="record.restorecleanupstate && record.restorecleanupstate !== 'NONE'" class="backup-progress-tooltip-row">
-              <span>Restore cleanup :</span><span>{{ record.restorecleanupstate }}</span>
+              <span>{{ $t('label.backup.restore.cleanup.state') }} :</span><span>{{ record.restorecleanupstate }}</span>
             </div>
             <div v-if="record.restorecleanupdetails" class="backup-progress-tooltip-row">
               <span>{{ record.restorecleanupdetails }}</span>
             </div>
             <template v-if="vmRestore && (!vmRestore.stagingjobid || !restoreJobId || vmRestore.stagingjobid === restoreJobId)">
-              <div class="backup-progress-tooltip-row"><span>VM restore :</span><span>{{ vmRestore.outcome }} / {{ vmRestore.phase }}</span></div>
-              <div class="backup-progress-tooltip-row"><span>Primary cleanup :</span><span>{{ vmRestore.primarycleanupstate }}</span></div>
+              <div class="backup-progress-tooltip-row"><span>{{ $t('label.backup.vm.restore.result') }} :</span><span>{{ vmRestore.outcome }} / {{ vmRestore.phase }}</span></div>
+              <div class="backup-progress-tooltip-row"><span>{{ $t('label.backup.primary.cleanup.state') }} :</span><span>{{ vmRestore.primarycleanupstate }}</span></div>
               <div v-if="vmRestore.recoveryerror || vmRestore.queryerror" class="backup-progress-tooltip-row backup-progress-tooltip-error">
                 <span>{{ vmRestore.recoveryerror || vmRestore.queryerror }}</span>
               </div>

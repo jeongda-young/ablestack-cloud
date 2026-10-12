@@ -661,10 +661,10 @@ export default {
         {
           api: 'getBackupStagingInfo',
           icon: 'tool-outlined',
-          label: 'Staging management',
+          label: 'label.backup.staging.management',
           dataView: true,
           popup: true,
-          show: (record) => isAdmin() && ['ablestack-commvault', 'ablestack-netbackup', 'ablestack-veeam'].includes(String(record.provider || '').toLowerCase()) && (record?.details?.['thirdparty.staging.mode'] === 'VOLUME' || !!record.stagingqueue),
+          show: (record) => isAdmin() && ['ablestack-commvault', 'ablestack-netbackup', 'ablestack-veeam'].includes(String(record.provider || '').toLowerCase()) && record.stagingmanagementrequired === true,
           component: shallowRef(defineAsyncComponent(() => import('@/views/storage/BackupStagingManagement.vue')))
         },
         {

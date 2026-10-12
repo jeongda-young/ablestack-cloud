@@ -17,6 +17,7 @@
 
 <template>
   <div class="staging-management">
+    <a-alert type="info" show-icon :message="$t('message.backup.staging.management')" class="staging-alert" />
     <a-space class="staging-toolbar">
       <a-select v-model:value="operation" :disabled="busy || loading" style="width: 140px">
         <a-select-option value="BACKUP">BACKUP</a-select-option>
@@ -62,12 +63,12 @@
             · {{ ['ADMITTING', 'ADMITTED', 'CANCEL_PENDING'].includes(info.stagingqueue.state) ? 'HELD' : info.stagingqueue.state === 'RELEASED' ? 'RELEASED' : 'NOT_RESERVED' }}
           </div>
         </a-descriptions-item>
-        <a-descriptions-item label="Cleanup">{{ info.cleanupstate || '—' }} · {{ info.cleanupreason || '—' }}</a-descriptions-item>
-        <a-descriptions-item v-if="operation === 'BACKUP' && info.sourcecleanupstate" label="Previous RBD snapshot cleanup">{{ info.sourcecleanupstate }} · {{ info.sourcecleanupreason || '—' }}</a-descriptions-item>
+        <a-descriptions-item :label="$t('label.backup.cleanup.state')">{{ info.cleanupstate || '—' }} · {{ info.cleanupreason || '—' }}</a-descriptions-item>
+        <a-descriptions-item v-if="operation === 'BACKUP' && info.sourcecleanupstate" :label="$t('label.backup.source.cleanup.state')">{{ info.sourcecleanupstate }} · {{ info.sourcecleanupreason || '—' }}</a-descriptions-item>
         <a-descriptions-item v-if="operation === 'BACKUP' && info.jobcleanupstate" label="Host job record cleanup">{{ info.jobcleanupstate }} · {{ info.jobcleanupreason || '—' }}</a-descriptions-item>
         <a-descriptions-item v-if="operation === 'BACKUP' && info.finalizationstate" label="Backup finalization">{{ info.finalizationstate }} · {{ info.finalizationreason || '—' }}</a-descriptions-item>
-        <a-descriptions-item v-if="operation === 'RESTORE'" label="VM restore outcome">{{ info.vmrestore?.outcome || 'NOT_RECORDED' }} · {{ info.vmrestore?.phase || 'NOT_RECORDED' }}</a-descriptions-item>
-        <a-descriptions-item v-if="operation === 'RESTORE'" label="Primary volume cleanup">{{ info.vmrestore?.primarycleanupstate || 'NOT_RECORDED' }}</a-descriptions-item>
+        <a-descriptions-item v-if="operation === 'RESTORE'" :label="$t('label.backup.vm.restore.result')">{{ info.vmrestore?.outcome || 'NOT_RECORDED' }} · {{ info.vmrestore?.phase || 'NOT_RECORDED' }}</a-descriptions-item>
+        <a-descriptions-item v-if="operation === 'RESTORE'" :label="$t('label.backup.primary.cleanup.state')">{{ info.vmrestore?.primarycleanupstate || 'NOT_RECORDED' }}</a-descriptions-item>
         <a-descriptions-item v-if="operation === 'RESTORE' && info.vmrestore?.transactionid" label="VM transaction">{{ info.vmrestore.transactionid }} · Revision {{ info.vmrestore.revision }}</a-descriptions-item>
         <a-descriptions-item v-if="operation === 'RESTORE' && info.vmrestore?.updatedat" label="VM result times">
           <div>Updated: {{ $toLocaleDate(info.vmrestore.updatedat) }}</div>
@@ -168,10 +169,17 @@ export default {
         ? base + ' A matching saved restore request is required for NetBackup/Veeam; an unverified Job ID cannot be connected.' : base
     },
     canCleanup () {
+      if (!this.info || this.info.historical) return false
+      const failedBackup = ['Failed', 'Canceled', 'Error'].includes(this.resource.status)
+      if (this.info.cleanupstate === 'COMPLETED') {
+        // Finished staging removal is durable proof for retrying the remaining records/slot release.
+        return this.operation === 'BACKUP' && failedBackup &&
+          (['WAITING', 'RUNNING'].includes(this.info.jobcleanupstate) ||
+            (!!this.info.stagingqueue && this.info.stagingqueue.state !== 'RELEASED'))
+      }
       const terminal = ['COMPLETED', 'FAILED', 'INTERRUPTED', 'CANCELED'].includes(this.info?.hoststate)
       const unstarted = this.info?.hoststate === 'UNKNOWN' && ['PREPARING', 'PREPARED', 'SUBMISSION_PENDING', 'START_FAILED'].includes(this.info?.startstate)
-      return !this.info?.historical && (terminal || unstarted) && this.info?.cleanupstate !== 'COMPLETED' &&
-        (this.operation === 'RESTORE' || ['Failed', 'Canceled', 'Error'].includes(this.resource.status))
+      return (terminal || unstarted) && (this.operation === 'RESTORE' || failedBackup)
     },
     columns () {
       const columns = [{ key: 'volume', title: 'Volume / path', width: 400 }, { key: 'job', title: 'External job / catalog / point', width: 300 }, { key: 'state', title: 'External state', width: 220 }]
@@ -241,7 +249,7 @@ export default {
         await this.$pollJob({
           jobId,
           originalPage: this.$route.path,
-          title: 'Staging management',
+          title: this.$t('label.backup.staging.management'),
           description: params.stagingjobid,
           resourceId: params.id,
           showLoading: false,

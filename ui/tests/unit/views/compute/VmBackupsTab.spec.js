@@ -152,3 +152,36 @@ test('bounded polling interruption marks unknown and retry completion clears it'
   expect(w.vm.pending).toBe(false); expect(w.vm.unknown).toBe(true)
   job.successMethod(); expect(w.vm.unknown).toBe(false); w.unmount()
 })
+
+test('hides staging management for a cleaned failure and ordinary volume backup', async () => {
+  const w = mount(); await flush()
+  w.vm.$store.getters.apis.getBackupStagingInfo = {}
+  const backup = { ...row, provider: 'ablestack-commvault', status: 'Failed', catalogstate: 'PENDING', cleanupstate: 'COMPLETED',
+    details: { 'thirdparty.staging.mode': 'VOLUME' }, stagingqueue: { state: 'RELEASED' }, stagingmanagementrequired: false }
+  expect(w.vm.visible('getBackupStagingInfo', backup)).toBe(false)
+  expect(w.vm.rowActions(backup).some(action => action.api === 'getBackupStagingInfo')).toBe(false)
+  expect(w.vm.visible('getBackupStagingInfo', { ...backup, status: 'BackingUp', cleanupstate: 'NONE', stagingqueue: { state: 'WAITING' } })).toBe(false)
+  w.unmount()
+})
+
+test('shows staging management only for an ABLESTACK provider with a confirmed recovery flag', async () => {
+  const w = mount(); await flush()
+  w.vm.$store.getters.apis.getBackupStagingInfo = {}
+  for (const provider of ['ablestack-commvault', 'ablestack-netbackup', 'ablestack-veeam']) {
+    expect(w.vm.visible('getBackupStagingInfo', { ...row, provider, stagingmanagementrequired: true })).toBe(true)
+    expect(w.vm.visible('getBackupStagingInfo', { ...row, provider, stagingmanagementrequired: 'true' })).toBe(false)
+  }
+  expect(w.vm.visible('getBackupStagingInfo', { ...row, stagingmanagementrequired: true })).toBe(false)
+  w.unmount()
+})
+
+test('does not open staging management after a fresh lookup confirms recovery is no longer needed', async () => {
+  const w = mount(); await flush()
+  w.vm.$store.getters.apis.getBackupStagingInfo = {}
+  const backup = { ...row, provider: 'ablestack-commvault', stagingmanagementrequired: true }
+  getAPI.mockResolvedValue(response([{ ...backup, stagingmanagementrequired: false }]))
+  await w.vm.openAction('getBackupStagingInfo', backup)
+  expect(w.vm.selected).toBeNull()
+  expect(w.vm.$notifyError).toHaveBeenCalled()
+  w.unmount()
+})

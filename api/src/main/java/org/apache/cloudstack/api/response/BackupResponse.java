@@ -115,6 +115,10 @@ public class BackupResponse extends BaseResponse {
     @Param(description = "Whether the logical backup is complete and has no confirmed missing artifacts or pending deletion")
     private Boolean restoreAvailable;
 
+    @SerializedName("stagingmanagementrequired")
+    @Param(description = "Whether recorded staging errors or unfinished recovery require administrator inspection")
+    private Boolean stagingManagementRequired;
+
     @SerializedName("catalogstate")
     @Param(description = "External artifact inventory: AVAILABLE, PARTIAL, EXPIRED, UNKNOWN or PENDING")
     private String catalogState;
@@ -409,6 +413,7 @@ public class BackupResponse extends BaseResponse {
     }
 
     public void setRestoreAvailable(Boolean value) { restoreAvailable = value; }
+    public void setStagingManagementRequired(Boolean value) { stagingManagementRequired = value; }
     public void setCatalogState(String value) { catalogState = value; }
     public void setCatalogChecked(Date value) { catalogChecked = value; }
     public void setCatalogDetails(String value) { catalogDetails = value; }

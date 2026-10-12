@@ -18,7 +18,9 @@
 package org.apache.cloudstack.backup;
 
 import com.cloud.host.Host;
+import com.google.gson.Gson;
 import org.apache.cloudstack.api.response.BackupStagingInfoResponse;
+import org.apache.commons.lang3.StringUtils;
 
 /** Management-side handoff between one host artifact and one external backup job. */
 public interface ThirdPartyBackupVolumeService {
@@ -36,6 +38,68 @@ public interface ThirdPartyBackupVolumeService {
             // Unreadable ownership must remain visible for reconciliation.
             return true;
         }
+    }
+
+    /** Menu visibility uses persisted recovery evidence, never ordinary execution or queue states. */
+    static boolean needsStagingManagement(Backup backup, BackupStagingInfoResponse.VmRestoreInfo restore) {
+        if (!ThirdPartyBackupManifest.VOLUME_MODE.equals(backup.getDetail(ThirdPartyBackupManifest.MODE_KEY))
+                || StringUtils.isNotBlank(backup.getDetail(ThirdPartyBackupManifest.DELETE_PROGRESS_KEY))) {
+            return false;
+        }
+        if (needsCleanupInspection(backup.getDetail(ThirdPartyBackupManifest.CLEANUP_STATE_KEY))
+                || needsCleanupInspection(backup.getDetail(ThirdPartyBackupManifest.SOURCE_CLEANUP_STATE_KEY))
+                || needsCleanupInspection(backup.getDetail(ThirdPartyBackupManifest.JOB_CLEANUP_STATE_KEY))
+                || needsCleanupInspection(backup.getDetail(ThirdPartyBackupRestore.CLEANUP_STATE_KEY))) {
+            return true;
+        }
+        boolean failed = Backup.Status.Failed.equals(backup.getStatus()) || Backup.Status.Canceled.equals(backup.getStatus())
+                || Backup.Status.Error.equals(backup.getStatus());
+        // Physical cleanup can be complete while a Host record or DB reservation remains unresolved.
+        if (failed && StringUtils.isBlank(backup.getDetail(ThirdPartyBackupManifest.CATALOG_FAILURE_KEY))
+                && needsBackupCleanup(backup)) {
+            return true;
+        }
+        boolean restoreClosed = "COMPLETED".equals(backup.getDetail(ThirdPartyBackupRestore.CLEANUP_STATE_KEY));
+        if (restore != null && (needsCleanupInspection(restore.primarycleanupstate)
+                || "RECOVERY_REQUIRED".equals(restore.outcome)
+                || ("UNKNOWN".equals(restore.outcome) && StringUtils.isNotBlank(restore.transactionid))
+                || (!restoreClosed && (StringUtils.isNotBlank(restore.recoveryerror) || StringUtils.isNotBlank(restore.queryerror))))) {
+            return true;
+        }
+        try {
+            Gson gson = new Gson();
+            if (!restoreClosed && StringUtils.isNotBlank(backup.getDetail(ThirdPartyBackupRestore.PLAN_KEY))) {
+                ThirdPartyBackupRestore.Plan plan = gson.fromJson(backup.getDetail(ThirdPartyBackupRestore.PLAN_KEY),
+                        ThirdPartyBackupRestore.Plan.class);
+                ThirdPartyBackupRestore.Operation operation = gson.fromJson(
+                        backup.getDetail(ThirdPartyBackupRestore.operationKey(plan.jobId)), ThirdPartyBackupRestore.Operation.class);
+                if (operation != null && (StringUtils.isNotBlank(operation.hostError)
+                        || (!"STARTED".equals(operation.startState) && StringUtils.isNotBlank(operation.startFailureReason))
+                        || StringUtils.isNotBlank(operation.vmResultError))) {
+                    return true;
+                }
+            }
+            // Historical failure information and the default PENDING catalog do not reopen a cleaned failure.
+            if (failed && "COMPLETED".equals(backup.getDetail(ThirdPartyBackupManifest.CLEANUP_STATE_KEY))
+                    && StringUtils.isBlank(backup.getDetail(ThirdPartyBackupManifest.CATALOG_FAILURE_KEY))) {
+                return false;
+            }
+            ThirdPartyBackupStart.Operation start = gson.fromJson(backup.getDetail(ThirdPartyBackupStart.DETAIL_KEY),
+                    ThirdPartyBackupStart.Operation.class);
+            if (start != null && !"STARTED".equals(start.state) && StringUtils.isNotBlank(start.reason)) {
+                return true;
+            }
+            ThirdPartyBackupManifest.Catalog catalog = gson.fromJson(backup.getDetail(ThirdPartyBackupManifest.CATALOG_KEY),
+                    ThirdPartyBackupManifest.Catalog.class);
+            return catalog != null && ("UNKNOWN".equals(catalog.state) || StringUtils.isNotBlank(catalog.error));
+        } catch (RuntimeException e) {
+            // Unreadable current ownership or query records require inspection, not a hidden recovery tool.
+            return true;
+        }
+    }
+
+    private static boolean needsCleanupInspection(String state) {
+        return "WAITING".equals(state) || "FAILED".equals(state);
     }
 
     interface Lease extends AutoCloseable {

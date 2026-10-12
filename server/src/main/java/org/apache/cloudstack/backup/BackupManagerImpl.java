@@ -6871,7 +6871,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         response.setSourceCleanupDetails(backup.getDetail(ThirdPartyBackupManifest.SOURCE_CLEANUP_DETAILS_KEY));
         response.setRestoreCleanupState(StringUtils.defaultIfBlank(backup.getDetail(ThirdPartyBackupRestore.CLEANUP_STATE_KEY), "NONE"));
         response.setRestoreCleanupDetails(backup.getDetail(ThirdPartyBackupRestore.CLEANUP_DETAILS_KEY));
-        response.setVmRestore(vmRestoreInfo(backup, null, null));
+        final org.apache.cloudstack.api.response.BackupStagingInfoResponse.VmRestoreInfo restore = vmRestoreInfo(backup, null, null);
+        response.setVmRestore(restore);
+        response.setStagingManagementRequired(ThirdPartyBackupVolumeService.needsStagingManagement(backup, restore));
         ThirdPartyBackupAdmission.Entry queue = getAdmissionEntry(backup, ThirdPartyBackupAdmission.RESTORE_KEY);
         if (queue == null || "RELEASED".equals(queue.state)) {
             queue = getAdmissionEntry(backup, ThirdPartyBackupAdmission.BACKUP_KEY);
