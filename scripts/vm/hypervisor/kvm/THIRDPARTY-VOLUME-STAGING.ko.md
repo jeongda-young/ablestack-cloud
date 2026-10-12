@@ -55,6 +55,33 @@ Cleanup은 개별 백업 시점 또는 복원 Job 디렉터리만 삭제한다.
 - Running RBD VM은 현재 Host에서, Stopped RBD VM은 pool 접근이 가능한 정상 Host 중
   현재 작업 수와 Staging 여유 공간을 고려하여 백업한다.
 
+## QCOW2 NBD 실행 전 검사와 오류 확인
+
+Commvault/NetBackup/Veeam 공통 볼륨 백업은 Host 용량 예약과 원본 준비 전에 다음을 확인한다.
+
+- 실행 중인 Python에서 `nbd`를 import하고 필요한 libnbd API를 사용할 수 있는지 확인한다.
+  RPM이 설치되어 있어도 Python 경로나 native library 문제로 import가 실패하면 백업을 중단한다.
+- `virsh`, `qemu-img`, `qemu-nbd` 실행 파일과 버전 명령을 확인한다.
+- 증분 백업은 dirty bitmap 조회 API와 각 볼륨의 부모 Artifact 연결 정보를 확인한다.
+
+이 단계에서 실패하면 원본 준비 기록은 `NOT_STARTED`로 유지하며 Host 용량을 예약하지 않는다.
+연결 후에는 원본/출력 NBD의 virtual size가 계획된 볼륨 크기와 일치하는지,
+출력에서 쓰기와 flush가 가능한지 확인한다. 읽기 응답이 요청한 길이보다 짧거나
+최종 flush가 실패하면 해당 볼륨을 외부 솔루션으로 전송하지 않는다.
+
+Full 백업은 `base:allocation`에서 ZERO로 확인된 범위의 읽기를 생략한다.
+HOLE만 표시된 범위는 읽으며, allocation 정보가 없거나 유효하지 않으면 전체 읽기로 진행한다.
+증분 백업은 classic/64-bit block status 응답을 지원하되 dirty bitmap이 없거나 응답이 잘못되면 실패한다.
+변경된 0 데이터도 출력 이미지에 기록하여 부모 이미지의 예전 데이터를 가린다.
+상태 정보는 최대 32 MiB, 데이터는 최대 4 MiB 단위로 처리하며 NBD 서버의 IO 제한도 적용한다.
+
+실행 Python·libnbd·도구 버전과 예외 원인은 Host Job의 `job.log`에서 확인한다.
+도구 실행 오류는 `qcow2-preflight.log`, 볼륨별 `qemu-nbd` stderr와 예외는
+`qcow2-volume-<volume-index>.log`에 보관한다. UI 실패 사유에는 볼륨과 실패 구간을 표시한다.
+연결·이미지 생성·복사 중 실패해도 열린 연결과 출력 프로세스의 정리를 시도한다.
+원본 reader 종료가 확인되지 않으면 기존 정책에 따라 용량 예약을 유지한다.
+`thirdparty_qcow2_nbd.py`는 `thirdparty_volume_backup.py`와 함께 배포해야 한다.
+
 ## Mold UI 복원
 
 Mold가 Worker Host와 `restore/<restore-job-id>`를 정하고 용량을 예약한다.

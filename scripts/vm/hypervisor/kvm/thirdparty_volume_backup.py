@@ -19,6 +19,7 @@
 """One source snapshot/checkpoint, one image in staging, confirmed transfer before unlink."""
 import argparse
 import contextlib
+import errno
 import fcntl
 import hashlib
 import json
@@ -28,13 +29,54 @@ from pathlib import Path
 import signal
 import shutil
 import subprocess
+import sys
 import time
+import traceback
 import uuid
 import xml.etree.ElementTree as ET
 
 from thirdparty_staging_cleanup import validate_job_directory
+from thirdparty_qcow2_nbd import Connection, copy_volume, preflight
 
-BLOCK = 4 * 1024 * 1024
+
+def diagnostic_tail(path):
+    with Path(path).open("rb") as stream:
+        stream.seek(0, os.SEEK_END)
+        stream.seek(max(0, stream.tell() - 4096))
+        lines = stream.read().decode("utf-8", errors="replace").splitlines()
+    return next((line.strip()[:500] for line in reversed(lines) if line.strip()), "no diagnostic output")
+
+
+def qcow2_command(args, diagnostics, timeout=300):
+    """Capture local QCOW2 tool errors without logging Ceph/controller command arguments."""
+    with Path(diagnostics).open("a") as stream:
+        os.chmod(diagnostics, 0o600)
+        stream.write("QCOW2 tool: %s %s\n" % (args[0], args[1]))
+        stream.flush()
+        try:
+            result = subprocess.run(args, stdout=subprocess.PIPE, stderr=stream, text=True,
+                                    timeout=timeout, check=False, env=dict(os.environ, LC_ALL="C"))
+        except subprocess.TimeoutExpired:
+            raise RuntimeError("%s %s timed out; diagnostics=%s" %
+                               (args[0], args[1], diagnostics)) from None
+        if result.returncode:
+            raise RuntimeError("%s %s failed (exit %d): %s; diagnostics=%s" %
+                               (args[0], args[1], result.returncode, diagnostic_tail(diagnostics), diagnostics))
+        return result.stdout
+
+
+def stop_qcow2_output(process, socket):
+    if process.poll() is None:
+        with contextlib.suppress(ProcessLookupError):
+            process.terminate()
+    try:
+        process.wait(timeout=30)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(ProcessLookupError):
+            process.kill()
+        process.wait(timeout=30)
+    # Never remove a socket while its writer may still be running.
+    Path(socket).unlink(missing_ok=True)
 
 
 def atomic(path, value):
@@ -282,11 +324,6 @@ class Backup:
         atomic(self.root / "checkpoints" / (checkpoint + ".meta"), metadata)
 
     def begin_qcow2(self):
-        try:
-            import nbd
-        except ImportError as exc:
-            raise RuntimeError("Volume QCOW2 staging requires the host python3-libnbd package") from exc
-        self.nbd = nbd
         # Pull-mode scratch belongs to primary storage, never to Host OS or staging.
         from thirdparty_primary_capacity import backup_capacity
         current = backup_capacity(json.loads((self.job / "backup-primary-capacity.json").read_text()))
@@ -319,7 +356,8 @@ class Backup:
             devices = ET.SubElement(dummy, "devices")
             for i, path in enumerate(self.plan["diskPaths"]):
                 disk = ET.SubElement(devices, "disk", type="file", device="disk")
-                info = json.loads(run(["qemu-img", "info", "--output=json", path]))
+                info = json.loads(qcow2_command(["qemu-img", "info", "--output=json", path],
+                                               self.job / "qcow2-preflight.log"))
                 ET.SubElement(disk, "driver", name="qemu", type=info["format"])
                 ET.SubElement(disk, "source", file=path)
                 ET.SubElement(disk, "target", dev="vd" + chr(ord("a") + i), bus="virtio")
@@ -408,77 +446,82 @@ class Backup:
                 raise
 
     def export_qcow2(self, index, target):
-        source = self.nbd.NBD()
-        source.set_export_name(self.labels[index])
-        context = "qemu:dirty-bitmap:dirty-" + self.labels[index]
         incremental = bool(self.plan.get("parentCheckpointName"))
-        if incremental:
-            source.add_meta_context(context)
-        source.connect_unix(str(self.socket))
-        size = source.get_size()
+        context = "qemu:dirty-bitmap:dirty-" + self.labels[index] if incremental else None
+        volume = self.manifest["volumes"][index]
+        size = volume["provisionedBytes"]
         destination_socket = self.job / ("target-" + str(index) + ".sock")
-        run(["qemu-img", "create", "-f", "qcow2", str(target), str(size)])
-        destination = None
-        process = subprocess.Popen(["qemu-nbd", "--socket", str(destination_socket),
-                                    "--persistent", "--format=qcow2", str(target)],
-                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        diagnostics = self.job / ("qcow2-volume-" + str(index + 1) + ".log")
+        deadline = time.monotonic() + self.timeout
+        phase = "SOURCE_CONNECT"
         try:
-            deadline = time.monotonic() + self.timeout
-            while not destination_socket.exists():
-                if process.poll() is not None or time.monotonic() > deadline:
-                    raise RuntimeError("Unable to open QCOW2 output image")
-                time.sleep(0.1)
-            destination = self.nbd.NBD()
-            destination.connect_unix(str(destination_socket))
-            if incremental and not source.can_meta_context(context):
-                raise RuntimeError("Source does not expose the requested incremental dirty bitmap")
-            offset = 0
-            while offset < size:
-                self.check_cancel()
-                if time.monotonic() > deadline:
-                    raise RuntimeError("QCOW2 volume export timed out")
-                length = min(BLOCK, size - offset)
-                dirty = True
-                if incremental:
-                    extents = []
-                    def extent_callback(name, start, entries, error):
-                        if name == context and start == offset:
-                            extents.extend(entries)
-                        return 0
-                    source.block_status(length, offset, extent_callback, flags=self.nbd.CMD_FLAG_REQ_ONE)
-                    if len(extents) < 2 or extents[0] <= 0:
-                        raise RuntimeError("Invalid incremental dirty bitmap response")
-                    length = min(length, extents[0])
-                    dirty = bool(extents[1] & 1)
-                if dirty:
-                    block_started = time.monotonic()
-                    data = source.pread(length, offset)
-                    # Changed zero blocks must be allocated in an incremental overlay.
-                    if incremental or any(data):
-                        destination.pwrite(data, offset)
-                    self.throttle(length, block_started)
-                offset += length
-                self.progress("QCOW2_BACKUP", index, offset / size)
-            destination.flush()
-        finally:
-            if destination is not None:
-                with contextlib.suppress(Exception):
-                    destination.shutdown()
-            with contextlib.suppress(Exception):
-                source.shutdown()
-            process.terminate()
-            try:
-                process.wait(timeout=30)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait()
-            destination_socket.unlink(missing_ok=True)
-        if incremental:
-            chain = self.manifest["volumes"][index]["chain"]
-            if len(chain) < 2:
-                raise RuntimeError("QCOW2 incremental volume is missing its parent artifact")
-            run(["qemu-img", "rebase", "-u", "-f", "qcow2", "-F", "qcow2",
-                 "-b", chain[-2]["path"], str(target)], self.timeout)
+            # All initialization is inside the cleanup scope, including failed handshakes and image creation.
+            with contextlib.ExitStack() as stack:
+                log = stack.enter_context(diagnostics.open("a"))
+                os.chmod(diagnostics, 0o600)
+                log.write("QCOW2 volume: index=%d uuid=%s export=%s provisionedBytes=%d incremental=%s\n" %
+                          (index + 1, volume["uuid"], self.labels[index], size, incremental))
+                log.flush()
+                source = stack.enter_context(Connection(self.nbd, self.socket, size,
+                                                        export=self.labels[index], dirty_context=context))
+                if destination_socket.exists() or destination_socket.is_symlink():
+                    raise RuntimeError("QCOW2 output socket already exists")
+                phase = "OUTPUT_CREATE"
+                qcow2_command(["qemu-img", "create", "-f", "qcow2", str(target), str(size)], diagnostics)
+                log.write("QCOW2 tool: qemu-nbd output server\n")
+                log.flush()
+                process = subprocess.Popen(["qemu-nbd", "--socket", str(destination_socket),
+                                            "--persistent", "--format=qcow2", str(target)],
+                                           stdout=subprocess.DEVNULL, stderr=log,
+                                           env=dict(os.environ, LC_ALL="C"))
+                stack.callback(stop_qcow2_output, process, destination_socket)
+                phase = "OUTPUT_CONNECT"
+                while True:
+                    self.check_cancel()
+                    if process.poll() is not None:
+                        raise RuntimeError("QCOW2 output server exited (exit %d): %s" %
+                                           (process.returncode, diagnostic_tail(diagnostics)))
+                    if time.monotonic() >= deadline:
+                        raise RuntimeError("QCOW2 output connection timed out")
+                    if destination_socket.exists():
+                        try:
+                            destination = stack.enter_context(Connection(self.nbd, destination_socket, size, writable=True))
+                            break
+                        except self.nbd.Error as exc:
+                            # Socket creation can precede listen(). Retry only before the first write.
+                            if getattr(exc, "errnum", None) not in (errno.ENOENT, errno.ECONNREFUSED):
+                                raise
+                    time.sleep(0.1)
+                phase = "DATA_COPY"
+                copy_volume(source, destination, incremental, self.check_cancel, self.throttle,
+                            lambda fraction: self.progress("QCOW2_BACKUP", index, fraction), deadline)
+                if process.poll() is not None:
+                    raise RuntimeError("QCOW2 output server exited before completion (exit %d): %s" %
+                                       (process.returncode, diagnostic_tail(diagnostics)))
+                phase = "OUTPUT_CLOSE"
+            if incremental:
+                phase = "PARENT_LINK"
+                chain = volume["chain"]
+                qcow2_command(["qemu-img", "rebase", "-u", "-f", "qcow2", "-F", "qcow2",
+                               "-b", chain[-2]["path"], str(target)], diagnostics, self.timeout)
+        except Exception as exc:
+            with contextlib.suppress(OSError):
+                with diagnostics.open("a") as log:
+                    os.chmod(diagnostics, 0o600)
+                    traceback.print_exception(type(exc), exc, exc.__traceback__, file=log)
+            raise RuntimeError("QCOW2 volume %d/%d (%s) failed at %s: %s; diagnostics=%s" %
+                               (index + 1, self.count, volume["uuid"], phase, exc, diagnostics)) from exc
+
+    def preflight_qcow2(self):
+        self.nbd = preflight(bool(self.plan.get("parentCheckpointName")))
+        if self.plan.get("parentCheckpointName"):
+            for volume in self.manifest["volumes"]:
+                if len(volume["chain"]) < 2:
+                    raise RuntimeError("QCOW2 incremental volume is missing its parent artifact")
+        diagnostics = self.job / "qcow2-preflight.log"
+        for tool in ("virsh", "qemu-img", "qemu-nbd"):
+            version = qcow2_command([tool, "--version"], diagnostics, 30).splitlines()
+            print("QCOW2 tool preflight: %s %s" % (shutil.which(tool), version[0] if version else "unknown"), flush=True)
 
     def transfer(self, index, artifact, metadata=False):
         self.progress("METADATA_TRANSFER" if metadata else self.plan["providerStep"], index)
@@ -519,6 +562,9 @@ class Backup:
         if (start != {"version": 1, "backupUuid": self.manifest["backupUuid"], "state": "NOT_STARTED"}
                 or self.engine.exists() or admission_closed_reason(self.job) is not None):
             raise RuntimeError("Backup engine was already initialized; its source start record is protected")
+        if not self.plan["rbd"]:
+            self.preflight_qcow2()
+        self.check_cancel()
         self.reserve()
         self.root.mkdir(parents=True, exist_ok=False)
         atomic(self.root / ".staging.inprogress", "volume_pipeline=true\n")
@@ -928,22 +974,42 @@ def run_backup(plan_file):
     # This proof also covers constructor/configuration failures before execute().
     # Never reset it on a repeated or delayed engine invocation.
     atomic(job / "volume-source-start.json", {"version": 1, "backupUuid": job.name, "state": "NOT_STARTED"})
-    worker = Backup(plan_file)
     def interrupt(signum, frame):
-        raise RuntimeError("Volume pipeline interrupted")
+        raise InterruptedError("Volume pipeline interrupted")
     signal.signal(signal.SIGTERM, interrupt)
     signal.signal(signal.SIGINT, interrupt)
+    worker = None
+    failure = None
+    cleanup_failure = None
     finalized = False
     try:
+        worker = Backup(plan_file)
         worker.execute()
     except Exception as exc:
-        print("%s: %s" % ("Volume backup finalization is pending" if worker.success else "Volume backup failed", exc), flush=True)
+        failure = exc
+        if not source["rbd"]:
+            # QCOW2 commands contain local file paths, never RBD/controller credentials.
+            traceback.print_exception(type(exc), exc, exc.__traceback__, file=sys.stdout)
+            sys.stdout.flush()
     finally:
-        try:
-            worker.close()
-            finalized = worker.success
-        except Exception as exc:
-            print("Host backup cleanup is pending: %s" % exc, flush=True)
+        if worker is not None:
+            try:
+                worker.close()
+                finalized = worker.success
+            except Exception as exc:
+                cleanup_failure = exc
+    # The Agent uses the last non-trace log line as the UI failure reason.
+    # Emit a compact summary after diagnostics and cleanup, preserving the initial failure.
+    if not finalized:
+        message = " ".join(str(failure or cleanup_failure or "Backup did not finalize").split())
+        label = "Volume backup finalization is pending" if worker is not None and worker.success else "Volume backup failed"
+        if cleanup_failure and failure:
+            message += "; host cleanup is pending: " + " ".join(str(cleanup_failure).split())
+        elif worker is not None and worker.pull:
+            message += "; source cleanup is pending and capacity reservation is retained"
+        print("%s: %s" % (label, message), flush=True)
+    elif failure:
+        print("Host backup finalization completed", flush=True)
     return 0 if finalized else 1
 
 
