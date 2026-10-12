@@ -17,7 +17,7 @@
 
 <template>
   <div style="display: inline-flex;">
-    <a-tooltip placement="bottom" :trigger="showTooltip ? 'hover' : []">
+    <a-tooltip placement="bottom" :trigger="showTooltip ? 'hover' : []" :color="tooltipColor" :overlay-class-name="tooltipOverlayClassName">
       <template v-if="showTooltip" #title>
         <slot name="tooltip">
           {{ getTooltip(text) }}
@@ -53,6 +53,14 @@ export default {
     showTooltip: {
       type: Boolean,
       default: true
+    },
+    tooltipColor: {
+      type: String,
+      default: ''
+    },
+    tooltipOverlayClassName: {
+      type: String,
+      default: ''
     },
     styles: {
       type: Object,

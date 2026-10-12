@@ -236,6 +236,16 @@ Host engine 및 외부 reader 종료 확인 → 원본 Scratch/Snapshot과 Stagi
 Job 기록 삭제가 실패하거나 응답이 유실되면 `jobcleanupstate=WAITING`으로 기록하고 별도로 재시도한다.
 이때 이미 확인한 Staging 정리 완료 상태는 유지하여 삭제된 원본 Job 기록을 다시 요구하지 않는다.
 
+외부 전송 전에 submission intent를 `backup_details`에 직접 저장하고, 확인한 child Job ID와 catalog reference도
+개별 detail key로 저장한다. `backups` 행에 변경 사항이 없어도 상세 정보 저장은 정상적으로 진행한다.
+전체 상세 정보 교체로 다른 작업의 용량 예약·복원·정리 기록을 덮어쓰지 않는다.
+마지막 metadata 전송 완료 시 manifest와 provider의 복원 시점 reference를 같은 DB 트랜잭션으로 저장한 후 Host에 ACK한다.
+저장에 실패한 요청 의도를 메모리에 완료된 저장으로 남기지 않으며, 외부 Job 복구 조회 오류는
+미확정 상태로 유지하여 같은 요청을 재조회한다. 미확정 요청을 중복 제출하거나 조회 오류만으로 Host를 중단하지 않는다.
+기존 버전에서 `Unable to persist external artifact submission intent`로 실패한 작업은 Host 종료 확인 후,
+외부 Job/복원 시점 참조가 없는 단일 미확정 요청에 한해 미전송으로 확정하여 공통 정리를 이어간다.
+이미 확인된 외부 Job, 다른 실패 원인과 불명확한 여러 요청은 이 복구 대상에서 제외한다.
+
 모든 child Job과 metadata 전송이 완료된 뒤 checkpoint 정보 저장, DB 예약 해제 또는 완료 상태 저장이
 일시적으로 실패하면 백업을 `Failed`로 바꾸지 않고 `BackingUp`을 유지하여 완료 처리만 재시도한다.
 Host 완료 후 Mold 완료 확정 전 화면 상태/단계는 `RUNNING`/`FINALIZING`, 진행률은 99%로 표시한다.

@@ -2869,11 +2869,8 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
             if (!artifact.completed) {
                 if (StringUtils.isBlank(artifact.jobId)) {
                     if (artifact.submissionPending) {
-                        ThirdPartyBackupManifest.Artifact recovered = transfer.recover(artifact, metadata);
-                        if (recovered == null || StringUtils.isBlank(recovered.jobId)) {
-                            saveCleanupState(tracked.getId(), "WAITING", "External submission is unconfirmed; waiting for an exact artifact job reference");
-                            return true;
-                        }
+                        ThirdPartyBackupManifest.Artifact recovered = recoverPendingArtifact(tracked, transfer, artifact, metadata);
+                        if (recovered == null) { return true; }
                         if (!artifact.path.equals(recovered.path) || !artifact.backupUuid.equals(recovered.backupUuid)
                                 || (!metadata && artifact.size != recovered.size)) {
                             throw new CloudRuntimeException("Recovered external job differs from the saved artifact");
@@ -2886,16 +2883,12 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
                         artifact.externalTerminal = recovered.externalTerminal;
                         artifact.externalFailure = recovered.externalFailure;
                         artifact.submissionPending = false;
-                        tracked.getDetails().put(ThirdPartyBackupManifest.DETAIL_KEY, manifest.toJson());
-                        if (!backupDao.update(tracked.getId(), tracked)) { throw new CloudRuntimeException("Unable to save recovered artifact job"); }
+                        saveVolumeManifest(tracked, manifest);
                     } else {
                         // A controller restart after an accepted request must not silently submit it again.
                         artifact.submissionPending = true;
                         artifact.submittedAt = System.currentTimeMillis();
-                        tracked.getDetails().put(ThirdPartyBackupManifest.DETAIL_KEY, manifest.toJson());
-                        if (!backupDao.update(tracked.getId(), tracked)) {
-                            throw new CloudRuntimeException("Unable to persist external artifact submission intent");
-                        }
+                        saveVolumeManifest(tracked, manifest);
                     }
                 }
                 // Save an accepted child job before polling it. Only a confirmed catalog reference permits unlink.
@@ -2906,8 +2899,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
                     artifact.submissionPending = false;
                     artifact.externalTerminal = true;
                     artifact.externalFailure = e.getMessage();
-                    tracked.getDetails().put(ThirdPartyBackupManifest.DETAIL_KEY, manifest.toJson());
-                    if (!backupDao.update(tracked.getId(), tracked)) { throw new CloudRuntimeException("Unable to persist non-submission proof", e); }
+                    saveVolumeManifest(tracked, manifest);
                     throw e;
                 }
                 catch (RuntimeException e) {
@@ -2929,23 +2921,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
                 artifact.submissionPending = false;
                 artifact.externalTerminal = result.externalTerminal || result.completed;
                 artifact.externalFailure = result.externalFailure;
-                if (metadata && artifact.completed) {
-                    manifest.setComplete(true);
-                    if ("ablestack-commvault".equals(manifest.getProvider())) {
-                        tracked.setExternalId(artifact.path + "," + artifact.jobId);
-                    } else if ("ablestack-netbackup".equals(manifest.getProvider())) {
-                        tracked.getDetails().put("netbackup.backup.id", artifact.externalId);
-                        if (artifact.backupTime != null) {
-                            tracked.getDetails().put("netbackup.backup.time", artifact.backupTime);
-                        }
-                    } else if ("ablestack-veeam".equals(manifest.getProvider())) {
-                        tracked.getDetails().put("ablestack.veeam.restore.point.id", artifact.externalId);
-                    }
-                }
-                tracked.getDetails().put(ThirdPartyBackupManifest.DETAIL_KEY, manifest.toJson());
-                if (!backupDao.update(tracked.getId(), tracked)) {
-                    throw new CloudRuntimeException("Unable to persist artifact catalog reference");
-                }
+                saveArtifactCatalogReference(tracked, manifest, artifact, metadata);
                 if (StringUtils.isNotBlank(artifact.externalFailure)) { throw new CloudRuntimeException(artifact.externalFailure); }
                 saveCleanupState(tracked.getId(), "NONE", null);
                 if (!artifact.completed) {
@@ -2996,6 +2972,90 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
             lock.releaseRef();
         }
         return true;
+    }
+
+    /** Detail-only writes must not depend on an UPDATE of the unchanged backups row. */
+    void saveVolumeManifest(BackupVO backup, ThirdPartyBackupManifest manifest) {
+        String json = manifest.toJson();
+        backupDetailsDao.addDetail(backup.getId(), ThirdPartyBackupManifest.DETAIL_KEY, json, false);
+        // Publish only persisted evidence: a failed intent write must not be saved later as an accepted request.
+        backup.getDetails().put(ThirdPartyBackupManifest.DETAIL_KEY, json);
+    }
+
+    /** The old failure occurred before transfer.backup: do not query a phantom external submission. */
+    boolean discardLegacyUnsubmittedIntent(BackupVO backup, ThirdPartyBackupManifest manifest) {
+        if (!Backup.Status.Failed.equals(backup.getStatus())
+                || !"Unable to persist external artifact submission intent".equals(backup.getDetail("thirdparty.volume.failure"))) {
+            return false;
+        }
+        java.util.List<ThirdPartyBackupManifest.Artifact> pendingArtifacts = manifest.getOwnedArtifacts().stream()
+                .filter(artifact -> artifact.submissionPending).collect(java.util.stream.Collectors.toList());
+        if (pendingArtifacts.size() != 1) { return false; }
+        ThirdPartyBackupManifest.Artifact artifact = pendingArtifacts.get(0);
+        if (artifact.completed || artifact.externalTerminal || artifact.submittedAt <= 0
+                || StringUtils.isNotBlank(artifact.jobId) || StringUtils.isNotBlank(artifact.externalId)
+                || StringUtils.isNotBlank(artifact.backupTime) || StringUtils.isNotBlank(artifact.externalFailure)) {
+            return false;
+        }
+        artifact.submissionPending = false;
+        artifact.submittedAt = 0;
+        artifact.externalTerminal = true;
+        artifact.externalFailure = "External submission was never sent: legacy intent persistence failed";
+        if (!"COMPLETED".equals(backup.getDetail(ThirdPartyBackupManifest.JOB_CLEANUP_STATE_KEY))) {
+            backupDetailsDao.addDetail(backup.getId(), ThirdPartyBackupManifest.JOB_CLEANUP_STATE_KEY, "WAITING", false);
+            backup.getDetails().put(ThirdPartyBackupManifest.JOB_CLEANUP_STATE_KEY, "WAITING");
+        }
+        saveVolumeManifest(backup, manifest);
+        logger.info("Cleared an unsent legacy artifact intent for failed backup [{}] after Host termination", backup.getUuid());
+        return true;
+    }
+
+    ThirdPartyBackupManifest.Artifact recoverPendingArtifact(BackupVO backup, Transfer transfer,
+            ThirdPartyBackupManifest.Artifact artifact, boolean metadata) {
+        ThirdPartyBackupManifest.Artifact recovered;
+        try {
+            recovered = transfer.recover(artifact, metadata);
+        } catch (RuntimeException e) {
+            saveCleanupState(backup.getId(), "WAITING", "External artifact recovery is unconfirmed: " + StringUtils.defaultString(e.getMessage()));
+            logger.debug("External artifact recovery remains pending for backup [{}]: {}", backup.getUuid(), e.getMessage());
+            return null;
+        }
+        if (recovered != null && StringUtils.isNotBlank(recovered.jobId)) { return recovered; }
+        saveCleanupState(backup.getId(), "WAITING", "External submission is unconfirmed; waiting for an exact artifact job reference");
+        return null;
+    }
+
+    /** A metadata completion and its provider restore-point reference are one DB commit. */
+    void saveArtifactCatalogReference(BackupVO backup, ThirdPartyBackupManifest manifest,
+            ThirdPartyBackupManifest.Artifact artifact, boolean metadata) {
+        if (!metadata || !artifact.completed) {
+            saveVolumeManifest(backup, manifest);
+            return;
+        }
+        manifest.setComplete(true);
+        Map<String, String> details = new java.util.HashMap<>();
+        details.put(ThirdPartyBackupManifest.DETAIL_KEY, manifest.toJson());
+        String externalId = "ablestack-commvault".equals(manifest.getProvider()) ? artifact.path + "," + artifact.jobId : null;
+        if ("ablestack-netbackup".equals(manifest.getProvider())) {
+            details.put("netbackup.backup.id", artifact.externalId);
+            if (artifact.backupTime != null) { details.put("netbackup.backup.time", artifact.backupTime); }
+        } else if ("ablestack-veeam".equals(manifest.getProvider())) {
+            details.put("ablestack.veeam.restore.point.id", artifact.externalId);
+        }
+        com.cloud.utils.db.Transaction.execute((com.cloud.utils.db.TransactionCallback<Boolean>) status -> {
+            if (externalId != null) {
+                // Do not save the stale loaded detail map when updating the Commvault external ID.
+                BackupVO update = backupDao.createForUpdate(backup.getId());
+                update.setExternalId(externalId);
+                if (!backupDao.update(backup.getId(), update)) {
+                    throw new CloudRuntimeException("Unable to persist the Commvault metadata job reference");
+                }
+            }
+            details.forEach((key, value) -> backupDetailsDao.addDetail(backup.getId(), key, value, false));
+            return true;
+        });
+        if (externalId != null) { backup.setExternalId(externalId); }
+        backup.getDetails().putAll(details);
     }
 
     /** All transfers are confirmed; failures here retry finalization, never submit or delete artifacts. */
@@ -3076,6 +3136,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
                 saveCleanupState(backup.getId(), "WAITING", "Backup engine termination is not yet confirmed");
                 return;
             }
+            discardLegacyUnsubmittedIntent(backup, manifest);
             boolean sourceNotStarted = false;
             if (manifest.getOwnedArtifacts().stream().noneMatch(artifact -> artifact.submissionPending || artifact.completed
                     || artifact.submittedAt > 0 || artifact.size > 0

@@ -19,7 +19,8 @@
 <template>
   <div class="backup-progress">
     <div class="backup-progress-status">
-      <status :text="displayStatus" displayText :styles="{ 'min-width': '80px' }">
+      <status :text="displayStatus" displayText :styles="{ 'min-width': '80px' }"
+        tooltip-color="#333333" tooltip-overlay-class-name="backup-progress-tooltip-overlay">
         <template v-if="showJobDetails" #tooltip>
           <div class="backup-progress-tooltip">
             <div class="backup-progress-tooltip-title">{{ displayStatus }}</div>
@@ -100,7 +101,7 @@
           </div>
         </template>
       </status>
-      <a-tooltip v-if="showRestoreFailure" placement="top">
+      <a-tooltip v-if="showRestoreFailure" placement="top" color="#333333" overlay-class-name="backup-progress-tooltip-overlay">
         <template #title>
           <div class="backup-progress-tooltip">
             <div class="backup-progress-tooltip-title">{{ $t('label.restore.failed') }}</div>
@@ -484,7 +485,10 @@ export default {
 }
 
 .backup-progress-tooltip {
-  max-width: 360px;
+  max-width: 100%;
+  min-width: 0;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .backup-progress-tooltip-title {
@@ -493,16 +497,26 @@ export default {
 }
 
 .backup-progress-tooltip-row {
+  align-items: baseline;
   display: flex;
+  flex-wrap: wrap;
   gap: 6px;
+  min-width: 0;
 }
 
 .backup-progress-tooltip-row span:first-child {
   flex: 0 0 auto;
+  max-width: 100%;
 }
 
 .backup-progress-tooltip-row span:last-child {
+  flex: 1 1 0;
+  min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.backup-progress-tooltip-row span:only-child {
+  flex-basis: 100%;
 }
 
 .backup-progress-tooltip-error span:last-child {
@@ -515,4 +529,17 @@ export default {
   padding-top: 6px;
 }
 
+</style>
+
+<style>
+/* Tooltip overlays are rendered outside the table; target only backup overlays. */
+.ant-tooltip.backup-progress-tooltip-overlay {
+  max-width: min(420px, calc(100vw - 24px));
+}
+
+.backup-progress-tooltip-overlay .ant-tooltip-inner {
+  max-height: min(480px, calc(100vh - 48px));
+  overflow-y: auto;
+  white-space: normal;
+}
 </style>
