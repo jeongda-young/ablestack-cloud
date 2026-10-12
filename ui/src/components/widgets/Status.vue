@@ -42,6 +42,10 @@ export default {
       type: String,
       required: true
     },
+    displayLabel: {
+      type: String,
+      default: ''
+    },
     displayText: {
       type: Boolean,
       default: false
@@ -61,6 +65,7 @@ export default {
   },
   methods: {
     getText () {
+      if (this.displayText && this.displayLabel) return this.displayLabel
       if (this.displayText && this.text) {
         var state = this.text
         switch (state.toLowerCase()) {
@@ -75,6 +80,14 @@ export default {
             break
           case 'running':
             state = this.$t('state.running')
+            break
+          case 'scaling':
+          case 'scalingstoppedcluster':
+          case 'upgrading':
+          case 'importing':
+          case 'removingnodes':
+          case 'recovering':
+            state = this.$t('state.' + state.toLowerCase())
             break
           case 'stopped':
             state = this.$t('state.stopped')
@@ -138,6 +151,15 @@ export default {
             break
           case 'connecting':
             state = this.$t('state.connecting')
+            break
+          case 'uploaded':
+            state = this.$t('label.creation.source.state.Uploaded')
+            break
+          case 'uploading':
+            state = this.$t('label.creation.source.state.Uploading')
+            break
+          case 'uploaderror':
+            state = this.$t('label.creation.source.state.UploadError')
             break
           case 'ready':
             state = this.$t('state.ready')
@@ -345,6 +367,7 @@ export default {
       }
     },
     getTooltip (state) {
+      if (this.displayText && this.displayLabel) return this.displayLabel
       if (!(state && this.displayText)) {
         return ''
       }

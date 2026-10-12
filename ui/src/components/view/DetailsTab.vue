@@ -58,7 +58,9 @@
           <a-tooltip v-if="['volume', 'snapshot', 'template', 'iso'].includes($route.meta.name) && item === 'savingrate'"><template #title>{{ $t('message.savingrate') }}</template><QuestionCircleOutlined style="margin-left: 8px;"/></a-tooltip>
           <a-tooltip v-if="$route.meta.name === 'storagepool' && item === 'disksizeallocated'" :title="$t('message.storage.allocated.meaning')"><info-circle-outlined style="margin-left: 8px" /></a-tooltip>
           <br/>
-          <div v-if="$route.meta.name === 'vm' && item === 'vbmcport'">
+          <div v-if="$route.meta.name === 'kubernetes' && ['autoscalingenabled', 'csienabled'].includes(item)">{{ $t(dataResource[item] ? 'label.enabled' : 'label.disabled') }}</div>
+          <div v-else-if="$route.meta.name === 'kubernetes' && item === 'clustertype'">{{ $t(dataResource[item] === 'ExternalManaged' ? 'label.external.managed' : 'label.cloud.managed') }}</div>
+          <div v-else-if="$route.meta.name === 'vm' && item === 'vbmcport'">
             <span>{{ dataResource[item] === 'None' ? $t('label.vbmc.Unallocated') : dataResource[item] }}</span>
           </div>
           <div v-else-if="Array.isArray(dataResource[item]) && item === 'service'">
@@ -344,6 +346,7 @@
 </template>
 
 <script>
+import { creationVmDetails } from '@/utils/creationVmPresentation'
 import DedicateData from './DedicateData'
 import HostInfo from '@/views/infra/HostInfo'
 import VmwareData from './VmwareData'
@@ -540,7 +543,7 @@ export default {
     }
   },
   created () {
-    this.dataResource = this.resource
+    this.dataResource = creationVmDetails(this.resource, this.$t)
     this.dedicatedSectionActive = this.dedicatedRoutes.includes(this.$route.meta.name)
     if (['host'].includes(this.$route.meta.name)) {
       this.fetchLicenseInfo()
@@ -553,7 +556,7 @@ export default {
     resource: {
       deep: true,
       handler (newVal) {
-        this.dataResource = newVal
+        this.dataResource = creationVmDetails(newVal, this.$t)
         if ('account' in this.dataResource && this.dataResource.account.startsWith('PrjAcct-')) {
           this.projectname = this.dataResource.account.substring(this.dataResource.account.indexOf('-') + 1, this.dataResource.account.lastIndexOf('-'))
           this.dataResource.projectname = this.projectname

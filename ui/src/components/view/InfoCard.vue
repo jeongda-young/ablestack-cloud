@@ -277,14 +277,14 @@
                 </div>
               </div>
             </div>
-        <div class="resource-detail-item" v-if="resource.ostypename && resource.ostypeid">
+        <div class="resource-detail-item" v-if="executionOsName && resource.ostypeid">
           <div class="resource-detail-item__label">{{ $t('label.ostypename') }}</div>
           <div class="resource-detail-item__details">
             <span v-if="resource.icon && resource.icon.base64image || images.template || images.iso">
               <resource-icon :image="getImage(images.template || images.iso)" size="1x" style="margin-right: 5px"/>
             </span>
-            <os-logo v-else :osId="resource.ostypeid" :osName="resource.ostypename" size="lg" style="margin-left: -1px" />
-            <span style="margin-left: 8px">{{ resource.ostypename }}</span>
+            <os-logo v-else :osId="resource.ostypeid" :osName="executionOsName" size="lg" style="margin-left: -1px" />
+            <span style="margin-left: 8px">{{ executionOsName }}</span>
           </div>
         </div>
         <div class="resource-detail-item" v-if="resource.ipaddress">
@@ -785,12 +785,20 @@
               </span>
             </div>
             <div class="resource-detail-item" v-if="resource.templateid">
-              <div class="resource-detail-item__label">{{ resource.templateformat === 'ISO'? $t('label.vmiso.source') : $t('label.templatename') }}</div>
+              <div class="resource-detail-item__label">{{ resource.templateformat === 'ISO'? $t('label.vmiso.source') : $t($route.meta.name === 'kubernetes' ? 'label.cks.cluster.default.template' : 'label.templatename') }}</div>
               <div class="resource-detail-item__details">
                 <resource-icon v-if="images.template || images.guestoscategory" :image="images.template || images.guestoscategory" size="1x" style="margin-right: 5px"/>
                 <SaveOutlined v-else />
                 <router-link v-if="validLinks.template" :to="{ path: (resource.templateformat === 'ISO' ? '/iso/' : '/template/') + resource.templateid }">{{ resource.templatedisplaytext || resource.templatename || resource.templateid }} </router-link>
                 <span v-else>{{ resource.templatedisplaytext || resource.templatename || resource.templateid }}</span>
+              </div>
+            </div>
+            <div class="resource-detail-item" v-for="template in kubernetesNodeTemplates" :key="template.role">
+              <div class="resource-detail-item__label">{{ $t(template.label) }}</div>
+              <div class="resource-detail-item__details">
+                <SaveOutlined />
+                <router-link v-if="validLinks.template" :to="{ path: '/template/' + template.id }">{{ template.name || template.id }}</router-link>
+                <span v-else>{{ template.name || template.id }}</span>
               </div>
             </div>
             <div class="resource-detail-item" v-if="attachedIsoRows.length">
@@ -1157,6 +1165,7 @@
 </template>
 
 <script>
+import { creationVmOsName } from '@/utils/creationVmPresentation'
 import { attachedIsos } from '@/utils/vmIsoActions'
 import { getAPI, postAPI } from '@/api'
 import axios from 'axios'
@@ -1290,6 +1299,16 @@ export default {
     this.updateResourceAdditionalData()
   },
   computed: {
+    executionOsName () { return creationVmOsName(this.resource, this.$t) },
+    kubernetesNodeTemplates () {
+      if (this.$route.meta.name !== 'kubernetes') return []
+      return ['control', 'worker', 'etcd'].map(role => ({
+        role,
+        id: this.resource[role + 'templateid'],
+        name: this.resource[role + 'templatename'],
+        label: 'label.cks.cluster.' + role + '.nodes.templateid'
+      })).filter(template => template.id && (template.role !== 'etcd' || Number(this.resource.etcdnodes) > 0))
+    },
     attachedIsoRows () { return attachedIsos(this.resource) },
     tagsSupportingResourceTypes () {
       return ['UserVm', 'Template', 'ISO', 'Volume', 'RbdImages', 'Snapshot', 'Backup', 'Network',

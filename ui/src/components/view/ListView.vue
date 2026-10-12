@@ -88,11 +88,11 @@
               @onClick="changeProject(record)"
             />
           </span>
-          <span v-if="$showIcon() && !['vm', 'vnfapp'].includes($route.path.split('/')[1])" style="margin-right: 5px">
+          <span v-if="($route.name === 'kubernetes' || $showIcon()) && !['vm', 'vnfapp'].includes($route.path.split('/')[1])" style="margin-right: 5px">
             <resource-icon v-if="$showIcon() && record.icon && record.icon.base64image" :image="record.icon.base64image" size="2x"/>
             <os-logo v-else-if="record.ostypename || ['guestoscategory'].includes($route.path.split('/')[1])" :osName="record.ostypename || record.name" size="xl" />
             <render-icon v-else-if="typeof $route.meta.icon ==='string'" style="font-size: 16px;" :icon="$route.meta.icon"/>
-            <render-icon v-else style="font-size: 16px;" :svgIcon="$route.meta.icon" />
+            <render-icon v-else :style="{ fontSize: $route.name === 'kubernetes' ? '18px' : '16px' }" :svgIcon="$route.meta.icon" />
           </span>
           <span
             v-else
@@ -495,7 +495,7 @@
       <template v-if="column.key === 'state'">
         <span class="list-state-with-flatten">
           <status v-if="$route.path.startsWith('/host')" :text="getHostState(record)" displayText />
-          <status v-else :text="text ? text : ''" displayText />
+          <status v-else :text="text ? text : ''" :displayLabel="column.stateLabel ? column.stateLabel(record) : ''" displayText />
           <clone-flatten-control :record="record" @refresh="$emit('refresh')" />
         </span>
       </template>
@@ -592,7 +592,8 @@
         <a-tag v-else-if="text" color="success">{{ text }}</a-tag>
       </template>
       <template v-if="column.key === 'resources'">
-        <div v-if="hasValue(record.cpunumber) || hasValue(record.memory)" class="resource-summary">
+        <span v-if="$route.meta.name === 'kubernetes' && record.clustertype === 'ExternalManaged'">N/A</span>
+        <div v-else-if="hasValue(record.cpunumber) || hasValue(record.memory)" class="resource-summary">
           <span v-if="hasValue(record.cpunumber)" class="resource-item resource-item--cpu">
             <a-tooltip>
               <template #title>{{ $t('label.cpu') }}</template>
@@ -872,8 +873,9 @@
       <template v-if="column.key === 'loadbalancerrule'">
         <span> {{ record.loadbalancerrule }} </span>
       </template>
+      <template v-if="$route.meta.name === 'kubernetes' && column.key === 'clustertype'">{{ $t(record.clustertype === 'ExternalManaged' ? 'label.external.managed' : 'label.cloud.managed') }}</template>
       <template v-if="column.key === 'autoscalingenabled'">
-        <status :text="record.autoscalingenabled ? 'Enabled' : 'Disabled'" displayText/>
+        <a-tag :color="record.autoscalingenabled ? 'blue' : undefined">{{ $t(record.autoscalingenabled ? 'label.cks.cluster.autoscaling.enabled' : 'label.cks.cluster.autoscaling.disabled') }}</a-tag>
       </template>
       <template v-if="column.key === 'current'">
         <span v-if="$route.name === 'vmsnapshot'">{{ $t(record.current ? 'label.vmsnapshot.current.yes' : 'label.vmsnapshot.current.no') }}</span>
@@ -1408,7 +1410,7 @@ export default {
   methods: {
     handleTableChange (pagination, filters, sorter) { this.$emit('table-change', pagination, filters, sorter) },
     snapshotRowEvents (record) {
-      if (this.$route.name !== 'vmsnapshot') return {}
+      if (!['vmsnapshot', 'kubernetes', 'kubernetesiso'].includes(this.$route.name)) return {}
       return {
         tabindex: 0,
         onKeydown: event => {
