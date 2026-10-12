@@ -138,6 +138,56 @@ public class ThirdPartyBackupArtifactPersistenceTest {
     }
 
     @Test
+    public void unconfirmedHostStatusIsRetriedWithoutFailingOrCancellingBackup() throws Exception {
+        for (String provider : Arrays.asList("ablestack-commvault", "ablestack-netbackup", "ablestack-veeam")) {
+            setup();
+            prepare(provider);
+            String reservation = persisted.get(ThirdPartyBackupAdmission.BACKUP_KEY);
+            String plannedManifest = persisted.get(ThirdPartyBackupManifest.DETAIL_KEY);
+            AblestackBackupJobStatusCommand command = new AblestackBackupJobStatusCommand(JOB_ID);
+            BackupAnswer running = new BackupAnswer(command, true, "Backup is running");
+            running.setState("RUNNING");
+            when(agentManager.send(eq(HOST_ID), any(AblestackBackupJobStatusCommand.class))).thenReturn(
+                    new Answer(command, false, "Host status temporarily unavailable"),
+                    new Answer(command, true, "Unexpected generic response"),
+                    null,
+                    new BackupAnswer(command, false, "Status query failed"),
+                    running);
+            ThirdPartyBackupVolumeService.Transfer transfer = mock(ThirdPartyBackupVolumeService.Transfer.class);
+            when(transfer.backup(any(), eq(false))).thenAnswer(invocation -> {
+                ThirdPartyBackupManifest.Artifact accepted = invocation.getArgument(0);
+                accepted.jobId = "123";
+                accepted.externalId = "point-123";
+                accepted.completed = true;
+                return accepted;
+            });
+            GlobalLock lock = mock(GlobalLock.class);
+            when(lock.lock(Mockito.anyInt())).thenReturn(true);
+            try (MockedStatic<GlobalLock> locks = Mockito.mockStatic(GlobalLock.class)) {
+                locks.when(() -> GlobalLock.getInternLock(anyString())).thenReturn(lock);
+                for (int attempt = 0; attempt < 4; attempt++) {
+                    assertTrue(service.reconcile(backup, host, transfer));
+                    assertEquals(plannedManifest, persisted.get(ThirdPartyBackupManifest.DETAIL_KEY));
+                    assertEquals(reservation, persisted.get(ThirdPartyBackupAdmission.BACKUP_KEY));
+                    verify(backup, never()).setStatus(any());
+                    verify(backupDao, never()).update(anyLong(), any(BackupVO.class));
+                    verify(transfer, never()).failed(any());
+                    verify(transfer, never()).backup(any(), Mockito.anyBoolean());
+                    verify(agentManager, never()).send(eq(HOST_ID), any(AblestackVolumeStagingCommand.class));
+                }
+                assertTrue(service.reconcile(backup, host, transfer));
+            }
+            verify(transfer).backup(any(), eq(false));
+            verify(backup, never()).setStatus(any());
+            verify(transfer, never()).failed(any());
+            verify(agentManager, never()).send(eq(HOST_ID), Mockito.<Command>argThat(sent -> sent instanceof AblestackVolumeStagingCommand
+                    && "CANCEL".equals(((AblestackVolumeStagingCommand) sent).getAction())));
+            assertTrue(ThirdPartyBackupManifest.fromJson(persisted.get(ThirdPartyBackupManifest.DETAIL_KEY))
+                    .getCurrentArtifacts().get(0).completed);
+        }
+    }
+
+    @Test
     public void unchangedBackupRowDoesNotBlockIntentJobIdOrAcknowledgment() throws Exception {
         for (String provider : Arrays.asList("ablestack-commvault", "ablestack-netbackup", "ablestack-veeam")) {
             setup();

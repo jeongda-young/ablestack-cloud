@@ -37,6 +37,7 @@ import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Instant;
@@ -230,7 +231,8 @@ final class LibvirtAblestackAsyncBackupRunner {
     static BackupAnswer getJobStatus(final Command command, final String jobId, final Long eventsOffset, final Integer eventsLimit,
             final Logger logger) {
         final String state = getJobState(jobId, logger);
-        final Properties properties = ensureCommonJobMetadata(jobId, refreshLiveProgress(jobId, readJob(jobId, logger), state, logger), logger);
+        // Progress capability checks also need the identity recovered from the status request.
+        final Properties properties = refreshLiveProgress(jobId, ensureCommonJobMetadata(jobId, readJob(jobId, logger), logger), state, logger);
         String details = properties != null ? properties.getProperty("details", state) : state;
         if (STATE_FAILED.equals(state) && details.startsWith("Detached backup job exited with code ")) {
             final Integer exitCode = readExitCode(jobId, logger);
@@ -693,9 +695,7 @@ final class LibvirtAblestackAsyncBackupRunner {
             if (details != null) {
                 properties.setProperty("details", details);
             }
-            try (OutputStream outputStream = Files.newOutputStream(getJobPath(jobId), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
-                properties.store(outputStream, "ABLESTACK backup job");
-            }
+            writeJobProperties(getJobPath(jobId), properties);
             if (!state.equals(previousState)) {
                 appendJobEvent(logger, jobId, provider, vmName, backupPath, backupType, state, details, properties);
             }
@@ -1064,7 +1064,8 @@ final class LibvirtAblestackAsyncBackupRunner {
     }
 
     private static boolean isRbdBackup(final Properties properties) {
-        return Files.exists(getJobDirectory(properties.getProperty("jobId")).resolve(RBD_PROGRESS_FILE));
+        final String jobId = properties.getProperty("jobId");
+        return !safeValue(jobId).isBlank() && Files.exists(getJobDirectory(jobId).resolve(RBD_PROGRESS_FILE));
     }
 
     private static String buildBlockJobBandwidthCommand(final String vmName, final int virshLimitMiBps) {
@@ -1082,10 +1083,23 @@ final class LibvirtAblestackAsyncBackupRunner {
     }
 
     private static void storeJobProperties(final Logger logger, final String jobId, final Properties properties) {
-        try (OutputStream outputStream = Files.newOutputStream(getJobPath(jobId), StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)) {
-            properties.store(outputStream, "ABLESTACK backup job");
+        try {
+            writeJobProperties(getJobPath(jobId), properties);
         } catch (IOException e) {
             logger.warn("Failed to store ABLESTACK backup job properties for job [{}]", jobId, e);
+        }
+    }
+
+    static void writeJobProperties(final Path path, final Properties properties) throws IOException {
+        // Agent polls and the detached worker must never read a truncated status file.
+        final Path temporary = Files.createTempFile(path.getParent(), path.getFileName().toString() + ".", ".tmp");
+        try {
+            try (OutputStream outputStream = Files.newOutputStream(temporary)) {
+                properties.store(outputStream, "ABLESTACK backup job");
+            }
+            Files.move(temporary, path, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING);
+        } finally {
+            Files.deleteIfExists(temporary);
         }
     }
 

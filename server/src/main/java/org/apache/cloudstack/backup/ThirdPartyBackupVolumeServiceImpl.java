@@ -2770,10 +2770,15 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
                         tracked.getDetail(ThirdPartyBackupManifest.FINALIZATION_DETAILS_KEY),
                         "Waiting for Host finalization and logical backup completion"));
             }
-            BackupAnswer status = (BackupAnswer) agentManager.send(host.getId(), new AblestackBackupJobStatusCommand(tracked.getUuid()));
-            if (status == null || !status.getResult()) {
+            Answer statusAnswer = agentManager.send(host.getId(), new AblestackBackupJobStatusCommand(tracked.getUuid()));
+            if (!(statusAnswer instanceof BackupAnswer) || !statusAnswer.getResult()) {
+                // A failed status query does not prove that the backup engine failed.
+                logger.warn("Host backup status is unconfirmed for backup [{}], host [{}]: responseType=[{}], details=[{}]; reconciliation will retry",
+                        tracked.getUuid(), host.getId(), statusAnswer == null ? "none" : statusAnswer.getClass().getSimpleName(),
+                        statusAnswer == null ? "No response" : StringUtils.defaultString(statusAnswer.getDetails()));
                 return true;
             }
+            BackupAnswer status = (BackupAnswer) statusAnswer;
             if (ThirdPartyBackupManifest.hasCompletedTransfers(tracked)
                     && java.util.Set.of("COMPLETED", "FAILED", "INTERRUPTED", "CANCELED").contains(StringUtils.defaultString(status.getState()))) {
                 // Engine exit only proves termination. Exact persisted catalog references

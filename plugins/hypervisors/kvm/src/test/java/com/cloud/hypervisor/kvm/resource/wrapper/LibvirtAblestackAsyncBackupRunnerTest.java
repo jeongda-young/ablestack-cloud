@@ -18,16 +18,69 @@ package com.cloud.hypervisor.kvm.resource.wrapper;
 
 import com.cloud.utils.Pair;
 import com.google.gson.Gson;
+import java.io.IOException;
+import java.io.InputStream;
+import java.io.OutputStream;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Properties;
 import java.util.Set;
 import org.apache.cloudstack.backup.AblestackVeeamTakeBackupCommand;
 import org.junit.Test;
+import org.junit.Rule;
+import org.junit.rules.TemporaryFolder;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.fail;
 
 public class LibvirtAblestackAsyncBackupRunnerTest {
+    @Rule
+    public TemporaryFolder temporaryFolder = new TemporaryFolder();
+
+    @Test
+    public void missingJobIdDoesNotFailProgressCapabilityChecks() {
+        Properties properties = volumeJob("ablestack-commvault", "QCOW2_BACKUP");
+        properties.remove("jobId");
+        assertTrue(LibvirtAblestackAsyncBackupRunner.resolveCapabilities(properties).contains("progress"));
+    }
+
+    @Test
+    public void statusReadersRetainCompleteRecordDuringInterruptedWrite() throws Exception {
+        Path path = temporaryFolder.getRoot().toPath().resolve("job.properties");
+        Properties initial = volumeJob("ablestack-commvault", "QCOW2_BACKUP");
+        initial.setProperty("state", "RUNNING");
+        LibvirtAblestackAsyncBackupRunner.writeJobProperties(path, initial);
+        String previous = Files.readString(path);
+        Properties interrupted = new Properties() {
+            @Override
+            public void store(OutputStream output, String comments) throws IOException {
+                output.write("state=FAILED\n".getBytes(StandardCharsets.UTF_8));
+                output.flush();
+                assertEquals(previous, Files.readString(path));
+                throw new IOException("Interrupted status write");
+            }
+        };
+        try {
+            LibvirtAblestackAsyncBackupRunner.writeJobProperties(path, interrupted);
+            fail("An interrupted write must not replace the status record");
+        } catch (IOException expected) {
+            assertEquals("Interrupted status write", expected.getMessage());
+        }
+        assertEquals(previous, Files.readString(path));
+        assertEquals(1, temporaryFolder.getRoot().list().length);
+        initial.setProperty("state", "COMPLETED");
+        LibvirtAblestackAsyncBackupRunner.writeJobProperties(path, initial);
+        Properties completed = new Properties();
+        try (InputStream input = Files.newInputStream(path)) {
+            completed.load(input);
+        }
+        assertEquals(initial.getProperty("jobId"), completed.getProperty("jobId"));
+        assertEquals("COMPLETED", completed.getProperty("state"));
+    }
+
     @Test
     public void qcow2VolumeControlsAreCommonToAllProviders() {
         for (String provider : Arrays.asList("ablestack-commvault", "ablestack-netbackup", "ablestack-veeam")) {
