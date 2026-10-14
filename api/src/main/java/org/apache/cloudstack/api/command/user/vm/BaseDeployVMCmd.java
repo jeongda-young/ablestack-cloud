@@ -157,7 +157,8 @@ public abstract class BaseDeployVMCmd extends BaseAsyncCreateCustomIdCmd impleme
                     " Example: datadisksdetails[0].diskofferingid=a2a73a84-19db-4852-8930-dfddef053341&datadisksdetails[0].size=10&datadisksdetails[0].miniops=100&datadisksdetails[0].maxiops=200&datadisksdetails[0].kmskeyid=<uuid>")
     private Map dataDisksDetails;
 
-    @Parameter(name = ApiConstants.GROUP, type = CommandType.STRING, description = "an optional group for the virtual machine")
+    @Parameter(name = ApiConstants.GROUP, type = CommandType.STRING, length = ApiConstants.INSTANCE_GROUP_NAME_INPUT_MAX_LENGTH,
+            description = "An optional group for the virtual machine. New names are trimmed and must contain 1 to 255 characters.")
     private String group;
 
     @Parameter(name = ApiConstants.HYPERVISOR, type = CommandType.STRING, description = "the hypervisor on which to deploy the virtual machine. "

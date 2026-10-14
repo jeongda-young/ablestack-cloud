@@ -177,3 +177,16 @@ test('allowed favicon values are applied and only one timer is owned', async () 
   UserMenu.beforeUnmount.call(vm)
   expect(jest.getTimerCount()).toBe(0)
 })
+
+test('refresh with a valid session and empty API cache discovers permissions even without the in-memory login flag', async () => {
+  store.getters.loginFlag = false
+  getAPI.mockImplementation(reply(baseApis))
+  await expect(user.actions.GetInfo(context())).resolves.toHaveProperty('listUsers')
+  expect(getAPI).toHaveBeenCalledWith('listApis')
+}, 1500)
+
+test('empty-cache refresh rejects an expired session instead of remaining pending', async () => {
+  store.getters.loginFlag = false
+  getAPI.mockImplementation(name => name === 'listApis' ? Promise.reject(new Error('session expired')) : reply(baseApis)(name))
+  await expect(user.actions.GetInfo(context())).rejects.toThrow('session expired')
+}, 1500)

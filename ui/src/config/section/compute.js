@@ -1155,12 +1155,13 @@ export default {
       permission: ['listAutoScaleVmGroups'],
       searchFilters: ['name', 'zoneid', 'domainid', 'account'],
       columns: (store) => {
-        var fields = ['name', 'state', 'associatednetworkname', 'publicip', 'publicport', 'privateport', 'minmembers', 'maxmembers', 'availablevirtualmachinecount', 'account']
+        var fields = ['name', 'state', { field: 'availablevirtualmachinecount', customTitle: 'autoscale.members.range' }, { field: 'associatednetworkname', customTitle: 'autoscale.network.lb' }, { field: 'lastcheckedat', customTitle: 'autoscale.last.checked' }, { field: 'account', customTitle: 'autoscale.owner' }]
         if (store.listAllProjects) {
           fields.push('project')
         }
         return fields
       },
+      optionalColumns: ['domain', { field: 'infrastructurenetworkname', customTitle: 'networkname', infrastructurenetworkname: record => record.associatednetworkname || '—' }, 'lbprovider', 'interval', 'created', 'zonename'],
       details: ['name', 'id', 'account', 'domain', 'associatednetworkname', 'associatednetworkid', 'lbruleid', 'lbprovider', 'publicip', 'publicipid', 'publicport', 'privateport', 'minmembers', 'maxmembers', 'availablevirtualmachinecount', 'interval', 'state', 'created'],
       related: [{
         name: 'vm',
@@ -1171,6 +1172,10 @@ export default {
         {
           name: 'details',
           component: shallowRef(defineAsyncComponent(() => import('@/components/view/DetailsTab.vue')))
+        },
+        {
+          name: 'autoscale.operations',
+          component: shallowRef(defineAsyncComponent(() => import('@/views/compute/AutoScaleOperations.vue')))
         },
         {
           name: 'autoscale.vm.profile',
@@ -1216,6 +1221,8 @@ export default {
         },
         {
           api: 'enableAutoScaleVmGroup',
+          disabled: (record) => !!record.operationinprogress,
+          disabledMessage: (record) => record.operationinprogress ? 'message.autoscale.operation.wait' : '',
           icon: 'play-circle-outlined',
           label: 'label.enable.autoscale.vmgroup',
           message: 'message.confirm.enable.autoscale.vmgroup',
@@ -1238,6 +1245,8 @@ export default {
         },
         {
           api: 'updateAutoScaleVmGroup',
+          disabled: (record) => !!record.operationinprogress,
+          disabledMessage: (record) => record.operationinprogress ? 'message.autoscale.operation.wait' : '',
           icon: 'edit-outlined',
           label: 'label.update.autoscale.vmgroup',
           dataView: true,
@@ -1253,6 +1262,8 @@ export default {
         },
         {
           api: 'deleteAutoScaleVmGroup',
+          disabled: (record) => !!record.operationinprogress,
+          disabledMessage: (record) => record.operationinprogress ? 'message.autoscale.operation.wait' : '',
           icon: 'delete-outlined',
           label: 'label.delete.autoscale.vmgroup',
           message: 'message.action.delete.autoscale.vmgroup',
@@ -1271,31 +1282,25 @@ export default {
       docHelp: 'adminguide/virtual_machines.html#changing-the-vm-name-os-or-group',
       resourceType: 'VMInstanceGroup',
       permission: ['listInstanceGroups'],
-      searchFilters: ['name', 'zoneid', 'domainid', 'account'],
+      searchFilters: ['name', 'domainid', 'account'],
       columns: (store) => {
-        var fields = ['name', 'account']
-        if (store.listAllProjects) {
+        var fields = ['name', 'virtualmachinecount', 'virtualmachinestates', store.project?.id ? 'project' : 'account']
+        if (store.listAllProjects && !fields.includes('project')) {
           fields.push('project')
         }
         fields.push('domain')
         return fields
       },
-      details: ['name', 'id', 'account', 'domain', 'created'],
+      details: ['name', 'id', 'virtualmachinecount', 'virtualmachinestates', 'account', 'domain', 'project', 'created'],
       related: [{
         name: 'vm',
         title: 'label.instances',
         param: 'groupid'
       }],
-      tabs: [
-        {
-          name: 'details',
-          component: shallowRef(defineAsyncComponent(() => import('@/components/view/DetailsTab.vue')))
-        },
-        {
-          name: 'comments',
-          component: shallowRef(defineAsyncComponent(() => import('@/components/view/AnnotationsTab.vue')))
-        }
-      ],
+      tabs: [{
+        name: 'instancegroup',
+        component: shallowRef(defineAsyncComponent(() => import('@/views/compute/InstanceGroupTab.vue')))
+      }],
       actions: [
         {
           api: 'createInstanceGroup',

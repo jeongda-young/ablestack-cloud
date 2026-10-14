@@ -384,7 +384,7 @@ public class LibvirtComputingResourceTest {
         operationGuard.when(() -> KvmVmOperationGuard.guestCommand(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyString(), org.mockito.ArgumentMatchers.anyInt()))
                 .thenAnswer(call -> ((org.libvirt.Domain) call.getArgument(0)).qemuAgentCommand(call.getArgument(1), call.getArgument(2), 0));
         boundedStats = org.mockito.Mockito.mockStatic(KvmBoundedStats.class);
-        boundedStats.when(() -> KvmBoundedStats.freeMemory(org.mockito.ArgumentMatchers.any()))
+        boundedStats.when(() -> KvmBoundedStats.freeMemory(org.mockito.ArgumentMatchers.any(), org.mockito.ArgumentMatchers.anyLong(), org.mockito.ArgumentMatchers.anyLong()))
                 .thenAnswer(call -> libvirtComputingResourceSpy.getMemoryFreeInKBs(call.getArgument(0)));
         boundedStats.when(() -> KvmBoundedStats.xml(org.mockito.ArgumentMatchers.any())).thenAnswer(call -> {
             org.libvirt.Domain domain = call.getArgument(0);

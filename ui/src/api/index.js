@@ -76,7 +76,7 @@ export function appendApiData (params, data = {}) {
   return params
 }
 
-export function postAPI (command, data = {}, { preserveOnFailure = false } = {}) {
+export function postAPI (command, data = {}, { preserveOnFailure = false, timeout, backgroundJob = false } = {}) {
   const params = new URLSearchParams()
   params.append('command', command)
   params.append('response', 'json')
@@ -89,6 +89,8 @@ export function postAPI (command, data = {}, { preserveOnFailure = false } = {})
   return axios({
     url: '/',
     method: 'POST',
+    ...(timeout ? { timeout } : {}),
+    ...(backgroundJob ? { backgroundJob: true } : {}),
     ...((preserveOnFailure || ['createVMSnapshot', 'revertToVMSnapshot', 'deleteVMSnapshot', 'createSnapshotFromVMSnapshot'].includes(command) ||
       (['deployVirtualMachine', 'deployVirtualMachineForVolume'].includes(command) && (data.volumeid || data.snapshotid)))
       ? { preserveOnFailure: true } : {}),

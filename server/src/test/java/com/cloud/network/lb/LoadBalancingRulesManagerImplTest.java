@@ -443,4 +443,19 @@ public class LoadBalancingRulesManagerImplTest{
         Nic nicInLb = lbr.getVmNicInLoadBalancer(userVm, loadBalancer, loadBalancerNetwork, vmIdNetworkIdMap, owner);
         Assert.assertEquals(nic, nicInLb);
     }
+
+    @Test public void testAssignFalseApplyIsNotReportedAsSuccess() throws Exception {
+        com.cloud.network.dao.LoadBalancerVMMapDao maps = Mockito.mock(com.cloud.network.dao.LoadBalancerVMMapDao.class);
+        com.cloud.network.as.dao.AutoScaleVmGroupDao groups = Mockito.mock(com.cloud.network.as.dao.AutoScaleVmGroupDao.class);
+        ReflectionTestUtils.setField(lbr, "_lb2VmMapDao", maps);
+        ReflectionTestUtils.setField(lbr, "_autoScaleVmGroupDao", groups);
+        when(_lbDao.findById(lbRuleId)).thenReturn(loadBalancerMock);
+        Mockito.doReturn(false).when(lbr).applyLoadBalancerConfig(lbRuleId);
+        try (org.mockito.MockedStatic<org.apache.cloudstack.context.CallContext> current = Mockito.mockStatic(org.apache.cloudstack.context.CallContext.class)) {
+            org.apache.cloudstack.context.CallContext context = Mockito.mock(org.apache.cloudstack.context.CallContext.class);
+            current.when(org.apache.cloudstack.context.CallContext::current).thenReturn(context);
+            Assert.assertThrows(CloudRuntimeException.class, () -> lbr.assignToLoadBalancer(lbRuleId, Collections.emptyList(), new HashMap<>(), null, true));
+            Mockito.verify(lbr).applyLoadBalancerConfig(lbRuleId);
+        }
+    }
 }

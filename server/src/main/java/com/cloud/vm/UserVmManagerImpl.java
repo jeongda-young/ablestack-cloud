@@ -636,6 +636,9 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
     private InstanceGroupDao _vmGroupDao;
     @Inject
     private InstanceGroupVMMapDao _groupVMMapDao;
+
+    @Inject
+    private VmInstanceGroupAssignment vmInstanceGroupAssignment;
     @Inject
     private VirtualMachineManager _itMgr;
     @Inject
@@ -2952,8 +2955,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
 
             backupManager.checkAndRemoveBackupOfferingBeforeExpunge(vm);
 
-            autoScaleManager.removeVmFromVmGroup(vm.getId());
-
+            // Keep autoscale membership until expunge and resource cleanup succeed.
             // VM expunge 시 할당된 모든 디바이스 자동 해제
             try {
                 _managementServer.deallocateAllDevicesOnVmDestroy(vm.getId());
@@ -2992,6 +2994,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
                 vmGuestNetworkStateDao.removeByVmId(vm.getId());
             }
 
+            autoScaleManager.removeVmFromVmGroup(vm.getId());
             return true;
 
         } catch (ResourceUnavailableException e) {
@@ -3415,9 +3418,20 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
     @ActionEvent(eventType = EVENT_VM_UPDATE, eventDescription = "updating Vm")
     public UserVm updateVirtualMachine(UpdateVMCmd cmd) throws ResourceUnavailableException, InsufficientCapacityException {
         validateInputsAndPermissionForUpdateVirtualMachineCommand(cmd);
+        cmd.validateGroupUpdateParameters();
+        if (cmd.hasGroupUpdate()) {
+            vmInstanceGroupAssignment.validate(cmd.getId(), cmd.getGroupId(), cmd.getGroup(), cmd.isClearGroup());
+        }
+        if (cmd.isGroupOnlyUpdate()) {
+            UserVmVO vm = _vmDao.findById(cmd.getId());
+            if (UserVmManager.SHAREDFSVM.equals(vm.getUserVmType()) || vm.getState() == State.Error || vm.getState() == State.Expunging) {
+                throw new InvalidParameterValueException("The VM is not available for instance group assignment.");
+            }
+            vmInstanceGroupAssignment.apply(cmd.getId(), cmd.getGroupId(), cmd.getGroup(), cmd.isClearGroup());
+            return _vmDao.findById(cmd.getId());
+        }
 
         String displayName = cmd.getDisplayName();
-        String group = cmd.getGroup();
         Boolean ha = cmd.getHaEnable();
         Boolean isDisplayVm = cmd.getDisplayVm();
         Long id = cmd.getId();
@@ -3565,11 +3579,15 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
             applyLeaseOnUpdateInstance(vmInstance, cmd.getLeaseDuration(), cmd.getLeaseExpiryAction());
         }
 
-        return updateVirtualMachine(id, displayName, group, ha, isDisplayVm,
+        UserVm result = updateVirtualMachine(id, displayName, null, ha, isDisplayVm,
                 cmd.getDeleteProtection(), osTypeId, userData,
                 userDataId, userDataDetails, isDynamicallyScalable, cmd.getHttpMethod(),
                 cmd.getCustomId(), hostName, cmd.getInstanceName(), securityGroupIdList,
                 cmd.getDhcpOptionsMap());
+        if (cmd.hasGroupUpdate()) {
+            vmInstanceGroupAssignment.apply(id, cmd.getGroupId(), cmd.getGroup(), cmd.isClearGroup());
+        }
+        return result;
     }
 
     private boolean isExtraConfig(String detailName) {
@@ -3742,10 +3760,6 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
             osTypeId = vm.getGuestOSId();
         }
 
-        if (group != null) {
-            addInstanceToGroup(id, group);
-        }
-
         if (isDynamicallyScalable == null) {
             isDynamicallyScalable = vm.isDynamicallyScalable();
         } else {
@@ -3811,6 +3825,9 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
             updateDns(vm, hostName);
         }
 
+        if (group != null) {
+            addInstanceToGroup(id, group);
+        }
         return _vmDao.findById(id);
     }
 
@@ -3993,6 +4010,8 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         }
 
         _accountMgr.checkAccess(caller, null, true, vmInstance);
+
+        autoScaleManager.checkIfVmActionAllowed(vmId);
 
         checkIfHostOfVMIsInPrepareForMaintenanceState(vmInstance, "Reboot");
 
@@ -4225,41 +4244,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         Account owner = _accountMgr.finalizeOwner(caller, accountName, domainId, projectId);
         long accountId = owner.getId();
 
-        // Check if name is already in use by this account
-        boolean isNameInUse = _vmGroupDao.isNameInUse(accountId, groupName);
-
-        if (isNameInUse) {
-            throw new InvalidParameterValueException(String.format("Unable to create Instance group, a group with name %s already exists for Account %s", groupName, owner));
-        }
-
-        return createVmGroup(groupName, accountId);
-    }
-
-    @DB
-    private InstanceGroupVO createVmGroup(String groupName, long accountId) {
-        Account account = null;
-        try {
-            account = _accountDao.acquireInLockTable(accountId); // to ensure
-            // duplicate
-            // vm group
-            // names are
-            // not
-            // created.
-            if (account == null) {
-                logger.warn("Failed to acquire lock on Account");
-                return null;
-            }
-            InstanceGroupVO group = _vmGroupDao.findByAccountAndName(accountId, groupName);
-            if (group == null) {
-                group = new InstanceGroupVO(groupName, accountId);
-                group = _vmGroupDao.persist(group);
-            }
-            return group;
-        } finally {
-            if (account != null) {
-                _accountDao.releaseFromLockTable(accountId);
-            }
-        }
+        return VmInstanceGroupNames.create(_vmGroupDao, _accountDao, accountId, groupName);
     }
 
     @Override
@@ -4280,76 +4265,28 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
 
     @Override
     public boolean deleteVmGroup(long groupId) {
-        InstanceGroupVO group = _vmGroupDao.findById(groupId);
-        annotationDao.removeByEntityType(AnnotationService.EntityType.INSTANCE_GROUP.name(), group.getUuid());
-        // delete all the mappings from group_vm_map table
-        List<InstanceGroupVMMapVO> groupVmMaps = _groupVMMapDao.listByGroupId(groupId);
-        for (InstanceGroupVMMapVO groupMap : groupVmMaps) {
+        return Transaction.execute((TransactionCallback<Boolean>) status -> {
+            InstanceGroupVO group = _vmGroupDao.lockRow(groupId, true);
+            if (group == null || group.getRemoved() != null) {
+                throw new InvalidParameterValueException("Unable to find an active instance group.");
+            }
+            annotationDao.removeByEntityType(AnnotationService.EntityType.INSTANCE_GROUP.name(), group.getUuid());
             SearchCriteria<InstanceGroupVMMapVO> sc = _groupVMMapDao.createSearchCriteria();
-            sc.addAnd("instanceId", SearchCriteria.Op.EQ, groupMap.getInstanceId());
+            // A concurrent move must not cause deletion of the VM's new group mapping.
+            sc.addAnd("groupId", SearchCriteria.Op.EQ, groupId);
             _groupVMMapDao.expunge(sc);
-        }
-
-        if (_vmGroupDao.remove(groupId)) {
+            if (!_vmGroupDao.remove(groupId)) {
+                throw new CloudRuntimeException("Unable to remove the instance group.");
+            }
             return true;
-        } else {
-            return false;
-        }
+        });
     }
 
     @Override
     @DB
     public boolean addInstanceToGroup(final long userVmId, String groupName) {
-        UserVmVO vm = _vmDao.findById(userVmId);
-
-        InstanceGroupVO group = _vmGroupDao.findByAccountAndName(vm.getAccountId(), groupName);
-        // Create vm group if the group doesn't exist for this account
-        if (group == null) {
-            group = createVmGroup(groupName, vm.getAccountId());
-        }
-
-        if (group != null) {
-            UserVm userVm = _vmDao.acquireInLockTable(userVmId);
-            if (userVm == null) {
-                logger.warn("Failed to acquire lock on user vm {} with id {}", vm, userVmId);
-            }
-            try {
-                final InstanceGroupVO groupFinal = group;
-                Transaction.execute(new TransactionCallbackNoReturn() {
-                    @Override
-                    public void doInTransactionWithoutResult(TransactionStatus status) {
-                        // don't let the group be deleted when we are assigning vm to
-                        // it.
-                        InstanceGroupVO ngrpLock = _vmGroupDao.lockRow(groupFinal.getId(), false);
-                        if (ngrpLock == null) {
-                            logger.warn("Failed to acquire lock on Instance group {}", groupFinal);
-                            throw new CloudRuntimeException(String.format("Failed to acquire lock on Instance group %s", groupFinal));
-                        }
-
-                        // Currently don't allow to assign a vm to more than one group
-                        if (_groupVMMapDao.listByInstanceId(userVmId) != null) {
-                            // Delete all mappings from group_vm_map table
-                            List<InstanceGroupVMMapVO> groupVmMaps = _groupVMMapDao.listByInstanceId(userVmId);
-                            for (InstanceGroupVMMapVO groupMap : groupVmMaps) {
-                                SearchCriteria<InstanceGroupVMMapVO> sc = _groupVMMapDao.createSearchCriteria();
-                                sc.addAnd("instanceId", SearchCriteria.Op.EQ, groupMap.getInstanceId());
-                                _groupVMMapDao.expunge(sc);
-                            }
-                        }
-                        InstanceGroupVMMapVO groupVmMapVO = new InstanceGroupVMMapVO(groupFinal.getId(), userVmId);
-                        _groupVMMapDao.persist(groupVmMapVO);
-
-                    }
-                });
-
-                return true;
-            } finally {
-                if (userVm != null) {
-                    _vmDao.releaseFromLockTable(userVmId);
-                }
-            }
-        }
-        return false;
+        vmInstanceGroupAssignment.apply(userVmId, null, groupName, false);
+        return true;
     }
 
     @Override
@@ -4976,6 +4913,10 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         Long rootDiskOfferingId, Long rootDiskKmsKeyId, long volumesSize, long additionalDiskSize, Volume volume, Snapshot snapshot) throws ResourceAllocationException {
 
         List<Reserver> checkedReservations = new ArrayList<>();
+
+        if (group != null) {
+            VmInstanceGroupNames.forExisting(group, _vmGroupDao.findByAccountAndName(owner.getId(), group));
+        }
 
 
         try {

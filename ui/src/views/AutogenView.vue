@@ -16,7 +16,7 @@
 // under the License.
 
 <template>
-  <div>
+  <div :class="{ 'autoscale-screen': $route.meta?.name === 'autoscalevmgroup' }">
     <a-affix
       :key="'affix-' + showSearchFilters"
       :offsetTop="this.$store.getters.maintenanceInitiated || this.$store.getters.shutdownTriggered ? 103 : 78"
@@ -30,7 +30,7 @@
             <breadcrumb :resource="resource">
               <template #end>
                 <a-button
-                  :loading="loading"
+                  :loading="loading || ($route.meta?.name === 'vmgroup' && listRequestPending)"
                   style="margin-bottom: 5px"
                   shape="round"
                   size="small"
@@ -177,6 +177,7 @@
       <keep-alive v-else-if="currentAction.component && (!currentAction.invokedAsGroupAction || currentAction.api === 'destroyVirtualMachine')">
         <a-modal
           class="mold-dialog"
+          :class="{ 'autoscale-dialog': $route.meta?.name === 'autoscalevmgroup' }"
           centered
           :visible="showAction"
           :closable="true"
@@ -219,6 +220,7 @@
       </keep-alive>
       <a-modal
           class="mold-dialog"
+          :class="{ 'autoscale-dialog': $route.meta?.name === 'autoscalevmgroup' }"
           v-else-if="currentAction.label === 'label.download.events'"
         :visible="showAction"
         :closable="true"
@@ -450,6 +452,7 @@
       </a-modal>
       <a-modal
           class="mold-dialog"
+          :class="{ 'autoscale-dialog': $route.meta?.name === 'autoscalevmgroup' }"
           v-else
         :visible="showAction"
         :closable="true"
@@ -478,6 +481,7 @@
           v-ctrl-enter="handleSubmit"
         >
           <VmSnapshotSummary v-if="currentAction.api === 'createVMSnapshot'" vm-only :snapshot="{ virtualmachineid: currentAction.resource.id, virtualmachinename: currentAction.resource.displayname || currentAction.resource.name, virtualmachineinstancename: currentAction.resource.instancename, virtualmachinestate: currentAction.resource.state }" />
+          <InstanceGroupDeleteSummary v-if="currentAction.api === 'deleteInstanceGroup'" :groups="currentAction.vmGroupTargets || []" />
           <span v-if="currentAction.message">
             <div v-if="selectedRowKeys.length > 0 && currentAction.invokedAsGroupAction">
               <a-alert
@@ -510,7 +514,7 @@
             <div v-if="selectedRowKeys.length > 0 && currentAction.invokedAsGroupAction">
               <a-divider />
               <a-table
-                v-if="selectedRowKeys.length > 0"
+                v-if="selectedRowKeys.length > 0 && currentAction.api !== 'deleteInstanceGroup'"
                 size="middle"
                 :columns="chosenColumns"
                 :dataSource="selectedItems"
@@ -800,18 +804,25 @@
     <div
       :style="this.$store.getters.maintenanceInitiated || this.$store.getters.shutdownTriggered ? 'margin-top: 24px; margin-bottom: 12px' : null"
     >
+      <InstanceGroupQueryStatus
+        v-if="$route.meta?.name === 'vmgroup'"
+        :status="vmGroupQueryStatus"
+        :updated="listLastUpdated"
+        :retained="!!listLoadedScope"
+        @retry="fetchData({ irefresh: true })" />
       <div v-if="dataView">
         <slot
           name="resource"
           v-if="$route.path.startsWith('/publicip')"
         ></slot>
         <resource-view
-          v-else
+          v-else-if="$route.meta?.name !== 'vmgroup' || resource.id || loading"
           :key="$route.path"
+          :readyForActions="$route.meta?.name !== 'vmgroup' || vmGroupQueryReady"
           :resource="resource"
           :loading="loading"
           :tabs="$route.meta.tabs"
-          :actions="actions"
+          :actions="$route.meta?.name === 'vmgroup' && !vmGroupQueryReady ? [] : actions"
           @exec-action="handleDataViewAction"
           @change-resource="resource = $event" />
       </div>
@@ -825,13 +836,13 @@
         <a-alert v-if="listRefreshError && $route.name === 'vmsnapshot'" type="error" show-icon :message="$t(listLoadedScope ? 'message.list.refresh.stale' : 'error.fetching.data')">
           <template #action><a-button size="small" @click="fetchData">{{ $t('label.refresh') }}</a-button></template>
         </a-alert>
-        <p v-else-if="listRefreshError" role="status">{{ $t('message.list.refresh.stale') }}</p>
+        <p v-else-if="listRefreshError && $route.meta?.name !== 'vmgroup'" role="status">{{ $t('message.list.refresh.stale') }}</p>
         <list-view
           :loading="loading"
-          :emptyText="snapshotEmptyText"
+          :emptyText="$route.meta?.name === 'vmgroup' ? vmGroupEmptyText : snapshotEmptyText"
           :columns="columns"
           :items="items"
-          :actions="actions"
+          :actions="$route.meta?.name === 'vmgroup' && !vmGroupQueryReady ? [] : actions"
           :currentPage="page"
           :pageSize="pageSize"
           :columnKeys="columnKeys"
@@ -843,6 +854,7 @@
           @table-change="handleTableChange"
         />
         <a-pagination
+          v-if="$route.meta?.name !== 'vmgroup' || listLoadedScope"
           class="row-element"
           style="margin-top: 10px"
           size="small"
@@ -875,6 +887,8 @@
 </template>
 
 <script>
+import '@/style/components/view/autoscale.less'
+import { autoScaleInfrastructureRows, autoScaleVisibleColumns } from '@/utils/autoScaleUi'
 import { createListRefresh, listRowKey, canRefreshList } from '@/utils/listRefresh'
 import { ref, reactive, toRaw, h } from 'vue'
 import { Button } from 'ant-design-vue'
@@ -901,6 +915,11 @@ import { bulkColumns, updateBulkItem } from '@/utils/bulkAction'
 import TooltipLabel from '@/components/widgets/TooltipLabel'
 import DetailsInput from '@/components/widgets/DetailsInput'
 import AdvisoriesView from '@/components/view/AdvisoriesView'
+import InstanceGroupDeleteSummary from '@/components/view/InstanceGroupDeleteSummary'
+import InstanceGroupQueryStatus from '@/components/view/InstanceGroupQueryStatus'
+import { vmGroupQuery, vmGroupQueryChanged, vmGroupQueryParams, vmGroupQueryScope, vmGroupQueryRows } from '@/utils/vmGroupQuery'
+import { vmGroupLookupStatus } from '@/utils/vmGroupLookup'
+import { normalizeVmGroupName, isVmGroupNameAction, isVmGroupAction, vmGroupErrorKey, vmGroupDeleteTargets } from '@/utils/vmGroupNames'
 
 export default {
   name: 'Resource',
@@ -910,6 +929,8 @@ export default {
     ListView,
     ActionButton,
     VmSnapshotSummary,
+    InstanceGroupDeleteSummary,
+    InstanceGroupQueryStatus,
     SearchView,
     SearchFilter,
     BulkActionProgress,
@@ -984,6 +1005,8 @@ export default {
       listCustomRender: {},
       listRefreshError: false,
       listLastUpdated: null,
+      vmGroupContextScope: null,
+      vmGroupQueryStatus: 'loading',
       autoRefreshInterval: 10000
     }
   },
@@ -1136,10 +1159,16 @@ export default {
   },
   watch: {
     snapshotSecurityScope () {
+      if (this.$route.meta?.name === 'vmgroup') this.fetchData()
       if (['createVMSnapshot', 'revertToVMSnapshot', 'deleteVMSnapshot', 'createSnapshotFromVMSnapshot'].includes(this.currentAction.api)) this.closeAction()
     },
     '$route' (to, from) {
       if (to.fullPath !== from.fullPath && !to.path.startsWith('/action/') && to?.query?.tab !== 'browser') {
+        if (to.meta?.name === 'vmgroup' && from.meta?.name === 'vmgroup' &&
+          vmGroupQueryScope(to, this.$store.getters, this.$store.state?.user?.token) === vmGroupQueryScope(from, this.$store.getters, this.$store.state?.user?.token)) {
+          this.fetchData({ irefresh: true })
+          return
+        }
         this.resetSelection()
         const page = Number(to.query.page)
         this.page = Number.isInteger(page) && page > 0 ? page : 1
@@ -1179,6 +1208,12 @@ export default {
     }
   },
   computed: {
+    vmGroupQueryReady () { return ['ready', 'empty'].includes(this.vmGroupQueryStatus) && this.listLoadedScope === this.listScope() && !this.listRequestPending },
+    vmGroupEmptyText () {
+      if (['error', 'forbidden', 'loading'].includes(this.vmGroupQueryStatus)) return this.$t('message.vm.group.query.' + this.vmGroupQueryStatus)
+      const filtered = ['name', 'keyword', 'account', 'domainid', 'projectid'].some(key => this.$route.query[key])
+      return this.$t(filtered ? 'message.vm.group.query.no.results' : 'message.vm.group.query.empty')
+    },
     snapshotEmptyText () {
       if (this.$route.name !== 'vmsnapshot') return ''
       const filtered = ['keyword', 'q', 'state', 'type', 'current', 'virtualmachineid', 'virtualmachineids', 'account', 'domainid'].some(key => this.$route.query[key] !== undefined && this.$route.query[key] !== '')
@@ -1259,6 +1294,7 @@ export default {
       return 'self'
     },
     visibleDataViewActions () {
+      if (this.$route.meta?.name === 'vmgroup' && !this.vmGroupQueryReady) return []
       if (!this.actions || !this.dataView) {
         return []
       }
@@ -1365,6 +1401,7 @@ export default {
       }
     },
     listScope () {
+      if (this.$route.meta?.name === 'vmgroup') return vmGroupQueryScope(this.$route, this.$store.getters, this.$store.state?.user?.token)
       return JSON.stringify([this.$route.fullPath, this.$store.getters.project?.id,
         this.$store.getters.userInfo?.id, this.$store.getters.metrics, this.$store.getters.listAllProjects])
     },
@@ -1445,14 +1482,34 @@ export default {
       })
     },
     fetchData (params = {}) {
+      if (this.$route.meta?.name === 'vmgroup') {
+        const clean = vmGroupQuery(this.$route.query)
+        if (vmGroupQueryChanged(this.$route.query, clean)) {
+          if (Object.keys(this.$route.query).some(key => !(key in clean))) this.$message.info(this.$t('message.vm.group.query.removed'))
+          return this.$router.replace({ query: clean })
+        }
+        const context = this.listScope()
+        if (this.vmGroupContextScope !== context) {
+          this.vmGroupContextScope = context
+          this.items = []; this.resource = {}; this.itemCount = 0
+          this.listLoadedScope = null; this.listLastUpdated = null; this.listRefreshError = false
+          this.listRefreshQueued = false
+          this.resetSelection()
+          if (this.$refs.listview) this.$refs.listview.resetSelection()
+          if (this.showGroupActionModal) this.handleCancel()
+          if (this.showAction) this.closeAction()
+          this.vmGroupQueryStatus = 'loading'
+        }
+      }
       // [ADD] 모든 반복 전 배열 보장 유틸
       const asArray = (v) => Array.isArray(v) ? v : []
 
       if (['deployVirtualMachine', 'usage'].includes(this.$route.name)) {
         return
       }
-      if (this.routeName !== this.$route.name) {
-        this.routeName = this.$route.name
+      const currentRouteName = this.$route.meta?.name === 'vmgroup' ? 'vmgroup' : this.$route.name
+      if (this.routeName !== currentRouteName) {
+        this.routeName = currentRouteName
         this.items = []
       }
       if (!this.routeName) {
@@ -1490,7 +1547,7 @@ export default {
 
       params.listall = true
 
-      this.dataView = !!(this.$route?.params?.id || !!this.$route?.query?.dataView)
+      this.dataView = !!(this.$route?.params?.id || (this.$route.meta?.name === 'vmgroup' ? this.$route.query.dataView === 'true' : !!this.$route?.query?.dataView))
 
       if (this.$route.meta.params) {
         const metaParams = this.$route.meta.params
@@ -1522,8 +1579,8 @@ export default {
         }
         Object.assign(params, this.$route.query)
       }
-      if (this.$route.name === 'vmsnapshot' && !rebuildSchema) {
-        this.columns.forEach(column => { column.sortOrder = (params.sortkey || 'created') === column.key ? (params.sortorder === 'asc' ? 'ascend' : 'descend') : null })
+      if ((this.$route.name === 'vmsnapshot' || this.$route.meta?.name === 'vmgroup') && !rebuildSchema) {
+        this.columns.forEach(column => { column.sortOrder = (params.sortkey || (this.$route.name === 'vmsnapshot' ? 'created' : '')) === column.key ? (params.sortorder === 'asc' ? 'ascend' : 'descend') : null })
       }
       delete params.q
       delete params.filter
@@ -1600,6 +1657,11 @@ export default {
           })
         }
 
+        // Optional AutoScale infrastructure fields use the existing VM column menu.
+        const defaultColumnKeys = [...this.columnKeys]
+        if (this.$route.name === 'autoscalevmgroup') {
+          this.columnKeys = [...this.columnKeys, ...asArray(this.$route.meta.optionalColumns)]
+        }
         // [CHANGE] 컬럼 루프 안전화
         for (const columnKey of asArray(this.columnKeys)) {
           let key = columnKey
@@ -1629,11 +1691,12 @@ export default {
             title: this.$t('label.' + String(title).toLowerCase()),
             dataIndex: key,
             sorter: this.$route.name === 'vmsnapshot' ? ['displayname', 'state', 'type', 'current', 'created'].includes(key) : sorter,
-            ...(this.$route.name === 'vmsnapshot' ? { sortOrder: (this.$route.query.sortkey || 'created') === key ? (this.$route.query.sortorder === 'asc' ? 'ascend' : 'descend') : null } : {})
+            ...((this.$route.name === 'vmsnapshot' || this.$route.meta?.name === 'vmgroup') ? { sortOrder: (this.$route.query.sortkey || (this.$route.name === 'vmsnapshot' ? 'created' : '')) === key ? (this.$route.query.sortorder === 'asc' ? 'ascend' : 'descend') : null } : {})
           })
-          this.selectedColumns.push(key)
+          if (this.$route.name !== 'autoscalevmgroup' || defaultColumnKeys.some(column => (typeof column === 'object' ? column.field : column) === key)) this.selectedColumns.push(key)
         }
-        this.allColumns = this.columns
+        this.allColumns = this.$route.name === 'autoscalevmgroup' ? [...this.columns] : this.columns
+        if (this.$route.name === 'autoscalevmgroup') this.columns = this.allColumns.filter(column => this.selectedColumns.includes(column.dataIndex))
 
         if (!store.getters.metrics) {
           if (!this.$store.getters.customColumns[this.$store.getters.userInfo.id]) {
@@ -1641,6 +1704,9 @@ export default {
             this.$store.getters.customColumns[this.$store.getters.userInfo.id][this.$route.path] = this.selectedColumns
           } else {
             this.selectedColumns = this.$store.getters.customColumns[this.$store.getters.userInfo.id][this.$route.path] || this.selectedColumns
+            if (this.$route.name === 'autoscalevmgroup') {
+              this.selectedColumns = autoScaleVisibleColumns(this.selectedColumns)
+            }
             if (this.$route.name === 'kubernetes') {
               this.selectedColumns = [...new Set(this.selectedColumns.map(key => ['cpunumber', 'memory'].includes(key) ? 'resources' : key))]
             }
@@ -1654,6 +1720,8 @@ export default {
             this.updateSelectedColumns()
           }
         }
+
+        if (this.$route.name === 'autoscalevmgroup' && !this.columns.some(column => column.key === 'filtercolumn')) this.updateSelectedColumns()
 
         this.chosenColumns = this.columns.filter(column => {
           return ![this.$t('label.state'), this.$t('label.hostname'), this.$t('label.hostid'), this.$t('label.zonename'),
@@ -1765,8 +1833,17 @@ export default {
       this.listRequestPending = true
       this.listRequestScope = scope
       const requestApi = this.apiName
-      const request = callAPI(requestApi, params).then(json => {
+      const vmGroups = this.$route.meta?.name === 'vmgroup'
+      if (vmGroups) {
+        this.columns.forEach(column => { if (column.key === 'virtualmachinestates') column.sorter = false })
+        params = vmGroupQueryParams(params)
+        if (this.dataView) { params.page = 1; params.pagesize = 20 }
+        this.vmGroupQueryStatus = sameList ? 'refreshing' : 'loading'
+      }
+      const response = vmGroups ? getAPI(requestApi, params, { preserveOnFailure: true, timeout: 20000 }) : callAPI(requestApi, params)
+      const request = response.then(async json => {
         if (version !== this.listRequestVersion || scope !== this.listScope()) return
+        const groupResult = vmGroups ? vmGroupQueryRows(json) : null
         this.listLastUpdated = Date.now()
         this.listLoadedScope = scope
         this.listRefreshError = false
@@ -1788,6 +1865,8 @@ export default {
           break
         }
 
+        if (groupResult) apiItemCount = groupResult.count
+
         const idFromRouteMatchesApiParameter = this.$route.params.id === params.id ||
           this.apiName === 'quotaSummary' && this.$route.params.id === params.accountid ||
           this.apiName === 'quotaEmailTemplateList' && this.$route.params.id === params.templatetype
@@ -1804,7 +1883,12 @@ export default {
             return
           }
         }
-        this.items = json[responseName][objectName]
+        let responseItems = groupResult ? groupResult.rows : json[responseName][objectName]
+        if (this.$route.name === 'autoscalevmgroup' && !this.dataView && this.selectedColumns.includes('zonename')) {
+          responseItems = await autoScaleInfrastructureRows(getAPI, responseItems || [], 'listNetworks' in this.$store.getters.apis)
+          if (version !== this.listRequestVersion || scope !== this.listScope()) return
+        }
+        this.items = responseItems
         if (!this.items || this.items.length === 0) {
           this.items = []
         }
@@ -1850,7 +1934,8 @@ export default {
             }
           }
         }
-        if (this.items.length <= 0 && this.dataView) {
+        if (vmGroups) this.vmGroupQueryStatus = this.items.length ? 'ready' : (this.dataView ? 'missing' : 'empty')
+        if (this.items.length <= 0 && this.dataView && !vmGroups) {
           this.$router.push({ path: '/exception/404' })
         }
         if (!this.showAction || this.dataView || (this.items.length === 1 && this.apiName === 'getUserKeys')) {
@@ -1862,6 +1947,17 @@ export default {
         }
       }).catch(error => {
         if (version !== this.listRequestVersion || scope !== this.listScope()) return
+        if (vmGroups) {
+          this.vmGroupQueryStatus = vmGroupLookupStatus(error)
+          this.listRefreshError = true
+          this.resetSelection()
+          if (this.$refs.listview) this.$refs.listview.resetSelection()
+          if (this.vmGroupQueryStatus === 'forbidden') {
+            this.items = []; this.resource = {}; this.itemCount = 0; this.listLoadedScope = null
+          }
+          if (isAutoScheduled) throw error
+          return
+        }
         if (sameList || this.$route.name === 'vmsnapshot') {
           this.listRefreshError = true
           if (isAutoScheduled) throw error
@@ -2015,6 +2111,9 @@ export default {
       this.currentAction = {
         ...action,
         invokedAsGroupAction: !!isGroupAction
+      }
+      if (action.api === 'deleteInstanceGroup') {
+        this.currentAction.vmGroupTargets = vmGroupDeleteTargets(this.currentAction, this.selectedItems)
       }
       const apiParams = store.getters.apis[this.currentAction.api]?.params
       if (!Array.isArray(apiParams)) {
@@ -2360,10 +2459,12 @@ export default {
     handleSubmit (e) {
       if (this.actionLoading || this.isSubmitDisabled) return
       this.promises = []
-      if (!this.dataView && this.currentAction.invokedAsGroupAction && this.selectedRowKeys.length > 0) {
-        if (this.selectedRowKeys.length > 0) {
+      const groupDeletion = this.currentAction.api === 'deleteInstanceGroup' && this.currentAction.invokedAsGroupAction
+      const selectedKeys = groupDeletion ? (this.currentAction.vmGroupTargets || []).map(group => group.id) : this.selectedRowKeys
+      if (!this.dataView && this.currentAction.invokedAsGroupAction && selectedKeys.length > 0) {
+        if (selectedKeys.length > 0) {
           this.bulkColumns = bulkColumns(this.chosenColumns)
-          this.selectedItems = this.selectedItems.map(v => ({ ...v, status: 'InProgress' }))
+          this.selectedItems = (groupDeletion ? this.currentAction.vmGroupTargets : this.selectedItems).map(v => ({ ...v, status: 'InProgress' }))
           this.bulkColumns.splice(0, 0, {
             key: 'status',
             dataIndex: 'status',
@@ -2382,10 +2483,11 @@ export default {
           const values = toRaw(this.form)
           this.actionLoading = true
           const itemsNameMap = {}
-          this.items.map(x => {
+          const namedItems = groupDeletion ? this.currentAction.vmGroupTargets : this.items
+          namedItems.map(x => {
             itemsNameMap[x.id] = x.name || x.displaytext || x.id
           })
-          const paramsList = this.currentAction.groupMap(this.selectedRowKeys, values, this.items)
+          const paramsList = this.currentAction.groupMap(groupDeletion ? selectedKeys : this.selectedRowKeys, values, this.items)
           for (const params of paramsList) {
             var resourceName = itemsNameMap[params.id]
             // Using a method for this since it's an async call and don't want wrong prarms to be passed
@@ -2420,7 +2522,8 @@ export default {
             return
           }
           if (selectedItems === this.selectedItems && selectedItems.length !== 0) {
-            this.$notifyError(error)
+            if (isVmGroupAction(action.api)) this.notifyVmGroupError(error)
+            else this.$notifyError(error)
             eventBus.emit('update-resource-state', { selectedItems, resource: this.getDataIdentifier(params), state: error.trackingStatus === 'unknown' ? 'unknown' : 'failed' })
           }
           resolve(false)
@@ -2525,11 +2628,23 @@ export default {
     execSubmit (e) {
       e.preventDefault()
       this.formRef.value.validate().then(() => {
-        const values = toRaw(this.form)
+        let values = toRaw(this.form)
         const params = {}
         const action = this.currentAction
+        if (isVmGroupNameAction(action.api)) {
+          values = { ...values, name: normalizeVmGroupName(values.name, action.api === 'updateInstanceGroup' ? this.resource.name : undefined) }
+          if (action.api === 'updateInstanceGroup' && values.name === this.resource.name) {
+            this.$message.info(this.$t('message.vm.group.name.unchanged'))
+            this.closeAction()
+            return
+          }
+        }
         if ('id' in this.resource && action.params.map(i => { return i.name }).includes('id')) {
           params.id = this.resource.id
+        }
+        if (action.api === 'deleteInstanceGroup') {
+          if (!action.vmGroupTargets?.length) throw new Error('message.vm.group.operation.missing')
+          params.id = action.vmGroupTargets[0].id
         }
 
         if (['updateDiskOffering'].includes(action.api) && values.tags === this.resource.tags) {
@@ -2630,7 +2745,7 @@ export default {
           }
         }
 
-        const resourceName = params.displayname || params.displaytext || params.name || params.hostname || params.username ||
+        const resourceName = (action.api === 'deleteInstanceGroup' ? action.vmGroupTargets[0]?.name : null) || params.displayname || params.displaytext || params.name || params.hostname || params.username ||
           params.ipaddress || params.virtualmachinename || this.resource.name || this.resource.ipaddress || this.resource.id
 
         var hasJobId = false
@@ -2660,15 +2775,20 @@ export default {
             return
           }
 
-          console.log(error)
+          if (!isVmGroupAction(action.api)) console.log(error)
           eventBus.emit('update-resource-state', { selectedItems: this.selectedItems, resource: this.getDataIdentifier(params), state: 'failed' })
-          this.$notifyError(error)
+          if (isVmGroupAction(action.api)) this.notifyVmGroupError(error)
+          else this.$notifyError(error)
         }).finally(f => {
           this.actionLoading = false
         })
       }).catch(error => {
-        this.formRef.value.scrollToField(error.errorFields[0].name)
+        if (error.errorFields?.length) this.formRef.value.scrollToField(error.errorFields[0].name)
+        else if (isVmGroupAction(this.currentAction.api)) this.notifyVmGroupError(error)
       })
+    },
+    notifyVmGroupError (error) {
+      this.$notification.error({ message: this.$t('message.request.failed'), description: this.$t(vmGroupErrorKey(error)) })
     },
     shouldNavigateBack (action) {
       return ((['delete-outlined', 'DeleteOutlined'].includes(action.icon) || ['archiveEvents', 'archiveAlerts', 'unmanageVirtualMachine'].includes(action.api)) && this.dataView)
@@ -2688,6 +2808,8 @@ export default {
           this.selectedColumns.push(name)
         }
       }
+
+      if (this.$route.name === 'autoscalevmgroup' && name === 'zonename' && this.selectedColumns.includes('zonename')) this.fetchData()
 
       this.columns = this.allColumns.filter(x => this.selectedColumns.includes(x.dataIndex))
       const filterColumn = {
@@ -2884,6 +3006,12 @@ export default {
       this.$router.push({ query })
     },
     handleTableChange (pagination, filters, sorter) {
+      if (this.$route.meta?.name === 'vmgroup') {
+        const query = { ...this.$route.query }
+        if (sorter?.order) { query.sortkey = sorter.field; query.sortorder = sorter.order === 'ascend' ? 'asc' : 'desc' } else { delete query.sortkey; delete query.sortorder }
+        this.$router.push({ query: vmGroupQuery(query) })
+        return
+      }
       if (this.$route.name !== 'vmsnapshot') return
       this.$router.push({ query: { ...this.$route.query, page: '1', pagesize: String(this.pageSize), sortkey: sorter?.order ? sorter.field : 'created', sortorder: sorter?.order === 'ascend' ? 'asc' : 'desc' } })
     },
@@ -2957,6 +3085,15 @@ export default {
       }
 
       switch (true) {
+        case (field.name === 'name' && isVmGroupNameAction(this.currentAction.api)):
+          rule.validator = (_, value) => {
+            try {
+              normalizeVmGroupName(value, this.currentAction.api === 'updateInstanceGroup' ? this.resource?.name : undefined)
+              return Promise.resolve()
+            } catch (error) { return Promise.reject(this.$t(error.message)) }
+          }
+          this.rules[field.name].push(rule)
+          break
         case (field.type === 'boolean'):
           rule.required = field.required
           rule.message = this.$t('message.error.required.input')

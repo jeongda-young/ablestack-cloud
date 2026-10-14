@@ -1093,8 +1093,11 @@
                     <a-form-item :label="$t('label.group.optional')" name="group" ref="group">
                       <a-auto-complete
                         v-model:value="form.group"
+                        :disabled="!groupLookupReady"
                         :filterOption="filterOption"
                         :options="options.instanceGroups" />
+                      <div role="status" aria-live="polite">{{ $t('message.vm.group.lookup.' + groupLookupState.status) }}</div>
+                      <a-button v-if="['error', 'forbidden', 'empty'].includes(groupLookupState.status)" size="small" :loading="loading.groups" @click="fetchInstaceGroups">{{ $t('label.refresh') }}</a-button>
                     </a-form-item>
                     <a-form-item :label="$t('label.keyboard')" name="keyboard" ref="keyboard">
                       <a-select
@@ -1240,6 +1243,8 @@ import DeploymentStorageSelection from '@views/compute/wizard/DeploymentStorageS
 import IsoAdditionalDataDisks from '@views/compute/wizard/IsoAdditionalDataDisks'
 import DiskQuantitySelection from './wizard/DiskQuantitySelection'
 import { deploymentStorageQuery, dataDiskRequest, dataDiskDeviceIds, completeIsoDiskDeployment, additionalIsoConfigDriveConflict } from '@/utils/vmDiskDeployment'
+import { createVmGroupLookup, vmGroupOwner, vmGroupOwnerKey, vmGroupLookupReady } from '@/utils/vmGroupLookup'
+import { normalizeVmGroupName } from '@/utils/vmGroupNames'
 import DiskSizeSelection from '@views/compute/wizard/DiskSizeSelection'
 import MultiDiskSelection from '@views/compute/wizard/MultiDiskSelection'
 import TemplateIsoSelection from '@views/compute/wizard/TemplateIsoSelection'
@@ -1405,6 +1410,7 @@ export default {
         domainid: store.getters.project?.id ? null : store.getters.userInfo.domainid,
         account: store.getters.project?.id ? null : store.getters.userInfo.account
       },
+      groupLookupState: { status: 'unavailable', scopeKey: '' },
       instanceConfig: {},
       template: {},
       defaultBootType: '',
@@ -1500,6 +1506,8 @@ export default {
     }
   },
   computed: {
+    groupOwnerKey () { return vmGroupOwnerKey(this.owner) },
+    groupLookupReady () { return vmGroupLookupReady(this.groupLookupState, this.owner) },
     creationSourceExecutionProfile () {
       return this.sourceConfiguration.mode === 'manual'
         ? { ...this.sourceConfiguration, osname: this.sourceConfiguration.osname || this.$t('label.creation.source.os.unspecified') }
@@ -2088,6 +2096,11 @@ export default {
     }
   },
   watch: {
+    groupOwnerKey () { this.form.group = null; this.fetchInstaceGroups() },
+    '$store.getters.apis.listInstanceGroups' () { this.fetchInstaceGroups() },
+    '$store.getters.project.id' (projectid) {
+      this.owner = projectid ? { projectid } : { account: this.$store.getters.userInfo.account, domainid: this.$store.getters.userInfo.domainid }
+    },
     sourceConfiguration: { deep: true, handler () { this.sourceConfirmed = false; this.sourceAcknowledged = false } },
     templateStrictCustomRoot (required) {
       if (!required) return
@@ -2341,6 +2354,11 @@ export default {
     this.apiParams = this.$getApiParams('deployVirtualMachine')
   },
   created () {
+    this.groupLookup = createVmGroupLookup(getAPI, state => {
+      this.groupLookupState = state
+      this.options.instanceGroups = state.opts
+      this.loading.groups = state.loading
+    })
     try {
       this.isoDataOperations = JSON.parse(sessionStorage.getItem(this.isoOperationsKey) || '[]')
       this.isoDataOperations.forEach(record => { if (record.status === 'running') record.status = 'failed' })
@@ -2367,6 +2385,7 @@ export default {
     this.updateDeployViewportHeight()
   },
   beforeUnmount () {
+    this.groupLookup.dispose()
     if (this.deployResizeObserver) this.deployResizeObserver.disconnect()
   },
   methods: {
@@ -2636,17 +2655,7 @@ export default {
       ]
     },
     fetchInstaceGroups () {
-      this.options.instanceGroups = []
-      getAPI('listInstanceGroups', {
-        account: this.$store.getters.project?.id ? null : this.$store.getters.userInfo.account,
-        domainid: this.$store.getters.project?.id ? null : this.$store.getters.userInfo.domainid,
-        listall: true
-      }).then(response => {
-        const groups = response.listinstancegroupsresponse.instancegroup || []
-        groups.forEach(x => {
-          this.options.instanceGroups.push({ label: x.name, value: x.name })
-        })
-      })
+      return this.groupLookup.load(this.owner, 'listInstanceGroups' in this.$store.getters.apis)
     },
     fetchNetwork () {
       const param = this.params.networks
@@ -3072,6 +3081,22 @@ export default {
       if (this.loading.deploy) return
       this.formRef.value.validate().then(async () => {
         const values = toRaw(this.form)
+        const ownerKey = vmGroupOwnerKey(this.owner)
+        if (!vmGroupOwner(this.owner)) {
+          this.$message.error(this.$t('message.vm.group.lookup.unavailable'))
+          return
+        }
+        if (values.group && !this.groupLookupReady) {
+          this.$message.error(this.$t('message.vm.group.lookup.blocked'))
+          return
+        }
+        let groupName
+        if (values.group) {
+          try {
+            const existing = this.groups.opts.find(group => group.value === values.group)
+            groupName = normalizeVmGroupName(values.group, existing?.value)
+          } catch (error) { this.$message.error(this.$t(error.message)); return }
+        }
         if (this.additionalIsoConfigDriveConflict) {
           this.$notification.error({ message: this.$t('message.request.failed'), description: this.$t('message.additional.iso.configdrive.conflict') })
           return
@@ -3146,6 +3171,10 @@ export default {
               return
             }
           } catch (error) { this.$notifyError(error); return }
+        }
+        if (ownerKey !== vmGroupOwnerKey(this.owner) || (values.group && !this.groupLookupReady)) {
+          this.$message.error(this.$t('message.vm.group.lookup.blocked'))
+          return
         }
         this.loading.deploy = true
 
@@ -3343,7 +3372,7 @@ export default {
           deployVmData.displayname = values.name
         }
         if (values.group) {
-          deployVmData.group = values.group
+          deployVmData.group = groupName
         }
         if (values.leaseduration) {
           deployVmData.leaseduration = values.leaseduration
@@ -3599,9 +3628,7 @@ export default {
       })
     },
     fetchOwnerOptions (OwnerOptions) {
-      this.owner = this.isCreationSource
-        ? { projectid: null, domainid: null, account: null }
-        : { projectid: null, domainid: store.getters.userInfo.domainid, account: store.getters.userInfo.account }
+      this.owner = { projectid: null, domainid: null, account: null }
       if (OwnerOptions.selectedAccountType === 'Account') {
         if (!OwnerOptions.selectedAccount) {
           if (this.isCreationSource) this.clearCreationSource()

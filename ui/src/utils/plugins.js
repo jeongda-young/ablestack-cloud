@@ -27,8 +27,14 @@ import { getAPI } from '@/api'
 import { message, notification, Modal } from 'ant-design-vue'
 import eventBus from '@/config/eventBus'
 import store from '@/store'
+import { autoScaleLifecycleErrorKey } from '@/utils/autoScaleLifecycle'
 import { createJobTracker } from '@/utils/jobTracker'
 import { toLocalDate, toLocaleDate } from '@/utils/date'
+
+function autoScaleErrorDescription (description) {
+  const key = autoScaleLifecycleErrorKey(description)
+  return key ? i18n.global.t(key) : description
+}
 
 function normalizePath (path) {
   if (!path) return ''
@@ -53,6 +59,7 @@ export const pollJobPlugin = {
         top: '65px',
         duration: 0,
         ...config,
+        description: autoScaleErrorDescription(config.description),
         onClose: () => store.commit('SET_COUNT_NOTIFY', Math.max(0, store.getters.countNotify - 1))
       })
     }
@@ -170,7 +177,7 @@ export const notifierPlugin = {
       notification.error({
         top: '65px',
         message: msg,
-        description: desc,
+        description: autoScaleErrorDescription(desc),
         duration: 0,
         onClose: () => {
           let c = store.getters.countNotify

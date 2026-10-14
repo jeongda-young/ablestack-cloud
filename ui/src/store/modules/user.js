@@ -437,7 +437,10 @@ const user = {
           }).catch(error => {
             reject(error)
           })
-        } else if (store.getters.loginFlag) {
+        } else {
+          // A page reload can retain the session while losing the API cache and
+          // in-memory login flag. Discover through the authenticated API so the
+          // promise always resolves or rejects; never leave the router pending.
           const hide = message.loading(i18n.global.t('message.discovering.feature'), 0)
           getAPI('listZones').then(json => {
             const zones = json.listzonesresponse.zone || []

@@ -52,7 +52,7 @@ describe('ResourceView resource navigation', () => {
 
   it('isolates detail instances by path, not tab query or delayed API resource ID', () => {
     const source = fs.readFileSync(path.resolve(__dirname, '../../../../src/views/AutogenView.vue'), 'utf8')
-    expect(source).toMatch(/<resource-view\s+v-else\s+:key="\$route.path"/)
+    expect(source).toMatch(/<resource-view\s+v-else(?:-if="[^"]*")?\s+:key="\$route.path"/)
   })
 
   it.each([

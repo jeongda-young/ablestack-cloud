@@ -16,14 +16,16 @@
 // under the License.
 
 <template>
-  <resource-layout :wide="wideLayout">
+  <resource-layout :wide="wideLayout" :class="{ 'autoscale-resource': $route.meta?.name === 'autoscalevmgroup' }">
     <template #left>
       <slot name="info-card">
         <info-card
           :resource="resource"
           :loading="loading"
           :actions="actions"
-          @exec-action="$emit('exec-action', $event)" />
+          @exec-action="$emit('exec-action', $event)">
+          <template #details><auto-scale-info-summary v-if="$route.meta?.name === 'autoscalevmgroup'" :resource="resource" /></template>
+        </info-card>
       </slot>
     </template>
     <template #right>
@@ -75,6 +77,7 @@
 <script>
 import DetailsTab from '@/components/view/DetailsTab'
 import InfoCard from '@/components/view/InfoCard'
+import AutoScaleInfoSummary from '@/views/compute/AutoScaleInfoSummary'
 import ResourceLayout from '@/layouts/ResourceLayout'
 import { getAPI } from '@/api'
 import { mixinDevice } from '@/utils/mixin.js'
@@ -83,10 +86,12 @@ export default {
   name: 'ResourceView',
   components: {
     InfoCard,
+    AutoScaleInfoSummary,
     ResourceLayout
   },
   mixins: [mixinDevice],
   props: {
+    readyForActions: { type: Boolean, default: true },
     resource: {
       type: Object,
       required: true
@@ -115,6 +120,7 @@ export default {
       default: ''
     }
   },
+  provide () { return { resourceActionReady: () => this.readyForActions } },
   data () {
     return {
       activeTab: '',

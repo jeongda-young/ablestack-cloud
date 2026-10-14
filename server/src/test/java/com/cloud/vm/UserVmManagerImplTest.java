@@ -259,6 +259,9 @@ public class UserVmManagerImplTest {
     private UserVmDao userVmDao;
 
     @Mock
+    private VmInstanceGroupAssignment vmInstanceGroupAssignment;
+
+    @Mock
     private UpdateVMCmd updateVmCommand;
 
     @Mock
@@ -617,6 +620,35 @@ public class UserVmManagerImplTest {
 
         Mockito.verify(userVmManagerImpl).validateGuestOsIdForUpdateVirtualMachineCommand(updateVmCommand);
         Mockito.verify(accountManager).checkAccess(callerAccount, null, true, userVmVoMock);
+    }
+
+    @Test
+    public void groupOnlyUpdateChecksAccessAndBypassesVmSettings() throws ResourceUnavailableException, InsufficientCapacityException {
+        Mockito.when(updateVmCommand.getOsTypeId()).thenReturn(null);
+        Mockito.when(updateVmCommand.hasGroupUpdate()).thenReturn(true);
+        Mockito.when(updateVmCommand.isGroupOnlyUpdate()).thenReturn(true);
+        Mockito.when(updateVmCommand.getGroupId()).thenReturn(20L);
+
+        Assert.assertSame(userVmVoMock, userVmManagerImpl.updateVirtualMachine(updateVmCommand));
+
+        Mockito.verify(accountManager).checkAccess(callerAccount, null, true, userVmVoMock);
+        Mockito.verify(vmInstanceGroupAssignment).validate(vmId, 20L, null, false);
+        Mockito.verify(vmInstanceGroupAssignment).apply(vmId, 20L, null, false);
+        Mockito.verify(userVmManagerImpl, never()).getSecurityGroupIdList(updateVmCommand);
+        Mockito.verifyNoInteractions(templateDao, volumeApiService, userDataManager, vmInstanceDetailsDao, _networkMgr);
+        Mockito.verify(userVmDao, never()).update(Mockito.anyLong(), Mockito.any());
+    }
+
+    @Test
+    public void unavailableVmCannotChangeGroup() {
+        Mockito.when(updateVmCommand.getOsTypeId()).thenReturn(null);
+        Mockito.when(updateVmCommand.hasGroupUpdate()).thenReturn(true);
+        Mockito.when(updateVmCommand.isGroupOnlyUpdate()).thenReturn(true);
+        Mockito.when(userVmVoMock.getState()).thenReturn(VirtualMachine.State.Expunging);
+
+        Assert.assertThrows(InvalidParameterValueException.class, () -> userVmManagerImpl.updateVirtualMachine(updateVmCommand));
+
+        Mockito.verify(vmInstanceGroupAssignment, never()).apply(Mockito.anyLong(), Mockito.any(), Mockito.any(), Mockito.anyBoolean());
     }
 
     @Test

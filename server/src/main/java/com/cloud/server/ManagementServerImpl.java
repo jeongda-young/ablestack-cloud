@@ -981,6 +981,7 @@ import com.cloud.vm.VirtualMachine.State;
 import com.cloud.vm.VirtualMachineManager;
 import com.cloud.vm.VirtualMachineProfile;
 import com.cloud.vm.VirtualMachineProfileImpl;
+import com.cloud.vm.VmInstanceGroupNames;
 import com.cloud.vm.dao.ConsoleProxyDao;
 import com.cloud.vm.dao.DomainRouterDao;
 import com.cloud.vm.dao.InstanceGroupDao;
@@ -7949,7 +7950,7 @@ public class ManagementServerImpl extends MutualExclusiveIdsManagerBase implemen
 
         // Verify input parameters
         final InstanceGroupVO group = _vmGroupDao.findById(groupId.longValue());
-        if (group == null) {
+        if (group == null || group.getRemoved() != null) {
             final InvalidParameterValueException ex = new InvalidParameterValueException("unable to find an instance group with specified groupId");
             ex.addProxyObject(groupId.toString(), "groupId");
             throw ex;
@@ -7957,18 +7958,7 @@ public class ManagementServerImpl extends MutualExclusiveIdsManagerBase implemen
 
         _accountMgr.checkAccess(caller, null, true, group);
 
-        // Check if name is already in use by this account (exclude this group)
-        final boolean isNameInUse = _vmGroupDao.isNameInUse(group.getAccountId(), groupName);
-
-        if (isNameInUse && !group.getName().equals(groupName)) {
-            throw new InvalidParameterValueException("Unable to update instance group, a group with name " + groupName + " already exists for account");
-        }
-
-        if (groupName != null) {
-            _vmGroupDao.updateVmGroup(groupId, groupName);
-        }
-
-        return _vmGroupDao.findById(groupId);
+        return VmInstanceGroupNames.rename(_vmGroupDao, _accountDao, group.getAccountId(), groupId, groupName);
     }
 
     @Override

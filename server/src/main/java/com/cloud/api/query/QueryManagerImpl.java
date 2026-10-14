@@ -1220,8 +1220,30 @@ public class QueryManagerImpl extends MutualExclusiveIdsManagerBase implements Q
         Pair<List<InstanceGroupJoinVO>, Integer> groups = searchForVmGroupsInternal(cmd);
         ListResponse<InstanceGroupResponse> response = new ListResponse<>();
         List<InstanceGroupResponse> grpResponses = ViewResponseHelper.createInstanceGroupResponse(groups.first().toArray(new InstanceGroupJoinVO[0]));
+        attachVmGroupMemberCounts(groups.first(), grpResponses, cmd.getFullUrlParams() == null ? null : cmd.getFullUrlParams().get(ApiConstants.API_KEY));
         response.setResponses(grpResponses, groups.second());
         return response;
+    }
+
+    void attachVmGroupMemberCounts(List<InstanceGroupJoinVO> groups, List<InstanceGroupResponse> responses, String apiKey) {
+        if (groups.isEmpty()) {
+            return;
+        }
+        Account caller = CallContext.current().getCallingAccount();
+        try {
+            accountMgr.checkApiAccessForUser(CallContext.current().getCallingUser(), "listVirtualMachines", apiKey);
+        } catch (PermissionDeniedException e) {
+            return;
+        }
+        Map<Long, Map<String, Long>> counts = _vmGroupJoinDao.listMemberStateCounts(
+                groups.stream().map(InstanceGroupJoinVO::getId).collect(Collectors.toList()), accountMgr.isRootAdmin(caller.getId()));
+        Map<String, Long> ids = groups.stream().collect(Collectors.toMap(InstanceGroupJoinVO::getUuid, InstanceGroupJoinVO::getId));
+        responses.forEach(response -> {
+            Long id = ids.get(response.getId());
+            if (id != null && counts.containsKey(id)) {
+                response.setVirtualMachineStates(counts.get(id));
+            }
+        });
     }
 
     private Pair<List<InstanceGroupJoinVO>, Integer> searchForVmGroupsInternal(ListVMGroupsCmd cmd) {

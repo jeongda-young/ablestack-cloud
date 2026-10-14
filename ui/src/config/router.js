@@ -88,6 +88,7 @@ function generateRouterMap (section) {
           filterLabels: child.filterLabels,
           params: child.params ? child.params : {},
           columns: child.columns,
+          optionalColumns: child.optionalColumns,
           advisories: !vueProps.$config.advisoriesDisabled ? child.advisories : undefined,
           details: child.details,
           searchFilters: child.searchFilters,

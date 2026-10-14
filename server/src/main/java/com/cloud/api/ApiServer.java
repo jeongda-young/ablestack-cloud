@@ -232,6 +232,8 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
     @Inject
     private APIAuthenticationManager authManager;
     @Inject
+    private com.cloud.network.as.AutoScaleCreationRequestManager autoScaleCreationRequests;
+    @Inject
     private ApiDispatcher dispatcher;
     @Inject
     private AsyncJobManager asyncMgr;
@@ -856,6 +858,13 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
 
     @Override
     public AsyncCmdResult processAsyncCmd(BaseAsyncCmd asyncCmd, Map<String, String> params, CallContext ctx, Long callerUserId, Account caller) throws Exception {
+        if (com.cloud.network.as.AutoScaleCreationRequestManager.supports(asyncCmd) && params.get(ApiConstants.CUSTOM_JOB_ID) != null) {
+            return autoScaleCreationRequests.submit(asyncCmd, params, () -> processAsyncCmdInternal(asyncCmd, params, ctx, callerUserId, caller));
+        }
+        return processAsyncCmdInternal(asyncCmd, params, ctx, callerUserId, caller);
+    }
+
+    protected AsyncCmdResult processAsyncCmdInternal(BaseAsyncCmd asyncCmd, Map<String, String> params, CallContext ctx, Long callerUserId, Account caller) throws Exception {
         if (!asyncMgr.isAsyncJobsEnabled()) {
             String msg = "Maintenance or Shutdown has been initiated on this management server. Can not accept new jobs";
             logger.warn(msg);
@@ -868,6 +877,12 @@ public class ApiServer extends ManagerBase implements HttpRequestHandler, ApiSer
             dispatcher.dispatchCreateCmd(createCmd, params);
             objectId = createCmd.getEntityId();
             objectUuid = createCmd.getEntityUuid();
+            if (com.cloud.network.as.AutoScaleCreationRequestManager.supports(asyncCmd) && asyncCmd.getInjectedJobId() != null) {
+                org.apache.cloudstack.framework.jobs.impl.AsyncJobVO existing = autoScaleCreationRequests.submittedJob(asyncCmd, objectId, callerUserId, caller.getId());
+                if (existing != null) {
+                    return new AsyncCmdResult(objectId, objectUuid, asyncCmd, existing.getId());
+                }
+            }
             params.put("id", objectId.toString());
             Class entityClass = EventTypes.getEntityClassForEvent(createCmd.getEventType());
             if (entityClass != null)

@@ -23,15 +23,18 @@
             :rules="rules"
             layout="vertical"
             class="form"
+            :class="{ 'autoscale-userdata-form': isAutoScaleProfile }"
             v-ctrl-enter="handleSubmit"
             @finish="handleSubmit">
       <div v-if="template && template.userdataid">
         <a-typography-text>
-            The template "{{ $t(this.template.name) }}" is linked to Userdata "{{ $t(this.template.userdataname) }}" with override policy "{{ $t(this.template.userdatapolicy) }}"
+            <template v-if="isAutoScaleProfile">{{ $t('message.autoscale.userdata.template', { template: template.name, userdata: template.userdataname, policy: template.userdatapolicy }) }}</template>
+            <template v-else>The template "{{ $t(this.template.name) }}" is linked to Userdata "{{ $t(this.template.userdataname) }}" with override policy "{{ $t(this.template.userdatapolicy) }}"</template>
         </a-typography-text><br/><br/>
         <div v-if="templateUserDataParams.length > 0 && !doUserdataOverride">
           <a-typography-text v-if="this.template && this.template.userdataid && templateUserDataParams.length > 0">
-              Enter the values for the variables in userdata
+              <template v-if="isAutoScaleProfile">{{ $t('message.autoscale.userdata.variables') }}</template>
+              <template v-else>Enter the values for the variables in userdata</template>
           </a-typography-text>
           <a-input-group>
             <a-table
@@ -104,7 +107,7 @@
                 <div v-else>
                   <a-form-item name="userdata" ref="userdata" >
                     <a-textarea
-                      placeholder="Userdata"
+                      :placeholder="isAutoScaleProfile ? $t('label.user.data') : 'Userdata'"
                       v-model:value="form.userdata">
                     </a-textarea>
                   </a-form-item>
@@ -125,6 +128,8 @@
 <script>
 import { ref, reactive, toRaw } from 'vue'
 import { getAPI, postAPI } from '@/api'
+import { runAutoScaleMutation, autoScaleMutationDescription, autoScaleOwnerParams } from '@/utils/autoScaleEditing'
+import { autoScaleTemplateById } from '@/utils/autoScaleUi'
 import { genericCompare } from '@/utils/sort.js'
 import UserDataSelection from '@views/compute/wizard/UserDataSelection'
 
@@ -214,6 +219,9 @@ export default {
       userdata: {}
     }
   },
+  computed: {
+    isAutoScaleProfile () { return this.resource.resetUserDataApiName === 'updateAutoScaleVmProfile' }
+  },
   created () {
     this.initForm()
     this.fetchData()
@@ -241,6 +249,13 @@ export default {
       })
     },
     fetchTemplateData () {
+      if (this.isAutoScaleProfile) {
+        return autoScaleTemplateById(getAPI, { ...autoScaleOwnerParams(this.resource), id: this.resource.templateid, isready: true, zoneid: this.resource.zoneid }).then(json => {
+          this.template = json.listtemplatesresponse?.template?.[0] || {}
+          this.userdataDefaultOverridePolicy = this.template.userdatapolicy
+          if (this.template.userdataid && this.template.userdataid !== '0') this.updateTemplateLinkedUserData(this.template.userdataid)
+        }).catch(error => this.$notifyError(error))
+      }
       const params = {}
       params.id = this.resource.templateid
       params.isrecursive = true
@@ -270,7 +285,7 @@ export default {
           var that = this
           that.templateUserDataParams = []
           if (dataParams) {
-            dataParams.forEach(function (val, index) {
+            ;(dataParams || []).forEach(function (val, index) {
               that.templateUserDataParams.push({
                 id: index,
                 key: val
@@ -283,21 +298,33 @@ export default {
     loadUserdataTabList () {
       this.userdataTabList = [{
         key: 'userdataregistered',
-        tab: this.$t('label.user.data.registered')
+        tab: this.$t(this.isAutoScaleProfile ? 'label.autoscale.userdata.registered' : 'label.user.data.registered')
       },
       {
         key: 'userdatatext',
-        tab: this.$t('label.user.data.text')
+        tab: this.$t(this.isAutoScaleProfile ? 'label.autoscale.userdata.manual' : 'label.user.data.text')
       }]
     },
     onUserdataTabChange (key, type) {
       this[type] = key
       this.userDataParams = []
+      if (this.isAutoScaleProfile && type === 'userdataTabKey' && key === 'userdataregistered') {
+        this.form.userdataid = undefined
+        this.userDataValues = {}
+      }
     },
     isUserAllowedToListUserDatas () {
       return Boolean('listUserData' in this.$store.getters.apis)
     },
     updateUserData (id) {
+      if (this.isAutoScaleProfile) {
+        this.userDataParams = []
+        this.userDataValues = {}
+        if (id === '0' || id === this.$t('label.noselect')) {
+          this.form.userdataid = undefined
+          return
+        }
+      }
       if (id === '0') {
         this.form.userdataid = undefined
         return
@@ -305,6 +332,7 @@ export default {
       this.form.userdataid = id
       this.userDataParams = []
       getAPI('listUserData', { id: id }).then(json => {
+        if (this.isAutoScaleProfile && this.form.userdataid !== id) return
         const resp = json?.listuserdataresponse?.userdata || []
         if (resp.length > 0) {
           var params = resp[0].params
@@ -312,7 +340,7 @@ export default {
             var dataParams = params.split(',')
           }
           var that = this
-          dataParams.forEach(function (val, index) {
+          ;(dataParams || []).forEach(function (val, index) {
             that.userDataParams.push({
               id: index,
               key: val
@@ -338,13 +366,12 @@ export default {
       if (this.loadingData) return
       const values = toRaw(this.form)
       this.loadingData = true
-      console.log(values)
       const params = {
       }
-      if (values.userdata && values.userdata.length > 0) {
+      if ((!this.isAutoScaleProfile || this.userdataTabKey === 'userdatatext') && values.userdata && values.userdata.length > 0) {
         params.userdata = this.$toBase64AndURIEncoded(values.userdata)
       }
-      if (values.userdataid) {
+      if ((!this.isAutoScaleProfile || this.userdataTabKey === 'userdataregistered') && values.userdataid) {
         params.userdataid = values.userdataid
       }
       var idx = 0
@@ -354,7 +381,7 @@ export default {
           idx++
         }
       }
-      if (this.userDataValues) {
+      if ((!this.isAutoScaleProfile || params.userdataid) && this.userDataValues) {
         for (const [key, value] of Object.entries(this.userDataValues)) {
           params['userdatadetails[' + idx + '].' + `${key}`] = value
           idx++
@@ -364,7 +391,11 @@ export default {
 
       const resetUserDataApiName = this.resource.resetUserDataApiName ? this.resource.resetUserDataApiName : 'resetUserDataForVirtualMachine'
 
-      postAPI(resetUserDataApiName, params).then(json => {
+      if (resetUserDataApiName === 'updateAutoScaleVmProfile' && !params.userdataid && !params.userdata) params.userdata = ''
+      const update = resetUserDataApiName === 'updateAutoScaleVmProfile'
+        ? runAutoScaleMutation(postAPI, getAPI, resetUserDataApiName, params)
+        : postAPI(resetUserDataApiName, params)
+      return update.then(json => {
         this.$message.success({
           content: `${this.$t('label.action.user.data.reset')} - ${this.$t('label.success')}`,
           duration: 2
@@ -372,7 +403,9 @@ export default {
         this.$emit('refresh-data')
         this.closeAction()
       }).catch(error => {
-        this.$notifyError(error)
+        if (resetUserDataApiName === 'updateAutoScaleVmProfile') {
+          this.$notification.error({ message: this.$t('label.error'), description: autoScaleMutationDescription(error, this.$t) })
+        } else this.$notifyError(error)
       }).finally(() => {
         this.loadingData = false
       })
@@ -390,5 +423,15 @@ export default {
   @media (min-width: 800px) {
     width: 45vw;
   }
+}
+.form.autoscale-userdata-form {
+  width: 100%;
+  max-width: 100%;
+  min-width: 0;
+  :deep(.ant-steps-item-description), :deep(.ant-steps-item-content) { width: 100%; min-width: 0; max-width: 100%; }
+  :deep(.ant-card), :deep(.ant-card-body), :deep(.ant-table-wrapper) { min-width: 0; max-width: 100%; }
+  :deep(.ant-input-search) { width: min(320px, 100%) !important; }
+  :deep(.ant-table-cell) { overflow-wrap: anywhere; }
+  :deep(.ant-table) { table-layout: fixed; }
 }
 </style>

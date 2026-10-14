@@ -16,16 +16,17 @@
 // under the License.
 
 <template>
-  <div class="list-view-table-wrapper" @contextmenu="handleGlobalContextMenu">
+  <div class="list-view-table-wrapper" :class="{ 'autoscale-list': $route.name === 'autoscalevmgroup' }" @contextmenu="handleGlobalContextMenu">
     <a-table
       size="middle"
       :loading="loading"
       :locale="emptyText ? { emptyText } : undefined"
       :columns="isOrderUpdatable() ? columns : columns.filter(x => x.dataIndex !== 'order')"
       :dataSource="items"
+      :scroll="$route.name === 'autoscalevmgroup' ? { x: 980 } : undefined"
       :rowKey="listRowKey"
       :pagination="false"
-      :rowSelection="explicitlyAllowRowSelection || enableGroupAction() || $route.name === 'event' ? {selectedRowKeys: selectedRowKeys, onChange: onSelectChange, columnWidth: 30} : null"
+      :rowSelection="explicitlyAllowRowSelection || enableGroupAction() || $route.name === 'event' ? {selectedRowKeys: selectedRowKeys, onChange: onSelectChange, getCheckboxProps: record => ({ disabled: selectionDisabled(record) }), columnWidth: 30} : null"
       :rowClassName="getRowClassName"
       :customRow="snapshotRowEvents"
       @change="handleTableChange"
@@ -53,9 +54,15 @@
       </div>
     </template>
     <template #bodyCell="{ column, text, record }">
-      <template v-if="['name', 'provider'].includes(column.key)">
+      <template v-if="$route.name === 'autoscalevmgroup' && ['availablevirtualmachinecount', 'associatednetworkname', 'lastcheckedat', 'account', 'zonename'].includes(column.key)">
+        <auto-scale-list-cell :resource="record" :column="column.key" />
+      </template>
+      <template v-else-if="$route.meta?.name === 'vmgroup' && ['virtualmachinecount', 'virtualmachinestates'].includes(column.key)">
+        <InstanceGroupSummary :resource="record" :field="column.key" />
+      </template>
+      <template v-else-if="['name', 'provider'].includes(column.key)">
         <span
-          v-if="['vm', 'vnfapp'].includes($route.path.split('/')[1])"
+          v-if="(resourcePath === '/vm' || ['vm', 'vnfapp'].includes($route.path.split('/')[1]))"
           style="margin-right: 5px"
         >
           <span v-if="record.icon && record.icon.base64image">
@@ -104,7 +111,8 @@
               size="xl"
             />
           </span>
-          <span v-if="record.hasannotations">
+          <span v-if="resourcePath && record.id" class="embedded-resource-name"><router-link :to="{ path: resourcePath === '/vm' ? createPathBasedOnVmType(record.vmtype, record.id) : resourcePath + '/' + record.id }">{{ text }}</router-link></span>
+          <span v-else-if="record.hasannotations">
             <span v-if="record.id">
               <router-link :to="{ path: $route.path + '/' + record.id }">{{ text }}</router-link>
               <router-link :to="{ path: $route.path + '/' + record.id, query: { tab: 'comments' } }"><message-filled
@@ -657,7 +665,7 @@
           <span v-if="idx < (record.network.length - 1)">, </span>
         </template>
       </template>
-      <template v-if="column.key === 'associatednetworkname'">
+      <template v-if="column.key === 'associatednetworkname' && $route.name !== 'autoscalevmgroup'">
         <router-link :to="{ path: '/guestnetwork/' + record.associatednetworkid }">{{ text }}</router-link>
       </template>
       <template v-if="column.key === 'vpcname'">
@@ -738,7 +746,7 @@
       <template v-if="column.key === 'podname'">
         <router-link :to="{ path: '/pod/' + record.podid }">{{ text }}</router-link>
       </template>
-      <template v-if="column.key === 'account'">
+      <template v-if="column.key === 'account' && $route.name !== 'autoscalevmgroup'">
         <template v-if="record.owner">
           <template
             v-for="(item, idx) in record.owner"
@@ -812,7 +820,7 @@
         >{{ text || record.zoneid }}</router-link>
         <span v-else>{{ text }}</span>
       </template>
-      <template v-if="column.key === 'zonename'">
+      <template v-if="column.key === 'zonename' && $route.name !== 'autoscalevmgroup'">
         <router-link
           v-if="$router.resolve('/zone/' + record.zoneid).matched[0].redirect !== '/exception/404'"
           :to="{ path: '/zone/' + record.zoneid }"
@@ -832,7 +840,7 @@
       </template>
       <template v-if="column.key === 'project'">
         <router-link
-          v-if="$router.resolve('/project/' + record.projectid).matched[0].redirect !== '/exception/404'"
+          v-if="canLinkProject(record)"
           :to="{ path: '/project/' + record.projectid }"
         >{{ text }}</router-link>
         <span v-else>{{ text }}</span>
@@ -886,7 +894,7 @@
         {{ record.enabled ? 'Enabled' : 'Disabled' }}
       </template>
       <template
-        v-if="['created', 'sent', 'removed', 'effectiveDate', 'endDate', 'allocated', 'startdate', 'enddate'].includes(column.key) || (['startdate'].includes(column.key) && ['webhook'].includes($route.path.split('/')[1])) || (column.key === 'allocated' && ['asnumbers', 'publicip', 'ipv4subnets'].includes($route.meta.name) && text)"
+        v-if="['created', 'sent', 'removed', 'effectiveDate', 'endDate', 'allocated', 'startdate', 'enddate'].includes(column.key) && !(['startdate', 'enddate'].includes(column.key) && ['vm', 'vnfapp', 'autoscalevmgroup'].includes($route.path.split('/')[1])) || (['startdate'].includes(column.key) && ['webhook'].includes($route.path.split('/')[1])) || (column.key === 'allocated' && ['asnumbers', 'publicip', 'ipv4subnets'].includes($route.meta.name) && text)"
       >
         {{ text && $toLocaleDate(text) }}
       </template>
@@ -1186,6 +1194,8 @@
 </template>
 
 <script>
+import AutoScaleListCell from '@/views/compute/AutoScaleListCell'
+import InstanceGroupSummary from '@/views/compute/InstanceGroupSummary'
 import { listRowKey } from '@/utils/listRefresh'
 import { getAPI, postAPI } from '@/api'
 import BackupProgress from '@/components/view/BackupProgress'
@@ -1210,6 +1220,8 @@ export default {
   name: 'ListView',
   components: {
     BackupProgress,
+    AutoScaleListCell,
+    InstanceGroupSummary,
     OsLogo,
     Status,
     CloneFlattenControl,
@@ -1222,6 +1234,9 @@ export default {
     FileTextOutlined
   },
   props: {
+    resourcePath: { type: String, default: '' },
+    selectionDisabled: { type: Function, default: () => false },
+    keyboardContextMenu: { type: Boolean, default: false },
     columns: {
       type: Array,
       required: true
@@ -1408,9 +1423,14 @@ export default {
     }
   },
   methods: {
+    canLinkProject (record) {
+      if (!record.projectid) return false
+      const matched = this.$router.resolve('/project/' + record.projectid).matched
+      return matched.length > 0 && matched[0].redirect !== '/exception/404'
+    },
     handleTableChange (pagination, filters, sorter) { this.$emit('table-change', pagination, filters, sorter) },
     snapshotRowEvents (record) {
-      if (!['vmsnapshot', 'kubernetes', 'kubernetesiso'].includes(this.$route.name)) return {}
+      if (!this.keyboardContextMenu && !['vmsnapshot', 'kubernetes', 'kubernetesiso'].includes(this.$route.name)) return {}
       return {
         tabindex: 0,
         onKeydown: event => {
@@ -1521,6 +1541,7 @@ export default {
           .test(this.$route.path)
     },
     enableGroupAction () {
+      if (this.resourcePath) return this.explicitlyAllowRowSelection
       return ['vm', 'alert', 'vmgroup', 'ssh', 'userdata', 'affinitygroup', 'autoscalevmgroup', 'volume', 'snapshot',
         'vmsnapshot', 'backup', 'guestnetwork', 'vpc', 'publicip', 'vpnuser', 'vpncustomergateway', 'vnfapp',
         'project', 'account', 'systemvm', 'router', 'computeoffering', 'systemoffering',
@@ -1747,7 +1768,7 @@ export default {
       }
     },
     generateHumanReadableSchedule (schedule) {
-      return cronstrue.toString(schedule, { locale: this.$i18n.locale })
+      return cronstrue.toString(schedule, { locale: this.$i18n.locale === 'ko_KR' ? 'ko' : this.$i18n.locale })
     },
     entityTypeToPath (entitytype) {
       switch (entitytype) {

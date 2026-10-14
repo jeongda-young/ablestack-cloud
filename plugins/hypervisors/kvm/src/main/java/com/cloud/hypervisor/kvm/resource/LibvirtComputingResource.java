@@ -6333,7 +6333,7 @@ public class LibvirtComputingResource extends ServerResourceBase implements Serv
         metrics.setMemoryKBs(info.maxMem);
         metrics.setTargetMemoryKBs(info.memory);
         LOGGER.trace("Trying to get free memory for VM [{}].", vmAsString);
-        metrics.setIntFreeMemoryKBs(KvmBoundedStats.freeMemory(dm));
+        metrics.setIntFreeMemoryKBs(KvmBoundedStats.freeMemory(dm, 2L * getCurrentVmBalloonStatsPeriod(), System.currentTimeMillis()));
 
         if (oldStats != null) {
             LOGGER.debug("Old stats exist for VM [{}]; therefore, the utilization will be calculated.", vmAsString);

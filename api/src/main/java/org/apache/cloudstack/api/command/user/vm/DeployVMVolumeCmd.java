@@ -144,7 +144,8 @@ public class DeployVMVolumeCmd extends BaseAsyncCreateCustomIdCmd implements Sec
             since = "4.4")
     private Long rootdisksize;
 
-    @Parameter(name = ApiConstants.GROUP, type = CommandType.STRING, description = "an optional group for the virtual machine")
+    @Parameter(name = ApiConstants.GROUP, type = CommandType.STRING, length = ApiConstants.INSTANCE_GROUP_NAME_INPUT_MAX_LENGTH,
+            description = "An optional group for the virtual machine. New names are trimmed and must contain 1 to 255 characters.")
     private String group;
 
     @Parameter(name = ApiConstants.HYPERVISOR, type = CommandType.STRING, description = "the hypervisor on which to deploy the virtual machine. "

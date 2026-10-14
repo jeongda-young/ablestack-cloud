@@ -298,6 +298,8 @@ public class ApiConstants {
     public static final String GROUP = "group";
     public static final String SUBGROUP = "subgroup";
     public static final String GROUP_ID = "groupid";
+    public static final String CLEAR_GROUP = "cleargroup";
+    public static final int INSTANCE_GROUP_NAME_INPUT_MAX_LENGTH = 1024;
     public static final String GSLB_LB_METHOD = "gslblbmethod";
     public static final String GSLB_SERVICE_DOMAIN_NAME = "gslbdomainname";
     public static final String GSLB_SERVICE_TYPE = "gslbservicetype";

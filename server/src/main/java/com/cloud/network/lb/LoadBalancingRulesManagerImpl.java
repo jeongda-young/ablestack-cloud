@@ -545,8 +545,7 @@ public class LoadBalancingRulesManagerImpl<Type> extends ManagerBase implements 
                         loadBalancer.setState(FirewallRule.State.Active);
                         logger.debug("LB rule {} state is set to Active", loadBalancer);
                         _lbDao.persist(loadBalancer);
-                        vmGroup.setState(AutoScaleVmGroup.State.ENABLED);
-                        _autoScaleVmGroupDao.persist(vmGroup);
+                        _autoScaleVmGroupDao.updateState(vmGroupid, AutoScaleVmGroup.State.NEW, AutoScaleVmGroup.State.ENABLED);
                         logger.debug("LB Auto Scale Vm Group: {} is set to Enabled state.", vmGroup);
                     }
                 });
@@ -1246,8 +1245,7 @@ public class LoadBalancingRulesManagerImpl<Type> extends ManagerBase implements 
         try {
             loadBalancer.setState(FirewallRule.State.Add);
             _lbDao.persist(loadBalancer);
-            applyLoadBalancerConfig(loadBalancerId);
-            success = true;
+            success = applyLoadBalancerConfig(loadBalancerId);
         } catch (ResourceUnavailableException e) {
             logger.warn("Unable to apply the load balancer config because resource is unavailable.", e);
             success = false;
@@ -1578,8 +1576,10 @@ public class LoadBalancingRulesManagerImpl<Type> extends ManagerBase implements 
             if (_autoScaleVmGroupDao.isAutoScaleLoadBalancer(loadBalancerId)) {
                 List<Long> vmIdsList = new ArrayList<>(vmIdIpMap.keySet());
                 _lb2VmMapDao.remove(loadBalancer.getId(), vmIdsList, null);
-                for (Long instanceId: vmIdsList){
-                    autoScaleVmGroupVmMapDao.removeByVm(instanceId);
+                if (!isAutoScaleVM) {
+                    for (Long instanceId : vmIdsList) {
+                        autoScaleVmGroupVmMapDao.removeByVm(instanceId);
+                    }
                 }
             }
 
