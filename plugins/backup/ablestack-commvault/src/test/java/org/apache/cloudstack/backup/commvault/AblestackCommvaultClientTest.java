@@ -25,6 +25,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.delete;
 import static com.github.tomakehurst.wiremock.client.WireMock.deleteRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
+import static com.github.tomakehurst.wiremock.client.WireMock.equalToJson;
 import static com.github.tomakehurst.wiremock.client.WireMock.matchingJsonPath;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static org.junit.Assert.assertEquals;
@@ -158,7 +159,11 @@ public class AblestackCommvaultClientTest {
     @Test
     public void catalogAvailabilityRequiresTheSavedPathAndJob() throws Exception {
         ThirdPartyBackupVolumeService.ArtifactInventory inventory = newInventory();
+        wireMockRule.stubFor(post(urlEqualTo("/api/DoBrowse")).atPriority(10)
+                .willReturn(aResponse().withStatus(400).withBody("{\"errorMessage\":\"Invalid JSON browse types\"}")));
         wireMockRule.stubFor(post(urlEqualTo("/api/DoBrowse"))
+                .atPriority(1)
+                .withRequestBody(equalToJson("{\"opType\":0,\"options\":{\"showDeletedFiles\":true,\"restoreIndex\":true}}", true, true))
                 .willReturn(aResponse().withStatus(200).withBody(catalogResult("1127"))));
 
         assertTrue(inventory.exists(artifact()));
@@ -167,8 +172,25 @@ public class AblestackCommvaultClientTest {
                 .withRequestBody(matchingJsonPath("$.timeRange.toTime", equalTo("1791791903"))));
 
         wireMockRule.stubFor(post(urlEqualTo("/api/DoBrowse"))
+                .atPriority(1)
+                .withRequestBody(equalToJson("{\"opType\":0,\"options\":{\"showDeletedFiles\":true,\"restoreIndex\":true}}", true, true))
                 .willReturn(aResponse().withStatus(200).withBody(catalogResult("9999"))));
         assertThrows(CloudRuntimeException.class, () -> newInventory().exists(artifact()));
+    }
+
+    @Test
+    public void metadataCatalogBrowseChecksTheManifestWithJsonOperationTypes() throws Exception {
+        ThirdPartyBackupVolumeService.ArtifactInventory inventory = newInventory();
+        ThirdPartyBackupManifest.Artifact metadata = artifact();
+        metadata.path = "/mnt/staging/vm/recovery-point";
+        metadata.checkpointName = "recovery-point";
+        metadata.jobId = "1129";
+        wireMockRule.stubFor(post(urlEqualTo("/api/DoBrowse"))
+                .withRequestBody(equalToJson("{\"opType\":0,\"options\":{\"showDeletedFiles\":true,\"restoreIndex\":true},"
+                        + "\"paths\":[{\"path\":\"/mnt/staging/vm/recovery-point\"}]}", true, true))
+                .willReturn(aResponse().withStatus(200).withBody(catalogResult("1129").replace("root.qcow2", "backup-manifest.json"))));
+
+        assertTrue(inventory.exists(metadata));
     }
 
     @Test

@@ -1530,7 +1530,8 @@ public class AblestackCommvaultClient {
         String expected = (metadata ? artifactPath.resolve(ThirdPartyBackupManifest.FILE_NAME) : artifactPath).toString();
         String directory = java.nio.file.Path.of(expected).getParent().toString();
         ObjectNode request = OBJECT_MAPPER.createObjectNode();
-        request.put("opType", "browse");
+        // Match Commvault's SDK JSON enum instead of the lowercase XML operation name.
+        request.put("opType", 0);
         ObjectNode entity = request.putObject("entity");
         for (String key : List.of("clientId", "applicationId", "subclientId", "backupsetId", "instanceId")) {
             String value = source.path(key).asText();
@@ -1545,7 +1546,7 @@ public class AblestackCommvaultClient {
         if (backupTime <= 0) { throw new CloudRuntimeException("Commvault artifact backup time is invalid"); }
         request.putObject("timeRange").put("toTime", backupTime);
         request.set("paths", buildPathsJson(directory));
-        request.putObject("options").put("showDeletedFiles", 1).put("restoreIndex", 1);
+        request.putObject("options").put("showDeletedFiles", true).put("restoreIndex", true);
         request.putObject("mode").put("mode", 2);
         ArrayNode queries = request.putArray("queries");
         queries.addObject().put("type", 0).put("queryId", "dataQuery").putObject("dataParam")
