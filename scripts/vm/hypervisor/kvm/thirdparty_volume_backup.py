@@ -714,32 +714,61 @@ def record_completed_transfers(plan, job, manifest):
     atomic(receipt, {"version": 1, "backupUuid": job.name, "state": "COMPLETED", "manifest": manifest})
 
 
-def finalize_host(plan, job, manifest):
+def finalize_host(plan, job, manifest, purge_staging=False):
     """Retry local cleanup without transferring data or deleting the current checkpoint."""
     record_completed_transfers(plan, job, manifest)
     finalization = job / "volume-finalization.json"
+    recorded = {}
     if finalization.exists():
         recorded = json.loads(finalization.read_text())
         if recorded.get("version") != 1 or recorded.get("backupUuid") != job.name:
             raise RuntimeError("Existing Host finalization ownership is unconfirmed")
-        if recorded.get("state") == "COMPLETED":
-            return
-    atomic(finalization, {"version": 1, "backupUuid": job.name, "state": "WAITING"})
-    stage, root, engine = backup_cleanup_paths(plan, job)
+    # The engine finishes first. Only the controller can authorize metadata removal,
+    # after its checkpoint XML has been durably saved outside staging.
+    cleanup_started = (recorded.get("state") == "COMPLETED"
+                       and recorded.get("stagingCleanupState") in ("WAITING", "COMPLETED")
+                       and recorded.get("stagingPath") == plan["backupPath"])
+    stage, root, engine = backup_cleanup_paths(plan, job, completed_cleanup=cleanup_started)
     if not engine.is_file():
         raise RuntimeError("Source engine and original staging filesystem identity are unconfirmed")
-    cleanup_source(plan, job, engine, keep_checkpoint=True)
-    for volume in manifest["volumes"]:
-        artifact = Path(volume["chain"][-1]["path"])
-        if artifact.parent != root or artifact.is_symlink():
-            raise RuntimeError("Invalid completed artifact cleanup destination")
-        artifact.unlink(missing_ok=True)
+    if recorded.get("state") != "COMPLETED":
+        atomic(finalization, {"version": 1, "backupUuid": job.name, "state": "WAITING"})
+        cleanup_source(plan, job, engine, keep_checkpoint=True)
+        for volume in manifest["volumes"]:
+            artifact = Path(volume["chain"][-1]["path"])
+            if artifact.parent != root or artifact.is_symlink():
+                raise RuntimeError("Invalid completed artifact cleanup destination")
+            artifact.unlink(missing_ok=True)
     reservations = stage / ".volume-reservations"
     with (reservations / "capacity.lock").open("a") as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         close_admission(job, "Backup staging completed\n")
         remove_reservation(reservations / (job.name + ".json"))
-    atomic(finalization, {"version": 1, "backupUuid": job.name, "state": "COMPLETED"})
+    result = {"version": 1, "backupUuid": job.name, "state": "COMPLETED"}
+    if purge_staging or cleanup_started:
+        # This receipt allows a partial rmtree to be retried even if it already
+        # removed the in-directory ownership marker. Plan/mount checks still apply.
+        result.update(stagingCleanupState="WAITING", stagingPath=plan["backupPath"])
+        atomic(finalization, result)
+        if root.exists():
+            validate_job_directory(manifest["provider"], root, stage / manifest["provider"])
+            shutil.rmtree(root)
+        try:
+            root.parent.rmdir()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            if exc.errno not in (errno.ENOTEMPTY, errno.EEXIST):
+                raise
+        parent = root.parent if root.parent.exists() else root.parent.parent
+        fd = os.open(parent, os.O_RDONLY | os.O_DIRECTORY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        result["stagingCleanupState"] = "COMPLETED"
+    atomic(finalization, result)
+    return result
 
 
 def retire_parent_snapshots(plan, job):
@@ -857,7 +886,7 @@ def cleanup_source(plan, job, receipt, keep_checkpoint=False):
             path.unlink(missing_ok=True)
 
 
-def backup_cleanup_paths(plan, job):
+def backup_cleanup_paths(plan, job, completed_cleanup=False):
     manifest = plan["manifest"]
     job_id = manifest["backupUuid"]
     stage = Path(plan["stageRoot"]).resolve(strict=True)
@@ -866,9 +895,11 @@ def backup_cleanup_paths(plan, job):
     validate_job_directory(manifest["provider"], root, stage / manifest["provider"])
     if root.resolve() != expected.resolve() or job.name != job_id or root.is_symlink():
         raise RuntimeError("Invalid backup cleanup destination")
-    if root.exists() and ((root / ".volume-bootstrap").is_symlink() or not (root / ".volume-bootstrap").is_file()
-                          or (root / ".volume-bootstrap").read_text().strip() != job_id):
-        raise RuntimeError("Backup directory ownership is unconfirmed; existing data is protected")
+    if root.exists():
+        marker = root / ".volume-bootstrap"
+        if (marker.is_symlink() or (marker.exists() and marker.read_text().strip() != job_id)
+                or (not marker.is_file() and not completed_cleanup)):
+            raise RuntimeError("Backup directory ownership is unconfirmed; existing data is protected")
     receipt = job / "volume-engine.json"
     if receipt.exists():
         engine = json.loads(receipt.read_text())
@@ -935,9 +966,9 @@ def main():
         if args.action == "finalize":
             plan = json.loads(file.read_text())
             manifest = json.loads(Path(args.completed_manifest_file).read_text())
-            finalize_host(plan, file.parent, manifest)
+            result = finalize_host(plan, file.parent, manifest, purge_staging=True)
             if args.result_file:
-                atomic(Path(args.result_file), {"version": 1, "backupUuid": file.parent.name, "state": "COMPLETED"})
+                atomic(Path(args.result_file), result)
             return 0
         return run_backup(args.plan_file)
 

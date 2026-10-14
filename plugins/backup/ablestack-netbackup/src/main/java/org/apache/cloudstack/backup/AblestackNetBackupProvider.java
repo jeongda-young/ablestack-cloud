@@ -2423,11 +2423,13 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
 
             @Override
             public void completed(final Backup current) {
-                if (BACKUP_ENGINE_QCOW2.equals(getBackupDetail(current, DETAIL_BACKUP_ENGINE))) {
+                if (BACKUP_ENGINE_QCOW2.equals(getBackupDetail(current, DETAIL_BACKUP_ENGINE))
+                        && StringUtils.isBlank(getBackupDetail(current, DETAIL_CHECKPOINT_XML))) {
                     final String xml = readFileContentsOnHost(host.getId(), getBackupDetail(current, DETAIL_CHECKPOINT_PATH));
                     if (StringUtils.isBlank(xml)) {
                         throw new CloudRuntimeException("Completed QCOW2 backup checkpoint metadata is missing");
                     }
+                    backupDetailsDao.addDetail(current.getId(), DETAIL_CHECKPOINT_XML, xml, false);
                     current.getDetails().put(DETAIL_CHECKPOINT_XML, xml);
                 }
             }

@@ -17,8 +17,7 @@
 
 <template>
   <div class="staging-management">
-    <a-alert type="info" show-icon :message="$t('message.backup.staging.management')" class="staging-alert" />
-    <a-space class="staging-toolbar" wrap>
+    <div class="staging-toolbar">
       <a-select v-model:value="operation" :disabled="busy || loading" style="width: 140px">
         <a-select-option value="BACKUP">{{ $t('label.backup') }}</a-select-option>
         <a-select-option value="RESTORE">{{ $t('label.restore') }}</a-select-option>
@@ -37,7 +36,7 @@
       <a-tooltip :title="$t('message.backup.staging.recheck')">
         <a-button v-if="canManage" :disabled="!canMutate || busy || loading" @click="run('RECHECK')">{{ $t('label.backup.staging.recheck') }}</a-button>
       </a-tooltip>
-    </a-space>
+    </div>
     <a-alert v-if="error" type="warning" show-icon :message="error" class="staging-alert" />
     <a-alert
       v-if="!loading && !error && !info"
@@ -61,7 +60,11 @@
         <a-descriptions-item v-if="info.step" :label="$t('label.step')">{{ info.step }}</a-descriptions-item>
         <a-descriptions-item v-if="info.volumecount" :label="$t('label.backup.staging.volume.progress')">{{ info.volumeindex || '—' }} / {{ info.volumecount }}</a-descriptions-item>
         <a-descriptions-item v-if="info.stagingqueue" :label="$t('label.backup.staging.state')">{{ info.stagingqueue.state }}<div v-if="info.stagingqueue.reason">{{ info.stagingqueue.reason }}</div></a-descriptions-item>
-        <a-descriptions-item v-if="info.cleanupstate" :label="$t('label.backup.cleanup.state')">{{ info.cleanupstate }}<div v-if="info.cleanupreason">{{ info.cleanupreason }}</div></a-descriptions-item>
+        <a-descriptions-item v-if="info.cleanupstate" :label="$t('label.backup.cleanup.state')">
+          {{ info.cleanupstate === 'NONE' ? $t('label.backup.staging.cleanup.none') : info.cleanupstate }}
+          <div v-if="info.cleanupreason">{{ info.cleanupreason }}</div>
+          <small v-if="successfulBackup">{{ $t('message.backup.staging.metadata.persisted') }}</small>
+        </a-descriptions-item>
         <a-descriptions-item v-if="operation === 'RESTORE' && info.vmrestore" :label="$t('label.backup.vm.restore.result')">{{ info.vmrestore.outcome }} · {{ info.vmrestore.phase }}</a-descriptions-item>
       </a-descriptions>
       <a-alert v-if="diagnosticErrors" type="warning" show-icon :message="diagnosticErrors" class="staging-alert" />
@@ -89,14 +92,15 @@
               <template v-else-if="column.key === 'job'">
                 <div>{{ record.externaljobid || (record.submissionpending ? 'UNCONFIRMED' : '—') }}</div>
                 <small v-if="record.externalid">{{ $t('label.backup.staging.catalog.reference') }}: {{ record.externalid }}</small>
-                <small v-if="record.backuptime">{{ record.backuptime }}</small>
+                <small v-if="record.backuptime">{{ backupTime(record.backuptime) }}</small>
               </template>
               <template v-else-if="column.key === 'state'">
                 {{ record.restorestate || (record.completed ? 'COMPLETED' : record.terminal ? 'TERMINAL' : record.submissionpending ? 'UNCONFIRMED' : record.externaljobid ? 'UNKNOWN' : 'NOT_STARTED') }}
                 <small v-if="record.failure">{{ record.failure }}</small><small v-if="record.queryerror">{{ record.queryerror }}</small>
               </template>
               <template v-else-if="column.key === 'availability'">
-                <a-tooltip :title="record.availabilityerror"><span>{{ record.availability || 'UNKNOWN' }}</span></a-tooltip>
+                <a-tag :color="availabilityColor(record)">{{ availabilityLabel(record) }}</a-tag>
+                <small v-if="record.availabilityerror" class="staging-error">{{ record.availabilityerror }}</small>
                 <small v-if="record.availabilitycheckedat">{{ $toLocaleDate(record.availabilitycheckedat) }}</small>
               </template>
             </template>
@@ -195,18 +199,26 @@ export default {
       return [this.info?.hosterror, this.info?.reservationerror, this.info?.reconciliationerror,
         this.info?.vmrestore?.failure, this.info?.vmrestore?.recoveryerror, this.info?.vmrestore?.queryerror].filter(Boolean).join(' · ')
     },
+    availabilityErrors () { return (this.info?.artifact || []).filter(row => row.availabilityerror) },
+    successfulBackup () {
+      return this.operation === 'BACKUP' && this.resource.status === 'BackedUp' &&
+        this.info?.hoststate === 'COMPLETED' && this.info?.stagingqueue?.state === 'RELEASED' &&
+        this.info?.cleanupstate === 'COMPLETED'
+    },
     situation () {
       let key = 'inspect'
       let type = 'info'
       if (this.info?.historical) {
         key = 'history'
-      } else if (this.diagnosticErrors) {
+      } else if (this.diagnosticErrors || this.availabilityErrors.length) {
         key = 'query.failed'; type = 'warning'
       } else if (this.unresolvedArtifacts.some(row => row.submissionpending)) {
         key = 'unconfirmed'; type = 'warning'
       } else if (this.canCleanup || ['WAITING', 'RUNNING'].includes(this.info?.cleanupstate) ||
         ['WAITING', 'RUNNING'].includes(this.info?.sourcecleanupstate) || ['WAITING', 'RUNNING'].includes(this.info?.jobcleanupstate)) {
         key = 'cleanup.pending'; type = 'warning'
+      } else if (this.successfulBackup) {
+        key = 'backup.completed'; type = 'success'
       } else if (this.info?.cleanupstate === 'COMPLETED') key = 'cleanup.completed'
       return { type, title: 'message.backup.staging.' + key + '.title', description: 'message.backup.staging.' + key }
     },
@@ -225,9 +237,9 @@ export default {
     },
     columns () {
       return [{ key: 'volume', title: this.$t('label.backup.staging.volume.file'), width: 350 },
-        { key: 'job', title: this.$t('label.backup.staging.external.job'), width: 300 },
-        { key: 'state', title: this.$t('label.backup.staging.external.state'), width: 200 },
-        { key: 'availability', title: this.$t('label.backup.staging.file.availability'), width: 150 }]
+        { key: 'job', title: this.$t('label.backup.staging.external.job'), width: 220 },
+        { key: 'state', title: this.$t('label.backup.staging.external.state'), width: 140 },
+        { key: 'availability', title: this.$t('label.backup.staging.file.availability'), width: 200, fixed: 'right' }]
     },
     vmColumns () {
       return [{ key: 'volume', title: this.$t('label.backup.staging.volume.destination'), width: 400 },
@@ -257,6 +269,23 @@ export default {
   mounted () { this.load() },
   beforeUnmount () { this.disposed = true; this.requestToken++ },
   methods: {
+    availabilityLabel (artifact) {
+      const key = artifact.availabilityerror ? 'query.failed'
+        : artifact.availability === 'AVAILABLE' ? 'available'
+          : artifact.availability === 'MISSING' ? 'missing'
+            : artifact.availabilitycheckedat ? 'unknown' : 'not.checked'
+      return this.$t('label.backup.staging.file.' + key)
+    },
+    availabilityColor (artifact) {
+      if (artifact.availabilityerror) return 'orange'
+      if (artifact.availability === 'AVAILABLE') return 'green'
+      if (artifact.availability === 'MISSING') return 'red'
+      return undefined
+    },
+    backupTime (value) {
+      const date = /^\d+$/.test(String(value)) ? new Date(Number(value) * 1000) : new Date(value)
+      return Number.isNaN(date.getTime()) ? String(value) : this.$toLocaleDate(date.toISOString())
+    },
     bytes (value) { return value == null ? this.$t('label.backup.staging.not.confirmed') : (Number(value) / 1073741824).toFixed(2) + ' GiB' },
     current (token) { return !this.disposed && token === this.requestToken },
     stagingInfo (result) {
@@ -325,6 +354,8 @@ export default {
 
 <style scoped>
 .staging-toolbar, .staging-alert, .staging-artifacts, .staging-actions { margin-bottom: 16px; }
+.staging-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.staging-error { color: var(--ant-warning-color, #ad6800); }
 .staging-actions, .staging-details { margin-top: 16px; }
 .staging-management { overflow-wrap: anywhere; }
 .staging-management small { display: block; }

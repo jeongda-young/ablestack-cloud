@@ -20,16 +20,30 @@ package org.apache.cloudstack.backup;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotSame;
 import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertThrows;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import java.util.List;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.cloudstack.backup.commvault.AblestackCommvaultClient;
 import org.junit.Test;
+import org.apache.cloudstack.backup.dao.BackupDetailsDao;
+import org.springframework.test.util.ReflectionTestUtils;
+
+import com.cloud.agent.AgentManager;
+import com.cloud.agent.api.Answer;
+import com.cloud.host.HostVO;
+import com.cloud.utils.exception.CloudRuntimeException;
+import com.cloud.vm.VirtualMachine;
 
 public class AblestackCommvaultBackupProviderTest {
     @Test
@@ -74,5 +88,40 @@ public class AblestackCommvaultBackupProviderTest {
 
         assertEquals("7", provider.resolvePrimaryStoragePolicyCopyId(1L, "4", changedJob, client));
         verify(client, times(1)).isPrimaryStoragePolicyCopy("4", "7");
+    }
+
+    @Test
+    public void checkpointIsSavedBeforeDeletionAndRetriesUseTheSavedCopy() throws Exception {
+        AblestackCommvaultBackupProvider provider = new AblestackCommvaultBackupProvider();
+        AgentManager agent = mock(AgentManager.class);
+        BackupDetailsDao detailsDao = mock(BackupDetailsDao.class);
+        ReflectionTestUtils.setField(provider, "agentManager", agent);
+        ReflectionTestUtils.setField(provider, "backupDetailsDao", detailsDao);
+        Backup backup = mock(Backup.class);
+        HostVO host = mock(HostVO.class);
+        when(host.getId()).thenReturn(14L);
+        when(backup.getId()).thenReturn(1L);
+        Map<String, String> details = new HashMap<>();
+        details.put("commvault.backup.engine", "QCOW2");
+        details.put("commvault.checkpoint.path", "/staging/checkpoints/current.xml");
+        when(backup.getDetails()).thenReturn(details);
+        when(backup.getDetail(any())).thenAnswer(invocation -> details.get(invocation.getArgument(0)));
+        String xml = "<domaincheckpoint><name>current</name></domaincheckpoint>";
+        when(agent.send(eq(14L), any(AblestackCommvaultReadFileCommand.class)))
+                .thenAnswer(invocation -> new Answer(invocation.getArgument(1), true, xml));
+        ThirdPartyBackupVolumeService.Transfer transfer = ReflectionTestUtils.invokeMethod(provider, "volumeTransfer", mock(VirtualMachine.class), backup, host);
+
+        doThrow(new CloudRuntimeException("DB unavailable")).doNothing().when(detailsDao)
+                .addDetail(1L, "commvault.checkpoint.xml", xml, false);
+        assertThrows(CloudRuntimeException.class, () -> transfer.completed(backup));
+        assertEquals(null, details.get("commvault.checkpoint.xml"));
+        transfer.completed(backup);
+        assertEquals(xml, details.get("commvault.checkpoint.xml"));
+        // Simulate a lost finalization response: staging is now gone, metadata is durable.
+        when(agent.send(eq(14L), any(AblestackCommvaultReadFileCommand.class)))
+                .thenThrow(new CloudRuntimeException("Staging was already removed"));
+        transfer.completed(backup);
+        verify(agent, times(2)).send(eq(14L), any(AblestackCommvaultReadFileCommand.class));
+        verify(detailsDao, times(2)).addDetail(1L, "commvault.checkpoint.xml", xml, false);
     }
 }

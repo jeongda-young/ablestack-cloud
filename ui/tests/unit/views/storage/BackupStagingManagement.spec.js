@@ -21,10 +21,10 @@ import BackupStagingManagement from '@/views/storage/BackupStagingManagement.vue
 
 jest.mock('@/api', () => ({ getAPI: jest.fn(), postAPI: jest.fn() }))
 
-async function mount (info, operation = 'BACKUP') {
+async function mount (info, operation = 'BACKUP', resource = {}) {
   getAPI.mockResolvedValue({ getbackupstaginginforesponse: { backupstaginginfo: { stagingjobid: 'staging-1', ...info } } })
   const wrapper = shallowMount(BackupStagingManagement, {
-    props: { resource: { id: 'backup-1', status: 'Failed', stagingqueue: { operation } } },
+    props: { resource: { id: 'backup-1', status: 'Failed', stagingqueue: { operation }, ...resource } },
     global: {
       mocks: {
         $store: { getters: { apis: { reconcileBackupStagingJob: {} } } },
@@ -94,4 +94,43 @@ test('a completed restore or historical attempt cannot acquire a cleanup action'
     expect(wrapper.vm.canCleanup).toBe(false)
     wrapper.unmount()
   }
+})
+
+test('a successful backup reports confirmed full staging cleanup', async () => {
+  const wrapper = await mount({ hoststate: 'COMPLETED', cleanupstate: 'COMPLETED', stagingqueue: { state: 'RELEASED' } }, 'BACKUP', { status: 'BackedUp' })
+  expect(wrapper.vm.situation.title).toBe('message.backup.staging.backup.completed.title')
+  expect(wrapper.vm.situation.type).toBe('success')
+  expect(wrapper.vm.canCleanup).toBe(false)
+  wrapper.unmount()
+})
+
+test('completion is not shown while the staging reservation or source cleanup is pending', async () => {
+  for (const info of [{ stagingqueue: { state: 'ADMITTED' } }, { stagingqueue: { state: 'RELEASED' }, sourcecleanupstate: 'WAITING' }, { stagingqueue: { state: 'RELEASED' }, cleanupstate: 'NONE' }]) {
+    const wrapper = await mount({ hoststate: 'COMPLETED', cleanupstate: 'NONE', ...info }, 'BACKUP', { status: 'BackedUp' })
+    expect(wrapper.vm.situation.title).not.toBe('message.backup.staging.backup.completed.title')
+    wrapper.unmount()
+  }
+})
+
+test('a catalog query error remains visible for completed external jobs', async () => {
+  const artifact = { completed: true, availability: 'UNKNOWN', availabilitycheckedat: '2026-10-14T00:21:57Z', availabilityerror: 'Commvault artifact catalog query failed' }
+  const wrapper = await mount({ hoststate: 'COMPLETED', cleanupstate: 'NONE', stagingqueue: { state: 'RELEASED' }, artifact: [artifact] }, 'BACKUP', { status: 'BackedUp' })
+  expect(wrapper.vm.situation.title).toBe('message.backup.staging.query.failed.title')
+  expect(wrapper.vm.availabilityLabel(artifact)).toBe('label.backup.staging.file.query.failed')
+  expect(wrapper.vm.availabilityColor(artifact)).toBe('orange')
+  wrapper.unmount()
+})
+
+test('unqueried, unconfirmed, present and missing catalog files have distinct labels', async () => {
+  const wrapper = await mount({})
+  for (const [artifact, label] of [
+    [{ completed: true, availability: 'UNKNOWN' }, 'not.checked'],
+    [{ availability: 'UNKNOWN', availabilitycheckedat: '2026-10-14T00:21:57Z' }, 'unknown'],
+    [{ availability: 'AVAILABLE' }, 'available'],
+    [{ availability: 'MISSING' }, 'missing']
+  ]) {
+    expect(wrapper.vm.availabilityLabel(artifact)).toBe('label.backup.staging.file.' + label)
+  }
+  expect(wrapper.vm.backupTime('1791791903')).toBe('2026-10-12T07:58:23.000Z')
+  wrapper.unmount()
 })

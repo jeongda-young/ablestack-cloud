@@ -401,4 +401,100 @@ public class ThirdPartyBackupArtifactPersistenceTest {
         verify(agentManager, never()).send(eq(HOST_ID), Mockito.<Command>argThat(command -> command instanceof AblestackVolumeStagingCommand
                 && "CANCEL".equals(((AblestackVolumeStagingCommand) command).getAction())));
     }
+
+    private void prepareFinalization() throws Exception {
+        prepare("ablestack-commvault");
+        manifest.getCurrentArtifacts().forEach(artifact -> {
+            artifact.completed = true;
+            artifact.jobId = "1127";
+            artifact.externalId = "1127";
+        });
+        ThirdPartyBackupManifest.Artifact metadata = new ThirdPartyBackupManifest.Artifact();
+        metadata.backupUuid = JOB_ID;
+        metadata.path = backup.getExternalId();
+        metadata.sourceHost = "host";
+        metadata.completed = true;
+        metadata.jobId = "1129";
+        metadata.externalId = "1129";
+        manifest.setMetadata(metadata);
+        manifest.setComplete(true);
+        persisted.put(ThirdPartyBackupManifest.DETAIL_KEY, manifest.toJson());
+        loaded.put(ThirdPartyBackupManifest.DETAIL_KEY, manifest.toJson());
+        ThirdPartyBackupStagingService staging = mock(ThirdPartyBackupStagingService.class);
+        ReflectionTestUtils.setField(service, "stagingService", staging);
+        when(staging.getStageRootPath("ablestack-commvault")).thenReturn("/staging/ablestack-commvault");
+        when(backupDao.update(BACKUP_ID, backup)).thenReturn(true);
+        when(agentManager.send(eq(HOST_ID), any(AblestackVolumeStagingCommand.class))).thenAnswer(invocation ->
+                new Answer(invocation.getArgument(1), true,
+                        "{\"backupUuid\":\"backup-id\",\"stagingCleanupState\":\"COMPLETED\"}"));
+    }
+
+    @Test
+    public void checkpointPersistencePrecedesHostDirectoryRemovalAndFailureBlocksDeletion() throws Exception {
+        prepareFinalization();
+        ThirdPartyBackupVolumeService.Transfer transfer = mock(ThirdPartyBackupVolumeService.Transfer.class);
+        doThrow(new CloudRuntimeException("Checkpoint DB write failed")).when(transfer).completed(backup);
+        ReflectionTestUtils.invokeMethod(service, "finalizeBackup", backup, host, manifest, transfer);
+        verify(agentManager, never()).send(eq(HOST_ID), Mockito.<Command>argThat(command -> command instanceof AblestackVolumeStagingCommand
+                && "FINALIZE_BACKUP".equals(((AblestackVolumeStagingCommand) command).getAction())));
+        verify(backup, never()).setStatus(Backup.Status.BackedUp);
+        assertEquals("WAITING", persisted.get(ThirdPartyBackupManifest.CLEANUP_STATE_KEY));
+    }
+
+    @Test
+    public void completeDirectoryRemovalIsRequiredBeforeCompletionAndCapacityRelease() throws Exception {
+        prepareFinalization();
+        ThirdPartyBackupVolumeService.Transfer transfer = mock(ThirdPartyBackupVolumeService.Transfer.class);
+        GlobalLock lock = mock(GlobalLock.class);
+        when(lock.lock(Mockito.anyInt())).thenReturn(true);
+        try (MockedStatic<GlobalLock> locks = Mockito.mockStatic(GlobalLock.class);
+                MockedStatic<Transaction> transactions = Mockito.mockStatic(Transaction.class)) {
+            locks.when(() -> GlobalLock.getInternLock(anyString())).thenReturn(lock);
+            transactions.when(() -> Transaction.execute(Mockito.<TransactionCallback<Boolean>>any()))
+                    .thenAnswer(invocation -> invocation.<TransactionCallback<Boolean>>getArgument(0).doInTransaction(null));
+            ReflectionTestUtils.invokeMethod(service, "finalizeBackup", backup, host, manifest, transfer);
+        }
+        InOrder order = inOrder(transfer, agentManager, backup);
+        order.verify(transfer).completed(backup);
+        order.verify(agentManager).send(eq(HOST_ID), Mockito.<Command>argThat(command -> command instanceof AblestackVolumeStagingCommand
+                && "FINALIZE_BACKUP".equals(((AblestackVolumeStagingCommand) command).getAction())));
+        order.verify(backup).setStatus(Backup.Status.BackedUp);
+        assertEquals("COMPLETED", persisted.get(ThirdPartyBackupManifest.CLEANUP_STATE_KEY));
+        assertEquals("RELEASED", new Gson().fromJson(persisted.get(ThirdPartyBackupAdmission.BACKUP_KEY), ThirdPartyBackupAdmission.Entry.class).state);
+    }
+
+    @Test
+    public void legacyHostFinalizationWithoutDirectoryRemovalProofRemainsPending() throws Exception {
+        prepareFinalization();
+        when(agentManager.send(eq(HOST_ID), any(AblestackVolumeStagingCommand.class)))
+                .thenAnswer(invocation -> new Answer(invocation.getArgument(1), true, "Host finalization completed"));
+        ThirdPartyBackupVolumeService.Transfer transfer = mock(ThirdPartyBackupVolumeService.Transfer.class);
+        ReflectionTestUtils.invokeMethod(service, "finalizeBackup", backup, host, manifest, transfer);
+        verify(backup, never()).setStatus(Backup.Status.BackedUp);
+        assertEquals("WAITING", persisted.get(ThirdPartyBackupManifest.CLEANUP_STATE_KEY));
+        assertEquals("ADMITTED", new Gson().fromJson(persisted.get(ThirdPartyBackupAdmission.BACKUP_KEY), ThirdPartyBackupAdmission.Entry.class).state);
+    }
+
+    @Test
+    public void recheckCleansAnOlderCompletedBackupWithoutSubmittingAnotherTransfer() throws Exception {
+        prepareFinalization();
+        when(backup.getStatus()).thenReturn(Backup.Status.BackedUp);
+        ThirdPartyBackupVolumeService.Transfer transfer = mock(ThirdPartyBackupVolumeService.Transfer.class);
+        AblestackBackupJobStatusCommand statusCommand = new AblestackBackupJobStatusCommand(JOB_ID);
+        BackupAnswer completed = new BackupAnswer(statusCommand, true, "Engine terminated");
+        completed.setState("COMPLETED");
+        when(agentManager.send(eq(HOST_ID), any(AblestackBackupJobStatusCommand.class))).thenReturn(completed);
+        GlobalLock lock = mock(GlobalLock.class);
+        when(lock.lock(Mockito.anyInt())).thenReturn(true);
+        try (MockedStatic<GlobalLock> locks = Mockito.mockStatic(GlobalLock.class);
+                MockedStatic<Transaction> transactions = Mockito.mockStatic(Transaction.class)) {
+            locks.when(() -> GlobalLock.getInternLock(anyString())).thenReturn(lock);
+            transactions.when(() -> Transaction.execute(Mockito.<TransactionCallback<Boolean>>any()))
+                    .thenAnswer(invocation -> invocation.<TransactionCallback<Boolean>>getArgument(0).doInTransaction(null));
+            ReflectionTestUtils.invokeMethod(service, "manageBackup", backup, host, "RECHECK", null, null, transfer);
+        }
+        verify(transfer).completed(backup);
+        verify(transfer, never()).backup(any(), Mockito.anyBoolean());
+        assertEquals("COMPLETED", persisted.get(ThirdPartyBackupManifest.CLEANUP_STATE_KEY));
+    }
 }

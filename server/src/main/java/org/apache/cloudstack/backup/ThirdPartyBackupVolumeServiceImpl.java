@@ -739,6 +739,16 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
                 } catch (RuntimeException e) { errors.add(artifact.path + ": " + e.getMessage()); }
             }
             if (!errors.isEmpty()) { throw new CloudRuntimeException(String.join("; ", errors)); }
+            if (host != null && ThirdPartyBackupManifest.hasCompletedTransfers(backup)
+                    && java.util.Set.of(Backup.Status.BackingUp, Backup.Status.BackedUp).contains(backup.getStatus())
+                    && !"COMPLETED".equals(backup.getDetail(ThirdPartyBackupManifest.CLEANUP_STATE_KEY))) {
+                if (!hostTerminal(host, "BACKUP", backup.getUuid())) {
+                    throw new CloudRuntimeException("Host engine termination is unconfirmed; completed staging cleanup remains pending");
+                }
+                // manage already owns the pipeline/lifecycle locks; do not acquire
+                // reconcile's pipeline lock again while repairing an older completion.
+                finalizeBackup(backup, host, manifest, transfer);
+            }
         } else {
             if (!isFailedPipeline(backup)) { throw new CloudRuntimeException("Only a failed or canceled source pipeline permits staging cleanup retry"); }
             if (!"COMPLETED".equals(backup.getDetail(ThirdPartyBackupManifest.CLEANUP_STATE_KEY))
@@ -2764,7 +2774,13 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
                 }
                 return true;
             }
-            if (tracked.getStatus() != Backup.Status.BackingUp) { return true; }
+            // Older completed backups kept staging metadata. A recheck can finish
+            // their cleanup using the saved manifest and checkpoint without a new transfer.
+            boolean completedCleanupPending = tracked.getStatus() == Backup.Status.BackedUp
+                    && ThirdPartyBackupManifest.hasCompletedTransfers(tracked)
+                    && StringUtils.isBlank(tracked.getDetail(ThirdPartyBackupManifest.DELETE_PROGRESS_KEY))
+                    && !"COMPLETED".equals(tracked.getDetail(ThirdPartyBackupManifest.CLEANUP_STATE_KEY));
+            if (tracked.getStatus() != Backup.Status.BackingUp && !completedCleanupPending) { return true; }
             if (ThirdPartyBackupManifest.hasCompletedTransfers(tracked)) {
                 saveFinalizationWaiting(tracked, StringUtils.defaultIfBlank(
                         tracked.getDetail(ThirdPartyBackupManifest.FINALIZATION_DETAILS_KEY),
@@ -3069,11 +3085,18 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
             manifest.validate(true);
             long size = manifest.getCurrentArtifacts().stream().mapToLong(artifact -> artifact.size).reduce(0L, Math::addExact);
             validateCleanupMount(host, manifest);
+            // The Host engine may already be finalized, but metadata must survive
+            // until the provider durably records the checkpoint needed for retries/incrementals.
+            transfer.completed(backup);
             Answer finalized = agentManager.send(host.getId(), new AblestackVolumeStagingCommand(backup.getUuid(), "FINALIZE_BACKUP", -1, manifest.toJson()));
             if (finalized == null || !finalized.getResult()) {
                 throw new CloudRuntimeException(finalized == null ? "Host finalization returned no response" : finalized.getDetails());
             }
-            transfer.completed(backup);
+            com.google.gson.JsonObject result = new Gson().fromJson(finalized.getDetails(), com.google.gson.JsonObject.class);
+            if (result == null || !result.has("backupUuid") || !backup.getUuid().equals(result.get("backupUuid").getAsString())
+                    || !result.has("stagingCleanupState") || !"COMPLETED".equals(result.get("stagingCleanupState").getAsString())) {
+                throw new CloudRuntimeException("Host has not confirmed complete staging directory removal");
+            }
             if (manifest.getVolumes().stream().anyMatch(volume -> volume.engine.startsWith("RBD")
                     && StringUtils.isNotBlank(volume.chain.get(volume.chain.size() - 1).parentCheckpointName))
                     && !"COMPLETED".equals(backup.getDetail(ThirdPartyBackupManifest.SOURCE_CLEANUP_STATE_KEY))) {
@@ -3087,13 +3110,15 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
                 if (!backupDao.update(backup.getId(), backup)) { throw new CloudRuntimeException("Unable to persist logical backup completion"); }
                 backupDetailsDao.addDetail(backup.getId(), ThirdPartyBackupManifest.FINALIZATION_STATE_KEY, "COMPLETED", false);
                 backupDetailsDao.removeDetail(backup.getId(), ThirdPartyBackupManifest.FINALIZATION_DETAILS_KEY);
+                saveCleanupState(backup.getId(), "COMPLETED", null);
                 reconcileResourceCounts(backup);
                 return true;
             });
         } catch (Exception e) {
-            // The persisted backup remains BackingUp, so restart/provider reconciliation
-            // retries Host cleanup and completion without replaying any child transfer.
+            // Keep completed transfers and the durable checkpoint available for
+            // retries, including repairs of an older BackedUp record. Never replay a child transfer.
             saveFinalizationWaiting(backup, e.getMessage());
+            saveCleanupState(backup.getId(), "WAITING", e.getMessage());
             logger.warn("Logical backup [{}] transfers are complete; finalization will be retried: {}", backup.getUuid(), e.getMessage());
         }
     }

@@ -1555,7 +1555,7 @@ public class AblestackCommvaultClient {
         try {
             HttpJsonResponse response = executeJsonRequest("POST", "/DoBrowse", request);
             if (!response.isSuccessful() || StringUtils.isBlank(response.body)) {
-                throw new CloudRuntimeException("Commvault artifact catalog query failed");
+                throw catalogQueryFailure(response);
             }
             JsonNode root = OBJECT_MAPPER.readTree(response.body);
             JsonNode responses = root.path("browseResponses");
@@ -1605,6 +1605,29 @@ public class AblestackCommvaultClient {
             if (recover && exists) { artifact.jobId = recoveredJob; }
             return exists;
         } catch (IOException e) { throw new CloudRuntimeException("Cannot read Commvault artifact catalog", e); }
+    }
+
+    private CloudRuntimeException catalogQueryFailure(HttpJsonResponse response) {
+        StringBuilder message = new StringBuilder("Commvault artifact catalog query failed (/DoBrowse, HTTP ")
+                .append(response.statusCode).append(")");
+        if (StringUtils.isBlank(response.body)) {
+            message.append(": empty response");
+        } else {
+            // Keep the service error useful without exposing an entire response or HTML error page.
+            try {
+                JsonNode error = OBJECT_MAPPER.readTree(response.body);
+                if (error.has("errorCode") && error.path("errorCode").isValueNode()) {
+                    message.append("; errorCode=").append(error.path("errorCode").asText());
+                }
+                if (error.path("errorMessage").isTextual()) {
+                    String reason = error.path("errorMessage").asText().replaceAll("\\s+", " ").trim();
+                    message.append("; ").append(StringUtils.abbreviate(reason, 512));
+                }
+            } catch (IOException ignored) {
+                // The HTTP status remains available even when an intermediary returns non-JSON.
+            }
+        }
+        return new CloudRuntimeException(message.toString());
     }
 
     /** Erase only the unique staged path owned by this artifact, using its original Host's subclient. */

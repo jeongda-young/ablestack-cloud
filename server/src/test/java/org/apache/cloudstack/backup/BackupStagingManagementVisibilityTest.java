@@ -151,4 +151,35 @@ public class BackupStagingManagementVisibilityTest {
         details.put(ThirdPartyBackupManifest.DELETE_PROGRESS_KEY, "{\"complete\":false}");
         assertFalse(ThirdPartyBackupVolumeService.needsStagingManagement(backup, null));
     }
+
+    @Test
+    public void olderCompletedBackupsRemainInspectableUntilMetadataCopiesAreRemoved() {
+        when(backup.getStatus()).thenReturn(Backup.Status.BackedUp);
+        String root = "/stage/ablestack-commvault/vm/2026.10.14.09.00.00.000";
+        ThirdPartyBackupManifest manifest = ThirdPartyBackupManifest.create("ablestack-commvault", "backup-1", "vm",
+                "2026.10.14.09.00.00.000", "FULL", "host", root, "QCOW2",
+                java.util.List.of(new Backup.VolumeInfo("volume-1", "root.qcow2", com.cloud.storage.Volume.Type.ROOT,
+                        1073741824L, 0L, null, null, null)), null, null);
+        manifest.getCurrentArtifacts().forEach(artifact -> {
+            artifact.completed = true;
+            artifact.externalId = "1127";
+            artifact.jobId = "1127";
+        });
+        ThirdPartyBackupManifest.Artifact metadata = new ThirdPartyBackupManifest.Artifact();
+        metadata.backupUuid = "backup-1";
+        metadata.path = root;
+        metadata.sourceHost = "host";
+        metadata.completed = true;
+        metadata.externalId = "1129";
+        metadata.jobId = "1129";
+        manifest.setMetadata(metadata);
+        manifest.setComplete(true);
+        details.put(ThirdPartyBackupManifest.DETAIL_KEY, manifest.toJson());
+        details.put(ThirdPartyBackupManifest.FINALIZATION_STATE_KEY, "COMPLETED");
+        details.put(ThirdPartyBackupManifest.CLEANUP_STATE_KEY, "NONE");
+        details.put(ThirdPartyBackupManifest.CATALOG_KEY, "{\"state\":\"AVAILABLE\"}");
+        assertTrue(ThirdPartyBackupVolumeService.needsStagingManagement(backup, null));
+        details.put(ThirdPartyBackupManifest.CLEANUP_STATE_KEY, "COMPLETED");
+        assertFalse(ThirdPartyBackupVolumeService.needsStagingManagement(backup, null));
+    }
 }

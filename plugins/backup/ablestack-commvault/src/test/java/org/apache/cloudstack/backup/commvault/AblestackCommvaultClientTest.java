@@ -25,9 +25,11 @@ import static com.github.tomakehurst.wiremock.client.WireMock.postRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.delete;
 import static com.github.tomakehurst.wiremock.client.WireMock.deleteRequestedFor;
 import static com.github.tomakehurst.wiremock.client.WireMock.equalTo;
+import static com.github.tomakehurst.wiremock.client.WireMock.matchingJsonPath;
 import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
 
 import java.util.List;
@@ -35,6 +37,10 @@ import java.util.List;
 import org.junit.Rule;
 import org.junit.Test;
 import org.apache.cloudstack.api.ServerApiException;
+import org.apache.cloudstack.backup.ThirdPartyBackupManifest;
+import org.apache.cloudstack.backup.ThirdPartyBackupVolumeService;
+
+import com.cloud.utils.exception.CloudRuntimeException;
 
 import com.github.tomakehurst.wiremock.junit.WireMockRule;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
@@ -117,6 +123,94 @@ public class AblestackCommvaultClientTest {
         assertThrows(ServerApiException.class, () -> newClient().getJobRetentionInfo("1055"));
         wireMockRule.verify(2, getRequestedFor(urlEqualTo(path)));
         wireMockRule.verify(2, postRequestedFor(urlEqualTo("/api/Login")));
+    }
+
+    @Test
+    public void catalogHttpFailureIncludesStatusAndServiceErrorInsteadOfReportingMissing() throws Exception {
+        ThirdPartyBackupVolumeService.ArtifactInventory inventory = newInventory();
+        wireMockRule.stubFor(post(urlEqualTo("/api/DoBrowse"))
+                .willReturn(aResponse().withStatus(400)
+                        .withBody("{\"errorCode\":12,\"errorMessage\":\"Invalid browse\\nrequest\",\"other\":\"not included\"}")));
+
+        CloudRuntimeException error = assertThrows(CloudRuntimeException.class, () -> inventory.exists(artifact()));
+        assertEquals("Commvault artifact catalog query failed (/DoBrowse, HTTP 400); errorCode=12; Invalid browse request", error.getMessage());
+    }
+
+    @Test
+    public void emptyCatalogResponseRemainsAQueryFailure() throws Exception {
+        ThirdPartyBackupVolumeService.ArtifactInventory inventory = newInventory();
+        wireMockRule.stubFor(post(urlEqualTo("/api/DoBrowse")).willReturn(aResponse().withStatus(200)));
+
+        CloudRuntimeException error = assertThrows(CloudRuntimeException.class, () -> inventory.exists(artifact()));
+        assertEquals("Commvault artifact catalog query failed (/DoBrowse, HTTP 200): empty response", error.getMessage());
+    }
+
+    @Test
+    public void nonJsonCatalogHttpFailureKeepsStatusWithoutIncludingHtml() throws Exception {
+        ThirdPartyBackupVolumeService.ArtifactInventory inventory = newInventory();
+        wireMockRule.stubFor(post(urlEqualTo("/api/DoBrowse"))
+                .willReturn(aResponse().withStatus(404).withBody("<html>Proxy error page</html>")));
+
+        CloudRuntimeException error = assertThrows(CloudRuntimeException.class, () -> inventory.exists(artifact()));
+        assertEquals("Commvault artifact catalog query failed (/DoBrowse, HTTP 404)", error.getMessage());
+    }
+
+    @Test
+    public void catalogAvailabilityRequiresTheSavedPathAndJob() throws Exception {
+        ThirdPartyBackupVolumeService.ArtifactInventory inventory = newInventory();
+        wireMockRule.stubFor(post(urlEqualTo("/api/DoBrowse"))
+                .willReturn(aResponse().withStatus(200).withBody(catalogResult("1127"))));
+
+        assertTrue(inventory.exists(artifact()));
+        wireMockRule.verify(postRequestedFor(urlEqualTo("/api/DoBrowse"))
+                .withRequestBody(matchingJsonPath("$.paths[0].path", equalTo("/mnt/staging/vm/recovery-point")))
+                .withRequestBody(matchingJsonPath("$.timeRange.toTime", equalTo("1791791903"))));
+
+        wireMockRule.stubFor(post(urlEqualTo("/api/DoBrowse"))
+                .willReturn(aResponse().withStatus(200).withBody(catalogResult("9999"))));
+        assertThrows(CloudRuntimeException.class, () -> newInventory().exists(artifact()));
+    }
+
+    @Test
+    public void onlyACompleteEmptyCatalogResultReportsMissing() throws Exception {
+        ThirdPartyBackupVolumeService.ArtifactInventory inventory = newInventory();
+        wireMockRule.stubFor(post(urlEqualTo("/api/DoBrowse"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"browseResponses\":["
+                        + "{\"respType\":0,\"browseResult\":{\"queryId\":\"dataQuery\",\"dataResultSet\":[]}},"
+                        + "{\"respType\":0,\"browseResult\":{\"queryId\":\"countQuery\",\"aggrResultSet\":{\"result\":0}}}]}")));
+
+        assertFalse(inventory.exists(artifact()));
+    }
+
+    private ThirdPartyBackupVolumeService.ArtifactInventory newInventory() throws Exception {
+        wireMockRule.stubFor(post(urlEqualTo("/api/Login"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"token\":\"test-token\"}")));
+        wireMockRule.stubFor(get(urlEqualTo("/api/Client"))
+                .willReturn(aResponse().withStatus(200)
+                        .withBody("{\"clientProperties\":[{\"client\":{\"clientEntity\":{\"clientId\":1,\"clientName\":\"ablecube4\"}}}]}")));
+        wireMockRule.stubFor(get(urlEqualTo("/api/Client/1"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"clientProperties\":[{}]}")));
+        wireMockRule.stubFor(get(urlEqualTo("/api/Subclient?clientId=1"))
+                .willReturn(aResponse().withStatus(200)
+                        .withBody("{\"subClientProperties\":[{\"subClientEntity\":{\"backupsetName\":\"i-2-220-VM\","
+                                + "\"applicationId\":29,\"subclientId\":2,\"backupsetId\":3,\"instanceId\":4}}]}")));
+        return newClient().volumeArtifactInventory("i-2-220-VM");
+    }
+
+    private ThirdPartyBackupManifest.Artifact artifact() {
+        ThirdPartyBackupManifest.Artifact artifact = new ThirdPartyBackupManifest.Artifact();
+        artifact.path = "/mnt/staging/vm/recovery-point/root.qcow2";
+        artifact.sourceHost = "ablecube4";
+        artifact.jobId = "1127";
+        artifact.backupTime = "1791791903";
+        artifact.completed = true;
+        return artifact;
+    }
+
+    private String catalogResult(String jobId) {
+        return "{\"browseResponses\":[{\"respType\":0,\"browseResult\":{\"queryId\":\"dataQuery\",\"dataResultSet\":["
+                + "{\"displayPath\":\"/mnt/staging/vm/recovery-point/root.qcow2\",\"advancedData\":{\"backupJobId\":\"" + jobId + "\"}}]}},"
+                + "{\"respType\":0,\"browseResult\":{\"queryId\":\"countQuery\",\"aggrResultSet\":{\"result\":1}}}]}";
     }
 
     private void stubTokenRenewal() {

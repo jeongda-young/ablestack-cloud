@@ -46,6 +46,12 @@ public interface ThirdPartyBackupVolumeService {
                 || StringUtils.isNotBlank(backup.getDetail(ThirdPartyBackupManifest.DELETE_PROGRESS_KEY))) {
             return false;
         }
+        // Older successful backups retained staging metadata. Keep their recheck
+        // action available until complete directory removal has been confirmed.
+        if (Backup.Status.BackedUp.equals(backup.getStatus()) && ThirdPartyBackupManifest.hasCompletedTransfers(backup)
+                && !"COMPLETED".equals(backup.getDetail(ThirdPartyBackupManifest.CLEANUP_STATE_KEY))) {
+            return true;
+        }
         if (needsCleanupInspection(backup.getDetail(ThirdPartyBackupManifest.CLEANUP_STATE_KEY))
                 || needsCleanupInspection(backup.getDetail(ThirdPartyBackupManifest.SOURCE_CLEANUP_STATE_KEY))
                 || needsCleanupInspection(backup.getDetail(ThirdPartyBackupManifest.JOB_CLEANUP_STATE_KEY))
@@ -167,7 +173,7 @@ public interface ThirdPartyBackupVolumeService {
         /** An external UI backup's pre/post hooks must finish before its child jobs may start. */
         default boolean ready() { return true; }
 
-        /** Persist engine checkpoint metadata after the Host finishes the entire logical backup. */
+        /** Durably persist engine checkpoint metadata before the Host removes staging; retries must use the saved copy. */
         default void completed(Backup backup) { }
 
         /** A failed checkpoint must not be reused as a healthy incremental source. */

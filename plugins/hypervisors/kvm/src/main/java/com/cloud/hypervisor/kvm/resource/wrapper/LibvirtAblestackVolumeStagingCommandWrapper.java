@@ -125,9 +125,10 @@ public class LibvirtAblestackVolumeStagingCommandWrapper
                     Files.deleteIfExists(resultFile);
                     if (result != null && result.has("version") && result.get("version").getAsInt() == 1
                             && result.has("backupUuid") && id.equals(result.get("backupUuid").getAsString())
-                            && result.has("state") && "COMPLETED".equals(result.get("state").getAsString())) {
+                            && result.has("state") && "COMPLETED".equals(result.get("state").getAsString())
+                            && result.has("stagingCleanupState") && "COMPLETED".equals(result.get("stagingCleanupState").getAsString())) {
                         LibvirtAblestackAsyncBackupRunner.markVolumeBackupFinalized(id, logger);
-                        return new Answer(command, true, "Host finalization completed; current source checkpoint is retained");
+                        return new Answer(command, true, result.toString());
                     }
                 }
                 String reason = output == null ? "Host finalization helper returned no output" : java.util.Arrays.stream(output.split("\\r?\\n"))
