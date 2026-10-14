@@ -20,6 +20,7 @@ package com.cloud.hypervisor.kvm.resource.wrapper;
 import com.cloud.agent.api.Answer;
 import com.cloud.agent.api.Command;
 import com.cloud.hypervisor.kvm.resource.LibvirtComputingResource;
+import com.cloud.utils.LogUtils;
 import com.google.gson.Gson;
 import org.apache.cloudstack.backup.AblestackCommvaultRestoreBackupCommand;
 import org.apache.cloudstack.backup.AblestackCommvaultTakeBackupCommand;
@@ -29,12 +30,15 @@ import org.apache.cloudstack.backup.AblestackNetBackupRestoreBackupCommand;
 import org.apache.cloudstack.backup.AblestackNetBackupTakeBackupCommand;
 import org.apache.cloudstack.backup.AblestackVeeamRestoreBackupCommand;
 import org.apache.cloudstack.backup.AblestackVeeamTakeBackupCommand;
+import org.apache.logging.log4j.LogManager;
+import org.apache.logging.log4j.Logger;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Set;
 
 public final class LibvirtAblestackJobMain {
+    private static final Logger LOGGER = LogManager.getLogger(LibvirtAblestackJobMain.class);
     private static final Set<Class<? extends Command>> SUPPORTED_COMMANDS = Set.of(
             AblestackNasTakeBackupCommand.class,
             AblestackCommvaultTakeBackupCommand.class,
@@ -51,6 +55,10 @@ public final class LibvirtAblestackJobMain {
     public static void main(final String[] args) {
         int exitCode = 1;
         try {
+            // Detached jobs bypass AgentShell, which normally configures the agent file logger.
+            LogUtils.initLog4j("log4j-cloud.xml");
+            LOGGER.info("[ABLESTACK_BACKUP_TRACE] phase=[WORKER_LOGGING_INITIALIZED], commandClass=[{}], commandFile=[{}]",
+                    args.length > 0 ? args[0] : "", args.length > 1 ? args[1] : "");
             if (args.length != 2) {
                 throw new IllegalArgumentException("backup command class and command file are required");
             }

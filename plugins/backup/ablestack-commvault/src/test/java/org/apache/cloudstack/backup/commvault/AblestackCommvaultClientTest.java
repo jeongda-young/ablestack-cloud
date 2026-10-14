@@ -33,6 +33,8 @@ import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertThrows;
 
+import java.io.IOException;
+import java.io.InputStream;
 import java.util.List;
 
 import org.junit.Rule;
@@ -42,6 +44,10 @@ import org.apache.cloudstack.backup.ThirdPartyBackupManifest;
 import org.apache.cloudstack.backup.ThirdPartyBackupVolumeService;
 
 import com.cloud.utils.exception.CloudRuntimeException;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.node.ArrayNode;
+import com.fasterxml.jackson.databind.node.ObjectNode;
 
 import com.github.tomakehurst.wiremock.junit.WireMockRule;
 import com.github.tomakehurst.wiremock.core.WireMockConfiguration;
@@ -202,6 +208,157 @@ public class AblestackCommvaultClientTest {
                         + "{\"respType\":0,\"browseResult\":{\"queryId\":\"countQuery\",\"aggrResultSet\":{\"result\":0}}}]}")));
 
         assertFalse(inventory.exists(artifact()));
+    }
+
+    @Test
+    public void capturedJsonCatalogResponseConfirmsTheRootArtifact() throws Exception {
+        stubCatalogResponse(capturedCatalogResult());
+
+        assertTrue(newInventory().exists(capturedArtifact()));
+        wireMockRule.verify(postRequestedFor(urlEqualTo("/api/DoBrowse"))
+                .withRequestBody(matchingJsonPath("$.paths[0].path", equalTo(
+                        "/mnt/glue-gfs/ablestack-commvault/i-2-220-VM/2026.10.12.16.55.52.320")))
+                .withRequestBody(matchingJsonPath("$.timeRange.toTime", equalTo("1791791903"))));
+    }
+
+    @Test
+    public void completeEmptyJsonCatalogWithNotificationReportsMissing() throws Exception {
+        ObjectNode response = capturedCatalogResult();
+        ((ArrayNode) response.at("/browseResponses/0/browseResult/dataResultSet")).removeAll();
+        ((ObjectNode) response.at("/browseResponses/1/browseResult/aggrResultSet/0"))
+                .put("result", 0).put("count", 0);
+        stubCatalogResponse(response);
+
+        assertFalse(newInventory().exists(capturedArtifact()));
+    }
+
+    @Test
+    public void jsonAggregateCountWithoutLegacyResultFieldIsSupported() throws Exception {
+        ObjectNode response = capturedCatalogResult();
+        ((ObjectNode) response.at("/browseResponses/1/browseResult/aggrResultSet/0")).remove("result");
+        stubCatalogResponse(response);
+
+        assertTrue(newInventory().exists(capturedArtifact()));
+    }
+
+    @Test
+    public void completionNotificationAloneCannotReportMissing() throws Exception {
+        ObjectNode response = capturedCatalogResult();
+        ArrayNode responses = response.withArray("browseResponses");
+        responses.remove(0);
+        responses.remove(0);
+        stubCatalogResponse(response);
+
+        assertThrows(CloudRuntimeException.class, () -> newInventory().exists(capturedArtifact()));
+    }
+
+    @Test
+    public void completionNotificationDoesNotHideServiceFailure() throws Exception {
+        ObjectNode response = capturedCatalogResult();
+        ((ObjectNode) response.at("/browseResponses/2"))
+                .put("errorCode", 7).put("errorMessage", "Browse session failed");
+        stubCatalogResponse(response);
+
+        CloudRuntimeException error = assertThrows(CloudRuntimeException.class, () -> newInventory().exists(capturedArtifact()));
+        assertTrue(error.getMessage().contains("respType=5"));
+        assertTrue(error.getMessage().contains("errorCode=7"));
+        assertTrue(error.getMessage().contains("Browse session failed"));
+    }
+
+    @Test
+    public void browseServiceErrorsExposeTheNestedReason() throws Exception {
+        ObjectNode response = capturedCatalogResult();
+        ObjectNode errorResponse = response.withArray("browseResponses").removeAll().addObject().put("respType", 2);
+        errorResponse.putArray("messages").addObject().put("errorCode", 19)
+                .put("errorMessage", "Index restore failed\nretry later").put("other", "not included");
+        stubCatalogResponse(response);
+
+        CloudRuntimeException error = assertThrows(CloudRuntimeException.class, () -> newInventory().exists(capturedArtifact()));
+        assertTrue(error.getMessage().contains("respType=2"));
+        assertTrue(error.getMessage().contains("errorCode=19"));
+        assertTrue(error.getMessage().contains("Index restore failed retry later"));
+        assertFalse(error.getMessage().contains("not included"));
+    }
+
+    @Test
+    public void completionNotificationCannotReplaceTheCountQuery() throws Exception {
+        ObjectNode response = capturedCatalogResult();
+        response.withArray("browseResponses").remove(1);
+        stubCatalogResponse(response);
+
+        assertThrows(CloudRuntimeException.class, () -> newInventory().exists(capturedArtifact()));
+    }
+
+    @Test
+    public void browseWithAdditionalPagesCannotReportMissing() throws Exception {
+        ObjectNode response = capturedCatalogResult();
+        ((ArrayNode) response.at("/browseResponses/0/browseResult/dataResultSet")).removeAll();
+        ((ObjectNode) response.at("/browseResponses/0/browseResult")).put("hasMoreData", true);
+        ((ObjectNode) response.at("/browseResponses/1/browseResult/aggrResultSet/0"))
+                .put("result", 0).put("count", 0);
+        stubCatalogResponse(response);
+
+        assertThrows(CloudRuntimeException.class, () -> newInventory().exists(capturedArtifact()));
+    }
+
+    @Test
+    public void arrayAggregatesRejectAmbiguousMalformedAndMismatchedCounts() throws Exception {
+        ObjectMapper mapper = new ObjectMapper();
+        for (String aggregate : List.of("[]", "[{\"result\":1},{\"result\":1}]", "[{\"result\":-1}]",
+                "[{\"result\":1.5}]", "[{\"result\":\"invalid\"}]", "[{\"result\":0,\"count\":1}]",
+                "[{\"result\":2,\"count\":2}]")) {
+            ObjectNode response = capturedCatalogResult();
+            ((ObjectNode) response.at("/browseResponses/1/browseResult")).set("aggrResultSet", mapper.readTree(aggregate));
+            stubCatalogResponse(response);
+
+            assertThrows(CloudRuntimeException.class, () -> newInventory().exists(capturedArtifact()));
+        }
+    }
+
+    @Test
+    public void capturedJsonCatalogStillRequiresTheSavedJob() throws Exception {
+        ObjectNode response = capturedCatalogResult();
+        ((ObjectNode) response.at("/browseResponses/0/browseResult/dataResultSet/0/advancedData")).put("backupJobId", 9999);
+        stubCatalogResponse(response);
+
+        assertThrows(CloudRuntimeException.class, () -> newInventory().exists(capturedArtifact()));
+    }
+
+    @Test
+    public void unknownNotificationTypesAreStillRejected() throws Exception {
+        ObjectNode response = capturedCatalogResult();
+        ((ObjectNode) response.at("/browseResponses/2")).put("respType", 1);
+        stubCatalogResponse(response);
+
+        CloudRuntimeException error = assertThrows(CloudRuntimeException.class, () -> newInventory().exists(capturedArtifact()));
+        assertTrue(error.getMessage().contains("respType=1"));
+    }
+
+    @Test
+    public void completionNotificationWithBrowseResultsIsRejected() throws Exception {
+        ObjectNode response = capturedCatalogResult();
+        ((ObjectNode) response.at("/browseResponses/2")).putObject("browseResult").put("queryId", "dataQuery");
+        stubCatalogResponse(response);
+
+        assertThrows(CloudRuntimeException.class, () -> newInventory().exists(capturedArtifact()));
+    }
+
+    private ObjectNode capturedCatalogResult() throws IOException {
+        try (InputStream stream = getClass().getResourceAsStream("/commvault/catalog-browse-root.json")) {
+            return (ObjectNode) new ObjectMapper().readTree(stream);
+        }
+    }
+
+    private ThirdPartyBackupManifest.Artifact capturedArtifact() {
+        ThirdPartyBackupManifest.Artifact artifact = artifact();
+        artifact.path = "/mnt/glue-gfs/ablestack-commvault/i-2-220-VM/2026.10.12.16.55.52.320/"
+                + "root.79ea9909-2abc-4941-b008-52a750654224.qcow2";
+        return artifact;
+    }
+
+    private void stubCatalogResponse(JsonNode response) {
+        wireMockRule.stubFor(post(urlEqualTo("/api/DoBrowse"))
+                .willReturn(aResponse().withStatus(200).withBody(response.toString())));
     }
 
     private ThirdPartyBackupVolumeService.ArtifactInventory newInventory() throws Exception {

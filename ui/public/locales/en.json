@@ -4753,6 +4753,7 @@
   "backup.create": "BACKUP.CREATE",
   "backup.cancel": "BACKUP.CANCEL",
   "backup.bandwidth.update": "BACKUP.BANDWIDTH.UPDATE",
+  "backup.staging.reconcile": "BACKUP.STAGING.RECONCILE",
   "message.backup.bandwidth.applying": "Updating bandwidth",
   "message.backup.bandwidth.applied": "Bandwidth updated",
   "message.backup.bandwidth.failed": "Bandwidth update needs attention",

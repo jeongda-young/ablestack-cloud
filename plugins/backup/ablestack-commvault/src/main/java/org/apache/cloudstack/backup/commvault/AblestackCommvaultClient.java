@@ -1559,22 +1559,31 @@ public class AblestackCommvaultClient {
                 throw catalogQueryFailure(response);
             }
             JsonNode root = OBJECT_MAPPER.readTree(response.body);
-            JsonNode responses = root.path("browseResponses");
-            if (root.path("errorCode").asInt(0) != 0 || !responses.isArray() || responses.isEmpty()) {
-                throw new CloudRuntimeException("Commvault artifact catalog response is incomplete");
+            if (root == null || !root.isObject() || catalogBrowseHasError(root)
+                    || !root.path("browseResponses").isArray() || root.path("browseResponses").isEmpty()) {
+                throw catalogBrowseFailure(response, root, "Commvault artifact catalog response is incomplete");
             }
+            JsonNode responses = root.path("browseResponses");
             long count = -1;
             int rows = 0;
             boolean dataReceived = false;
             boolean exists = false;
             String recoveredJob = null;
             for (JsonNode browse : responses) {
-                if (browse.path("respType").asInt(-1) != 0 || browse.path("errorCode").asInt(0) != 0) {
-                    throw new CloudRuntimeException("Commvault artifact browse has not completed successfully");
-                }
                 JsonNode result = browse.path("browseResult");
+                int responseType = browse.path("respType").asInt(-1);
+                if (catalogBrowseHasError(browse)
+                        || (responseType != 0 && (responseType != 5 || !result.isMissingNode()))) {
+                    throw catalogBrowseFailure(response, browse, "Commvault artifact browse has not completed successfully");
+                }
+                // JSON browse responses also include a type 5 notification without query results.
+                // It does not replace the required data and count queries below.
+                if (responseType == 5) { continue; }
+                if (!result.isObject() || result.path("hasMoreData").asBoolean(false)) {
+                    throw catalogBrowseFailure(response, browse, "Commvault artifact browse results are incomplete");
+                }
                 if ("countQuery".equals(result.path("queryId").asText())) {
-                    count = result.path("aggrResultSet").path("result").asLong(-1);
+                    count = catalogArtifactCount(result.path("aggrResultSet"));
                 } else if ("dataQuery".equals(result.path("queryId").asText())) {
                     dataReceived = true;
                     JsonNode data = result.path("dataResultSet");
@@ -1608,6 +1617,69 @@ public class AblestackCommvaultClient {
         } catch (IOException e) { throw new CloudRuntimeException("Cannot read Commvault artifact catalog", e); }
     }
 
+    private long catalogArtifactCount(JsonNode aggregate) {
+        // JSON returns an array; retain the legacy single-object representation as well.
+        if (aggregate.isArray()) {
+            if (aggregate.size() != 1) {
+                throw new CloudRuntimeException("Commvault artifact browse count is missing or ambiguous");
+            }
+            aggregate = aggregate.get(0);
+        }
+        JsonNode value = aggregate.has("result") ? aggregate.path("result") : aggregate.path("count");
+        long count = value.asLong(-1);
+        if (!aggregate.isObject() || !value.asText().matches("[0-9]+") || count < 0
+                || (aggregate.has("count") && (!aggregate.path("count").asText().matches("[0-9]+")
+                        || aggregate.path("count").asLong(-1) != count))) {
+            throw new CloudRuntimeException("Commvault artifact browse count is malformed or inconsistent");
+        }
+        return count;
+    }
+
+    private boolean catalogBrowseHasError(JsonNode browse) {
+        if (browse.has("errorCode") && browse.path("errorCode").asLong(-1) != 0) { return true; }
+        JsonNode messages = browse.path("messages");
+        if (!messages.isMissingNode() && !messages.isArray()) { return true; }
+        for (JsonNode message : messages) {
+            if (message.path("errorCode").asLong(-1) != 0) { return true; }
+        }
+        return false;
+    }
+
+    private CloudRuntimeException catalogBrowseFailure(HttpJsonResponse response, JsonNode browse, String reason) {
+        StringBuilder message = new StringBuilder(reason).append(" (/DoBrowse, HTTP ")
+                .append(response.statusCode).append(")");
+        if (browse != null) {
+            if (browse.path("respType").isValueNode()) {
+                message.append("; respType=").append(StringUtils.abbreviate(browse.path("respType").asText(), 64));
+            }
+            appendCatalogServiceError(message, browse);
+        }
+        return new CloudRuntimeException(message.toString());
+    }
+
+    private void appendCatalogServiceError(StringBuilder message, JsonNode error) {
+        if (error.path("errorCode").isValueNode()) {
+            message.append("; errorCode=").append(StringUtils.abbreviate(error.path("errorCode").asText(), 64));
+        }
+        if (error.path("errorMessage").isTextual()) {
+            String reason = error.path("errorMessage").asText().replaceAll("\\s+", " ").trim();
+            message.append("; ").append(StringUtils.abbreviate(reason, 512));
+        }
+        for (JsonNode detail : error.path("messages")) {
+            if (detail.path("errorCode").asLong(-1) != 0) {
+                // Commvault's SDK reads service failures from browseResponses[].messages[].
+                if (detail.path("errorCode").isValueNode()) {
+                    message.append("; errorCode=").append(StringUtils.abbreviate(detail.path("errorCode").asText(), 64));
+                }
+                if (detail.path("errorMessage").isTextual()) {
+                    String reason = detail.path("errorMessage").asText().replaceAll("\\s+", " ").trim();
+                    message.append("; ").append(StringUtils.abbreviate(reason, 512));
+                }
+                break;
+            }
+        }
+    }
+
     private CloudRuntimeException catalogQueryFailure(HttpJsonResponse response) {
         StringBuilder message = new StringBuilder("Commvault artifact catalog query failed (/DoBrowse, HTTP ")
                 .append(response.statusCode).append(")");
@@ -1617,13 +1689,7 @@ public class AblestackCommvaultClient {
             // Keep the service error useful without exposing an entire response or HTML error page.
             try {
                 JsonNode error = OBJECT_MAPPER.readTree(response.body);
-                if (error.has("errorCode") && error.path("errorCode").isValueNode()) {
-                    message.append("; errorCode=").append(error.path("errorCode").asText());
-                }
-                if (error.path("errorMessage").isTextual()) {
-                    String reason = error.path("errorMessage").asText().replaceAll("\\s+", " ").trim();
-                    message.append("; ").append(StringUtils.abbreviate(reason, 512));
-                }
+                if (error != null) { appendCatalogServiceError(message, error); }
             } catch (IOException ignored) {
                 // The HTTP status remains available even when an intermediary returns non-JSON.
             }

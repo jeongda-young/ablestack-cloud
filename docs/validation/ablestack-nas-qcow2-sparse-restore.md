@@ -73,17 +73,82 @@ compare의 일반 모드는 할당 구조가 달라도 읽히는 데이터가 �
 [ABLESTACK_BACKUP_TRACE] provider=[ablestack-nas] operation=[RESTORE] phase=[QCOW2_COMPARE], source=[...], target=[...], exitCode=[0], result=[IDENTICAL], elapsedMillis=[...], output=[...]
 ```
 
-기존 비동기 restore job의 `jobLog`와 agent 로그를 보관한다. `ENTER`의 restoreJobId/jobLog, 대상 VM, 전체 디스크의 source/target이 포함되도록 수집한다.
+비동기 복원은 `LibvirtAblestackJobMain`이라는 별도 Java 프로세스에서 수행한다. 이 진입점은 `AgentShell`을 거치지 않으므로 `log4j-cloud.xml`을 직접 초기화해야 한다. 수정된 진입점은 시작 시 `WORKER_LOGGING_INITIALIZED`와 command class/file 경로를 INFO로 기록한다. 실제 복원 호스트에 수정된 에이전트가 설치되어 있어야 하며, 해당 호스트의 Log4j 설정에서 `com.cloud` 및 파일 appender의 INFO 기록을 허용해야 한다.
+
+**기본 확인 대상은 실제 복원 호스트의 `/var/log/cloudstack/agent/agent.log`와 회전된 `.gz` 로그다.** 에이전트 기본 설정은 콘솔 INFO 출력을 끄므로 작업별 `job.log`에 모든 진단 로그가 들어간다고 가정하지 않는다. 복원 완료 처리에서는 작업 폴더와 상태 파일을 자동 정리할 수 있다. `job.log`가 없다는 사실만으로 복원이 실행되지 않았다고 판단하지 않는다.
+
+`ENTER`의 restoreJobId/jobLog, 대상 VM, 전체 디스크의 source/target이 포함되도록 수집한다. 완료한 작업은 압축된 로그까지 검색한다.
 
 ```bash
-# JOB_LOG는 기존 ENTER / RESTORE_COMMAND_SEND에 출력된 실제 경로 지정
-JOB_LOG='/var/lib/ablestack/backup/jobs/<job-id>/job.log'
-rg 'phase=\[(QCOW2_|TEMP_TARGET_|TARGET_MOVED_ASIDE|FILE_RESTORE_FAILED)' "$JOB_LOG"
+zgrep -H -E 'WORKER_LOGGING_INITIALIZED|QCOW2_|phase=\[CONVERT\]' \
+  /var/log/cloudstack/agent/agent.log*
 ```
 
 `QCOW2_TEST_SUMMARY`에 케이스, 원본 오퍼링 라벨, mode, `-S`, source/target 크기, source checks, target check, compare, convert/compare 시간, backing 잔존 여부를 기록한다.
 
 할당량은 `apparentSizeBytes = stat %s`, `allocatedBytes = stat %b × %B`, `allocationRatio = allocatedBytes / virtualSize × 100`으로 계산한다. QCOW2 메타데이터 때문에 비율이 100%를 넘을 수도 있다. `ls -lh`만으로 Thin 여부를 판단하지 않는다. source actual-size는 leaf 파일의 점유량이며 chain 전체의 합계가 아니다.
+
+### 새 인스턴스 생성으로 복원할 때의 확인·보관 절차
+
+1. 현재 진행 중인 복원은 완료시킨 뒤 수정된 KVM 에이전트를 배포한다. 수정 이전에 시작한 Java 프로세스에는 이번 초기화 변경이 적용되지 않으며, 출력되지 않은 과거 INFO 로그를 소급 생성할 수 없다. 동일한 INC3 백업본과 Mac에 보관한 `INC3.csv`를 사용해 재시험한다.
+2. 복원 가능한 호스트에 테스트 설정을 적용한다. 첫 복원은 `FULL_ALLOCATED` / `case.id=INC3-S0-R2`, 두 번째는 `SPARSE` / `case.id=INC3-S4k-R2`로 구분한다. `enabled=true`, `fail.on.compare=true`, 실제 원본 오퍼링 라벨을 유지한다. 복원 중에는 설정을 바꾸지 않는다.
+3. 복원 로그를 저장할 SSH 터미널을 실제 복원 호스트에 열어 둔다. `rg` 설치 없이 다음 명령으로 원본 로그를 별도 파일에 저장할 수 있다. `CASE_ID`는 이번 복원 설정과 맞춘다. 이 명령은 계속 실행되며, 복원이 완료된 뒤 Ctrl+C로 수집을 끝낸다.
+
+   ```bash
+   CASE_ID='INC3-S4k-R2'
+   EVIDENCE_DIR='/root/ablestack-nas-restore-evidence'
+   mkdir -p "$EVIDENCE_DIR"
+   tail -n 0 -F /var/log/cloudstack/agent/agent.log \
+     | tee "$EVIDENCE_DIR/$CASE_ID.capture.log"
+   ```
+
+4. Mold에서 동일한 INC3 백업의 **백업에서 새 인스턴스 생성**을 실행한다. 실제 볼륨 복원 호스트와 최종 부팅 호스트는 다를 수 있다. 호스트를 확인할 때는 Mold 관리 서버에서 다음 명령을 실행하고 `hostName`, `vmName`, `restoreJobId`를 확인한다. 백업 UUID는 선택한 INC3 백업의 값이다.
+
+   ```bash
+   BACKUP_UUID='<INC3 백업 UUID>'
+   zgrep -h -F 'phase=[RESTORE_COMMAND_SEND]' \
+     /var/log/cloudstack/management/management-server.log* \
+     | grep -F "$BACKUP_UUID"
+   ```
+
+   수집 터미널의 호스트가 `hostName`과 다르면 해당 실제 호스트에서도 수집한다. 수집 시작 전에 출력된 기록은 그 호스트의 기존 agent 로그에서 추출해 함께 보관한다.
+5. 새 복원이 시작되면 `WORKER_LOGGING_INITIALIZED`와 해당 작업의 command file 경로가 기록되는지 확인한다. 이어서 `QCOW2_CONVERT_BEGIN`의 mode와 `sparseSize`를 확인한다. `QCOW2_TEST_SKIPPED`가 있으면 해당 디스크는 이번 QCOW2 증분 파일 변환 테스트 대상이 아니다. 이 경우를 S0/S4k 성공 결과로 집계하지 않는다.
+6. 진행 중에는 다른 SSH 터미널에서 실제 명령을 확인한다.
+
+   ```bash
+   ps -ww -eo pid,etime,args | grep '[q]emu-img'
+   ```
+
+   `convert ... -S 4k`는 SPARSE 변환 단계이고, `compare -f qcow2 -F qcow2`는 변환이 끝난 뒤 데이터 검증 단계다. `compare` 명령에는 `-S` 옵션이 없다. `etime`은 해당 프로세스의 경과 시간이며 전체 복원 시간이나 완료율이 아니다. 요약은 compare가 끝나야 기록된다.
+
+   작업 상태는 실제 `restoreJobId`로 조회한다. 상태 파일은 작업 폴더 안의 `job.properties`가 아니라 아래 경로에 있다. 완료 후 자동 정리되기 전에 필요한 내용을 복사해 둔다.
+
+   ```bash
+   RESTORE_JOB_ID='<RESTORE_COMMAND_SEND에 기록된 restoreJobId>'
+   grep -E '^(state|step|progress|details|vmName|provider|updated)=' \
+     "/var/lib/ablestack/backup/jobs/$RESTORE_JOB_ID.properties"
+   ```
+
+7. 복원 완료 후 case별 결과를 압축 로그까지 검색해 별도 파일로 저장한다. 이 파일은 VM 삭제나 작업 폴더 정리와 별도로 보관된다.
+
+   ```bash
+   CASE_ID='INC3-S4k-R2'
+   EVIDENCE_DIR='/root/ablestack-nas-restore-evidence'
+   mkdir -p "$EVIDENCE_DIR"
+   zgrep -h -F "testCase=[$CASE_ID]" /var/log/cloudstack/agent/agent.log* \
+     > "$EVIDENCE_DIR/$CASE_ID.result.log"
+   grep -F 'phase=[QCOW2_TEST_SUMMARY]' "$EVIDENCE_DIR/$CASE_ID.result.log"
+   ```
+
+   ROOT와 DATA 각각의 요약을 확인한다. `sourceVirtualSize=targetVirtualSize`, `targetCheckExitCode=0`, `compareExitCode=0`, `backingFileRemaining=false`가 정상 기준이다. 요약이 출력되지 않으면 결과를 확보한 것으로 처리하지 않는다.
+8. 복원 VM에서 데이터 드라이브 문자를 확인하고, 외부 `INC3.csv`로 검증한다. 아래는 스크립트를 `C:\NasIncrementalTest.ps1`로 복사한 경우이며, 출력도 파일로 보관한다.
+
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\NasIncrementalTest.ps1 -Stage VERIFY -DataDrive F -ExpectedManifest C:\Temp\INC3.csv 2>&1 | Tee-Object -FilePath C:\Temp\VERIFY-S4k-R2.txt
+   ```
+
+   최종 `PASS`와 파일별 결과를 확인한다. 호스트의 case별 result/capture 로그, Windows 검증 출력, 사용한 외부 CSV를 Mac에 복사한 뒤 해당 테스트 VM을 정리한다.
+9. 동일한 조건으로 S0와 S4k 결과를 ROOT끼리, DATA끼리 비교한다. `allocatedBytes`와 `allocationRatio`는 실제 점유량, `convertElapsedMillis`는 변환 시간이다. 밀리초를 60,000으로 나누면 분이다. Windows `VERIFY`의 PASS와 호스트 check/compare 결과도 두 모드 모두 기록한다. 이벤트의 시작/완료 시각은 전체 작업 시간이며 convert 시간으로 대체하지 않는다. 두 케이스를 마치면 각 테스트 호스트의 설정을 `enabled=false`로 돌린다.
 
 ## 1 TB 주요 테스트
 
@@ -132,8 +197,8 @@ convert/check/compare를 추가하므로 테스트 복원의 전체 소요 시�
 ```bash
 mvn -o -pl plugins/hypervisors/kvm -am test \
   -Ddownload.plugin.skip=true \
-  -Dtest=LibvirtAblestackNasRestoreDiagnosticsTest,EuropaNasRestoreTest \
+  -Dtest=LibvirtAblestackJobMainTest,LibvirtAblestackNasRestoreDiagnosticsTest,EuropaNasRestoreTest \
   -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false
 ```
 
-mock 기반 회귀 테스트는 mode 선택, compare 전 교체 방지, 실패 시 기존 볼륨 원복, source 파일 미변경, 기존 기본 경로 유지를 확인한다. 실제 QEMU를 이용한 1 TB 데이터 정합성·부팅 검증은 현장에서 별도로 수행한다.
+별도 JVM 회귀 테스트는 비동기 진입점이 `log4j-cloud.xml`을 발견하여 INFO를 agent 파일 로그에 기록하는지 확인한다. mock 기반 회귀 테스트는 mode 선택, compare 전 교체 방지, 실패 시 기존 볼륨 원복, source 파일 미변경, 기존 기본 경로 유지를 확인한다. 실제 QEMU를 이용한 1 TB 데이터 정합성·부팅 검증은 현장에서 별도로 수행한다.

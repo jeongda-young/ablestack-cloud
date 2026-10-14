@@ -4722,6 +4722,7 @@
   "backup.create": "백업 생성",
   "backup.cancel": "백업 취소",
   "backup.bandwidth.update": "백업 대역폭 조정",
+  "backup.staging.reconcile": "백업 스테이징 작업 조정",
   "message.backup.bandwidth.applying": "대역폭 조정 중",
   "message.backup.bandwidth.applied": "대역폭 조정 완료",
   "message.backup.bandwidth.failed": "대역폭 조정 확인 필요",
