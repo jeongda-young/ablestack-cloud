@@ -150,6 +150,41 @@ zgrep -H -E 'WORKER_LOGGING_INITIALIZED|QCOW2_|phase=\[CONVERT\]' \
    최종 `PASS`와 파일별 결과를 확인한다. 호스트의 case별 result/capture 로그, Windows 검증 출력, 사용한 외부 CSV를 Mac에 복사한 뒤 해당 테스트 VM을 정리한다.
 9. 동일한 조건으로 S0와 S4k 결과를 ROOT끼리, DATA끼리 비교한다. `allocatedBytes`와 `allocationRatio`는 실제 점유량, `convertElapsedMillis`는 변환 시간이다. 밀리초를 60,000으로 나누면 분이다. Windows `VERIFY`의 PASS와 호스트 check/compare 결과도 두 모드 모두 기록한다. 이벤트의 시작/완료 시각은 전체 작업 시간이며 convert 시간으로 대체하지 않는다. 두 케이스를 마치면 각 테스트 호스트의 설정을 `enabled=false`로 돌린다.
 
+### 원본 Windows VM의 DATA를 600GiB에서 900GiB로 늘려 재검증
+
+기존 `FULL → INC1 → INC2 → INC3`를 완료한 **원본 VM**에서 진행한다. 이 단계는 `F:\NasRestoreTest\Data\inc4.bin`에 기존과 같은 방식의 난수 300GiB를 새로 쓴다. 기존 DATA 파일은 유지하고, ROOT의 단계 표식은 `INC4`로 바꾼다. DATA 파일의 논리 크기 합계는 900GiB이며, 기존 `zeros.bin` 20GiB와 파일시스템·QCOW2 메타데이터 때문에 실제 물리 점유량과는 다르다.
+
+1. 수정된 `ablestack-nas-windows-incremental-test.ps1`를 원본 VM의 `C:\NasIncrementalTest.ps1`에 복사한다. 관리자 PowerShell에서 F:의 용량과 기존 단계를 확인한다.
+
+   ```powershell
+   Get-Volume -DriveLetter F | Select-Object DriveLetter, FileSystemType,
+       @{Name='SizeGiB'; Expression={[math]::Round($_.Size / 1GB, 2)}},
+       @{Name='FreeGiB'; Expression={[math]::Round($_.SizeRemaining / 1GB, 2)}}
+   Get-Content -LiteralPath C:\NasRestoreTest\Results\state.json
+   ```
+
+   기존 단계는 `INC3`, DataDrive는 `F`여야 한다. 추가 쓰기에는 300GiB와 2GiB의 여유 공간이 필요하며, 부족하거나 `inc4.bin`이 이미 있으면 스크립트가 중단한다.
+2. `INC4`를 실행한다. 난수 파일 생성 후 모든 ROOT/DATA 파일의 SHA256 계산까지 끝나서 `DATA STAGE COMPLETE: INC4`가 출력될 때까지 기다린다.
+
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\NasIncrementalTest.ps1 -Stage INC4 -DataDrive F
+   ```
+
+3. `C:\NasRestoreTest\Results\INC4.csv`를 VM 밖에 보관한다. 원본 VM을 정상 종료하고 기존과 같은 백업 스케줄 또는 수동 백업 방식으로 NAS 백업을 완료한다. 실제 백업 유형이 `INCREMENTAL`인지 확인한다. 체인 한도 도달 등으로 `FULL`로 전환됐다면 이번 결과는 대용량 증분 체인 복원 검증으로 집계하지 않는다.
+4. 실제 복원 호스트의 테스트 설정을 `sparse.mode=SPARSE`, `fail.on.compare=true`, `source.disk.offering=THIN`, `case.id=THIN-INC4-900GiB-S4k-R1`로 지정하고 `enabled=true`로 둔다. 위의 로그 수집 절차에 따라 새 case ID로 수집을 시작한 뒤, 종료된 원본 VM에 INC4 백업을 직접 복원한다. 기존 VM과 새 인스턴스 복원은 같은 NAS 파일 볼륨 변환 함수를 사용하므로, 이번 대용량 변환·부팅 검증은 원본 VM 직접 복원으로 진행할 수 있다. 다중 디스크 복원이 끝날 때까지 설정을 유지하고, 결과에는 `기존 VM 직접 복원`으로 기록한다. 새 인스턴스 생성 절차 자체는 별도 검증 범위다.
+5. ROOT/DATA 각각에서 `QCOW2_CONVERT_BEGIN`의 `sparseSize=[4k]`, 요약의 가상 용량 일치, `targetCheckExitCode=0`, `compareExitCode=0`, `backingFileRemaining=false`를 확인한다. `QCOW2_TEST_SKIPPED`이거나 실제 옵션을 확인하지 못한 결과는 `-S 4k` 성공으로 집계하지 않는다.
+6. 복원된 원본 VM을 부팅해 Windows 로그인과 데이터 볼륨 접근을 확인한다. 드라이브 문자가 F:인지 확인하고, VM 밖에 보관한 INC4.csv를 `C:\Temp\INC4.csv`로 가져와 검증한다. 검증은 기존 테스트 파일을 읽고 해시를 비교한다.
+
+   ```powershell
+   powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\NasIncrementalTest.ps1 -Stage VERIFY -DataDrive F -ExpectedStage INC4 -ExpectedManifest C:\Temp\INC4.csv 2>&1 | Tee-Object -FilePath C:\Temp\VERIFY-INC4-900GiB-S4k-R1.txt
+   ```
+
+   `PASS: both disks match the external INC4 manifest; deleted files are absent.`와 Windows 정상 부팅 결과를 함께 보관한다. 테스트 후 호스트 설정을 `enabled=false`로 돌린다.
+
+원본 VM에 복원이 완료되면 해당 VM의 활성 증분 체인은 `vm-restore-completed` 사유로 봉인된다. 이후 첫 백업이 FULL로 시작하는 것은 정상 동작이다. INC4 증분 백업을 먼저 완료한 뒤 직접 복원한다.
+
+판정은 **900GiB DATA를 가진 이번 VM·NAS/QCOW2 체인·QEMU 버전·스토리지 조합에서 `-S 4k` 변환, 이미지 검증, 부팅 및 파일 검증을 통과했음**으로 기록한다. 한 번의 부팅 성공이나 특정 용량만으로 다른 환경 전체의 안전성을 보장하지 않는다. 운영 적용 환경이 다르면 해당 조합에서 검증한다.
+
 ### 복원 진행 화면
 
 수정된 KVM 에이전트와 UI를 배포한 뒤 새로 시작한 NAS 복원은 현재 볼륨과 처리 단계를 상태 API로 전달한다. 목록에서 `2/2 · 복원 데이터 비교`처럼 표시하며, 상태 툴팁의 상세에는 `DATA · QCOW2 ↔ QCOW2` 또는 `DATA · QCOW2 → QCOW2 · -S 4k`가 나온다.

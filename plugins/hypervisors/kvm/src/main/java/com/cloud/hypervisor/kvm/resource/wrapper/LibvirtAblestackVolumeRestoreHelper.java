@@ -19,6 +19,7 @@ package com.cloud.hypervisor.kvm.resource.wrapper;
 
 import java.io.IOException;
 import java.nio.channels.FileChannel;
+import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.Files;
 import java.nio.file.LinkOption;
 import java.nio.file.Path;
@@ -276,12 +277,7 @@ final class LibvirtAblestackVolumeRestoreHelper {
             }
             if (Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) {
                 if (!destination.toRealPath().startsWith(root.toRealPath())) { throw new CloudRuntimeException("Restore cleanup resolves outside staging"); }
-                Path owner = destination.resolve(".restore-owner");
-                if (!Files.isRegularFile(owner, LinkOption.NOFOLLOW_LINKS) || !Files.readString(owner).trim().equals(plan.jobId)) {
-                    throw new CloudRuntimeException("Restore staging directory ownership is unconfirmed; existing data is protected");
-                }
-                LibvirtAblestackStagingCleanup.delete(plan.manifest.getProvider(), destination,
-                        root.resolve(plan.manifest.getProvider()));
+                cleanupStagingDirectory(plan.manifest.getProvider(), plan.jobId, destination, root.resolve(plan.manifest.getProvider()));
             }
             if (Files.exists(capacityPlan)) {
                 Path script = Path.of(resource.getAbleCvtBackupPath()).getParent().resolve("thirdparty_restore_capacity.py");
@@ -294,6 +290,30 @@ final class LibvirtAblestackVolumeRestoreHelper {
             }
             atomic(job.resolve("volume-restore-cleanup.json"), "{\"state\":\"COMPLETED\"}");
             LibvirtAblestackAsyncBackupRunner.recoverFailedRestoreTransaction(plan.jobId, resource.getStoragePoolMgr(), logger);
+        }
+    }
+
+    /** Called after the recorded plan, worker termination and VM transaction have been verified. */
+    static void cleanupStagingDirectory(String provider, String jobId, Path destination, Path providerRoot) throws IOException {
+        if (!destination.equals(providerRoot.resolve("restore").resolve(jobId))) {
+            throw new CloudRuntimeException("Restore cleanup destination differs from its job");
+        }
+        LibvirtAblestackStagingCleanup.validate(provider, destination, providerRoot);
+        if (!Files.exists(destination, LinkOption.NOFOLLOW_LINKS)) { return; }
+        Path owner = destination.resolve(".restore-owner");
+        if (Files.isRegularFile(owner, LinkOption.NOFOLLOW_LINKS) && Files.readString(owner).trim().equals(jobId)) {
+            LibvirtAblestackStagingCleanup.delete(provider, destination, providerRoot);
+            return;
+        }
+        if (Files.exists(owner, LinkOption.NOFOLLOW_LINKS) || !Files.isDirectory(destination, LinkOption.NOFOLLOW_LINKS)) {
+            throw new CloudRuntimeException("Restore staging directory ownership is unconfirmed; existing data is protected");
+        }
+        // Older mount preparation recreated an empty directory without an owner marker.
+        // A nonrecursive delete can remove that remnant, but cannot delete any contents
+        // that already exist or arrive between validation and deletion.
+        try { Files.delete(destination); }
+        catch (DirectoryNotEmptyException e) {
+            throw new CloudRuntimeException("Restore staging directory ownership is unconfirmed; existing data is protected", e);
         }
     }
 

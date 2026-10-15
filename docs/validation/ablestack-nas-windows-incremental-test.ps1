@@ -20,18 +20,22 @@
 # This script creates test files only; it never partitions/formats disks or requests backups.
 # Sizes use PowerShell binary suffixes (1GB = 1 GiB).
 # DATA: FULL = 500GiB; INC1 = +100GiB; INC2 = rewrite 50GiB, delete 100GiB, add 50GiB;
-# INC3 = rewrite 50GiB, add 50GiB. Final DATA file size = 600GiB.
+# INC3 = rewrite 50GiB, add 50GiB. DATA file size = 600GiB.
+# INC4 = add 300GiB to the existing INC3 dataset. DATA file size = 900GiB.
 # Write sizes are not guarantees of changed-block counts or backup file sizes.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('FULL', 'INC1', 'INC2', 'INC3', 'VERIFY')]
+    [ValidateSet('FULL', 'INC1', 'INC2', 'INC3', 'INC4', 'VERIFY')]
     [string]$Stage,
 
     [ValidatePattern('^[A-Za-z]$')]
     [string]$DataDrive = 'D',
 
-    [string]$ExpectedManifest
+    [string]$ExpectedManifest,
+
+    [ValidateSet('INC3', 'INC4')]
+    [string]$ExpectedStage = 'INC3'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -125,7 +129,7 @@ function Get-TestManifest {
 
 if ($Stage -eq 'VERIFY') {
     if ([string]::IsNullOrWhiteSpace($ExpectedManifest) -or -not (Test-Path -LiteralPath $ExpectedManifest -PathType Leaf)) {
-        throw 'Supply -ExpectedManifest with the INC3.csv saved OUTSIDE the source VM before its INC3 backup.'
+        throw "Supply -ExpectedManifest with the ${ExpectedStage}.csv saved OUTSIDE the source VM before its $ExpectedStage backup."
     }
     $Expected = @(Import-Csv -LiteralPath $ExpectedManifest)
     if ($Expected.Count -eq 0) { throw 'Expected manifest is empty.' }
@@ -146,10 +150,10 @@ if ($Stage -eq 'VERIFY') {
     foreach ($Path in @((Join-Path $RootDir 'delete.bin'), (Join-Path $DataDir 'delete.bin'))) {
         if (Test-Path -LiteralPath $Path) { throw "Deleted file unexpectedly exists: $Path" }
     }
-    if ((Get-Content -LiteralPath (Join-Path $RootDir 'stage.txt') -Raw).Trim() -ne 'INC3') {
-        throw 'Restored stage marker is not INC3.'
+    if ((Get-Content -LiteralPath (Join-Path $RootDir 'stage.txt') -Raw).Trim() -ne $ExpectedStage) {
+        throw "Restored stage marker is not $ExpectedStage."
     }
-    Write-Host 'PASS: both disks match the external INC3 manifest; deleted files are absent.'
+    Write-Host "PASS: both disks match the external $ExpectedStage manifest; deleted files are absent."
     exit 0
 }
 
@@ -168,7 +172,7 @@ if ($Stage -eq 'FULL') {
     if ($State.Dataset -ne $Dataset) {
         throw 'Previous data belongs to a different test dataset. Use a fresh dataset and complete FULL with this script first.'
     }
-    $Previous = @{ INC1 = 'FULL'; INC2 = 'INC1'; INC3 = 'INC2' }[$Stage]
+    $Previous = @{ INC1 = 'FULL'; INC2 = 'INC1'; INC3 = 'INC2'; INC4 = 'INC3' }[$Stage]
     if ($State.Stage -ne $Previous -or $State.DataDrive -ne $DataDrive) {
         throw "Unexpected previous stage or drive. $Stage requires completed data stage $Previous on the same data volume."
     }
@@ -199,6 +203,9 @@ switch ($Stage) {
         Write-TestFile -Path (Join-Path $DataDir 'inc1.bin') -Bytes 10GB -Offset 90GB -Patch
         Write-TestFile -Path (Join-Path $DataDir 'inc3.bin') -Bytes 50GB
         Write-TestFile -Path (Join-Path $RootDir 'root.bin') -Bytes 64MB -Offset 192MB -Patch
+    }
+    'INC4' {
+        Write-TestFile -Path (Join-Path $DataDir 'inc4.bin') -Bytes 300GB
     }
 }
 
