@@ -8918,5 +8918,20 @@
   "message.vm.group.members.groups.forbidden": "Target group access was denied.",
   "message.vm.group.members.groups.unavailable": "The target owner scope is unavailable.",
   "message.volume.storage.rule.automatic": "Rule-based storage tags are evaluated by the server. Turn off Create on storage to use automatic placement for these pools.",
-  "message.volume.storage.select.matching": "Select an available primary storage that matches the disk offering tags."
+  "message.volume.storage.select.matching": "Select an available primary storage that matches the disk offering tags.",
+  "label.backup.restore.step.validate.chain": "Validating backup chain",
+  "label.backup.restore.step.prepare.source": "Preparing backup source",
+  "label.backup.restore.step.data": "Restoring volume data",
+  "label.backup.restore.step.prepare.target": "Preparing destination volume",
+  "label.backup.restore.step.source.check": "Checking backup images",
+  "label.backup.restore.step.convert": "Converting disk image",
+  "label.backup.restore.step.copy": "Copying disk image",
+  "label.backup.restore.step.target.check": "Checking restored image",
+  "label.backup.restore.step.compare": "Comparing restored data",
+  "label.backup.restore.step.promote": "Applying restored volume",
+  "label.backup.restore.step.rbd.import": "Importing full RBD backup",
+  "label.backup.restore.step.rbd.diff": "Applying incremental RBD backup",
+  "label.backup.restore.step.attach.volume": "Attaching restored volume",
+  "label.backup.restore.step.cleanup.source": "Cleaning up backup source",
+  "label.backup.restore.step.finalizing": "Finalizing restore"
 }

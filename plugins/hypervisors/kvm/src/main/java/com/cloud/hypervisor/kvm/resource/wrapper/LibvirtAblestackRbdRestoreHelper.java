@@ -55,6 +55,7 @@ final class LibvirtAblestackRbdRestoreHelper {
             return false;
         }
 
+        LibvirtAblestackRestoreProgress.phase("RESTORE_PREPARE_TARGET", "RBD");
         validateRbdStorageSpace(tracePrefix, storagePool, backupPaths, timeoutSeconds);
 
         final String temporaryVolumePath = buildTemporaryRbdImageName(volumePath);
@@ -131,6 +132,7 @@ final class LibvirtAblestackRbdRestoreHelper {
         try {
             srcBackupFile = new QemuImgFile(backupPath, getBackupFileFormat(backupPath));
             destVolumeFile = new QemuImgFile(KVMPhysicalDisk.RBDStringBuilder(storagePool, volumePath), QemuImg.PhysicalDiskFormat.RAW);
+            LibvirtAblestackRestoreProgress.phase("RESTORE_CONVERT", srcBackupFile.getFormat() + " → RBD (RAW)");
             LOGGER.debug("{} phase=[RBD_CONVERT_BEGIN], source=[{}], targetVolume=[{}]", tracePrefix, backupPath, volumePath);
             qemu.convert(srcBackupFile, destVolumeFile);
             LOGGER.debug("{} phase=[RBD_CONVERT_DONE], source=[{}], targetVolume=[{}]", tracePrefix, backupPath, volumePath);
@@ -177,6 +179,7 @@ final class LibvirtAblestackRbdRestoreHelper {
                 if (!rbdSnapshotExists(storagePool, volumePath, parentCheckpoint, timeoutSeconds)) {
                     throw new CloudRuntimeException(String.format("Required parent snapshot %s is missing on volume %s", parentCheckpoint, volumePath));
                 }
+                LibvirtAblestackRestoreProgress.phase("RESTORE_RBD_DIFF", "RBD · " + index + "/" + (backupPaths.size() - 1));
                 final CommandExecutionResult importDiffResult = executeBashCommandWithResult(
                         buildRbdCommand(storagePool, "import-diff", backupPath, volumePath), timeoutSeconds, "Import RBD diff to temporary volume");
                 if (importDiffResult.exitCode != 0) {
@@ -226,6 +229,7 @@ final class LibvirtAblestackRbdRestoreHelper {
 
     private static boolean importRawBackupToRbd(final KVMStoragePool storagePool, final String volumePath, final String backupPath,
             final int timeoutSeconds, final boolean createTargetVolume) {
+        LibvirtAblestackRestoreProgress.phase("RESTORE_RBD_IMPORT", "RAW → RBD");
         if (!createTargetVolume && !deleteRbdImageIfPresent(storagePool, volumePath, timeoutSeconds)) {
             LOGGER.error("Failed to delete existing RBD volume {} before raw import", volumePath);
             return false;
@@ -243,6 +247,7 @@ final class LibvirtAblestackRbdRestoreHelper {
 
     private static boolean promoteTemporaryRbdImage(final String tracePrefix, final KVMStoragePool storagePool, final String targetVolumePath,
             final String temporaryVolumePath, final int timeoutSeconds, final boolean createTargetVolume) {
+        LibvirtAblestackRestoreProgress.phase("RESTORE_PROMOTE", "RBD");
         final String originalVolumePath = buildOriginalRbdImageName(targetVolumePath);
         boolean originalMovedAside = false;
         try {

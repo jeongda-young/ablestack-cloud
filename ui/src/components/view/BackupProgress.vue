@@ -38,11 +38,15 @@
             </div>
             <div v-if="displayStep" class="backup-progress-tooltip-row">
               <span>{{ $t('label.step') }} :</span>
-              <span>{{ displayStep }}</span>
+              <span>{{ displayStepLabel }}</span>
             </div>
             <div v-if="volumeIndex && volumeCount" class="backup-progress-tooltip-row">
               <span>{{ $t('label.volume') }} :</span>
               <span>{{ volumeIndex }}/{{ volumeCount }}</span>
+            </div>
+            <div v-if="isRestoring && jobDetails && !isFailedJobState(jobState)" class="backup-progress-tooltip-row">
+              <span>{{ $t('label.details') }} :</span>
+              <span>{{ jobDetails }}</span>
             </div>
             <template v-if="stagingQueue && stagingQueue.state !== 'RELEASED'">
               <div class="backup-progress-tooltip-row"><span>{{ $t('label.backup.staging.state') }} :</span><span>{{ stagingQueue.state }}</span></div>
@@ -123,6 +127,9 @@
         <info-circle-outlined class="backup-progress-restore-info" />
       </a-tooltip>
     </div>
+    <div v-if="isRestoring && isActive && displayStep" class="backup-restore-step">
+      <span v-if="volumeIndex && volumeCount">{{ volumeIndex }}/{{ volumeCount }} · </span>{{ displayStepLabel }}
+    </div>
     <div v-if="showProgress && isActive" class="backup-progress-line">
       <a-progress
         :percent="progress"
@@ -139,6 +146,23 @@ import { getAPI } from '@/api'
 import Status from '@/components/widgets/Status'
 
 const POLL_INTERVAL_MS = 5000
+const RESTORE_STEP_LABELS = {
+  VALIDATE_CHAIN: 'validate.chain',
+  PREPARE_SOURCE: 'prepare.source',
+  RESTORE_DATA: 'data',
+  RESTORE_PREPARE_TARGET: 'prepare.target',
+  RESTORE_SOURCE_CHECK: 'source.check',
+  RESTORE_CONVERT: 'convert',
+  RESTORE_COPY: 'copy',
+  RESTORE_TARGET_CHECK: 'target.check',
+  RESTORE_COMPARE: 'compare',
+  RESTORE_PROMOTE: 'promote',
+  RESTORE_RBD_IMPORT: 'rbd.import',
+  RESTORE_RBD_DIFF: 'rbd.diff',
+  ATTACH_VOLUME: 'attach.volume',
+  CLEANUP_SOURCE: 'cleanup.source',
+  FINALIZING: 'finalizing'
+}
 
 export default {
   name: 'BackupProgress',
@@ -164,6 +188,7 @@ export default {
       jobState: this.record?.backupcancellationpending ? 'CANCEL_PENDING' : (this.record?.restorejobstate || this.record?.backupjobstate || ''),
       cancellationDetails: this.record?.backupcancellationpending ? this.record?.backupjobdetails || '' : '',
       step: this.record?.restorejobstep || this.record?.backupjobstep || '',
+      jobDetails: this.record?.restorejobdetails || '',
       volumeIndex: null,
       volumeCount: null,
       stagingQueue: this.record?.stagingqueue || null,
@@ -226,6 +251,10 @@ export default {
         return 'FINALIZING'
       }
       return this.step
+    },
+    displayStepLabel () {
+      const label = this.isRestoring && RESTORE_STEP_LABELS[this.displayStep]
+      return label ? this.$t('label.backup.restore.step.' + label) : this.displayStep
     },
     bandwidthStatusLabel () {
       if (!this.bandwidthStatus) {
@@ -294,6 +323,9 @@ export default {
       this.jobState = this.record?.backupcancellationpending ? 'CANCEL_PENDING' : (this.record?.restorejobstate || this.record?.backupjobstate || '')
       this.stagingQueue = this.record?.stagingqueue || null
       this.step = this.record?.restorejobstep || this.record?.backupjobstep || this.step
+      if (Object.prototype.hasOwnProperty.call(this.record || {}, 'restorejobdetails')) {
+        this.jobDetails = this.record.restorejobdetails || ''
+      }
       this.logPath = this.record?.restorejoblogpath || this.record?.backupjoblogpath || this.logPath
       const bandwidthLimitMbps = this.normalizeBandwidth(this.record?.bandwidthlimitmbps)
       if (bandwidthLimitMbps !== null) {
@@ -373,6 +405,7 @@ export default {
       }
       this.bandwidthStatus = response.bandwidthstatus || this.bandwidthStatus
       if (Object.prototype.hasOwnProperty.call(response, 'details')) {
+        if (wasRestoring) this.jobDetails = response.details || ''
         const status = String(this.localStatus || '').toLowerCase()
         this.failureDetails = ['failed', 'error'].includes(status) ? (response.details || '') : ''
         if (wasRestoring && this.isFailedJobState(response.state)) {
@@ -459,6 +492,12 @@ export default {
   align-items: center;
   display: flex;
   gap: 4px;
+}
+
+.backup-restore-step {
+  color: rgba(0, 0, 0, 0.65);
+  font-size: 12px;
+  margin-top: 4px;
 }
 
 .backup-progress-restore-info {

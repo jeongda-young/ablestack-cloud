@@ -41,6 +41,32 @@ public class LibvirtAblestackAsyncBackupRunnerTest {
     public TemporaryFolder temporaryFolder = new TemporaryFolder();
 
     @Test
+    public void restorePhasesRetainVolumeIdentityThroughCleanup() {
+        Properties properties = new Properties();
+        properties.setProperty("state", "RUNNING");
+        assertTrue(LibvirtAblestackAsyncBackupRunner.applyRestoreStep(properties, "RESTORE_CONVERT", "DATA · -S 4k", 2, 2));
+        assertTrue(LibvirtAblestackAsyncBackupRunner.applyRestoreStep(properties, "RESTORE_COMPARE", "DATA", 2, 2));
+        assertEquals("RESTORE_COMPARE", properties.getProperty("step"));
+        assertTrue(LibvirtAblestackAsyncBackupRunner.applyRestoreStep(properties, "CLEANUP_SOURCE", "", null, null));
+        assertEquals("2", properties.getProperty("volumeIndex"));
+        assertEquals("2", properties.getProperty("volumeCount"));
+    }
+
+    @Test
+    public void cleanupCannotReviveAFailedOrCompletedRestore() {
+        for (String state : Arrays.asList("FAILED", "COMPLETED", "CANCELED", "INTERRUPTED")) {
+            Properties properties = new Properties();
+            properties.setProperty("state", state);
+            properties.setProperty("step", state);
+            properties.setProperty("details", "original outcome");
+            assertFalse(LibvirtAblestackAsyncBackupRunner.applyRestoreStep(properties, "CLEANUP_SOURCE", "cleanup", 2, 2));
+            assertEquals(state, properties.getProperty("state"));
+            assertEquals(state, properties.getProperty("step"));
+            assertEquals("original outcome", properties.getProperty("details"));
+        }
+    }
+
+    @Test
     public void missingJobIdDoesNotFailProgressCapabilityChecks() {
         Properties properties = volumeJob("ablestack-commvault", "QCOW2_BACKUP");
         properties.remove("jobId");

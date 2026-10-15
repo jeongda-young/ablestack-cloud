@@ -104,6 +104,7 @@ final class LibvirtAblestackNasRestoreDiagnostics {
     }
 
     void inspectSource(final String trace, final Logger logger, final String leaf, final List<String> backupPaths, final int timeout) {
+        LibvirtAblestackRestoreProgress.phase("RESTORE_SOURCE_CHECK", "QCOW2");
         final String testTrace = trace;
         final Pair<Integer, String> version = run("qemu-img --version", timeout);
         logger.info("{} phase=[QCOW2_TEST_ENVIRONMENT], testCase=[{}], sourceDiskOffering=[{}], sparseMode=[{}], sparseSize=[{}], qemuVersion=[{}], exitCode=[{}], failOnCompare=[{}]",
@@ -139,7 +140,9 @@ final class LibvirtAblestackNasRestoreDiagnostics {
                 checkFiles.add(backupPath);
             }
         }
+        int checkIndex = 0;
         for (String filename : checkFiles) {
+            LibvirtAblestackRestoreProgress.phase("RESTORE_SOURCE_CHECK", "QCOW2 · " + (++checkIndex) + "/" + checkFiles.size());
             final Pair<Integer, String> check = run("qemu-img check -f qcow2 " + quote(filename), timeout);
             final JsonObject entry = new JsonObject();
             entry.addProperty("file", filename);
@@ -164,6 +167,7 @@ final class LibvirtAblestackNasRestoreDiagnostics {
     }
 
     void verifyTarget(final String trace, final Logger logger, final String source, final String target, final int timeout) throws QemuImgException {
+        LibvirtAblestackRestoreProgress.phase("RESTORE_TARGET_CHECK", "QCOW2");
         final String testTrace = trace;
         final Pair<Integer, String> info = run("qemu-img info --output=json " + quote(target), timeout);
         logger.info("{} phase=[QCOW2_INFO_TARGET], target=[{}], exitCode=[{}], info=[{}]", testTrace, target, info.first(), clean(info.second()));
@@ -194,6 +198,7 @@ final class LibvirtAblestackNasRestoreDiagnostics {
                 ? String.format(Locale.ROOT, "%.2f", allocatedBytes.doubleValue() / targetVirtualSize * 100.0) : "UNKNOWN";
         logger.info("{} phase=[QCOW2_ALLOCATION_TARGET], target=[{}], virtualSizeBytes=[{}], apparentSizeBytes=[{}], allocatedBytes=[{}], allocationRatio=[{}], exitCode=[{}], output=[{}]",
                 testTrace, target, targetVirtualSize, apparentBytes, allocatedBytes, allocationRatio, stat.first(), clean(stat.second()));
+        LibvirtAblestackRestoreProgress.phase("RESTORE_COMPARE", "QCOW2 ↔ QCOW2");
         logger.info("{} phase=[QCOW2_COMPARE_BEGIN], source=[{}], target=[{}]", testTrace, source, target);
         final long compareStart = System.nanoTime();
         final Pair<Integer, String> compare = run("qemu-img compare -f qcow2 -F qcow2 " + quote(source) + " " + quote(target), timeout);

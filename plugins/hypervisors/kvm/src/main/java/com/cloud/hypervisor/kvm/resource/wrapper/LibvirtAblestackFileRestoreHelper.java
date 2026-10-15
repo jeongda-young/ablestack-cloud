@@ -156,6 +156,7 @@ final class LibvirtAblestackFileRestoreHelper {
         try {
             srcBackupFile = new QemuImgFile(backupPath, getBackupFileFormat(backupPath));
             final QemuImg.PhysicalDiskFormat targetFormat = getFileVolumeFormat(logger, volumePath);
+            LibvirtAblestackRestoreProgress.phase("RESTORE_PREPARE_TARGET", targetFormat.toString());
             validatePrimaryStorageSpaceForFileRestore(trace, logger, backupPath, volumePath);
             final boolean testIncrementalQcow2 = diagnostics != null && srcBackupFile.getFormat() == QemuImg.PhysicalDiskFormat.QCOW2
                     && targetFormat == QemuImg.PhysicalDiskFormat.QCOW2 && hasBackingChain(backupPath);
@@ -181,6 +182,7 @@ final class LibvirtAblestackFileRestoreHelper {
             } else {
                 restoreFileVolumeData(trace, logger, backupPath, temporaryVolumeFile.getFileName(), srcBackupFile.getFormat(), targetFormat, timeout);
             }
+            LibvirtAblestackRestoreProgress.phase("RESTORE_PROMOTE", "");
             Files.move(temporaryVolumePath, Paths.get(volumePath), StandardCopyOption.REPLACE_EXISTING);
             logger.info("{} phase=[TEMP_TARGET_PROMOTED], target=[{}], temporaryTarget=[{}]",
                     trace, volumePath, temporaryVolumePath);
@@ -319,6 +321,7 @@ final class LibvirtAblestackFileRestoreHelper {
 
     private static void rsyncQcow2BackupFile(final String trace, final Logger logger, final String backupPath,
             final String volumePath, final int timeout) throws QemuImgException {
+        LibvirtAblestackRestoreProgress.phase("RESTORE_COPY", "QCOW2");
         final String rsyncCommand = String.format("rsync -az %s %s", quote(backupPath), quote(volumePath));
         final Pair<Integer, String> result = runCommandWithOutput(rsyncCommand, timeout * 1000);
         final String output = formatTraceOutput(result.second());
@@ -342,6 +345,7 @@ final class LibvirtAblestackFileRestoreHelper {
             final String volumePath, final QemuImg.PhysicalDiskFormat backupFormat, final QemuImg.PhysicalDiskFormat volumeFormat,
             final int timeout, final LibvirtAblestackNasRestoreDiagnostics diagnostics) throws QemuImgException {
         final String sparseSize = diagnostics == null ? "0" : diagnostics.getSparseSize();
+        LibvirtAblestackRestoreProgress.phase("RESTORE_CONVERT", backupFormat + " → " + volumeFormat + " · -S " + sparseSize);
         final String convertCommand = String.format("qemu-img convert -p -S %s -f %s -O %s %s %s",
                 sparseSize,
                 backupFormat.toString().toLowerCase(Locale.ROOT), volumeFormat.toString().toLowerCase(Locale.ROOT),

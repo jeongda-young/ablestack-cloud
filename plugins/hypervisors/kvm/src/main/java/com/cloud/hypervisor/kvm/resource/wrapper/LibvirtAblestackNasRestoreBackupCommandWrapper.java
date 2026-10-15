@@ -102,6 +102,8 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
                 "NAS restore command started");
         String newVolumeId = null;
         String mountDirectory = null;
+        LibvirtAblestackRestoreProgress progress = LibvirtAblestackRestoreProgress.begin(logger, PROVIDER_NAME,
+                command.getRestoreJobId(), vmName, backupPath);
         try {
             LibvirtAblestackAsyncBackupRunner.markRestoreJobStep(logger, PROVIDER_NAME, command.getRestoreJobId(), vmName, backupPath,
                     "VALIDATE_CHAIN", "Validating restore chain");
@@ -135,7 +137,14 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
             LibvirtAblestackAsyncBackupRunner.markRestoreJobFailed(logger, PROVIDER_NAME, command.getRestoreJobId(), vmName, backupPath, errorMessage);
             return new BackupAnswer(command, false, errorMessage);
         } finally {
-            cleanupMountedBackupDirectory(mountDirectory, restorePlan);
+            try {
+                if (mountDirectory != null) {
+                    LibvirtAblestackRestoreProgress.phase("CLEANUP_SOURCE", "");
+                }
+                cleanupMountedBackupDirectory(mountDirectory, restorePlan);
+            } finally {
+                progress.close();
+            }
         }
 
         logger.info("{} phase=[DONE], restoreJobId=[{}], vm=[{}], backupPath=[{}], vmExists=[{}], newVolumeId=[{}]",
@@ -150,12 +159,14 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
                                             String mountDirectory, Integer timeout, KVMStoragePoolManager storagePoolMgr,
                                             List<PrimaryDataStoreTO> restoreVolumePools) {
         List<List<String>> mountedBackupPathsByVolume = getMountedBackupPathsForVolumes(mountDirectory, backupPath, backupFiles, backupFileChains, volumeChainStates, volumePaths);
+        LibvirtAblestackRestoreProgress.phase("RESTORE_PREPARE_TARGET", "");
         validatePrimaryStorageSpaceForFileRestorePlan(volumePaths, mountedBackupPathsByVolume, restoreVolumePools);
         for (int idx = 0; idx < volumePaths.size(); idx++) {
             String volumePath = volumePaths.get(idx);
             List<String> mountedBackupPaths = mountedBackupPathsByVolume.get(idx);
             validateResolvedChainPaths(mountedBackupPaths, volumePath);
             PrimaryDataStoreTO restoreVolumePool = restoreVolumePools.get(idx);
+            LibvirtAblestackRestoreProgress.volume(idx + 1, volumePaths.size(), getRestorableFileBackupPath(mountedBackupPaths));
             if (!replaceVolumeWithBackup(storagePoolMgr, restoreVolumePool, volumePath, mountedBackupPaths, timeout,
                     String.format(FILE_PATH_PLACEHOLDER, mountDirectory, backupPath), idx)) {
                 throw new CloudRuntimeException(String.format("Unable to restore backup from volume [%s].", volumePath));
@@ -168,12 +179,14 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
                                               String mountDirectory, KVMStoragePoolManager storagePoolMgr,
                                               List<PrimaryDataStoreTO> restoreVolumePools, Integer timeout) {
         List<List<String>> mountedBackupPathsByVolume = getMountedBackupPathsForVolumes(mountDirectory, backupPath, backupFiles, backupFileChains, volumeChainStates, volumePaths);
+        LibvirtAblestackRestoreProgress.phase("RESTORE_PREPARE_TARGET", "");
         validatePrimaryStorageSpaceForFileRestorePlan(volumePaths, mountedBackupPathsByVolume, restoreVolumePools);
         for (int idx = 0; idx < volumePaths.size(); idx++) {
             String volumePath = volumePaths.get(idx);
             List<String> mountedBackupPaths = mountedBackupPathsByVolume.get(idx);
             validateResolvedChainPaths(mountedBackupPaths, volumePath);
             PrimaryDataStoreTO restoreVolumePool = restoreVolumePools.get(idx);
+            LibvirtAblestackRestoreProgress.volume(idx + 1, volumePaths.size(), getRestorableFileBackupPath(mountedBackupPaths));
             if (!replaceVolumeWithBackup(storagePoolMgr, restoreVolumePool, volumePath, mountedBackupPaths, timeout,
                     String.format(FILE_PATH_PLACEHOLDER, mountDirectory, backupPath), idx)) {
                 throw new CloudRuntimeException(String.format("Unable to restore backup from volume [%s].", volumePath));
@@ -186,6 +199,8 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
                                KVMStoragePoolManager storagePoolMgr, PrimaryDataStoreTO restoreVolumePool, String cacheMode, BackupRestorePlan restorePlan) {
         List<String> mountedBackupPaths = getMountedBackupPaths(mountDirectory, backupPath, backupFile, backupFileChain);
         validateResolvedChainPaths(mountedBackupPaths, volumePath);
+        LibvirtAblestackRestoreProgress.volume(1, 1, getRestorableFileBackupPath(mountedBackupPaths));
+        LibvirtAblestackRestoreProgress.phase("RESTORE_PREPARE_TARGET", "");
         validatePrimaryStorageSpaceForFileRestorePlan(List.of(volumePath), List.of(mountedBackupPaths), List.of(restoreVolumePool));
         if (!replaceVolumeWithBackup(storagePoolMgr, restoreVolumePool, volumePath, mountedBackupPaths, timeout,
                 String.format(FILE_PATH_PLACEHOLDER, mountDirectory, backupPath), 0, true)) {
@@ -193,6 +208,7 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
         }
         if (AblestackBackupFrameworkUtils.hasRestoreStage(restorePlan, BackupRestoreStage.ATTACH_VOLUME)
                 && VirtualMachine.State.Running.equals(vmNameAndState.second())) {
+            LibvirtAblestackRestoreProgress.phase("ATTACH_VOLUME", "");
             if (!attachVolumeToVm(storagePoolMgr, vmNameAndState.first(), restoreVolumePool, volumePath, cacheMode)) {
                 throw new CloudRuntimeException(String.format("Failed to attach volume to VM: %s", vmNameAndState.first()));
             }
@@ -401,6 +417,7 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
             QemuImg qemu = new QemuImg(timeout * 1000, true, false);
             srcBackupFile = new QemuImgFile(sourceImage.buildQemuUri(tempImage), QemuImg.PhysicalDiskFormat.RAW);
             destVolumeFile = new QemuImgFile(volumePath, getFileVolumeFormat(volumePath));
+            LibvirtAblestackRestoreProgress.phase("RESTORE_CONVERT", "RBD (RAW) → " + destVolumeFile.getFormat());
             qemu.convert(srcBackupFile, destVolumeFile);
             return true;
         } catch (QemuImgException | LibvirtException e) {
@@ -582,6 +599,7 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
             throw new CloudRuntimeException("Incremental RBD backup chain is missing the base full backup");
         }
         String importCommand = sourceImage.buildRbdCommand("import", quote(backupPaths.get(0)), quote(tempImage));
+        LibvirtAblestackRestoreProgress.phase("RESTORE_RBD_IMPORT", "RAW → RBD");
         if (Script.runSimpleBashScriptForExitValue(importCommand, timeout * 1000, false) != 0) {
             logger.error("Failed to import base RBD backup {} into temporary image {}", backupPaths.get(0), tempImage);
             return false;
@@ -613,6 +631,7 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
                     throw new CloudRuntimeException(String.format("Required parent snapshot %s is missing on temporary image %s", parentCheckpoint, tempImage));
                 }
                 String importDiffCommand = sourceImage.buildRbdCommand("import-diff", quote(backupPath), quote(tempImage));
+                LibvirtAblestackRestoreProgress.phase("RESTORE_RBD_DIFF", "RBD · " + index + "/" + (backupPaths.size() - 1));
                 if (Script.runSimpleBashScriptForExitValue(importDiffCommand, timeout * 1000, false) != 0) {
                     logger.error("Failed to import RBD diff {} into temporary image {}", backupPath, tempImage);
                     return false;

@@ -8932,5 +8932,20 @@
   "message.vm.group.members.groups.forbidden": "대상 그룹 조회 권한이 없습니다.",
   "message.vm.group.members.groups.unavailable": "대상 소유 범위를 확인할 수 없습니다.",
   "message.volume.storage.rule.automatic": "규칙형 스토리지 태그는 서버에서 판정합니다. 해당 스토리지는 스토리지에 생성을 끄고 자동 배치를 사용해 주세요.",
-  "message.volume.storage.select.matching": "디스크 오퍼링 태그와 일치하는 사용 가능한 기본 스토리지를 선택해 주세요."
+  "message.volume.storage.select.matching": "디스크 오퍼링 태그와 일치하는 사용 가능한 기본 스토리지를 선택해 주세요.",
+  "label.backup.restore.step.validate.chain": "백업 체인 검증",
+  "label.backup.restore.step.prepare.source": "백업 원본 준비",
+  "label.backup.restore.step.data": "볼륨 데이터 복원",
+  "label.backup.restore.step.prepare.target": "대상 볼륨 준비",
+  "label.backup.restore.step.source.check": "백업 이미지 검사",
+  "label.backup.restore.step.convert": "디스크 이미지 변환",
+  "label.backup.restore.step.copy": "디스크 이미지 복사",
+  "label.backup.restore.step.target.check": "복원 이미지 검사",
+  "label.backup.restore.step.compare": "복원 데이터 비교",
+  "label.backup.restore.step.promote": "복원 볼륨 적용",
+  "label.backup.restore.step.rbd.import": "RBD 전체 백업 가져오기",
+  "label.backup.restore.step.rbd.diff": "RBD 증분 백업 적용",
+  "label.backup.restore.step.attach.volume": "복원 볼륨 연결",
+  "label.backup.restore.step.cleanup.source": "백업 원본 정리",
+  "label.backup.restore.step.finalizing": "복원 마무리"
 }

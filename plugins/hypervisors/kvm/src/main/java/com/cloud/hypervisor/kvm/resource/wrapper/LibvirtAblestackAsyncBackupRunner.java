@@ -300,6 +300,12 @@ final class LibvirtAblestackAsyncBackupRunner {
 
     static void markRestoreJobStep(final Logger logger, final String provider, final String jobId,
             final String vmName, final String backupPath, final String step, final String details) {
+        markRestoreJobStep(logger, provider, jobId, vmName, backupPath, step, details, null, null);
+    }
+
+    static void markRestoreJobStep(final Logger logger, final String provider, final String jobId,
+            final String vmName, final String backupPath, final String step, final String details,
+            final Integer volumeIndex, final Integer volumeCount) {
         if (jobId == null || jobId.isBlank()) {
             return;
         }
@@ -311,21 +317,37 @@ final class LibvirtAblestackAsyncBackupRunner {
         if (properties == null) {
             return;
         }
+        if (!applyRestoreStep(properties, step, details, volumeIndex, volumeCount)) {
+            return;
+        }
         properties.setProperty("jobId", jobId);
         properties.setProperty("provider", safeValue(provider));
         properties.setProperty("vmName", safeValue(vmName));
         properties.setProperty("backupPath", safeValue(backupPath));
         properties.setProperty("backupType", "RESTORE");
         properties.setProperty("operation", AblestackBackupFrameworkUtils.OPERATION_RESTORE);
+        properties.setProperty("updated", String.valueOf(System.currentTimeMillis()));
+        storeJobProperties(logger, jobId, properties);
+        appendJobEvent(logger, jobId, provider, vmName, backupPath, "RESTORE", STATE_RUNNING, details, properties);
+    }
+
+    static boolean applyRestoreStep(final Properties properties, final String step, final String details,
+            final Integer volumeIndex, final Integer volumeCount) {
+        String state = properties.getProperty("state");
+        if (STATE_COMPLETED.equals(state) || STATE_FAILED.equals(state) || STATE_CANCELED.equals(state) || STATE_INTERRUPTED.equals(state)) {
+            return false;
+        }
         properties.setProperty("state", STATE_RUNNING);
         properties.setProperty("step", safeValue(step));
         properties.setProperty("progress", String.valueOf(resolveRestoreStepProgress(step)));
-        properties.setProperty("updated", String.valueOf(System.currentTimeMillis()));
+        if (volumeIndex != null && volumeCount != null) {
+            properties.setProperty("volumeIndex", String.valueOf(volumeIndex));
+            properties.setProperty("volumeCount", String.valueOf(volumeCount));
+        }
         if (details != null) {
             properties.setProperty("details", details);
         }
-        storeJobProperties(logger, jobId, properties);
-        appendJobEvent(logger, jobId, provider, vmName, backupPath, "RESTORE", STATE_RUNNING, details, properties);
+        return true;
     }
 
     static void markRestoreJobCompleted(final Logger logger, final String provider, final String jobId,
@@ -811,7 +833,12 @@ final class LibvirtAblestackAsyncBackupRunner {
         if (properties == null || !STATE_RUNNING.equals(state)) {
             return properties;
         }
-        if (refreshVolumeProgress(jobId, properties, logger) || refreshRbdProgress(jobId, properties, logger)) {
+        if (refreshVolumeProgress(jobId, properties, logger)) {
+            return properties;
+        }
+        // Restore phases are reported by the worker, not by libvirt's VM backup/export job.
+        if (AblestackBackupFrameworkUtils.OPERATION_RESTORE.equals(properties.getProperty("operation"))
+                || refreshRbdProgress(jobId, properties, logger)) {
             return properties;
         }
         final String vmName = properties.getProperty("vmName");
@@ -929,6 +956,15 @@ final class LibvirtAblestackAsyncBackupRunner {
             case "VALIDATE_CHAIN":
                 return 30;
             case "RESTORE_DATA":
+            case "RESTORE_PREPARE_TARGET":
+            case "RESTORE_SOURCE_CHECK":
+            case "RESTORE_CONVERT":
+            case "RESTORE_COPY":
+            case "RESTORE_TARGET_CHECK":
+            case "RESTORE_COMPARE":
+            case "RESTORE_PROMOTE":
+            case "RESTORE_RBD_IMPORT":
+            case "RESTORE_RBD_DIFF":
                 return 45;
             case "ATTACH_VOLUME":
                 return 85;

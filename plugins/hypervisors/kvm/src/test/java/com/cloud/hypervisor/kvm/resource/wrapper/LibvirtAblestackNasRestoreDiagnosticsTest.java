@@ -111,6 +111,21 @@ public class LibvirtAblestackNasRestoreDiagnosticsTest {
     }
 
     @Test
+    public void liveRestoreStatusDistinguishesConversionFromLongComparison() throws Exception {
+        final List<LibvirtAblestackRestoreProgress.Update> updates = new ArrayList<>();
+        try (LibvirtAblestackRestoreProgress scope = LibvirtAblestackRestoreProgress.begin(updates::add)) {
+            LibvirtAblestackRestoreProgress.volume(2, 2, "/nas/datadisk.test.qcow2");
+            restore("SPARSE", 0, 0, 0, false, false, false, true);
+        }
+        final List<String> phases = updates.stream().map(update -> update.step).collect(java.util.stream.Collectors.toList());
+        assertTrue(phases.indexOf("RESTORE_CONVERT") > phases.indexOf("RESTORE_SOURCE_CHECK"));
+        assertTrue(phases.indexOf("RESTORE_COMPARE") > phases.indexOf("RESTORE_TARGET_CHECK"));
+        assertTrue(phases.indexOf("RESTORE_PROMOTE") > phases.indexOf("RESTORE_COMPARE"));
+        assertTrue(updates.stream().allMatch(update -> Integer.valueOf(2).equals(update.volumeIndex)
+                && Integer.valueOf(2).equals(update.volumeCount) && update.details.startsWith("DATA")));
+    }
+
+    @Test
     public void everyCompareFailureRestoresTheOriginalVolume() throws Exception {
         for (int exitCode : new int[]{1, 2, 3, 4, -1}) {
             restore("SPARSE", exitCode, 0, 0, false, false, false, false);

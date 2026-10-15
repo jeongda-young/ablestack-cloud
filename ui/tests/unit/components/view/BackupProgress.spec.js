@@ -111,7 +111,7 @@ test('shows the QCOW2 backup step separately from the running state', async () =
   wrapper.unmount()
 })
 
-test('shows restore step codes without translating them', () => {
+test('keeps restore step codes while translating the displayed label', () => {
   const wrapper = shallowMount(BackupProgress, {
     props: { record: { id: 'backup-1', status: 'Restoring', restorejobstate: 'RUNNING', restorejobstep: 'PREPARE_SOURCE' } },
     global: {
@@ -123,6 +123,51 @@ test('shows restore step codes without translating them', () => {
   })
 
   expect(wrapper.vm.displayStep).toBe('PREPARE_SOURCE')
+  expect(wrapper.vm.displayStepLabel).toBe('label.backup.restore.step.prepare.source')
+  wrapper.unmount()
+})
+
+test('shows the restored volume, translated comparison phase and details from status polling', async () => {
+  getAPI.mockResolvedValue({
+    getbackuprestorejobstatusresponse: {
+      status: 'Restoring',
+      state: 'RUNNING',
+      step: 'RESTORE_COMPARE',
+      volumeindex: 2,
+      volumecount: 2,
+      details: 'DATA · QCOW2 ↔ QCOW2',
+      progress: 45
+    }
+  })
+  const wrapper = shallowMount(BackupProgress, {
+    props: { record: { id: 'backup-1', status: 'Restoring', restorejobstate: 'RUNNING', restorejobstep: 'RESTORE_DATA' } },
+    global: {
+      mocks: {
+        $t: key => key === 'label.backup.restore.step.compare' ? '복원 데이터 비교' : key,
+        $store: { getters: { apis: { getBackupRestoreJobStatus: {} } } }
+      }
+    }
+  })
+
+  for (let i = 0; i < 5; i++) await Promise.resolve()
+  expect(wrapper.vm.volumeIndex).toBe(2)
+  expect(wrapper.vm.volumeCount).toBe(2)
+  expect(wrapper.vm.jobDetails).toBe('DATA · QCOW2 ↔ QCOW2')
+  expect(wrapper.find('.backup-restore-step').text()).toBe('2/2 · 복원 데이터 비교')
+  expect(wrapper.vm.showProgress).toBe(false)
+  wrapper.vm.applyStatus({ state: 'RUNNING', step: 'RESTORE_PROMOTE', volumeindex: 2, volumecount: 2, details: 'DATA' })
+  expect(wrapper.vm.displayStepLabel).toBe('label.backup.restore.step.promote')
+  expect(wrapper.vm.jobDetails).toBe('DATA')
+  wrapper.unmount()
+})
+
+test('shows unknown restore phases without hiding them', () => {
+  const wrapper = shallowMount(BackupProgress, {
+    props: { record: { id: 'backup-1', status: 'Restoring', restorejobstate: 'RUNNING', restorejobstep: 'FUTURE_RESTORE_PHASE' } },
+    global: { mocks: { $t: key => key, $store: { getters: { apis: {} } } } }
+  })
+  expect(wrapper.vm.displayStepLabel).toBe('FUTURE_RESTORE_PHASE')
+  expect(wrapper.find('.backup-restore-step').text()).toBe('FUTURE_RESTORE_PHASE')
   wrapper.unmount()
 })
 

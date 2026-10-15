@@ -125,7 +125,7 @@ zgrep -H -E 'WORKER_LOGGING_INITIALIZED|QCOW2_|phase=\[CONVERT\]' \
 
    ```bash
    RESTORE_JOB_ID='<RESTORE_COMMAND_SEND에 기록된 restoreJobId>'
-   grep -E '^(state|step|progress|details|vmName|provider|updated)=' \
+   grep -E '^(state|step|progress|details|volumeIndex|volumeCount|vmName|provider|updated)=' \
      "/var/lib/ablestack/backup/jobs/$RESTORE_JOB_ID.properties"
    ```
 
@@ -149,6 +149,14 @@ zgrep -H -E 'WORKER_LOGGING_INITIALIZED|QCOW2_|phase=\[CONVERT\]' \
 
    최종 `PASS`와 파일별 결과를 확인한다. 호스트의 case별 result/capture 로그, Windows 검증 출력, 사용한 외부 CSV를 Mac에 복사한 뒤 해당 테스트 VM을 정리한다.
 9. 동일한 조건으로 S0와 S4k 결과를 ROOT끼리, DATA끼리 비교한다. `allocatedBytes`와 `allocationRatio`는 실제 점유량, `convertElapsedMillis`는 변환 시간이다. 밀리초를 60,000으로 나누면 분이다. Windows `VERIFY`의 PASS와 호스트 check/compare 결과도 두 모드 모두 기록한다. 이벤트의 시작/완료 시각은 전체 작업 시간이며 convert 시간으로 대체하지 않는다. 두 케이스를 마치면 각 테스트 호스트의 설정을 `enabled=false`로 돌린다.
+
+### 복원 진행 화면
+
+수정된 KVM 에이전트와 UI를 배포한 뒤 새로 시작한 NAS 복원은 현재 볼륨과 처리 단계를 상태 API로 전달한다. 목록에서 `2/2 · 복원 데이터 비교`처럼 표시하며, 상태 툴팁의 상세에는 `DATA · QCOW2 ↔ QCOW2` 또는 `DATA · QCOW2 → QCOW2 · -S 4k`가 나온다.
+
+일반 복원은 대상 준비, 이미지 복사/변환, 볼륨 적용, 원본 정리를 구분한다. QCOW2 테스트를 활성화하면 백업 이미지 검사, 복원 이미지 검사, 데이터 비교도 각각 구분한다. RBD 복원은 전체 백업 가져오기, 증분 적용, 이미지 변환, 볼륨 적용을 표시한다. 테스트 설정과 변환 옵션은 기존 동작을 유지한다.
+
+`getBackupRestoreJobStatus`의 `volumeindex`/`volumecount`는 현재 볼륨의 순서와 전체 개수다. `step`은 현재 단계, `details`는 볼륨 종류와 작업 설명이다. 복원 화면은 개별 명령의 실제 완료율을 계측하지 않은 단계별 추정치를 퍼센트로 표시하지 않는다. 긴 compare 동안에도 볼륨과 데이터 비교 단계는 계속 확인할 수 있다.
 
 ## 1 TB 주요 테스트
 
@@ -197,7 +205,7 @@ convert/check/compare를 추가하므로 테스트 복원의 전체 소요 시�
 ```bash
 mvn -o -pl plugins/hypervisors/kvm -am test \
   -Ddownload.plugin.skip=true \
-  -Dtest=LibvirtAblestackJobMainTest,LibvirtAblestackNasRestoreDiagnosticsTest,EuropaNasRestoreTest \
+  -Dtest=LibvirtAblestackJobMainTest,LibvirtAblestackRestoreProgressTest,LibvirtAblestackAsyncBackupRunnerTest,LibvirtAblestackNasRestoreDiagnosticsTest,EuropaNasRestoreTest \
   -Dsurefire.failIfNoSpecifiedTests=false -DfailIfNoTests=false
 ```
 
