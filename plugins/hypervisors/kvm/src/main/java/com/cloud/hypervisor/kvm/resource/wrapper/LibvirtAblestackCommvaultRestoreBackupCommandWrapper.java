@@ -95,9 +95,12 @@ public class LibvirtAblestackCommvaultRestoreBackupCommandWrapper extends Comman
                         command.getBackupPath(), StringUtils.defaultIfBlank(restoredVolumeId, "Volume restore completed"));
                 return new BackupAnswer(command, true, restoredVolumeId);
             } catch (Exception e) {
+                final String failure = StringUtils.defaultIfBlank(e.getMessage(), e.toString());
+                logger.warn("{} phase=[VOLUME_RESTORE_FAILED], restoreJobId=[{}], vm=[{}], backupPath=[{}]",
+                        RESTORE_TRACE, command.getRestoreJobId(), command.getVmName(), command.getBackupPath(), e);
                 LibvirtAblestackAsyncBackupRunner.markRestoreJobFailed(logger, "commvault", command.getRestoreJobId(), command.getVmName(),
-                        command.getBackupPath(), e.getMessage());
-                return new BackupAnswer(command, false, e.getMessage());
+                        command.getBackupPath(), failure);
+                return new BackupAnswer(command, false, failure);
             }
         }
         String vmName = command.getVmName();

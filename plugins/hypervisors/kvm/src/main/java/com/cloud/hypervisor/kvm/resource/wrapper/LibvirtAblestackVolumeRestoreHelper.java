@@ -44,6 +44,7 @@ import org.apache.cloudstack.backup.ThirdPartyBackupRestore;
 import org.apache.cloudstack.storage.to.PrimaryDataStoreTO;
 import org.apache.cloudstack.utils.qemu.QemuImg;
 import org.apache.cloudstack.utils.qemu.QemuImgFile;
+import org.apache.commons.lang3.StringUtils;
 import org.apache.logging.log4j.Logger;
 
 /** Download/apply/unlink one artifact at a time; use the same journalled VM switch as legacy restores. */
@@ -211,7 +212,7 @@ final class LibvirtAblestackVolumeRestoreHelper {
                 LibvirtAblestackRestoreOutcome.initialize(plan);
                 try { helper.execute(resource, vmName, pools, targets); }
                 catch (RuntimeException failure) {
-                    try { LibvirtAblestackRestoreOutcome.recordFailure(plan, failure.getMessage()); }
+                    try { LibvirtAblestackRestoreOutcome.recordFailure(plan, StringUtils.defaultIfBlank(failure.getMessage(), failure.toString())); }
                     catch (Exception auditFailure) { logger.warn("Restore failure result could not be saved for job [{}]", plan.jobId, auditFailure); }
                     throw failure;
                 }

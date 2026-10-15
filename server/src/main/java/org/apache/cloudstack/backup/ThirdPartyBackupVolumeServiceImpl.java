@@ -2564,7 +2564,9 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
         if (!java.nio.file.Path.of(providerRoot).getParent().toString().equals(plan.stageRoot)) {
             throw new CloudRuntimeException("Restore staging configuration changed; restore the original mount before cleanup");
         }
-        stagingService.prepareCleanup(host, plan.destination);
+        // Mount validation creates its requested directory. Do not recreate an unowned
+        // restore destination when the worker failed before admission or already removed it.
+        stagingService.prepareCleanup(host, providerRoot);
         saveRestoreCleanup(backup.getId(), plan.jobId, "RUNNING", null);
         Answer answer = agentManager.send(host.getId(), new AblestackVolumeStagingCommand(plan.jobId, "RESTORE_CLEANUP", -1,
                 new Gson().toJson(plan)));
