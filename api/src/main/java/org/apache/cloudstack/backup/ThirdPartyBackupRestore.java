@@ -28,8 +28,27 @@ public final class ThirdPartyBackupRestore {
     public static final String TRANSFER_KEY = "thirdparty.volume.restore.transfer";
     public static final String CLEANUP_STATE_KEY = "thirdparty.volume.restore.cleanup.state";
     public static final String CLEANUP_DETAILS_KEY = "thirdparty.volume.restore.cleanup.details";
+    private static final int MAX_DB_LOCK_NAME_LENGTH = 64;
 
     private ThirdPartyBackupRestore() { }
+
+    public static String prepareLockName(String backupUuid) {
+        return boundedLockName("backup.volume.restore.prepare.", backupUuid);
+    }
+
+    public static String lockName(String jobId) {
+        return boundedLockName("backup.volume.restore.", jobId);
+    }
+
+    private static String boundedLockName(String prefix, String identifier) {
+        if (identifier == null || identifier.isEmpty()) { throw new IllegalArgumentException("Missing restore lock identifier"); }
+        String name = prefix + identifier;
+        if (name.length() <= MAX_DB_LOCK_NAME_LENGTH) { return name; }
+        // MySQL limits GET_LOCK names to 64 characters. Hash the complete identity,
+        // including the attempt suffix, so truncation cannot merge distinct jobs.
+        return prefix + java.util.UUID.nameUUIDFromBytes(name.getBytes(java.nio.charset.StandardCharsets.UTF_8))
+                .toString().replace("-", "");
+    }
 
     public static class Plan {
         public String jobId;

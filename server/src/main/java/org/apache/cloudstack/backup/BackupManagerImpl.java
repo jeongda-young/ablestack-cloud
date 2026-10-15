@@ -1934,7 +1934,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             if (target != null) { accountManager.checkAccess(CallContext.current().getCallingAccount(), null, true, target); }
         }
         GlobalLock lock = GlobalLock.getInternLock("RESTORE".equals(operation)
-                ? "backup.volume.restore." + jobId : "backup.volume." + backup.getUuid());
+                ? ThirdPartyBackupRestore.lockName(jobId) : "backup.volume." + backup.getUuid());
         boolean acquired = false;
         try {
             acquired = lock.lock(5);

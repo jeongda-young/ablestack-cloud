@@ -330,7 +330,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
             throw new CloudRuntimeException("Backup staging attempt does not match the selected backup");
         }
         GlobalLock lock = GlobalLock.getInternLock("RESTORE".equals(operation)
-                ? "backup.volume.restore." + jobId : "backup.volume." + jobId);
+                ? ThirdPartyBackupRestore.lockName(jobId) : "backup.volume." + jobId);
         boolean acquired = false;
         try {
             acquired = lock.lock(5);
@@ -609,7 +609,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
             throw new CloudRuntimeException("LINK_JOB requires an artifact index and an external Job ID");
         }
         GlobalLock lock = GlobalLock.getInternLock("RESTORE".equals(operation)
-                ? "backup.volume.restore." + jobId : "backup.volume." + backup.getUuid());
+                ? ThirdPartyBackupRestore.lockName(jobId) : "backup.volume." + backup.getUuid());
         boolean acquired = false;
         try {
             acquired = lock.lock(5);
@@ -1823,7 +1823,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
 
     private ThirdPartyBackupRestore.Plan prepareRestoreWithLock(Backup backup, Host host, java.util.List<String> volumeUuids,
             java.util.List<Long> targetVolumeBytes, String targetVmName, int timeout) {
-        GlobalLock lock = GlobalLock.getInternLock("backup.volume.restore.prepare." + backup.getUuid());
+        GlobalLock lock = GlobalLock.getInternLock(ThirdPartyBackupRestore.prepareLockName(backup.getUuid()));
         boolean acquired = false;
         try {
             acquired = lock.lock(5);
@@ -1935,7 +1935,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
     }
 
     private void prepareRestoreStart(BackupVO backup, Host host, ThirdPartyBackupRestore.Plan plan) {
-        GlobalLock lock = GlobalLock.getInternLock("backup.volume.restore." + plan.jobId);
+        GlobalLock lock = GlobalLock.getInternLock(ThirdPartyBackupRestore.lockName(plan.jobId));
         boolean acquired = false;
         try {
             acquired = lock.lock(5);
@@ -1967,7 +1967,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
 
     @Override
     public void markRestoreDispatch(Backup backup, ThirdPartyBackupRestore.Plan plan) {
-        GlobalLock lock = GlobalLock.getInternLock("backup.volume.restore." + plan.jobId);
+        GlobalLock lock = GlobalLock.getInternLock(ThirdPartyBackupRestore.lockName(plan.jobId));
         boolean acquired = false;
         try {
             acquired = lock.lock(5);
@@ -2434,7 +2434,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
     }
 
     private void reconcileRestore(long backupId, Host host, ThirdPartyBackupRestore.Plan plan, RestoreTransfer transfer) {
-        GlobalLock lock = GlobalLock.getInternLock("backup.volume.restore." + plan.jobId);
+        GlobalLock lock = GlobalLock.getInternLock(ThirdPartyBackupRestore.lockName(plan.jobId));
         boolean acquired = false;
         try {
             acquired = lock.lock(1);
