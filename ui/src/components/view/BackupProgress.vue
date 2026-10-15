@@ -38,7 +38,7 @@
             </div>
             <div v-if="displayStep" class="backup-progress-tooltip-row">
               <span>{{ $t('label.step') }} :</span>
-              <span>{{ displayStepLabel }}</span>
+              <span>{{ displayStep }}</span>
             </div>
             <div v-if="volumeIndex && volumeCount" class="backup-progress-tooltip-row">
               <span>{{ $t('label.volume') }} :</span>
@@ -143,23 +143,6 @@ import { getAPI } from '@/api'
 import Status from '@/components/widgets/Status'
 
 const POLL_INTERVAL_MS = 5000
-const RESTORE_STEP_LABELS = {
-  VALIDATE_CHAIN: 'validate.chain',
-  PREPARE_SOURCE: 'prepare.source',
-  RESTORE_DATA: 'data',
-  RESTORE_PREPARE_TARGET: 'prepare.target',
-  RESTORE_SOURCE_CHECK: 'source.check',
-  RESTORE_CONVERT: 'convert',
-  RESTORE_COPY: 'copy',
-  RESTORE_TARGET_CHECK: 'target.check',
-  RESTORE_COMPARE: 'compare',
-  RESTORE_PROMOTE: 'promote',
-  RESTORE_RBD_IMPORT: 'rbd.import',
-  RESTORE_RBD_DIFF: 'rbd.diff',
-  ATTACH_VOLUME: 'attach.volume',
-  CLEANUP_SOURCE: 'cleanup.source',
-  FINALIZING: 'finalizing'
-}
 
 export default {
   name: 'BackupProgress',
@@ -248,10 +231,6 @@ export default {
         return 'FINALIZING'
       }
       return this.step
-    },
-    displayStepLabel () {
-      const label = this.isRestoring && RESTORE_STEP_LABELS[this.displayStep]
-      return label ? this.$t('label.backup.restore.step.' + label) : this.displayStep
     },
     bandwidthStatusLabel () {
       if (!this.bandwidthStatus) {

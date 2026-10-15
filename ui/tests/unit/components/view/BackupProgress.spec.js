@@ -18,6 +18,7 @@
 import { shallowMount } from '@vue/test-utils'
 import { getAPI } from '@/api'
 import BackupProgress from '@/components/view/BackupProgress.vue'
+import korean from '@public/locales/ko_KR.json'
 
 jest.mock('@/api', () => ({ getAPI: jest.fn() }))
 
@@ -102,8 +103,9 @@ test('shows the QCOW2 backup step separately from the running state', async () =
   const wrapper = shallowMount(BackupProgress, {
     props: { record: { id: 'backup-1', status: 'BackingUp', backupengine: 'QCOW2' } },
     global: {
+      stubs: { Status: statusWithTooltip },
       mocks: {
-        $t: key => key,
+        $t: key => korean[key] || key,
         $store: { getters: { apis: { getBackupJobStatus: {} } } }
       }
     }
@@ -112,23 +114,27 @@ test('shows the QCOW2 backup step separately from the running state', async () =
   for (let i = 0; i < 5; i++) await Promise.resolve()
   expect(wrapper.vm.jobState).toBe('RUNNING')
   expect(wrapper.vm.displayStep).toBe('QCOW2_BACKUP')
+  expect(wrapper.find('.status-tooltip').text()).toContain('단계 :')
+  expect(wrapper.find('.status-tooltip').text()).toContain('QCOW2_BACKUP')
   expect(wrapper.vm.progress).toBe(16)
   wrapper.unmount()
 })
 
-test('keeps restore step codes while translating the displayed label', () => {
+test.each(['PREPARE_SOURCE', 'RESTORE_PREPARE_TARGET', 'RESTORE_CONVERT'])('shows the restore phase %s as an English code in the Korean UI', step => {
   const wrapper = shallowMount(BackupProgress, {
-    props: { record: { id: 'backup-1', status: 'Restoring', restorejobstate: 'RUNNING', restorejobstep: 'PREPARE_SOURCE' } },
+    props: { record: { id: 'backup-1', status: 'Restoring', restorejobstate: 'RUNNING', restorejobstep: step } },
     global: {
+      stubs: { Status: statusWithTooltip },
       mocks: {
-        $t: key => key,
+        $t: key => korean[key] || key,
         $store: { getters: { apis: {} } }
       }
     }
   })
 
-  expect(wrapper.vm.displayStep).toBe('PREPARE_SOURCE')
-  expect(wrapper.vm.displayStepLabel).toBe('label.backup.restore.step.prepare.source')
+  expect(wrapper.vm.displayStep).toBe(step)
+  expect(wrapper.find('.status-tooltip').text()).toContain('단계 :')
+  expect(wrapper.find('.status-tooltip').text()).toContain(step)
   wrapper.unmount()
 })
 
@@ -149,7 +155,7 @@ test('keeps restore status compact and shows volume, phase and details in the to
     global: {
       stubs: { Status: statusWithTooltip },
       mocks: {
-        $t: key => key === 'label.backup.restore.step.compare' ? '복원 데이터 비교' : key,
+        $t: key => korean[key] || key,
         $store: { getters: { apis: { getBackupRestoreJobStatus: {} } } }
       }
     }
@@ -162,12 +168,12 @@ test('keeps restore status compact and shows volume, phase and details in the to
   expect(wrapper.find('.status-text').text()).toBe('Restoring')
   expect(wrapper.find('.backup-restore-step').exists()).toBe(false)
   expect(wrapper.find('.status-tooltip').text()).toContain('2/2')
-  expect(wrapper.find('.status-tooltip').text()).toContain('복원 데이터 비교')
+  expect(wrapper.find('.status-tooltip').text()).toContain('RESTORE_COMPARE')
   expect(wrapper.find('.status-tooltip').text()).toContain('DATA · QCOW2 ↔ QCOW2')
   expect(wrapper.find('.backup-progress-line').exists()).toBe(false)
   expect(wrapper.vm.showProgress).toBe(false)
   wrapper.vm.applyStatus({ state: 'RUNNING', step: 'RESTORE_PROMOTE', volumeindex: 2, volumecount: 2, details: 'DATA' })
-  expect(wrapper.vm.displayStepLabel).toBe('label.backup.restore.step.promote')
+  expect(wrapper.vm.displayStep).toBe('RESTORE_PROMOTE')
   expect(wrapper.vm.jobDetails).toBe('DATA')
   wrapper.unmount()
 })
@@ -180,7 +186,7 @@ test('keeps unknown restore phases available in the tooltip', () => {
       mocks: { $t: key => key, $store: { getters: { apis: {} } } }
     }
   })
-  expect(wrapper.vm.displayStepLabel).toBe('FUTURE_RESTORE_PHASE')
+  expect(wrapper.vm.displayStep).toBe('FUTURE_RESTORE_PHASE')
   expect(wrapper.find('.backup-restore-step').exists()).toBe(false)
   expect(wrapper.find('.status-tooltip').text()).toContain('FUTURE_RESTORE_PHASE')
   wrapper.unmount()
