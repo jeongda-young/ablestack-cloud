@@ -22,7 +22,7 @@
       :title="title"
       @contextmenu="handleContextMenu">
       <div class="card-body">
-        <div class="card-content">
+        <div class="card-content" :tabindex="scrollable ? 0 : undefined" :role="scrollable ? 'region' : undefined" :aria-label="scrollable ? title : undefined">
           <div>
             <div class="resource-details">
               <div class="resource-details__name">
@@ -1226,6 +1226,10 @@ export default {
       default: false
     },
     footerVisible: {
+      type: Boolean,
+      default: false
+    },
+    scrollable: {
       type: Boolean,
       default: false
     },

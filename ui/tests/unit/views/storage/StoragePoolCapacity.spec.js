@@ -57,34 +57,38 @@ test('summary renders independent values and explains reservation and physical m
 function context () {
   return {
     storageRequestId: 0,
+    createOnStorage: true,
+    reconcileStoragePool () { if (!this.storagePools.some(p => p.id === this.form.storageid && p.state === 'Up')) this.form.storageid = undefined },
     storageLoading: false,
     storageFetchError: false,
     storagePools: [pool],
-    form: { storageid: 'pool', name: 'Keep typed name', size: '17' },
+    form: { zoneid: 'zone', storageid: 'pool', name: 'Keep typed name', size: '17' },
     $notifyError: jest.fn()
   }
 }
 beforeEach(() => getAPI.mockReset())
-test('storage refresh preserves inputs, selected UUID and old capacity until the response arrives', async () => {
+test('storage refresh clears obsolete candidates and preserves entered fields while pending', async () => {
   const vm = context()
   let finish
   getAPI.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
   const pending = CreateVolume.methods.fetchStoragePools.call(vm, 'zone')
   expect(vm.storageLoading).toBe(true)
-  expect(vm.storagePools).toEqual([pool])
-  expect(vm.form).toMatchObject({ storageid: 'pool', name: 'Keep typed name', size: '17' })
+  expect(vm.storagePools).toEqual([])
+  expect(vm.form).toMatchObject({ name: 'Keep typed name', size: '17' })
   finish({ liststoragepoolsresponse: { storagepool: [{ ...pool, disksizeused: 250 * GiB }, { ...pool, id: 'down', state: 'Maintenance' }] } })
   await pending
-  expect(vm.storagePools).toHaveLength(1)
-  expect(vm.form.storageid).toBe('pool')
+  expect(vm.storagePools).toHaveLength(2)
+  expect(vm.form.storageid).toBeUndefined()
   expect(vm.storageLoading).toBe(false)
 })
 test('a late old-zone result cannot replace the current storage selection or capacity', async () => {
   const vm = context()
   let finishOld
   getAPI.mockImplementationOnce(() => new Promise(resolve => { finishOld = resolve }))
+  vm.form.zoneid = 'old-zone'
   const old = CreateVolume.methods.fetchStoragePools.call(vm, 'old-zone')
   getAPI.mockResolvedValueOnce({ liststoragepoolsresponse: { storagepool: [{ ...pool, id: 'current' }] } })
+  vm.form.zoneid = 'current-zone'
   const current = CreateVolume.methods.fetchStoragePools.call(vm, 'current-zone')
   await current
   vm.form.storageid = 'current'
@@ -98,8 +102,8 @@ test('fetch failure remains distinct from no candidates and does not erase typed
   getAPI.mockRejectedValueOnce(new Error('unavailable'))
   await CreateVolume.methods.fetchStoragePools.call(vm, 'zone')
   expect(vm.storageFetchError).toBe(true)
-  expect(vm.storagePools).toEqual([pool])
-  expect(vm.form.storageid).toBe('pool')
+  expect(vm.storagePools).toEqual([])
+  expect(vm.form.storageid).toBeUndefined()
   expect(vm.storageLoading).toBe(false)
 })
 

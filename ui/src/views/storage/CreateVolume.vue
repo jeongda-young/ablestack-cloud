@@ -159,6 +159,7 @@
             v-model:value="form.storageid"
             :loading="storageLoading"
             :options="storagePoolOptions"
+            :disabled="storageLoading || storageFetchError || !selectedDiskOffering"
             :virtual="false"
             dropdown-class-name="volume-storage-pool-dropdown"
             option-label-prop="label"
@@ -186,6 +187,7 @@
             </template>
           </a-select>
           <storage-pool-capacity v-if="selectedStoragePool" :pool="selectedStoragePool" summary />
+          <p v-if="hasRuleStoragePools" class="volume-storage-error">{{ $t('message.volume.storage.rule.automatic') }}</p>
           <p v-if="storageFetchError" class="volume-storage-error">{{ $t('message.volume.storage.failed') }}</p>
         </a-form-item>
       </span>
@@ -236,7 +238,7 @@
       </a-form-item>
       <div v-if="!hideActions" :span="24" class="action-button">
         <a-button @click="closeModal">{{ $t('label.cancel') }}</a-button>
-        <a-button type="primary" ref="submit" @click="handleSubmit">{{ $t('label.ok') }}</a-button>
+        <a-button type="primary" ref="submit" :disabled="createOnStorage && (storageLoading || storageFetchError || !selectedStoragePool)" @click="handleSubmit">{{ $t('label.ok') }}</a-button>
       </div>
     </a-form>
   </a-spin>
@@ -246,6 +248,7 @@
 import { ref, reactive, toRaw } from 'vue'
 import { getAPI, postAPI } from '@/api'
 import { volumeDeviceIdReason } from '@/utils/vmVolumeActions'
+import { offeringStoragePools, readStoragePools, storageTags } from '@/utils/volumeStoragePools'
 import { mixinForm } from '@/utils/mixin'
 import { isAdmin } from '@/role'
 import ResourceIcon from '@/components/view/ResourceIcon'
@@ -273,6 +276,7 @@ export default {
   },
   data () {
     return {
+      form: {},
       owner: {
         projectid: store.getters.project?.id,
         domainid: store.getters.project?.id ? null : store.getters.userInfo.domainid,
@@ -290,6 +294,7 @@ export default {
       storageLoading: false,
       storageFetchError: false,
       storageRequestId: 0,
+      offeringRequestId: 0,
       attachVolume: false,
       vmidtoattach: null,
       kmsKeys: [],
@@ -298,11 +303,13 @@ export default {
     }
   },
   computed: {
+    eligibleStoragePools () { return offeringStoragePools(this.storagePools, this.selectedDiskOffering) },
+    hasRuleStoragePools () { return storageTags(this.selectedDiskOffering?.tags).length > 0 && this.storagePools.some(pool => pool.state === 'Up' && pool.istagarule) },
     storagePoolOptions () {
-      return this.storagePools.map(pool => ({ value: pool.id, label: pool.name, title: pool.name, pool }))
+      return this.eligibleStoragePools.map(pool => ({ value: pool.id, label: pool.name, title: pool.name, pool }))
     },
     selectedStoragePool () {
-      return this.storagePools.find(pool => pool.id === this.form.storageid)
+      return this.eligibleStoragePools.find(pool => pool.id === this.form.storageid)
     },
     selectedDiskOffering () {
       if (!this.form.diskofferingid || !this.offerings.length) return null
@@ -324,6 +331,13 @@ export default {
       return this.$route.path.startsWith('/snapshot')
     }
   },
+  watch: {
+    'form.diskofferingid' () { this.reconcileStoragePool() },
+    'form.zoneid' () {
+      this.invalidateStoragePools()
+      if (this.createOnStorage) this.fetchStoragePools(this.form.zoneid)
+    }
+  },
   beforeCreate () {
     this.apiParams = this.$getApiParams('createVolume')
   },
@@ -332,7 +346,7 @@ export default {
     this.initForm()
     this.fetchData()
   },
-  beforeUnmount () { this.storageRequestId++ },
+  beforeUnmount () { this.storageRequestId++; this.offeringRequestId++ },
   methods: {
     validateDeviceId (rule, value) {
       const reason = volumeDeviceIdReason(value)
@@ -407,12 +421,12 @@ export default {
       } else if (id !== null) {
         params.id = id
       }
-      getAPI('listZones', params).then(json => {
+      getAPI('listZones', params, { preserveOnFailure: true }).then(json => {
         this.zones = json.listzonesresponse.zone || []
-        this.form.zoneid = this.zones[0].id || ''
+        this.form.zoneid = this.zones[0]?.id || ''
         this.fetchDiskOfferings(this.form.zoneid)
         if (this.createOnStorage) {
-          this.fetchStoragePools(this.form.zoneid)
+          // The zone watcher owns storage requests.
         }
         if (this.attachVolume) {
           this.fetchVirtualMachines(this.form.zoneid)
@@ -428,7 +442,7 @@ export default {
         showunique: false,
         id: this.resource.id
       }
-      getAPI('listSnapshots', params).then(json => {
+      getAPI('listSnapshots', params, { preserveOnFailure: true }).then(json => {
         const snapshots = json.listsnapshotsresponse.snapshot || []
         for (const snapshot of snapshots) {
           if (!this.snapshotZoneIds.includes(snapshot.zoneid)) {
@@ -442,6 +456,10 @@ export default {
       })
     },
     fetchDiskOfferings (zoneId) {
+      const sequence = ++this.offeringRequestId
+      this.offerings = []
+      this.form.diskofferingid = undefined
+      this.form.storageid = undefined
       if (zoneId !== this.kmsKeysZoneId) {
         this.kmsKeys = []
         this.kmsKeysZoneId = null
@@ -461,15 +479,16 @@ export default {
       } else {
         params.account = this.owner.account
       }
-      getAPI('listDiskOfferings', params).then(json => {
+      return getAPI('listDiskOfferings', params, { preserveOnFailure: true }).then(json => {
+        if (sequence !== this.offeringRequestId || zoneId !== this.form.zoneid) return
         this.offerings = json.listdiskofferingsresponse.diskoffering || []
         if (this.createVolumeFromVM) {
           this.offerings = this.offerings.filter(x => x.suitableforvirtualmachine)
         }
         if (!this.createVolumeFromSnapshot) {
-          this.form.diskofferingid = this.offerings[0].id || ''
+          this.form.diskofferingid = this.offerings[0]?.id || ''
         }
-        this.customDiskOffering = this.offerings[0].iscustomized || false
+        this.customDiskOffering = this.offerings[0]?.iscustomized || false
         this.isCustomizedDiskIOps = this.offerings[0]?.iscustomizediops || false
         if (this.offerings[0]?.encrypt) {
           this.fetchKmsKeys()
@@ -477,37 +496,41 @@ export default {
           this.form.kmskeyid = undefined
           this.kmsKeys = []
         }
+      }).catch(error => {
+        if (sequence === this.offeringRequestId) this.$notifyError(error)
       }).finally(() => {
-        this.loading = false
+        if (sequence === this.offeringRequestId) this.loading = false
       })
     },
-    fetchStoragePools (zoneId) {
-      const sequence = ++this.storageRequestId
+    invalidateStoragePools () {
+      this.storageRequestId++
+      this.storagePools = []
+      this.form.storageid = undefined
+      this.storageLoading = false
       this.storageFetchError = false
-      if (!zoneId) {
-        this.storageLoading = false
-        this.storagePools = []
-        this.form.storageid = undefined
-        return Promise.resolve()
-      }
-      this.storageLoading = true
-      return getAPI('listStoragePools', {
-        zoneid: zoneId,
-        showicon: true
-      }).then(json => {
-        if (sequence !== this.storageRequestId) return
-        const pools = json.liststoragepoolsresponse.storagepool || []
-        this.storagePools = pools.filter(p => p.state === 'Up')
-        if (this.form.storageid && !this.storagePools.some(pool => pool.id === this.form.storageid)) {
-          this.form.storageid = undefined
-        }
-      }).catch(error => {
+    },
+    reconcileStoragePool () {
+      if (!this.selectedStoragePool) this.form.storageid = undefined
+    },
+    async fetchStoragePools (zoneId) {
+      const sequence = ++this.storageRequestId
+      this.storagePools = []
+      this.form.storageid = undefined
+      this.storageFetchError = false
+      this.storageLoading = !!zoneId
+      if (!zoneId) return
+      try {
+        const pools = await readStoragePools(getAPI, zoneId, () => sequence === this.storageRequestId && this.form.zoneid === zoneId && this.createOnStorage)
+        if (pools === null) return
+        this.storagePools = pools
+        this.reconcileStoragePool()
+      } catch (error) {
         if (sequence !== this.storageRequestId) return
         this.storageFetchError = true
         this.$notifyError(error)
-      }).finally(() => {
+      } finally {
         if (sequence === this.storageRequestId) this.storageLoading = false
-      })
+      }
     },
     fetchVirtualMachines (zoneId) {
       var params = {
@@ -525,7 +548,7 @@ export default {
       var vmStates = ['Running', 'Stopped']
       vmStates.forEach((state) => {
         params.state = state
-        getAPI('listVirtualMachines', params).then(response => {
+        getAPI('listVirtualMachines', params, { preserveOnFailure: true }).then(response => {
           this.virtualmachines = this.virtualmachines.concat(response.listvirtualmachinesresponse.virtualmachine || [])
         }).catch(error => {
           this.$notifyError(error)
@@ -535,8 +558,11 @@ export default {
       })
     },
     handleSubmit (e) {
-      if (this.loading) return
+      if (this.loading || (this.createOnStorage && this.storageLoading)) return
       this.formRef.value.validate().then(() => {
+        if (this.createOnStorage && (this.storageFetchError || this.storageLoading || !this.selectedStoragePool)) {
+          throw new Error(this.$t(this.storageFetchError ? 'message.volume.storage.failed' : 'message.volume.storage.select.matching'))
+        }
         const formRaw = toRaw(this.form)
         const values = this.handleRemoveFields(formRaw)
         if (this.createVolumeFromVM) {
@@ -549,6 +575,7 @@ export default {
           values.size = values.size.trim()
         }
         delete values.createOnStorage
+        if (!this.createOnStorage) delete values.storageid
         if (this.createVolumeFromSnapshot) {
           values.snapshotid = this.resource.id
         }
@@ -616,6 +643,8 @@ export default {
       this.$emit('close-action')
     },
     onChangeDiskOffering (id) {
+      this.form.diskofferingid = id
+      this.reconcileStoragePool()
       const offering = this.offerings.filter(x => x.id === id)
       this.customDiskOffering = offering[0]?.iscustomized || false
       this.isCustomizedDiskIOps = offering[0]?.iscustomizediops || false
@@ -639,7 +668,7 @@ export default {
         projectid: this.owner.projectid,
         purpose: 'volume'
       }
-      getAPI('listKMSKeys', params).then(response => {
+      getAPI('listKMSKeys', params, { preserveOnFailure: true }).then(response => {
         const kmskeyMap = response.listkmskeysresponse.kmskey || []
         if (kmskeyMap.length > 0) {
           this.kmsKeys = kmskeyMap
@@ -660,17 +689,11 @@ export default {
         this.fetchVirtualMachines(this.form.zoneid)
       }
     },
-    onChangeCreateOnStorage () {
-      this.createOnStorage = !this.createOnStorage
-      if (this.createOnStorage) {
-        this.fetchStoragePools(this.form.zoneid)
-        this.form.storageid = this.storagePools[0]?.id || undefined
-      } else {
-        this.form.storageid = undefined
-        this.storageRequestId++
-        this.storageLoading = false
-        this.storageFetchError = false
-      }
+    onChangeCreateOnStorage (checked) {
+      this.createOnStorage = checked
+      this.form.createOnStorage = checked
+      this.invalidateStoragePools()
+      if (checked) this.fetchStoragePools(this.form.zoneid)
     }
   }
 }

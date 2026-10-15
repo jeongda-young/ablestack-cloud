@@ -23,7 +23,7 @@
       <a-input-search v-model:value="search" :placeholder="$t('label.search')" allow-clear @search="current = 1" @change="current = 1" />
     </div>
     <a-alert v-if="listRefreshFailed" class="schedule-spacing" type="warning" show-icon :message="$t('message.list.refresh.stale')" />
-    <a-table :columns="columns" :data-source="visibleRows" row-key="id" :pagination="false" :loading="busy && !rows.length" :scroll="{ x: 960 }" size="small">
+    <a-table :columns="columns" :data-source="visibleRows" row-key="id" :pagination="false" :loading="busy && loadedScope !== scopeKey" :scroll="{ x: 960 }" size="small">
       <template #emptyText>{{ $t(search ? 'message.schedule.search.empty' : 'message.schedule.empty') }}</template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'action'">{{ actionName(record.action) }}</template>
@@ -124,6 +124,7 @@ export default {
       focusTarget: null,
       rows: [],
       busy: false,
+      loadedScope: null,
       current: 1,
       size: 10,
       search: '',
@@ -215,7 +216,7 @@ export default {
     }
   },
   watch: {
-    scopeKey () { this.rows = []; this.current = 1; this.search = ''; this.mode = ''; this.selected = null; this.fetchSchedules() }
+    scopeKey () { this.loadedScope = null; this.rows = []; this.current = 1; this.search = ''; this.mode = ''; this.selected = null; this.fetchSchedules() }
   },
   created () { this.fetchSchedules(); timeZone().then(zones => { this.zones = zones }) },
   methods: {
@@ -238,7 +239,7 @@ export default {
         let page = 1
         let total = 0
         do {
-          const json = await getAPI('listResourceSchedule', { resourceid: this.resource.id, resourcetype: 'VirtualMachine', listall: true, page, pagesize: 100 })
+          const json = await getAPI('listResourceSchedule', { resourceid: this.resource.id, resourcetype: 'VirtualMachine', listall: true, page, pagesize: 100 }, { preserveOnFailure: true })
           if (scope !== this.scopeKey || !this.isListRequestCurrent('fetchSchedules', request)) return
           const result = json.listresourcescheduleresponse || {}
           const batch = result.resourceschedule || []
@@ -247,7 +248,8 @@ export default {
           rows.push(...batch)
           page++
         } while (rows.length < total)
-        this.rows = rows
+        if (JSON.stringify(this.rows) !== JSON.stringify(rows)) this.rows = rows
+        this.loadedScope = scope
         this.clampPage()
       } catch (error) {
         if (scope !== this.scopeKey || !this.isListRequestCurrent('fetchSchedules', request)) return

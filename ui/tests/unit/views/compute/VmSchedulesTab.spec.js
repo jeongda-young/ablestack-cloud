@@ -110,3 +110,20 @@ test('delete includes the resource type and VM scope required by the API', async
   expect(postAPI).toHaveBeenCalledWith('deleteResourceSchedule', { id: 's1', resourceid: 'v1', resourcetype: 'VirtualMachine' })
   wrapper.unmount()
 })
+
+test.each([[[]], [[row]]])('successful empty and populated lists remain loaded during refresh and retry (%j)', async rows => {
+  getAPI.mockResolvedValue(response(rows))
+  const w = mount(); await flush()
+  const original = w.vm.rows
+  let finish
+  getAPI.mockImplementationOnce(() => new Promise(resolve => { finish = resolve }))
+  const pending = w.vm.fetchSchedules(); await flush()
+  expect(w.vm.loadedScope).toBe(w.vm.scopeKey)
+  expect(w.vm.busy).toBe(true)
+  expect(w.vm.rows).toBe(original)
+  finish(response(rows)); await pending
+  expect(w.vm.rows).toBe(original)
+  getAPI.mockRejectedValue(new Error('offline')); await w.vm.fetchSchedules()
+  expect(w.vm.loadedScope).toBe(w.vm.scopeKey)
+  w.unmount()
+})

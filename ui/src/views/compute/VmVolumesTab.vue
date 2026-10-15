@@ -20,11 +20,11 @@
     <div class="volume-toolbar">
       <a-tooltip :title="reason('createVolume') ? $t(reason('createVolume')) : ''"><span v-if="allowed('createVolume') && allowed('attachVolume')"><a-button type="primary" :disabled="busy || opening || !!reason('createVolume')" @click="openCreate"><template #icon><plus-outlined /></template>{{ $t('label.vmvolume.create') }}</a-button></span></a-tooltip>
       <a-tooltip :title="reason('createVolume') ? $t(reason('createVolume')) : ''"><span v-if="allowed('attachVolume')"><a-button :disabled="busy || opening || !!reason('createVolume')" @click="openAttach">{{ $t('label.vmvolume.attach') }}</a-button></span></a-tooltip>
-      <a-button @click="fetchData"><template #icon><reload-outlined /></template>{{ $t('label.refresh') }}</a-button>
+      <a-button :loading="listRefreshing > 0 || loading || snapshotChecking" @click="fetchData"><template #icon><reload-outlined /></template>{{ $t('label.refresh') }}</a-button>
       <a-input-search v-model:value="search" :placeholder="$t('label.search')" />
     </div>
     <a-alert v-if="backupReason" type="warning" show-icon :message="$t(backupReason)" class="volume-alert" />
-    <a-alert v-if="snapshotReason" type="info" show-icon :message="$t(snapshotReason)" class="volume-alert" />
+    <a-alert v-if="snapshotNotice" type="info" show-icon :message="$t(snapshotNotice)" class="volume-alert" />
     <a-alert v-if="listRefreshFailed" type="warning" show-icon :message="$t('message.list.refresh.stale')" class="volume-alert" />
     <a-alert v-if="operation" :type="operation.status === 'complete' ? 'success' : 'info'" show-icon class="volume-alert">
       <template #message><a @click="progressVisible = true">{{ $t('label.vmvolume.progress') }}: {{ $t('label.vmvolume.' + operation.status) }}</a></template>
@@ -44,10 +44,10 @@
         </template>
       </template>
     </a-table>
-    <a-modal centered wrap-class-name="vm-volume-modal" :visible="form === 'create'" :title="$t('label.vmvolume.create')" :mask-closable="false" @cancel="form = ''"><a-alert v-if="snapshotReason" type="info" show-icon :message="$t(snapshotReason)" class="volume-alert" /><a-alert v-if="backupReason" type="warning" show-icon :message="$t(backupReason)" class="volume-alert" /><CreateVolume ref="volumeCreator" v-if="form === 'create'" :resource="resource" :submit-handler="createAndAttach" hide-actions @close-action="form = ''" /><template #footer><a-button @click="form = ''">{{ $t('label.cancel') }}</a-button><a-button type="primary" :disabled="busy || !!reason('createVolume')" @click="$refs.volumeCreator.handleSubmit()">{{ $t('label.ok') }}</a-button></template></a-modal>
+    <a-modal centered wrap-class-name="vm-volume-modal" :visible="form === 'create'" :title="$t('label.vmvolume.create')" :mask-closable="false" @cancel="form = ''"><a-alert v-if="snapshotNotice" type="info" show-icon :message="$t(snapshotNotice)" class="volume-alert" /><a-alert v-if="backupReason" type="warning" show-icon :message="$t(backupReason)" class="volume-alert" /><CreateVolume ref="volumeCreator" v-if="form === 'create'" :resource="resource" :submit-handler="createAndAttach" hide-actions @close-action="form = ''" /><template #footer><a-button @click="form = ''">{{ $t('label.cancel') }}</a-button><a-button type="primary" :disabled="busy || !!reason('createVolume')" @click="$refs.volumeCreator.handleSubmit()">{{ $t('label.ok') }}</a-button></template></a-modal>
     <a-modal centered wrap-class-name="vm-volume-modal" :visible="form === 'attach'" :title="$t('label.vmvolume.attach')" :ok-button-props="{ disabled: !attachId || busy || candidatesLoading || !!deviceReason || !!snapshotReason || !!backupReason }" @ok="attachExisting" @cancel="form = ''">
       <a-alert v-if="backupReason" type="warning" show-icon :message="$t(backupReason)" class="volume-alert" />
-      <a-alert v-if="snapshotReason" type="info" show-icon :message="$t(snapshotReason)" class="volume-alert" />
+      <a-alert v-if="snapshotNotice" type="info" show-icon :message="$t(snapshotNotice)" class="volume-alert" />
       <p>{{ resource.displayname || resource.name }}</p>
       <a-select v-model:value="attachId" show-search :filter-option="filterOption" :loading="candidatesLoading" style="width: 100%" :placeholder="$t('label.volumes')"><a-select-option v-for="volume in candidates" :key="volume.id" :value="volume.id" :label="volume.name">{{ volume.name }} ({{ (volume.size / 1073741824).toFixed(2) }} GB)</a-select-option></a-select>
       <a-form layout="vertical" class="volume-device-form">
@@ -68,7 +68,7 @@ wrap-class-name="vm-volume-modal"
 @cancel="selected = null">
       <template v-if="selected">
         <a-alert v-if="backupReason" type="warning" show-icon :message="$t(backupReason)" class="volume-alert" />
-        <a-alert v-if="snapshotReason" type="info" show-icon :message="$t(snapshotReason)" class="volume-alert" />
+        <a-alert v-if="snapshotNotice" type="info" show-icon :message="$t(snapshotNotice)" class="volume-alert" />
         <a-descriptions bordered :column="1" size="small" class="volume-description"><a-descriptions-item :label="$t('label.vm')">{{ resource.displayname || resource.name }}</a-descriptions-item><a-descriptions-item :label="$t('label.volumes')">{{ selected.name }}</a-descriptions-item><a-descriptions-item :label="$t('label.id')">{{ selected.id }}</a-descriptions-item><a-descriptions-item :label="$t('label.type')">{{ selected.type }}</a-descriptions-item><a-descriptions-item :label="$t('label.size')">{{ (selected.size / 1073741824).toFixed(2) }} GB</a-descriptions-item></a-descriptions>
         <a-radio-group v-model:value="mode" class="volume-options"><a-radio value="preserve">{{ $t('label.vmvolume.preserve') }}</a-radio><a-radio v-if="selected.type === 'DATADISK' && allowed('destroyVolume') && !selected.deleteprotection" value="destroy">{{ $t('label.vmvolume.destroy') }}</a-radio><a-radio v-if="selected.type === 'DATADISK' && canExpunge && !selected.deleteprotection" value="expunge">{{ $t('label.vmvolume.expunge') }}</a-radio></a-radio-group>
         <a-alert show-icon :type="mode === 'expunge' ? 'error' : 'warning'" :message="$t('message.vmvolume.' + mode)" />
@@ -105,19 +105,20 @@ export default {
   components: { Status, CreateVolume },
   props: { resource: { type: Object, required: true } },
   mixins: [listRefreshMixin(['fetchData'], { interval: 10000, active: vm => !!vm.resource.id })],
-  data () { return { backupReason: 'message.vmvolume.backup.unknown', snapshots: null, snapshotRequest: 0, opening: false, rows: [], loading: false, search: '', form: '', selected: null, mode: 'preserve', candidates: [], candidatesLoading: false, candidateError: '', attachId: undefined, attachDeviceId: undefined, progressVisible: false } },
+  data () { return { backupReason: 'message.vmvolume.backup.unknown', snapshots: null, snapshotChecking: false, snapshotRequest: 0, opening: false, rows: [], loading: false, search: '', form: '', selected: null, mode: 'preserve', candidates: [], candidatesLoading: false, candidateError: '', attachId: undefined, attachDeviceId: undefined, progressVisible: false } },
   computed: {
     security () { return JSON.stringify([this.$store.getters.project?.id, this.$store.getters.userInfo?.id, this.$store.state?.user?.token]) },
     scopeKey () { return this.security + ':' + this.resource.id },
     operation () { return volumeOperations[this.scopeKey] },
     busy () { return this.operation && this.operation.status !== 'complete' },
-    snapshotReason () { return volumeSnapshotReason(this.snapshots) },
+    snapshotReason () { return volumeSnapshotReason(this.snapshotChecking ? null : this.snapshots) },
+    snapshotNotice () { return volumeSnapshotReason(this.snapshots) },
     deviceReason () { return volumeDeviceIdReason(this.attachDeviceId, this.rows) },
     canExpunge () { return this.allowed('destroyVolume') && (this.$store.getters.userInfo?.roletype === 'Admin' || this.$store.getters.features?.allowuserexpungerecovervolume) },
     filteredRows () { const query = this.search.trim().toLowerCase(); return this.rows.filter(row => (row.name || '').toLowerCase().includes(query)) },
     columns () { return ['name', 'state', 'type', 'deviceid', 'size', 'storage', ...(this.allowed('listKMSKeys') ? ['kmskey'] : []), 'actions'].map(key => ({ key, dataIndex: key, width: { name: 190, state: 100, type: 100, deviceid: 140, size: 100, storage: 160, kmskey: 140, actions: 190 }[key], title: this.$t(key === 'kmskey' ? 'label.kms.key' : key === 'deviceid' ? 'label.vmvolume.deviceid' : 'label.' + key), ...(key === 'actions' ? { fixed: 'right' } : {}) })) }
   },
-  watch: { scopeKey () { this.snapshotRequest++; this.snapshots = null; this.backupReason = 'message.vmvolume.backup.unknown'; this.opening = false; this.rows = []; this.search = ''; this.form = ''; this.selected = null; this.progressVisible = false; this.fetchData() } },
+  watch: { scopeKey () { this.snapshotRequest++; this.snapshotChecking = false; this.snapshots = null; this.backupReason = 'message.vmvolume.backup.unknown'; this.opening = false; this.rows = []; this.search = ''; this.form = ''; this.selected = null; this.progressVisible = false; this.fetchData() } },
   created () { this.fetchData(); this.onJobComplete = () => this.fetchData(); eventBus.on('async-job-complete', this.onJobComplete) },
   beforeUnmount () { eventBus.off('async-job-complete', this.onJobComplete) },
   methods: {
@@ -130,20 +131,21 @@ export default {
     },
     async refreshSnapshots (vmId = this.resource.id, scope = this.scopeKey) {
       const request = ++this.snapshotRequest
-      if (scope === this.scopeKey) this.snapshots = null
+      // Retain the last result for display; actions still fail closed during verification.
+      if (scope === this.scopeKey) this.snapshotChecking = true
       let count = null
       let backupReason = 'message.vmvolume.backup.unknown'
       try {
-        const vmResponse = await getAPI('listVirtualMachines', { id: vmId })
+        const vmResponse = await getAPI('listVirtualMachines', { id: vmId }, { preserveOnFailure: true })
         backupReason = volumeBackupReason(vmResponse.listvirtualmachinesresponse?.virtualmachine?.find(vm => vm.id === vmId))
         if (this.allowed('listVMSnapshot')) {
-          const response = await getAPI('listVMSnapshot', { virtualmachineid: vmId, ...(this.resource.projectid ? { projectid: this.resource.projectid } : {}), page: 1, pagesize: 1, listall: true })
+          const response = await getAPI('listVMSnapshot', { virtualmachineid: vmId, ...(this.resource.projectid ? { projectid: this.resource.projectid } : {}), page: 1, pagesize: 1, listall: true }, { preserveOnFailure: true })
           const data = response.listvmsnapshotresponse
           if (data) count = Math.max(Number(data.count || 0), data.vmSnapshot?.length || 0)
           if (!Number.isFinite(count)) count = null
         }
       } catch (_) { /* Unknown is a blocking state, never an empty snapshot list. */ }
-      if (scope === this.scopeKey && request === this.snapshotRequest && !this.listRefreshDisposed) { this.snapshots = count; this.backupReason = backupReason }
+      if (scope === this.scopeKey && request === this.snapshotRequest && !this.listRefreshDisposed) { this.snapshots = count; this.backupReason = backupReason; this.snapshotChecking = false }
       return count
     },
     async canOpen (api, volume, permission = api) {
@@ -164,7 +166,7 @@ export default {
       const snapshots = this.refreshSnapshots()
       const request = this.listRequestToken('fetchData'); this.loading = !request.loaded
       try {
-        const response = await getAPI('listVolumes', { virtualmachineid: this.resource.id, ...(this.resource.projectid ? { projectid: this.resource.projectid } : {}), listall: true, listsystemvms: true })
+        const response = await getAPI('listVolumes', { virtualmachineid: this.resource.id, ...(this.resource.projectid ? { projectid: this.resource.projectid } : {}), listall: true, listsystemvms: true }, { preserveOnFailure: true })
         if (!this.isListRequestCurrent('fetchData', request)) return
         const rows = (response.listvolumesresponse.volume || []).filter(row => row.virtualmachineid === this.resource.id).sort((a, b) => a.deviceid - b.deviceid)
         if (JSON.stringify(rows) !== JSON.stringify(this.rows)) this.rows = rows
@@ -179,7 +181,7 @@ export default {
         let page = 1
         let fetched = 0
         do {
-          const response = await getAPI('listVolumes', { ...params, page })
+          const response = await getAPI('listVolumes', { ...params, page }, { preserveOnFailure: true })
           if (scope !== this.scopeKey || this.form !== 'attach' || this.listRefreshDisposed) return
           const data = response.listvolumesresponse
           const volumes = data.volume || []
@@ -209,12 +211,12 @@ export default {
         validate: async operation => {
           const api = operation.steps[operation.stage]
           if (!this.allowed(api) || (api === 'destroyVolume' && operation.mode === 'expunge' && !this.canExpunge)) throw new Error(this.$t('message.vmsnapshot.permission'))
-          const response = await getAPI('listVirtualMachines', { id: vm.id })
+          const response = await getAPI('listVirtualMachines', { id: vm.id }, { preserveOnFailure: true })
           const freshVm = response.listvirtualmachinesresponse.virtualmachine?.find(item => item.id === vm.id)
           let freshVolume = operation.volume
-          if (freshVolume?.id) { const result = await getAPI('listVolumes', { id: freshVolume.id, ...(vm.projectid ? { projectid: vm.projectid } : {}), listall: true }); freshVolume = result.listvolumesresponse.volume?.find(item => item.id === freshVolume.id) }
+          if (freshVolume?.id) { const result = await getAPI('listVolumes', { id: freshVolume.id, ...(vm.projectid ? { projectid: vm.projectid } : {}), listall: true }, { preserveOnFailure: true }); freshVolume = result.listvolumesresponse.volume?.find(item => item.id === freshVolume.id) }
           if (['createVolume', 'attachVolume'].includes(api) && operation.deviceId !== undefined && operation.deviceId !== null && operation.deviceId !== '') {
-            const attached = await getAPI('listVolumes', { virtualmachineid: vm.id, ...(vm.projectid ? { projectid: vm.projectid } : {}), listall: true })
+            const attached = await getAPI('listVolumes', { virtualmachineid: vm.id, ...(vm.projectid ? { projectid: vm.projectid } : {}), listall: true }, { preserveOnFailure: true })
             const deviceReason = volumeDeviceIdReason(operation.deviceId, attached.listvolumesresponse.volume || [])
             if (deviceReason) throw new Error(this.$t(deviceReason))
           }
@@ -227,7 +229,7 @@ export default {
           if (reason) throw new Error(this.$t(reason))
           if (api === 'detachVolume' && freshVolume.type === 'ROOT') {
             if (!this.allowed('listStoragePools')) throw new Error(this.$t('message.vmvolume.root'))
-            const pools = await getAPI('listStoragePools', { id: freshVolume.storageid })
+            const pools = await getAPI('listStoragePools', { id: freshVolume.storageid }, { preserveOnFailure: true })
             const pool = pools.liststoragepoolsresponse.storagepool?.find(item => item.id === freshVolume.storageid)
             if (!pool || pool.managed !== false) throw new Error(this.$t('message.vmvolume.root'))
           }

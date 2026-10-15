@@ -25,7 +25,7 @@
     </div>
     <a-alert v-if="error" type="warning" show-icon :message="error" />
     <a-alert v-if="blockReason && canManage && snapshots !== null" type="info" show-icon :message="blockReason" />
-    <a-table :columns="columns" :data-source="visibleRows" :row-key="rowKey" :loading="loading" :pagination="false" :scroll="{ x: 760 }" size="small">
+    <a-table :columns="columns" :data-source="visibleRows" :row-key="rowKey" :loading="loading && loadedScope !== scopeKey" :pagination="false" :scroll="{ x: 760 }" size="small">
       <template #emptyText>{{ d('empty') }}</template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'type'"><a-tag>{{ typeLabel(record.devicetype) }}</a-tag></template>
@@ -102,14 +102,16 @@ wrap-class-name="vm-device-dialog"
 
 <script>
 import { getAPI, postAPI } from '@/api'
+import { createListRefresh, canRefreshList } from '@/utils/listRefresh'
 import { deviceTypes, asArray, deviceCandidates, deviceSummary, deviceXml, vhbaXml, deviceBlocked, deviceSafetyKey } from '@/utils/vmDevices'
 export default {
   name: 'VmDevicesTab',
   props: { resource: { type: Object, required: true }, active: Boolean },
   data () {
-    return { vm: this.resource, rows: [], loading: false, busy: false, submitting: false, error: '', snapshots: null, search: '', filter: '', page: 1, pageSize: 10, dialog: '', selected: null, ack: false, dialogError: '', mode: 'existing', type: 'usb', pathMode: 'multipath', candidates: [], candidateLoading: false, choice: undefined, hostId: this.resource.hostid, hosts: [], address: undefined, scsiDevices: [], vhbaName: '', createdDevice: '', createdHost: '', resultFailed: false, steps: [], revision: 0, candidateRevision: 0 }
+    return { vm: this.resource, rows: [], loadedScope: null, loading: false, busy: false, submitting: false, error: '', snapshots: null, search: '', filter: '', page: 1, pageSize: 10, dialog: '', selected: null, ack: false, dialogError: '', mode: 'existing', type: 'usb', pathMode: 'multipath', candidates: [], candidateLoading: false, choice: undefined, hostId: this.resource.hostid, hosts: [], address: undefined, scsiDevices: [], vhbaName: '', createdDevice: '', createdHost: '', resultFailed: false, steps: [], revision: 0, candidateRevision: 0 }
   },
   computed: {
+    scopeKey () { return JSON.stringify([this.resource.id, this.resource.projectid, this.$store.getters.project?.id, this.$store.getters.userInfo?.id, this.$store.state?.user?.token]) },
     types () { return Object.keys(deviceTypes) },
     canManage () { return this.types.some(this.allowed) },
     blockReason () {
@@ -131,7 +133,7 @@ export default {
     scsiChoices () { return this.scsiDevices.filter(d => (d.text || '').includes('[' + (this.choice || '').replace('scsi_host', '') + ':')).map(d => ({ value: (d.text.match(/\[(\d+:\d+:\d+:\d+)\]/) || [])[1], label: this.candidateLabel(d), disabled: deviceBlocked(d) })).filter(d => d.value) }
   },
   watch: {
-    active: { immediate: true, handler (value) { if (value) this.refresh() } },
+    active: { handler (value) { if (value) this.refresh() } },
     choice () { this.ack = false; this.address = undefined },
     address () { this.ack = false },
     type () { this.ack = false },
@@ -141,9 +143,16 @@ export default {
     selectedSafetyKey () { this.ack = false },
     'resource.state' () { if (this.active) this.refresh() },
     'resource.hostid' () { if (this.active) this.refresh() },
-    'resource.id' () { this.revision++; this.candidateRevision++; this.dialog = ''; this.rows = []; this.snapshots = null; if (this.active) this.refresh() }
+    scopeKey () { this.loadedScope = null; this.error = ''; this.vm = this.resource; this.page = 1; this.search = ''; this.filter = ''; this.revision++; this.candidateRevision++; this.dialog = ''; this.rows = []; this.snapshots = null; if (this.active) this.refresh() }
   },
-  beforeUnmount () { this.revision++; this.candidateRevision++ },
+  created () { if (this.active) this.refresh() },
+  mounted () {
+    this.refreshController = createListRefresh({
+      active: () => this.active && canRefreshList(this.$el),
+      refresh: async () => { await this.refresh(); if (this.error) throw new Error(this.error) }
+    })
+  },
+  beforeUnmount () { if (this.refreshController) this.refreshController.stop(); this.revision++; this.candidateRevision++ },
   methods: {
     d (key) { return this.$t('label.vmdevice.' + key) },
     api (name) { return name in this.$store.getters.apis },
@@ -163,14 +172,17 @@ export default {
     },
     async refresh () {
       const version = ++this.revision
+      const scope = this.scopeKey
       this.loading = true
       try {
-        const [v, a, s] = await Promise.all([getAPI('listVirtualMachines', { id: this.resource.id, details: 'all' }), getAPI('listVmDeviceAssignments', { virtualmachineid: this.resource.id }), this.canManage ? getAPI('listVMSnapshot', { virtualmachineid: this.resource.id, listall: true }) : Promise.resolve(null)])
-        if (version !== this.revision) return
+        const [v, a, s] = await Promise.all([getAPI('listVirtualMachines', { id: this.resource.id, details: 'all' }, { preserveOnFailure: true }), getAPI('listVmDeviceAssignments', { virtualmachineid: this.resource.id }, { preserveOnFailure: true }), this.canManage ? getAPI('listVMSnapshot', { virtualmachineid: this.resource.id, listall: true }, { preserveOnFailure: true }) : Promise.resolve(null)])
+        if (version !== this.revision || scope !== this.scopeKey) return
         const vm = asArray(v.listvirtualmachinesresponse?.virtualmachine)[0]
         if (!vm) throw new Error(this.d('verifyFirst'))
         this.vm = vm
-        this.rows = asArray(a.listvmdeviceassignmentsresponse?.vmdeviceassignment)
+        const rows = asArray(a.listvmdeviceassignmentsresponse?.vmdeviceassignment)
+        if (JSON.stringify(this.rows) !== JSON.stringify(rows)) this.rows = rows
+        this.loadedScope = scope
         this.snapshots = s ? (s.listvmsnapshotresponse?.count || asArray(s.listvmsnapshotresponse?.vmSnapshot || s.listvmsnapshotresponse?.vmsnapshot).length) : null
         this.page = Math.min(this.page, Math.max(1, Math.ceil(this.filteredRows.length / this.pageSize)))
         this.error = ''
@@ -179,7 +191,7 @@ export default {
     async openAllocate () {
       this.selected = null; this.mode = 'existing'; this.type = this.vm.state === 'Stopped' ? 'pci' : this.types.find(t => t !== 'pci' && this.allowed(t)); this.dialog = 'allocate'; this.dialogError = ''; this.ack = false; this.createdDevice = ''; this.hostId = this.vm.hostid
       if (!this.hostId) {
-        try { const r = await getAPI('listHosts', { zoneid: this.vm.zoneid, type: 'Routing' }); this.hosts = asArray(r.listhostsresponse?.host).filter(h => h.hypervisor === 'KVM' && h.state === 'Up'); this.hostId = this.rows.find(r => r.hostuuid)?.hostuuid } catch (e) { this.dialogError = this.d('loadFailed') }
+        try { const r = await getAPI('listHosts', { zoneid: this.vm.zoneid, type: 'Routing' }, { preserveOnFailure: true }); this.hosts = asArray(r.listhostsresponse?.host).filter(h => h.hypervisor === 'KVM' && h.state === 'Up'); this.hostId = this.rows.find(r => r.hostuuid)?.hostuuid } catch (e) { this.dialogError = this.d('loadFailed') }
       }
       await this.fetchCandidates()
     },
@@ -195,7 +207,7 @@ export default {
       const name = deviceTypes[type][0]
       const params = type === 'vhba' ? { hostid: hostId } : { id: hostId }
       if (type === 'lun') params.lunpathmode = this.pathMode
-      return deviceCandidates(await getAPI(name, params), type)
+      return deviceCandidates(await getAPI(name, params, { preserveOnFailure: true }), type)
     },
     async fetchCandidates () {
       const revision = ++this.candidateRevision

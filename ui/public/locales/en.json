@@ -8916,5 +8916,7 @@
   "message.vm.group.members.groups.empty": "No other target groups. Create a group in the same owner scope first.",
   "message.vm.group.members.groups.error": "Unable to load target groups. Input is preserved.",
   "message.vm.group.members.groups.forbidden": "Target group access was denied.",
-  "message.vm.group.members.groups.unavailable": "The target owner scope is unavailable."
+  "message.vm.group.members.groups.unavailable": "The target owner scope is unavailable.",
+  "message.volume.storage.rule.automatic": "Rule-based storage tags are evaluated by the server. Turn off Create on storage to use automatic placement for these pools.",
+  "message.volume.storage.select.matching": "Select an available primary storage that matches the disk offering tags."
 }

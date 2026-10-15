@@ -51,11 +51,6 @@
   .autoscale-dialog .ant-modal-footer .action-button { width: 100%; }
 }
 
-.autoscale-list a, .autoscale-resource .resource-detail-item a {
-  color: var(--ui-text-primary);
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
 .autoscale-tab, .autoscale-create, .autoscale-dialog {
   .ant-input, .ant-input-number, .ant-select:not(.ant-select-customize-input) .ant-select-selector {
     border-color: var(--ui-text-muted);
@@ -83,7 +78,6 @@ body .autoscale-screen, body .autoscale-create, body .autoscale-dialog {
   .ant-input:disabled, .ant-select-disabled .ant-select-selection-item { color: var(--ui-text-secondary) !important; -webkit-text-fill-color: var(--ui-text-secondary) !important; }
 }
 
-body .autoscale-list a, body .autoscale-resource .resource-detail-item a,
 body .autoscale-create .vm-info-card .resource-detail-item__details a {
   color: var(--ui-text-primary) !important;
 }
@@ -204,13 +198,6 @@ body .autoscale-schedule-picker, body .autoscale-confirm {
   .ant-popover-message-title { color: var(--ui-text-primary); white-space: normal; overflow-wrap: anywhere; }
 }
 .autoscale-dialog .ant-table-wrapper { max-width: 100%; overflow-x: auto; }
-
-// Keep existing links in AutoScale tables readable, including library selections.
-body .autoscale-tab .ant-table-cell a, body .autoscale-dialog .ant-table-cell a {
-  color: var(--ui-link) !important;
-  text-decoration: underline;
-  text-underline-offset: 2px;
-}
 
 body .autoscale-dialog .ant-tabs-tab-active .ant-tabs-tab-btn {
   color: var(--ui-link) !important;

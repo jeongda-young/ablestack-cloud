@@ -55,7 +55,6 @@ export default {
 </script>
 <style scoped lang="less">
 .autoscale-list-cell { min-width: 120px; color: var(--ui-text-primary); overflow-wrap: anywhere;
-  a { color: var(--ui-text-primary); text-decoration: underline; text-underline-offset: 2px; }
   > div + span, > div + div, strong + div { margin-top: 4px; display: block; }
 }
 </style>
