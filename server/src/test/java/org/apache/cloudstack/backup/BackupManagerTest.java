@@ -399,6 +399,13 @@ public class BackupManagerTest {
     }
 
     @Test
+    public void testRestorePrimaryStorageBufferConfigKeyIsRegistered() {
+        assertEquals("20", BackupManager.RestorePrimaryStorageCapacityBufferPercent.defaultValue());
+        assertTrue(java.util.Arrays.stream(backupManager.getConfigKeys()).anyMatch(key ->
+                "backup.restore.primary.storage.capacity.buffer.percent".equals(key.key())));
+    }
+
+    @Test
     public void testThirdPartyStagingConfigKeysAreRegistered() {
         List<String> registeredKeys = new ArrayList<>();
         for (ConfigKey<?> configKey : backupManager.getConfigKeys()) {

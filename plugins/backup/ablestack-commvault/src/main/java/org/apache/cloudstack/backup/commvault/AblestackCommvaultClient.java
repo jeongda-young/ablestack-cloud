@@ -39,9 +39,12 @@ import org.apache.http.client.methods.HttpDelete;
 import org.apache.http.client.methods.HttpGet;
 import org.apache.http.client.methods.HttpRequestBase;
 import org.apache.http.conn.ConnectTimeoutException;
+import org.apache.http.conn.ConnectionPoolTimeoutException;
 import org.apache.http.conn.ssl.NoopHostnameVerifier;
 import org.apache.http.conn.ssl.SSLConnectionSocketFactory;
 import org.apache.http.impl.client.HttpClientBuilder;
+import org.apache.http.entity.ByteArrayEntity;
+import org.apache.http.message.BasicHttpResponse;
 import org.apache.http.util.EntityUtils;
 import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
@@ -273,6 +276,10 @@ public class AblestackCommvaultClient {
     }
 
     private void checkResponseTimeOut(final Exception e) {
+        if (e instanceof ConnectionPoolTimeoutException) {
+            throw new ServerApiException(ApiErrorCode.RESOURCE_UNAVAILABLE_ERROR,
+                    "Commvault API connection pool wait timed out. No connection was available; please retry the operation.");
+        }
         if (e instanceof ConnectTimeoutException || e instanceof SocketTimeoutException) {
             throw new ServerApiException(ApiErrorCode.RESOURCE_UNAVAILABLE_ERROR, "Commvault API operation timed out, please try again.");
         }
@@ -301,9 +308,20 @@ public class AblestackCommvaultClient {
             }
             request.setHeader(HttpHeaders.ACCEPT, "application/json");
             headers.forEach(request::setHeader);
-            final HttpResponse response = httpClient.execute(request);
+            // Callers may return without reading a DELETE body or an unavailable Client response.
+            // The response handler releases the pooled connection on success and every exception path.
+            final HttpResponse response = httpClient.execute(request, received -> {
+                final HttpResponse buffered = new BasicHttpResponse(received.getStatusLine());
+                buffered.setHeaders(received.getAllHeaders());
+                if (received.getEntity() != null) {
+                    final ByteArrayEntity entity = new ByteArrayEntity(EntityUtils.toByteArray(received.getEntity()));
+                    entity.setContentType(received.getEntity().getContentType());
+                    entity.setContentEncoding(received.getEntity().getContentEncoding());
+                    buffered.setEntity(entity);
+                }
+                return buffered;
+            });
             if (response.getStatusLine().getStatusCode() == HttpStatus.SC_UNAUTHORIZED) {
-                EntityUtils.consumeQuietly(response.getEntity());
                 if (attempt == 0) {
                     reauthenticateIfTokenUnchanged(token);
                     continue;

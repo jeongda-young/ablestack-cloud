@@ -97,7 +97,7 @@ final class LibvirtAblestackRestoreTransaction {
             }
             for (Map.Entry<String, Long> entry : preparedBytes.entrySet()) {
                 final long required = Math.addExact(entry.getValue(), overlayBytes.getOrDefault(entry.getKey(), 0L));
-                final long buffered = Math.addExact(required, Math.max(10L * 1024L * 1024L * 1024L, required / 5L));
+                final long buffered = Math.addExact(required, LibvirtAblestackRestoreCapacity.bufferBytes(required));
                 logger.info("{} phase=[VM_RESTORE_PRIMARY_CAPACITY], storage=[{}], requiredBytes=[{}], availableBytes=[{}]",
                         trace, entry.getKey(), buffered, availableBytes.get(entry.getKey()));
                 if (availableBytes.get(entry.getKey()) < buffered) {

@@ -19,14 +19,13 @@
 
 package org.apache.cloudstack.backup;
 
-import com.cloud.agent.api.Command;
 import com.cloud.agent.api.LogLevel;
 import com.cloud.vm.VirtualMachine;
 import org.apache.cloudstack.storage.to.PrimaryDataStoreTO;
 
 import java.util.List;
 
-public class AblestackCommvaultRestoreBackupCommand extends Command  {
+public class AblestackCommvaultRestoreBackupCommand extends AblestackRestoreBackupCommand {
     private String vmName;
     private String backupPath;
     private List<String> backupVolumesUUIDs;

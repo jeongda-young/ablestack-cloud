@@ -1284,6 +1284,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
 
             final String restoreJobId = AblestackBackupFrameworkUtils.createRestoreJobId(getName(), backup.getUuid(), vm.getInstanceName(), null);
             final AblestackNetBackupRestoreBackupCommand restoreCommand = new AblestackNetBackupRestoreBackupCommand();
+            restoreCommand.setPrimaryStorageCapacityBufferPercent(BackupManager.RestorePrimaryStorageCapacityBufferPercent.value());
             restoreCommand.setRestoreJobId(restoreJobId);
             restoreCommand.setBackupPath(backup.getExternalId());
             restoreCommand.setVmName(vm.getName());
@@ -1441,6 +1442,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
             final String restoreJobId = AblestackBackupFrameworkUtils.createRestoreJobId(getName(), backup.getUuid(),
                     vmNameAndState.first(), volumeUuid);
             final AblestackNetBackupRestoreBackupCommand restoreCommand = new AblestackNetBackupRestoreBackupCommand();
+            restoreCommand.setPrimaryStorageCapacityBufferPercent(BackupManager.RestorePrimaryStorageCapacityBufferPercent.value());
             restoreCommand.setRestoreJobId(restoreJobId);
             restoreCommand.setBackupPath(backup.getExternalId());
             restoreCommand.setVmName(vmNameAndState.first());
@@ -2125,6 +2127,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         ThirdPartyBackupRestore.Plan plan = thirdPartyBackupVolumeService.prepareRestore(backup, host, sourceUuids,
                 targets.stream().map(VolumeVO::getSize).collect(Collectors.toList()), vm.getInstanceName(), BackupDataOperationTimeout.value());
         AblestackNetBackupRestoreBackupCommand command = new AblestackNetBackupRestoreBackupCommand();
+        command.setPrimaryStorageCapacityBufferPercent(plan.getPrimaryStorageCapacityBufferPercent());
         command.setVolumeRestorePlan(plan);
         command.setRestoreJobId(plan.jobId);
         command.setBackupPath(plan.destination);

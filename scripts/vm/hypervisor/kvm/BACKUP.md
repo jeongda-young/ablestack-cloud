@@ -45,7 +45,7 @@ Provider는 Mold가 사용할 백업 연동 종류이며, 아래의 `ablestack-*
 
 | 구분 | 종류 | 운영자가 확인할 내용 |
 | --- | --- | --- |
-| VM 기본스토리지 | RBD | VM 디스크가 Ceph RBD 이미지로 저장된다. 백업할 시점의 데이터를 읽어 파일로 내보낸다. 원본 VM 디스크를 Host에 별도 마운트할 필요는 없다. |
+| VM 기본스토리지 | RBD | VM 디스크가 Glue RBD 이미지로 저장된다. 백업할 시점의 데이터를 읽어 파일로 내보낸다. 원본 VM 디스크를 Host에 별도 마운트할 필요는 없다. |
 | VM 기본스토리지 | QCOW2, GFS2 환경 등 | VM 디스크가 QCOW2 파일로 저장된다. 해당 시점의 디스크 데이터를 백업 파일로 복사한다. |
 | 공통 스테이징 | GFS2 | Host에서 사용하는 GFS2 경로를 지정한다. 기본스토리지 경로인 `/mnt/glue-gfs`도 사용할 수 있다. |
 | 공통 스테이징 | NFS | NFS 서버의 공유 경로와 Host의 마운트 경로를 지정한다. |
@@ -336,13 +336,10 @@ NAS는 볼륨 파일을 NAS에 직접 저장하므로 외부 전송 단계가 �
 QCOW2 증분 시작 전 부모 체크포인트를 libvirt에 재등록해야 할 수 있다.
 재등록이 실패하면 실제 백업을 시작하지 않고 정리 후 실패를 반환한다.
 실패 사유의 `Failed to redefine checkpoint ...`와 뒤에 붙은 libvirt 오류를 확인한다.
-수정 전 스크립트에서는 재등록 실패 후 폴더를 정리하고도 실행을 계속하여,
-`backup.xml: No such file or directory`가 원래 오류를 가리는 경우가 있었다.
-이 증상만으로 부모 체크포인트 재등록이 실패한 구체적인 이유를 확정할 수는 없다.
 
 실행 Host의 `/var/lib/ablestack/backup/jobs/<백업 UUID>/job.log`로 실패한 시도를 확인한다.
 Full 재시도의 새 작업 UUID와 혼동하지 않는다. 실패 작업 정리가 끝나면 이 파일은 이미 없어질 수 있다.
-수정된 스크립트는 체크포인트 재등록의 원래 오류를 작업 로그와 Agent 로그에 함께 남긴다.
+체크포인트 재등록 오류는 작업 로그와 Agent 로그에 함께 기록한다.
 
 대용량 NAS QCOW2의 `-S 4k` 변환·부팅 검증은 **Full과 증분 백업 모두** 대상으로 할 수 있다.
 테스트 설정을 활성화하면 독립 Full도 단순 복사 대신 지정한 `-S` 값으로 변환하고 검사·비교한다.
@@ -418,6 +415,47 @@ NAS·Commvault·NetBackup·Veeam의 복원은 대상 백업 시점과 VM을 선�
 교체 도중 실패하면 기존 볼륨으로 되돌리는 절차를 수행하며, 복구가 완료되지 않은 경우에는 관리자 확인이 필요하다.
 원본을 보호하면서 새 볼륨을 준비하므로 기본스토리지에 추가 공간이 필요하다.
 QCOW2 백업도 원본 기본스토리지에 별도 임시 작업 공간을 사용하므로 스테이징 여유 공간만 확인해서는 안 된다.
+
+### 솔루션별 복원 공간 여유율
+
+여유율은 전체 스토리지의 일정 비율을 비워 두라는 뜻이 아니라, **복원에 필요한 것으로 계산한 용량에 추가하는 비율**이다.
+스테이징과 기본스토리지는 각각 검사한다. Disk Offering의 thin/sparse 설정이나 게스트의 실제 데이터량,
+작은 증분 백업 파일 크기만으로 복원 공간 요구량이 줄어들지는 않는다.
+
+| 백업 솔루션 | 검사 대상 | 설정 | 기본값 및 범위 |
+| --- | --- | --- | --- |
+| NAS·Commvault·NetBackup·Veeam | 복원 대상 기본스토리지: QCOW2 파일·Glue RBD | `backup.restore.primary.storage.capacity.buffer.percent` | 기본 `20`, 정수 `0`~`100`. 검사별 최소 여유 공간 `10 GiB` |
+| Commvault | 공통 스테이징: QCOW2·RBD 백업 파일 | `backup.thirdparty.staging.capacity.buffer.percent` | 기본 `20`, 정수 `0`~`100` |
+| NetBackup | 공통 스테이징: QCOW2·RBD 백업 파일 | `backup.thirdparty.staging.capacity.buffer.percent` | 기본 `20`, 정수 `0`~`100` |
+| Veeam | 공통 스테이징: QCOW2·RBD 백업 파일 | `backup.thirdparty.staging.capacity.buffer.percent` | 기본 `20`, 정수 `0`~`100` |
+
+**기본스토리지:** ABLESTACK의 네 백업 솔루션이 글로벌 설정
+`backup.restore.primary.storage.capacity.buffer.percent`를 함께 사용한다.
+`15`로 지정하면 새 복원의 QCOW2 파일 공간 검사와 Glue RBD 풀 공간 검사에 모두 15%를 적용한다.
+필요 용량이 1000 GiB인 검사라면 최소 1150 GiB의 가용 공간이 필요하다.
+`0`으로 설정해도 최소 10 GiB의 여유 공간은 필요하다.
+이 설정은 Full·증분, 기존 VM 복원·새 인스턴스 생성·개별 볼륨 복원에 적용한다.
+
+NAS 파일 복원은 같은 대상 디렉터리의 볼륨별 임시 공간과 누적 증가량으로 전체 복원 계획을 검사하고,
+각 볼륨 처리 전에도 확인한다. RBD는 해당 Glue 풀의 가용 공간과 복원 추정 용량을 비교한다.
+Commvault·NetBackup·Veeam은 기존 VM 볼륨을 유지하면서 새 볼륨을 준비하므로 대상 볼륨들의 용량을 반영한다.
+세 솔루션의 외부 전송 전 기본스토리지 예약, 스테이징과 겹치는 공간 계산, 실제 볼륨 준비 검사에도
+같은 복원 계획에 저장한 기본스토리지 여유율을 사용한다.
+
+글로벌 설정값을 바꿀 때에는 서비스 재시작이 필요 없다.
+변경값은 새로 요청한 복원부터 적용하며, 진행 중인 복원은 시작할 때의 값을 유지한다.
+Host 로그의 `PRIMARY_CAPACITY_POLICY`, `PRIMARY_SPACE_PLAN_CHECK`, `PRIMARY_SPACE_CHECK`, `RBD_SPACE_CHECK`,
+`VM_RESTORE_PRIMARY_CAPACITY`와 용량 예약 정보에서 적용값과 요구·가용 바이트를 확인한다.
+NAS의 `-S 4k` 테스트 설정과는 별개이며,
+`/etc/cloudstack/agent/ablestack-nas-restore-test.properties`에 여유율을 추가하지 않는다.
+
+**스테이징:** Commvault·NetBackup·Veeam은 공통 스테이징 설정 하나를 함께 사용한다.
+RBD 원본도 `.raw`·`.rbdiff` 파일로 스테이징하므로 QCOW2와 같은 스테이징 여유율을 사용한다.
+활성화 검사는 가장 큰 VM 볼륨 크기에 비율을 더하고, 실제 복원은 선택한 복원 계획의 스테이징 요구량에 적용한다.
+이 비율에는 기본스토리지 복원의 최소 10 GiB 규칙을 적용하지 않는다. 복원 계획 생성 시 비율을 저장하므로 변경값은 새 작업에서 사용한다.
+스테이징과 기본스토리지가 같은 파일시스템이면 두 공간 요구량과 다른 작업의 예약분을 함께 반영한다.
+스테이징 비율과 기본스토리지 비율은 독립적이다. 예를 들어 스테이징만 15%로 바꾸고 기본스토리지는 20%로 유지하거나,
+기본스토리지 설정도 15%로 변경할 수 있다. 백업 시 원본 기본스토리지의 작업 공간 예약은 별도 기준을 사용한다.
 
 ### Commvault·NetBackup·Veeam 볼륨별 복원 단계
 

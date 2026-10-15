@@ -181,7 +181,9 @@ final class LibvirtAblestackVolumeRestoreHelper {
             throw new CloudRuntimeException("Restore target differs from the recorded plan");
         }
         LibvirtAblestackVolumeRestoreHelper helper = new LibvirtAblestackVolumeRestoreHelper(plan, logger);
-        try {
+        try (LibvirtAblestackRestoreCapacity capacity = LibvirtAblestackRestoreCapacity.begin(plan.getPrimaryStorageCapacityBufferPercent())) {
+            logger.info("{} phase=[PRIMARY_CAPACITY_POLICY], bufferPercent=[{}], minimumBufferGiB=[10]",
+                    helper.trace, LibvirtAblestackRestoreCapacity.bufferPercent());
             Files.createDirectories(helper.job);
             try (FileChannel channel = FileChannel.open(helper.job.resolve("volume-restore-engine.lock"),
                     StandardOpenOption.CREATE, StandardOpenOption.WRITE); java.nio.channels.FileLock lock = channel.tryLock()) {
@@ -472,7 +474,8 @@ final class LibvirtAblestackVolumeRestoreHelper {
         } catch (IOException e) { throw new CloudRuntimeException("Cannot read restore filesystem capacity", e); }
         long sharedScratch = 0;
         for (Map.Entry<String, Long> entry : required.entrySet()) {
-            long bytes = Math.addExact(entry.getValue(), Math.max(10L * 1024L * 1024L * 1024L, entry.getValue() / 5));
+            long bytes = org.apache.cloudstack.backup.BackupRestoreCapacity.requiredBytes(
+                    entry.getValue(), plan.getPrimaryStorageCapacityBufferPercent());
             if (entry.getKey().equals(stageStore)) { sharedScratch = bytes; }
             if (!entry.getKey().equals(stageStore) && available.get(entry.getKey()) < bytes) {
                 throw new CloudRuntimeException("Insufficient primary capacity to retain original volumes: " + entry.getKey());

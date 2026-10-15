@@ -1283,6 +1283,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         ThirdPartyBackupRestore.Plan plan = thirdPartyBackupVolumeService.prepareRestore(backup, host, sourceUuids,
                 targets.stream().map(VolumeVO::getSize).collect(Collectors.toList()), vm.getInstanceName(), BackupDataOperationTimeout.value());
         AblestackCommvaultRestoreBackupCommand command = new AblestackCommvaultRestoreBackupCommand();
+        command.setPrimaryStorageCapacityBufferPercent(plan.getPrimaryStorageCapacityBufferPercent());
         command.setVolumeRestorePlan(plan);
         command.setRestoreJobId(plan.jobId);
         command.setBackupPath(plan.destination);
@@ -1629,6 +1630,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                 final String restoreJobId = AblestackBackupFrameworkUtils.createRestoreJobId(getName(), backup.getUuid(),
                         vm.getInstanceName(), null);
                 AblestackCommvaultRestoreBackupCommand restoreCommand = new AblestackCommvaultRestoreBackupCommand();
+                restoreCommand.setPrimaryStorageCapacityBufferPercent(BackupManager.RestorePrimaryStorageCapacityBufferPercent.value());
                 restoreCommand.setRestoreJobId(restoreJobId);
                 LOG.info(restoreSourcePath);
                 restoreCommand.setBackupPath(restoreSourcePath);
@@ -1861,6 +1863,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                     final String restoreJobId = AblestackBackupFrameworkUtils.createRestoreJobId(getName(), backup.getUuid(),
                             vmNameAndState.first(), volumeUUID);
                     AblestackCommvaultRestoreBackupCommand restoreCommand = new AblestackCommvaultRestoreBackupCommand();
+                    restoreCommand.setPrimaryStorageCapacityBufferPercent(BackupManager.RestorePrimaryStorageCapacityBufferPercent.value());
                     restoreCommand.setRestoreJobId(restoreJobId);
                     restoreCommand.setBackupPath(restoreSourcePath);
                     restoreCommand.setVmName(vmNameAndState.first());

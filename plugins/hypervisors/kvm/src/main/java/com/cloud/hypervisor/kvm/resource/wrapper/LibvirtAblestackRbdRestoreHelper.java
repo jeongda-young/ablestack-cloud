@@ -42,7 +42,6 @@ import java.util.Map;
 final class LibvirtAblestackRbdRestoreHelper {
     private static final Logger LOGGER = LogManager.getLogger(LibvirtAblestackRbdRestoreHelper.class);
     private static final String COMMAND_EXIT_MARKER = "__CS_COMMAND_EXIT__=";
-    private static final long RESTORE_PRIMARY_SPACE_BUFFER_BYTES = 10L * 1024L * 1024L * 1024L;
     private static final String RBD_RESTORE_TEMP_SUFFIX = "-csrestore-";
     private static final String RBD_RESTORE_ORIGINAL_SUFFIX = "-csrestore-original-";
 
@@ -309,8 +308,8 @@ final class LibvirtAblestackRbdRestoreHelper {
     private static void validateRbdStorageSpace(final String tracePrefix, final KVMStoragePool storagePool, final List<String> backupPaths,
             final int timeoutSeconds) {
         final long requiredBytes = estimateRequiredBytesForRbdRestore(backupPaths);
-        final long bufferBytes = Math.max(RESTORE_PRIMARY_SPACE_BUFFER_BYTES, requiredBytes / 5L);
-        final long minimumAvailableBytes = requiredBytes + bufferBytes;
+        final long bufferBytes = LibvirtAblestackRestoreCapacity.bufferBytes(requiredBytes);
+        final long minimumAvailableBytes = Math.addExact(requiredBytes, bufferBytes);
         final Long availableBytes = getCephPoolAvailableBytes(storagePool, timeoutSeconds);
         if (availableBytes == null) {
             LOGGER.warn("{} phase=[RBD_SPACE_CHECK_SKIPPED], pool=[{}], requiredBytes=[{}], bufferBytes=[{}]",
@@ -321,7 +320,7 @@ final class LibvirtAblestackRbdRestoreHelper {
                 tracePrefix, storagePool.getSourceDir(), requiredBytes, bufferBytes, minimumAvailableBytes, availableBytes);
         if (availableBytes < minimumAvailableBytes) {
             throw new CloudRuntimeException(String.format(
-                    "Insufficient Ceph RBD pool space for restore on pool [%s]. Required at least [%d] bytes including buffer, but only [%d] bytes are available.",
+                    "Insufficient Glue RBD pool space for restore on pool [%s]. Required at least [%d] bytes including buffer, but only [%d] bytes are available.",
                     storagePool.getSourceDir(), minimumAvailableBytes, availableBytes));
         }
     }
@@ -329,8 +328,8 @@ final class LibvirtAblestackRbdRestoreHelper {
     private static void validateRbdStorageSpace(final String tracePrefix, final RbdSourceImage sourceImage, final List<String> backupPaths,
             final int timeoutSeconds) {
         final long requiredBytes = estimateRequiredBytesForRbdRestore(backupPaths);
-        final long bufferBytes = Math.max(RESTORE_PRIMARY_SPACE_BUFFER_BYTES, requiredBytes / 5L);
-        final long minimumAvailableBytes = requiredBytes + bufferBytes;
+        final long bufferBytes = LibvirtAblestackRestoreCapacity.bufferBytes(requiredBytes);
+        final long minimumAvailableBytes = Math.addExact(requiredBytes, bufferBytes);
         final Long availableBytes = getCephPoolAvailableBytes(sourceImage, timeoutSeconds);
         if (availableBytes == null) {
             LOGGER.warn("{} phase=[RBD_SPACE_CHECK_SKIPPED], pool=[{}], requiredBytes=[{}], bufferBytes=[{}]",
@@ -341,7 +340,7 @@ final class LibvirtAblestackRbdRestoreHelper {
                 tracePrefix, sourceImage.getPoolName(), requiredBytes, bufferBytes, minimumAvailableBytes, availableBytes);
         if (availableBytes < minimumAvailableBytes) {
             throw new CloudRuntimeException(String.format(
-                    "Insufficient Ceph RBD pool space for restore on pool [%s]. Required at least [%d] bytes including buffer, but only [%d] bytes are available.",
+                    "Insufficient Glue RBD pool space for restore on pool [%s]. Required at least [%d] bytes including buffer, but only [%d] bytes are available.",
                     sourceImage.getPoolName(), minimumAvailableBytes, availableBytes));
         }
     }
@@ -373,12 +372,12 @@ final class LibvirtAblestackRbdRestoreHelper {
 
     static org.apache.cloudstack.backup.ThirdPartyBackupAdmission.PrimaryClaim getCephPoolCapacity(
             final KVMStoragePool pool, final int timeoutSeconds) {
-        // Ceph FSID + numeric pool ID remains the same across CloudStack pool aliases.
+        // Glue FSID + numeric pool ID remains the same across CloudStack pool aliases.
         final CommandExecutionResult fsid = executeBashCommandWithResult(buildCephCommand(pool, "fsid"), timeoutSeconds,
-                "Query Ceph cluster identity");
+                "Query Glue cluster identity");
         final CommandExecutionResult df = executeBashCommandWithResult(buildCephCommand(pool, "df", "detail", "--format", "json"),
-                timeoutSeconds, "Query Ceph restore capacity");
-        if (fsid.exitCode != 0 || df.exitCode != 0) { throw new CloudRuntimeException("Ceph primary capacity identity is unconfirmed"); }
+                timeoutSeconds, "Query Glue restore capacity");
+        if (fsid.exitCode != 0 || df.exitCode != 0) { throw new CloudRuntimeException("Glue primary capacity identity is unconfirmed"); }
         String cluster = java.util.UUID.fromString(fsid.output.trim()).toString();
         com.google.gson.JsonObject data = com.google.gson.JsonParser.parseString(df.output).getAsJsonObject();
         for (com.google.gson.JsonElement item : data.getAsJsonArray("pools")) {
@@ -388,10 +387,10 @@ final class LibvirtAblestackRbdRestoreHelper {
                     new org.apache.cloudstack.backup.ThirdPartyBackupAdmission.PrimaryClaim();
             result.storageKey = "rbd:" + cluster + ":" + candidate.get("id").getAsLong();
             result.availableBytes = candidate.getAsJsonObject("stats").get("max_avail").getAsLong();
-            if (result.availableBytes < 0) { throw new CloudRuntimeException("Invalid Ceph primary capacity"); }
+            if (result.availableBytes < 0) { throw new CloudRuntimeException("Invalid Glue primary capacity"); }
             return result;
         }
-        throw new CloudRuntimeException("Restore Ceph pool was not found in cluster capacity information");
+        throw new CloudRuntimeException("Restore Glue pool was not found in cluster capacity information");
     }
 
     private static Long getCephPoolAvailableBytes(final RbdSourceImage sourceImage, final int timeoutSeconds) {
@@ -408,7 +407,7 @@ final class LibvirtAblestackRbdRestoreHelper {
                 + "value=stats.get('max_avail') or stats.get('available') or stats.get('total_avail_bytes'); "
                 + "print(value if value is not None else '')";
         final String command = cephDfCommand + " | python3 -c " + quote(python) + " " + quote(StringUtils.defaultString(pool));
-        final CommandExecutionResult result = executeBashCommandWithResult(command, timeoutSeconds, "Query Ceph pool available bytes");
+        final CommandExecutionResult result = executeBashCommandWithResult(command, timeoutSeconds, "Query Glue pool available bytes");
         if (result.exitCode != 0 || StringUtils.isBlank(result.output)) {
             return null;
         }
@@ -420,7 +419,7 @@ final class LibvirtAblestackRbdRestoreHelper {
         try {
             return Long.parseLong(lastLine);
         } catch (final NumberFormatException e) {
-            LOGGER.warn("Failed to parse Ceph pool available bytes from output [{}]", result.output, e);
+            LOGGER.warn("Failed to parse Glue pool available bytes from output [{}]", result.output, e);
             return null;
         }
     }

@@ -828,6 +828,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         final Host host = getVMHypervisorHost(vm);
         final String restoreJobId = AblestackBackupFrameworkUtils.createRestoreJobId(getName(), backup.getUuid(), vm.getInstanceName(), null);
         AblestackNasRestoreBackupCommand restoreCommand = new AblestackNasRestoreBackupCommand();
+        restoreCommand.setPrimaryStorageCapacityBufferPercent(BackupManager.RestorePrimaryStorageCapacityBufferPercent.value());
         restoreCommand.setRestoreJobId(restoreJobId);
         restoreCommand.setBackupPath(backup.getExternalId());
         restoreCommand.setBackupRepoType(backupRepository.getType());
@@ -1211,6 +1212,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         final String restoreJobId = AblestackBackupFrameworkUtils.createRestoreJobId(getName(), backup.getUuid(),
                 vmNameAndState.first(), volumeUUID);
         AblestackNasRestoreBackupCommand restoreCommand = new AblestackNasRestoreBackupCommand();
+        restoreCommand.setPrimaryStorageCapacityBufferPercent(BackupManager.RestorePrimaryStorageCapacityBufferPercent.value());
         restoreCommand.setRestoreJobId(restoreJobId);
         restoreCommand.setBackupPath(backup.getExternalId());
         restoreCommand.setBackupRepoType(backupRepository.getType());

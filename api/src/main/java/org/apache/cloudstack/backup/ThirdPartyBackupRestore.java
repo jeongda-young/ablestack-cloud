@@ -57,6 +57,8 @@ public final class ThirdPartyBackupRestore {
         public String stageRoot;
         public String destination;
         public int bufferPercent;
+        /** Primary storage policy captured separately from the staging percentage. Null means legacy 20%. */
+        public Integer primaryStorageCapacityBufferPercent;
         public int timeout;
         public int queueTimeout;
         /** Host must acknowledge a durable start receipt before this plan can be dispatched. */
@@ -69,6 +71,10 @@ public final class ThirdPartyBackupRestore {
         public List<Long> targetVolumeBytes;
         /** Host journal identifies the actual restore target, including restore into another VM. */
         public String targetVmName;
+
+        public int getPrimaryStorageCapacityBufferPercent() {
+            return BackupRestoreCapacity.bufferPercent(primaryStorageCapacityBufferPercent);
+        }
     }
 
     public static class Request {

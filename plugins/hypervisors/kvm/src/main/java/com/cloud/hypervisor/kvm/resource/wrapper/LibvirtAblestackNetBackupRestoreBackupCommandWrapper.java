@@ -65,7 +65,6 @@ public class LibvirtAblestackNetBackupRestoreBackupCommandWrapper extends Comman
             + "($4 ~ /^(vd|sd|hd)[a-z]+$/) {print $4}' | sort -V | tail -n 1";
     private static final String QEMU_IMG_HAS_BACKING_COMMAND = "qemu-img info --output=json %s 2>/dev/null | grep -q '\"backing-filename\"'";
     private static final String RESTORE_TRACE = AblestackBackupFrameworkUtils.buildTracePrefix("netbackup", AblestackBackupFrameworkUtils.OPERATION_RESTORE);
-    private static final long RESTORE_PRIMARY_SPACE_BUFFER_BYTES = 10L * 1024L * 1024L * 1024L;
 
     @Override
     public Answer execute(final AblestackNetBackupRestoreBackupCommand command, final LibvirtComputingResource serverResource) {
@@ -119,7 +118,9 @@ public class LibvirtAblestackNetBackupRestoreBackupCommandWrapper extends Comman
                 command.getVmName(), backupPath, vmExists, restorePlan, restoreVolumePaths, backupFiles, backupFileChains);
         LibvirtAblestackAsyncBackupRunner.markRestoreJobRunning(logger, "netbackup", command.getRestoreJobId(), command.getVmName(), backupPath,
                 "NetBackup restore command started");
-        try {
+        try (LibvirtAblestackRestoreCapacity capacity = LibvirtAblestackRestoreCapacity.begin(command.getPrimaryStorageCapacityBufferPercent())) {
+            logger.info("{} phase=[PRIMARY_CAPACITY_POLICY], bufferPercent=[{}], minimumBufferGiB=[10]",
+                    RESTORE_TRACE, LibvirtAblestackRestoreCapacity.bufferPercent());
             LibvirtAblestackAsyncBackupRunner.markRestoreJobStep(logger, "netbackup", command.getRestoreJobId(), command.getVmName(), backupPath,
                     "VALIDATE_CHAIN", "Validating restore chain");
             LibvirtAblestackAsyncBackupRunner.markRestoreJobStep(logger, "netbackup", command.getRestoreJobId(), command.getVmName(), backupPath,
@@ -361,7 +362,7 @@ public class LibvirtAblestackNetBackupRestoreBackupCommandWrapper extends Comman
     private void validatePrimaryStorageSpaceForFileRestore(final String backupPath, final String volumePath) throws IOException, QemuImgException, LibvirtException {
         final Path targetDirectory = getTargetDirectory(volumePath);
         final long requiredBytes = estimateRequiredBytesForFileRestore(backupPath);
-        final long bufferBytes = Math.max(RESTORE_PRIMARY_SPACE_BUFFER_BYTES, requiredBytes / 5L);
+        final long bufferBytes = LibvirtAblestackRestoreCapacity.bufferBytes(requiredBytes);
         final long minimumAvailableBytes = requiredBytes + bufferBytes;
         final long availableBytes = Files.getFileStore(targetDirectory).getUsableSpace();
         logger.info("{} phase=[PRIMARY_SPACE_CHECK], source=[{}], target=[{}], targetDirectory=[{}], requiredBytes=[{}], bufferBytes=[{}], minimumAvailableBytes=[{}], availableBytes=[{}]",

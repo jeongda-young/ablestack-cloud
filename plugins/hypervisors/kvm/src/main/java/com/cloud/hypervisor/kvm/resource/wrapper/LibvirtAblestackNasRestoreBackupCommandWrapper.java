@@ -69,7 +69,6 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
     private static final String CURRENT_DEVICE = "virsh domblklist --domain %s --details | awk '($3 ~ /^(vd|sd|hd)[a-z]+$/) {print $3} "
             + "($4 ~ /^(vd|sd|hd)[a-z]+$/) {print $4}' | sort -V | tail -n 1";
     private static final String QEMU_IMG_HAS_BACKING_COMMAND = "qemu-img info --output=json %s 2>/dev/null | grep -q '\"backing-filename\"'";
-    private static final long RESTORE_PRIMARY_SPACE_BUFFER_BYTES = 10L * 1024L * 1024L * 1024L;
     @Override
     public Answer execute(AblestackNasRestoreBackupCommand command, LibvirtComputingResource serverResource) {
         if (!command.isWaitForCompletion()) {
@@ -104,7 +103,9 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
         String mountDirectory = null;
         LibvirtAblestackRestoreProgress progress = LibvirtAblestackRestoreProgress.begin(logger, PROVIDER_NAME,
                 command.getRestoreJobId(), vmName, backupPath);
-        try {
+        try (LibvirtAblestackRestoreCapacity capacity = LibvirtAblestackRestoreCapacity.begin(command.getPrimaryStorageCapacityBufferPercent())) {
+            logger.info("{} phase=[PRIMARY_CAPACITY_POLICY], bufferPercent=[{}], minimumBufferGiB=[10]",
+                    RESTORE_TRACE, LibvirtAblestackRestoreCapacity.bufferPercent());
             LibvirtAblestackAsyncBackupRunner.markRestoreJobStep(logger, PROVIDER_NAME, command.getRestoreJobId(), vmName, backupPath,
                     "VALIDATE_CHAIN", "Validating restore chain");
             validateChainStatePlan(volumeChainStates, restorePlan);
@@ -132,7 +133,7 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
                 restoreVolumesOfDestroyedVMs(restoreVolumePaths, backupPath, backupFiles, backupFileChains, volumeChainStates,
                         mountDirectory, storagePoolMgr, restoreVolumePools, timeout);
             }
-        } catch (CloudRuntimeException e) {
+        } catch (CloudRuntimeException | IllegalArgumentException e) {
             String errorMessage = e.getMessage() != null ? e.getMessage() : "";
             LibvirtAblestackAsyncBackupRunner.markRestoreJobFailed(logger, PROVIDER_NAME, command.getRestoreJobId(), vmName, backupPath, errorMessage);
             return new BackupAnswer(command, false, errorMessage);
@@ -384,8 +385,8 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
     private void validatePrimaryStorageSpaceForFileRestore(String backupPath, String volumePath) throws IOException, QemuImgException, LibvirtException {
         Path targetDirectory = getTargetDirectory(volumePath);
         long requiredBytes = estimateRequiredBytesForFileRestore(backupPath);
-        long bufferBytes = Math.max(RESTORE_PRIMARY_SPACE_BUFFER_BYTES, requiredBytes / 5L);
-        long minimumAvailableBytes = requiredBytes + bufferBytes;
+        long bufferBytes = LibvirtAblestackRestoreCapacity.bufferBytes(requiredBytes);
+        long minimumAvailableBytes = Math.addExact(requiredBytes, bufferBytes);
         long availableBytes = Files.getFileStore(targetDirectory).getUsableSpace();
         logger.info("{} phase=[PRIMARY_SPACE_CHECK], source=[{}], target=[{}], targetDirectory=[{}], requiredBytes=[{}], bufferBytes=[{}], minimumAvailableBytes=[{}], availableBytes=[{}]",
                 RESTORE_TRACE, backupPath, volumePath, targetDirectory, requiredBytes, bufferBytes, minimumAvailableBytes, availableBytes);

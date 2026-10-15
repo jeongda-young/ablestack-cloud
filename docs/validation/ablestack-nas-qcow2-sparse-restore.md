@@ -9,7 +9,9 @@
 
 테스트 설정을 켜면 독립 Full도 기존 복사 대신 위 convert와 검사·비교를 거친다. 설정이 없거나 꺼져 있으면 독립 Full의 기존 복사 경로를 사용한다. `FULL_ALLOCATED`는 `-S 0`을 고르는 테스트 모드 이름이며 백업 유형 Full을 뜻하지 않는다. Full과 증분 각각에서 두 모드를 사용할 수 있다.
 
-rebase, 체인 재구성, preallocation, cache, coroutine, `--target-is-zero` 등의 옵션은 추가하지 않는다. RAW, RBD, 다른 백업 솔루션에는 테스트 모드를 적용하지 않는다. primary storage 공간 사전 검사는 기존 기준을 유지하므로 SPARSE 테스트에도 전체 가상 용량과 여유 공간을 준비한다.
+rebase, 체인 재구성, preallocation, cache, coroutine, `--target-is-zero` 등의 옵션은 추가하지 않는다. RAW, RBD, 다른 백업 솔루션에는 테스트 모드를 적용하지 않는다. SPARSE 테스트에도 primary storage 공간 사전 검사를 수행하므로 전체 가상 용량과 여유 공간을 준비한다.
+
+기본스토리지 복원 여유율은 글로벌 설정 `backup.restore.primary.storage.capacity.buffer.percent`로 지정한다. NAS·Commvault·NetBackup·Veeam의 공통 설정이다. 기본 `20`, 허용 범위 `0`~`100`이며 검사별 최소 여유 공간은 `10 GiB`다. `15`이면 필요 용량 1000 GiB인 검사에 1150 GiB의 가용 공간이 필요하다. 이 비율은 새 복원의 QCOW2 파일 및 Glue RBD 공간 검사에 적용된다. 진행 중인 복원은 시작할 때의 비율을 유지한다. 솔루션별 스테이징·기본스토리지 기준은 [BACKUP.md의 복원 공간 여유율](../../scripts/vm/hypervisor/kvm/BACKUP.md#솔루션별-복원-공간-여유율)을 참고한다.
 
 ## 테스트 모드 설정
 

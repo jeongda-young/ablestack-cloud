@@ -4310,6 +4310,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 BackupActiveJobSyncPollingInterval,
                 BackupDataOperationTimeout,
                 BackupQosBandwidthLimitMbps,
+                RestorePrimaryStorageCapacityBufferPercent,
                 ThirdPartyStagingEnable,
                 ThirdPartyStagingStorageType,
                 ThirdPartyStagingRootPath,

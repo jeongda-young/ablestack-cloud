@@ -100,8 +100,8 @@ final class LibvirtAblestackPrimaryRestoreCapacity {
             claim.availableBytes = Math.min(claim.availableBytes, actual.availableBytes);
         }
         for (PrimaryClaim claim : claims.values()) {
-            // Keep the existing primary restore overhead; staging uses its own configured percentage.
-            claim.requiredBytes = Math.addExact(claim.volumeBytes, Math.max(10L * 1024 * 1024 * 1024, claim.volumeBytes / 5));
+            claim.requiredBytes = org.apache.cloudstack.backup.BackupRestoreCapacity.requiredBytes(
+                    claim.volumeBytes, plan.getPrimaryStorageCapacityBufferPercent());
             saved.capacity.primaryClaims.add(claim);
         }
         Path file = job.resolve("restore-primary-capacity.json");

@@ -1065,7 +1065,8 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
                     int buffer = ((Number) request.getOrDefault("bufferPercent", 0)).intValue();
                     if (buffer < 0 || buffer > 100) { throw new CloudRuntimeException("Invalid backup staging buffer"); }
                     validatePrimaryClaims(entry, current, manifest.getVolumes().stream().mapToLong(volume -> volume.provisionedBytes)
-                            .reduce(0, Math::addExact), manifest.getVolumes().stream().mapToLong(volume -> volume.provisionedBytes).max().orElseThrow(), buffer);
+                            .reduce(0, Math::addExact), manifest.getVolumes().stream().mapToLong(volume -> volume.provisionedBytes).max().orElseThrow(),
+                            buffer, BackupRestoreCapacity.DEFAULT_BUFFER_PERCENT);
                 }
                 entry.capacityVersion = 1;
                 entry.primaryClaims = current.primaryClaims;
@@ -1166,7 +1167,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
             expected = Math.addExact(expected, bytes);
             largest = Math.max(largest, volume.provisionedBytes);
         }
-        validatePrimaryClaims(entry, current, expected, largest, plan.bufferPercent);
+        validatePrimaryClaims(entry, current, expected, largest, plan.bufferPercent, plan.getPrimaryStorageCapacityBufferPercent());
     }
 
     private boolean needsPrimaryClaims(ThirdPartyBackupAdmission.Entry entry) {
@@ -1184,7 +1185,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
     }
 
     private void validatePrimaryClaims(ThirdPartyBackupAdmission.Entry entry, ThirdPartyBackupAdmission.PrimaryCapacity current,
-            long expected, long largest, int bufferPercent) {
+            long expected, long largest, int bufferPercent, int primaryBufferPercent) {
         if (current == null || current.version != 1 || !entry.jobId.equals(current.jobId)
                 || current.stagingStorageKey == null || !current.stagingStorageKey.equals(entry.stagingStorageKey)
                 || current.primaryClaims == null || current.primaryClaims.isEmpty()) {
@@ -1195,7 +1196,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
         long shared = 0;
         for (ThirdPartyBackupAdmission.PrimaryClaim claim : current.primaryClaims) {
             if (claim.storageKey == null || !keys.add(claim.storageKey) || claim.volumeBytes <= 0 || claim.availableBytes < 0
-                    || claim.requiredBytes != Math.addExact(claim.volumeBytes, Math.max(10L * 1024 * 1024 * 1024, claim.volumeBytes / 5))) {
+                    || claim.requiredBytes != BackupRestoreCapacity.requiredBytes(claim.volumeBytes, primaryBufferPercent)) {
                 throw new CloudRuntimeException("Invalid primary storage capacity claim");
             }
             volumeBytes = Math.addExact(volumeBytes, claim.volumeBytes);
@@ -1927,6 +1928,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
         plan.stageRoot = providerRoot.getParent().toString();
         plan.destination = providerRoot.resolve("restore").resolve(plan.jobId).toString();
         plan.bufferPercent = stagingService.getCapacityBufferPercent();
+        plan.primaryStorageCapacityBufferPercent = BackupManager.RestorePrimaryStorageCapacityBufferPercent.value();
         plan.timeout = timeout;
         plan.queueTimeout = BackupManager.ThirdPartyStagingQueueTimeout.value();
         plan.startProtocolVersion = ThirdPartyBackupRestore.START_PROTOCOL_VERSION;

@@ -31,6 +31,7 @@ import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
 import static org.junit.Assert.assertThrows;
 
 import java.io.IOException;
@@ -42,6 +43,13 @@ import org.junit.Test;
 import org.apache.cloudstack.api.ServerApiException;
 import org.apache.cloudstack.backup.ThirdPartyBackupManifest;
 import org.apache.cloudstack.backup.ThirdPartyBackupVolumeService;
+import org.apache.http.HttpResponse;
+import org.apache.http.client.HttpClient;
+import org.apache.http.client.ResponseHandler;
+import org.apache.http.client.methods.HttpUriRequest;
+import org.apache.http.conn.ConnectionPoolTimeoutException;
+import org.mockito.Mockito;
+import org.springframework.test.util.ReflectionTestUtils;
 
 import com.cloud.utils.exception.CloudRuntimeException;
 import com.fasterxml.jackson.databind.JsonNode;
@@ -105,6 +113,56 @@ public class AblestackCommvaultClientTest {
         assertEquals("{\"job\":{}}", newClient().getJobDetails("1055"));
         wireMockRule.verify(2, postRequestedFor(urlEqualTo(path)));
         wireMockRule.verify(2, postRequestedFor(urlEqualTo("/api/Login")));
+    }
+
+    @Test
+    public void poolWaitTimeoutIsDistinguishedFromACommvaultServerTimeout() throws Exception {
+        stubTokenRenewal();
+        AblestackCommvaultClient client = newClient();
+        HttpClient transport = Mockito.mock(HttpClient.class);
+        Mockito.when(transport.execute(Mockito.any(HttpUriRequest.class), Mockito.<ResponseHandler<HttpResponse>>any()))
+                .thenThrow(new ConnectionPoolTimeoutException("Timeout waiting for connection from pool"));
+        ReflectionTestUtils.setField(client, "httpClient", transport);
+
+        ServerApiException error = assertThrows(ServerApiException.class, () -> client.getClientId("ablecube4"));
+        assertEquals("Commvault API connection pool wait timed out. No connection was available; please retry the operation.", error.getMessage());
+    }
+
+    @Test
+    public void successfulDeleteResponsesReleaseConnectionsBeforeAnotherLookup() throws Exception {
+        stubTokenRenewal();
+        wireMockRule.stubFor(delete(urlEqualTo("/api/Backupset/9"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"errorCode\":0}")));
+        wireMockRule.stubFor(get(urlEqualTo("/api/Client"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"clientProperties\":[]}")));
+
+        AblestackCommvaultClient client = newClient();
+        // More calls than HttpClient's default two connections per route; callers do not read DELETE bodies.
+        for (int attempt = 0; attempt < 5; attempt++) {
+            assertTrue(client.deleteBackupSet("9"));
+        }
+        assertNull(client.getClientId("ablecube4"));
+        wireMockRule.verify(5, deleteRequestedFor(urlEqualTo("/api/Backupset/9")));
+        wireMockRule.verify(1, getRequestedFor(urlEqualTo("/api/Client")));
+    }
+
+    @Test
+    public void unavailableClientResponsesReleaseConnectionsForLaterRequests() throws Exception {
+        stubTokenRenewal();
+        wireMockRule.stubFor(get(urlEqualTo("/api/Client"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"clientProperties\":["
+                        + "{\"client\":{\"clientEntity\":{\"clientId\":\"42\",\"clientName\":\"ablecube4\"}}}]}")));
+        wireMockRule.stubFor(get(urlEqualTo("/api/Client/42"))
+                .willReturn(aResponse().withStatus(404).withBody("{\"errorCode\":4}")));
+
+        AblestackCommvaultClient client = newClient();
+        for (int attempt = 0; attempt < 5; attempt++) {
+            assertNull(client.getClientId("ablecube4"));
+        }
+        wireMockRule.stubFor(get(urlEqualTo("/api/Client/42"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"clientProperties\":[{}]}")));
+        assertEquals("42", client.getClientId("ablecube4"));
+        wireMockRule.verify(6, getRequestedFor(urlEqualTo("/api/Client/42")));
     }
 
     @Test

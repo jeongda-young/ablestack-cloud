@@ -128,6 +128,16 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
             true,
             BackupFrameworkEnabled.key());
 
+    ConfigKey<Integer> RestorePrimaryStorageCapacityBufferPercent = new ConfigKey<>("Advanced", Integer.class,
+            "backup.restore.primary.storage.capacity.buffer.percent",
+            "20",
+            "Percentage of additional primary storage capacity required for ABLESTACK NAS, Commvault, NetBackup and Veeam restores. " +
+                    "Valid values: 0-100. Each capacity check keeps a minimum 10 GiB buffer. " +
+                    "The value is captured for each new restore; running restores keep their original value.",
+            true,
+            ConfigKey.Scope.Global,
+            BackupFrameworkEnabled.key());
+
     ConfigKey<Boolean> ThirdPartyStagingEnable = new ConfigKey<>("Advanced", Boolean.class,
             "backup.thirdparty.staging.enable",
             "false",

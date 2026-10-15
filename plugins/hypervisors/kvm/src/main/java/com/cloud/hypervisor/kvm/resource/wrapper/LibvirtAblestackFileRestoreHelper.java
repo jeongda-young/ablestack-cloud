@@ -43,7 +43,6 @@ import java.util.Map;
 
 final class LibvirtAblestackFileRestoreHelper {
     private static final String QEMU_IMG_HAS_BACKING_COMMAND = "qemu-img info --output=json %s 2>/dev/null | grep -q '\"backing-filename\"'";
-    private static final long RESTORE_PRIMARY_SPACE_BUFFER_BYTES = 10L * 1024L * 1024L * 1024L;
 
     private LibvirtAblestackFileRestoreHelper() {
     }
@@ -260,8 +259,8 @@ final class LibvirtAblestackFileRestoreHelper {
             final long persistentGrowthBytes = entry.getValue();
             final long peakRestoreBytes = peakRestoreBytesByDirectory.getOrDefault(targetDirectory, 0L);
             final long requiredBytes = Math.max(persistentGrowthBytes, peakRestoreBytes);
-            final long bufferBytes = Math.max(RESTORE_PRIMARY_SPACE_BUFFER_BYTES, requiredBytes / 5L);
-            final long minimumAvailableBytes = requiredBytes + bufferBytes;
+            final long bufferBytes = LibvirtAblestackRestoreCapacity.bufferBytes(requiredBytes);
+            final long minimumAvailableBytes = Math.addExact(requiredBytes, bufferBytes);
             final long availableBytes;
             try {
                 availableBytes = Files.getFileStore(targetDirectory).getUsableSpace();
@@ -382,8 +381,8 @@ final class LibvirtAblestackFileRestoreHelper {
             final String backupPath, final String volumePath) throws IOException, QemuImgException, LibvirtException {
         final Path targetDirectory = getTargetDirectory(volumePath);
         final long requiredBytes = estimateRequiredBytesForFileRestore(backupPath);
-        final long bufferBytes = Math.max(RESTORE_PRIMARY_SPACE_BUFFER_BYTES, requiredBytes / 5L);
-        final long minimumAvailableBytes = requiredBytes + bufferBytes;
+        final long bufferBytes = LibvirtAblestackRestoreCapacity.bufferBytes(requiredBytes);
+        final long minimumAvailableBytes = Math.addExact(requiredBytes, bufferBytes);
         final long availableBytes = Files.getFileStore(targetDirectory).getUsableSpace();
         logger.info("{} phase=[PRIMARY_SPACE_CHECK], source=[{}], target=[{}], targetDirectory=[{}], requiredBytes=[{}], bufferBytes=[{}], minimumAvailableBytes=[{}], availableBytes=[{}]",
                 trace, backupPath, volumePath, targetDirectory, requiredBytes, bufferBytes, minimumAvailableBytes, availableBytes);
