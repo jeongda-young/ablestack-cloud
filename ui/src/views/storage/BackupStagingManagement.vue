@@ -72,8 +72,8 @@
         <p>{{ $t('message.backup.staging.cleanup') }}</p>
         <a-button :disabled="busy || loading" @click="run('RETRY_CLEANUP')">{{ $t('label.backup.staging.retry.cleanup') }}</a-button>
       </div>
-      <a-collapse class="staging-details">
-        <a-collapse-panel v-if="info.artifact?.length" key="files" :header="$t('label.backup.staging.files')">
+      <a-collapse v-if="info.artifact?.length" class="staging-details">
+        <a-collapse-panel key="files" :header="$t('label.backup.staging.files')">
           <p>{{ $t('message.backup.staging.files') }}</p>
           <a-table
             :columns="columns"
@@ -103,42 +103,6 @@
                 <small v-if="record.availabilityerror" class="staging-error">{{ record.availabilityerror }}</small>
                 <small v-if="record.availabilitycheckedat">{{ $toLocaleDate(record.availabilitycheckedat) }}</small>
               </template>
-            </template>
-          </a-table>
-        </a-collapse-panel>
-        <a-collapse-panel key="details" :header="$t('label.backup.staging.details')">
-          <a-descriptions bordered :column="1" size="small">
-            <a-descriptions-item :label="$t('label.backup.staging.job.id')">{{ info.stagingjobid }}</a-descriptions-item>
-            <a-descriptions-item v-if="info.checkedat" :label="$t('label.backup.staging.checked.at')">{{ $toLocaleDate(info.checkedat) }}</a-descriptions-item>
-            <a-descriptions-item v-if="info.startstate" :label="$t('label.backup.staging.start.state')">{{ info.startstate }}<div v-if="info.startreason">{{ info.startreason }}</div></a-descriptions-item>
-            <a-descriptions-item v-if="info.cancelrequestedat" :label="$t('label.backup.staging.cancel.requested')">{{ $toLocaleDate(info.cancelrequestedat) }}<div v-if="info.cancelreason">{{ info.cancelreason }}</div></a-descriptions-item>
-            <a-descriptions-item v-if="info.hostcheckedat" :label="$t('label.backup.staging.host.checked.at')">{{ $toLocaleDate(info.hostcheckedat) }}</a-descriptions-item>
-            <a-descriptions-item v-if="info.currentvolumeid" :label="$t('label.backup.staging.volume.id')">{{ info.currentvolumeid }}</a-descriptions-item>
-            <a-descriptions-item v-if="!info.historical && (info.reservedbytes != null || info.reservationstate)" :label="$t('label.backup.staging.reserved.capacity')">{{ bytes(info.reservedbytes) }}<span v-if="info.reservationstate"> · {{ info.reservationstate }}</span></a-descriptions-item>
-            <a-descriptions-item v-if="!info.historical && info.stagingqueue" :label="$t('label.backup.staging.capacity')">{{ bytes(info.stagingqueue.requiredbytes) }} / {{ bytes(info.stagingqueue.effectiveavailablebytes) }}</a-descriptions-item>
-            <a-descriptions-item v-if="!info.historical && info.stagingqueue?.primarystorage?.length" :label="$t('label.backup.staging.primary.reservations')">
-              <div v-for="claim in info.stagingqueue.primarystorage" :key="claim.storagekey">{{ claim.storagekey }} · {{ bytes(claim.requiredbytes) }} / {{ bytes(claim.effectiveavailablebytes) }}</div>
-            </a-descriptions-item>
-            <a-descriptions-item v-if="info.sourcecleanupstate" :label="$t('label.backup.source.cleanup.state')">{{ info.sourcecleanupstate }}<div v-if="info.sourcecleanupreason">{{ info.sourcecleanupreason }}</div></a-descriptions-item>
-            <a-descriptions-item v-if="info.jobcleanupstate" :label="$t('label.backup.staging.job.cleanup')">{{ info.jobcleanupstate }}<div v-if="info.jobcleanupreason">{{ info.jobcleanupreason }}</div></a-descriptions-item>
-            <a-descriptions-item v-if="info.finalizationstate" :label="$t('label.backup.staging.finalization')">{{ info.finalizationstate }}<div v-if="info.finalizationreason">{{ info.finalizationreason }}</div></a-descriptions-item>
-            <a-descriptions-item v-if="info.vmrestore?.primarycleanupstate" :label="$t('label.backup.primary.cleanup.state')">{{ info.vmrestore.primarycleanupstate }}</a-descriptions-item>
-            <a-descriptions-item v-if="info.vmrestore?.transactionid" :label="$t('label.backup.staging.vm.transaction')">{{ info.vmrestore.transactionid }}</a-descriptions-item>
-            <a-descriptions-item v-if="info.vmrestore?.updatedat" :label="$t('label.backup.staging.checked.at')">{{ $toLocaleDate(info.vmrestore.updatedat) }}</a-descriptions-item>
-          </a-descriptions>
-          <a-table
-            v-if="operation === 'RESTORE' && info.vmrestore?.volume?.length"
-            :columns="vmColumns"
-            :data-source="info.vmrestore.volume"
-            row-key="volumeid"
-            :pagination="false"
-            :scroll="{ x: 1200 }"
-            size="small"
-            class="staging-artifacts">
-            <template #bodyCell="{ column, record }">
-              <template v-if="column.key === 'volume'"><div>{{ record.index }} · {{ record.volumeid }}</div><small>{{ record.destination }}</small></template>
-              <template v-else-if="column.key === 'cleanup'">{{ record.cleanupstate }}<small v-if="record.failure">{{ record.failure }}</small></template>
-              <template v-else>{{ record[column.key + 'state'] || 'NOT_RECORDED' }}</template>
             </template>
           </a-table>
         </a-collapse-panel>
@@ -241,13 +205,6 @@ export default {
         { key: 'state', title: this.$t('label.backup.staging.external.state'), width: 140 },
         { key: 'availability', title: this.$t('label.backup.staging.file.availability'), width: 200, fixed: 'right' }]
     },
-    vmColumns () {
-      return [{ key: 'volume', title: this.$t('label.backup.staging.volume.destination'), width: 400 },
-        { key: 'prepare', title: this.$t('label.backup.staging.volume.prepare'), width: 200 },
-        { key: 'switch', title: this.$t('label.backup.staging.volume.switch'), width: 200 },
-        { key: 'rollback', title: this.$t('label.backup.staging.volume.rollback'), width: 200 },
-        { key: 'cleanup', title: this.$t('label.backup.primary.cleanup.state'), width: 200 }]
-    },
     rowSelection () {
       return {
         type: 'radio',
@@ -286,7 +243,6 @@ export default {
       const date = /^\d+$/.test(String(value)) ? new Date(Number(value) * 1000) : new Date(value)
       return Number.isNaN(date.getTime()) ? String(value) : this.$toLocaleDate(date.toISOString())
     },
-    bytes (value) { return value == null ? this.$t('label.backup.staging.not.confirmed') : (Number(value) / 1073741824).toFixed(2) + ' GiB' },
     current (token) { return !this.disposed && token === this.requestToken },
     stagingInfo (result) {
       const info = result?.backupstaginginfo || result
