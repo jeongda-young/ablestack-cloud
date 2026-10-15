@@ -34,7 +34,7 @@
     <a-table :columns="columns" :data-source="rows" row-key="id" :loading="loading" :pagination="false" :scroll="{ x: 900 }" size="small">
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'name'"><router-link :to="'/backup/' + record.id">{{ record.name || record.id }}</router-link><small v-if="provider(record) === 'kboss'" class="backup-secondary">{{ $t('label.compressionstatus') }}: {{ record.compressionstatus || '—' }} · {{ $t('label.validationstatus') }}: {{ record.validationstatus || '—' }}</small></template>
-        <template v-else-if="column.key === 'status'"><backup-progress :record="record" :statusText="record.status" @restore-finished="record.restoreoperationpending = false; record.restorejobstate = $event" /></template>
+        <template v-else-if="column.key === 'status'"><backup-progress :record="record" :statusText="record.status" @capabilities-change="record.capabilities = $event" @cancellation-change="record.backupcancellationpending = $event" @restore-finished="record.restoreoperationpending = false; record.restorejobstate = $event" /></template>
         <template v-else-if="column.key === 'size'">{{ bytes(record.size) }} / {{ bytes(record.virtualsize) }}</template>
         <template v-else-if="column.key === 'type'">{{ record.type || '—' }} / {{ record.intervaltype || '—' }}</template>
         <template v-else-if="column.key === 'created'">{{ $toLocaleDate(record.created) }}</template>

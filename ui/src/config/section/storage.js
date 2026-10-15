@@ -36,7 +36,7 @@ const isFastCloneFlattenRunning = (record) => {
 }
 
 const hasBackupCapability = (record, capability) => {
-  return String(record?.capabilities || record?.backupjobcapabilities || '')
+  return String(record?.capabilities ?? record?.backupjobcapabilities ?? '')
     .split(',')
     .map(item => item.trim())
     .includes(capability)
@@ -46,9 +46,13 @@ const isLiveBandwidthBackup = (record) => {
   return hasBackupCapability(record, 'live-bandwidth')
 }
 
+const isVolumeBackup = (record) => {
+  return (record?.vmdetails?.['thirdparty.staging.mode'] ?? record?.details?.['thirdparty.staging.mode']) === 'VOLUME'
+}
+
 const hasSubmittedCommvaultJob = (record) => {
   if (String(record?.provider || '').toLowerCase() !== 'ablestack-commvault') return false
-  if (record?.details?.['thirdparty.staging.mode'] === 'VOLUME') return false
+  if (isVolumeBackup(record)) return false
   const externalId = String(record?.externalid || '')
   const separator = externalId.lastIndexOf(',')
   return separator >= 0 && !!externalId.substring(separator + 1).trim()
@@ -692,7 +696,7 @@ export default {
           show: (record) => {
             if (record.status !== 'BackingUp') return false
             if (record?.stagingqueue?.state === 'WAITING') return false
-            if (record?.details?.['thirdparty.staging.mode'] === 'VOLUME') return hasBackupCapability(record, 'cancel')
+            if (isVolumeBackup(record)) return hasBackupCapability(record, 'cancel')
             return !hasSubmittedCommvaultJob(record)
           },
           args: ['id'],

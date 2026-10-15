@@ -824,6 +824,7 @@
           :tabs="$route.meta.tabs"
           :actions="$route.meta?.name === 'vmgroup' && !vmGroupQueryReady ? [] : actions"
           @exec-action="handleDataViewAction"
+          @backup-controls-change="Object.assign(resource, $event)"
           @change-resource="resource = $event" />
       </div>
       <div

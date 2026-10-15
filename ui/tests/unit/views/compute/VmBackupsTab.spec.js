@@ -90,6 +90,32 @@ test('Commvault cancel action disappears after the host export submits a Commvau
   expect(w.vm.visible('cancelBackup', { ...active, status: 'BackedUp' })).toBe(false)
   w.unmount()
 })
+test.each(['ablestack-commvault', 'ablestack-netbackup', 'ablestack-veeam'])('volume backup controls follow the latest capabilities for %s', async provider => {
+  const w = mount(); await flush()
+  const active = {
+    ...row,
+    provider,
+    status: 'BackingUp',
+    externalid: '/stage/backup-1',
+    vmdetails: { 'thirdparty.staging.mode': 'VOLUME' },
+    backupjobstep: 'QCOW2_BACKUP',
+    capabilities: 'cancel,live-bandwidth,events,log,progress',
+    backupjobcapabilities: 'cancel,live-bandwidth'
+  }
+  expect(w.vm.visible('cancelBackup', active)).toBe(true)
+  expect(w.vm.visible('updateBackupJobBandwidth', active)).toBe(true)
+  for (const step of [provider.replace('ablestack-', '').toUpperCase() + '_TRANSFER', 'METADATA_TRANSFER', 'FINALIZING']) {
+    for (const capabilities of ['', 'events,log,progress']) {
+      const transferring = { ...active, backupjobstep: step, capabilities }
+      expect(w.vm.visible('cancelBackup', transferring)).toBe(false)
+      expect(w.vm.visible('updateBackupJobBandwidth', transferring)).toBe(false)
+    }
+  }
+  // A later volume may be canceled during local generation after the prior transfer finishes.
+  expect(w.vm.visible('cancelBackup', { ...active, backupjobstep: 'RBD_EXPORT', capabilities: 'cancel,events,log,progress' })).toBe(true)
+  expect(w.vm.visible('cancelBackup', { ...active, capabilities: undefined, backupjobcapabilities: undefined })).toBe(false)
+  w.unmount()
+})
 test('Commvault live bandwidth action is available only during host backup', async () => {
   const w = mount(); await flush()
   const active = { ...row, status: 'BackingUp', provider: 'ablestack-commvault', capabilities: 'live-bandwidth' }
@@ -156,8 +182,16 @@ test('bounded polling interruption marks unknown and retry completion clears it'
 test('hides staging management for a cleaned failure and ordinary volume backup', async () => {
   const w = mount(); await flush()
   w.vm.$store.getters.apis.getBackupStagingInfo = {}
-  const backup = { ...row, provider: 'ablestack-commvault', status: 'Failed', catalogstate: 'PENDING', cleanupstate: 'COMPLETED',
-    details: { 'thirdparty.staging.mode': 'VOLUME' }, stagingqueue: { state: 'RELEASED' }, stagingmanagementrequired: false }
+  const backup = {
+    ...row,
+    provider: 'ablestack-commvault',
+    status: 'Failed',
+    catalogstate: 'PENDING',
+    cleanupstate: 'COMPLETED',
+    vmdetails: { 'thirdparty.staging.mode': 'VOLUME' },
+    stagingqueue: { state: 'RELEASED' },
+    stagingmanagementrequired: false
+  }
   expect(w.vm.visible('getBackupStagingInfo', backup)).toBe(false)
   expect(w.vm.rowActions(backup).some(action => action.api === 'getBackupStagingInfo')).toBe(false)
   expect(w.vm.visible('getBackupStagingInfo', { ...backup, status: 'BackingUp', cleanupstate: 'NONE', stagingqueue: { state: 'WAITING' } })).toBe(false)
