@@ -1362,8 +1362,13 @@ export default {
           component: shallowRef(defineAsyncComponent(() => import('@/components/view/DetailsTab.vue')))
         },
         {
+          name: 'ssh.keypair.usage',
+          component: shallowRef(defineAsyncComponent(() => import('@/views/compute/SSHKeyPairUsage.vue')))
+        },
+        {
           name: 'comments',
-          component: shallowRef(defineAsyncComponent(() => import('@/components/view/AnnotationsTab.vue')))
+          component: shallowRef(defineAsyncComponent(() => import('@/components/view/AnnotationsTab.vue'))),
+          show: () => 'listAnnotations' in store.getters.apis
         }
       ],
       actions: [
@@ -1374,16 +1379,30 @@ export default {
           docHelp: 'adminguide/virtual_machines.html#creating-the-ssh-keypair',
           listView: true,
           popup: true,
+          selfManagedDialog: true,
+          component: shallowRef(defineAsyncComponent(() => import('@/views/compute/CreateSSHKeyPair.vue')))
+        },
+        {
+          api: 'registerSSHKeyPair',
+          icon: 'import-outlined',
+          label: 'label.register.ssh.key.pair',
+          docHelp: 'adminguide/virtual_machines.html#creating-the-ssh-keypair',
+          listView: true,
+          popup: true,
+          selfManagedDialog: true,
           component: shallowRef(defineAsyncComponent(() => import('@/views/compute/CreateSSHKeyPair.vue')))
         },
         {
           api: 'deleteSSHKeyPair',
+          selfManagedDialog: true,
+          component: shallowRef(defineAsyncComponent(() => import('@/views/compute/DeleteSSHKeyPair.vue'))),
           icon: 'delete-outlined',
           label: 'label.remove.ssh.key.pair',
           message: 'message.please.confirm.remove.ssh.key.pair',
           dataView: true,
           args: ['name', 'account', 'domainid', 'projectid'],
           mapping: {
+            ignoreproject: { value: record => record.projectid ? undefined : true },
             name: {
               value: (record, params) => { return record.name }
             },
@@ -1406,7 +1425,8 @@ export default {
                 name: data[0].name,
                 account: data[0].account,
                 domainid: data[0].domainid,
-                projectid: data[0].projectid
+                projectid: data[0].projectid,
+                ignoreproject: data[0].projectid ? undefined : true
               }
             })
           }

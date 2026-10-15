@@ -216,3 +216,71 @@ body .detail-tab-toolbar > .ant-btn { margin: 0; }
   .detail-tab-toolbar-context { width: 100%; margin-left: 0; }
   .kubernetes-access-content .ant-card-body { padding: 16px; }
 }
+
+/* Opt-in MOLD-DIALOG-1.0 presets share the existing MoldDialog shell.
+ * Legacy dialogs retain their width, spacing and body contracts. */
+.mold-dialog-standard-wrap { width: 100vw; scrollbar-gutter: auto; overflow: hidden; }
+.mold-dialog-standard {
+  --dialog-chrome: var(--ui-bg-navigation);
+  --ui-text-placeholder: var(--ui-text-muted);
+  --ui-border-strong: var(--ui-text-muted);
+  --ui-focus: var(--ui-link);
+  max-width: calc(100vw - 48px);
+  .ant-modal-content {
+    max-height: ~"min(832px, calc(100vh - 64px))";
+    max-height: ~"min(832px, calc(100dvh - 64px))";
+    border: 1px solid var(--ui-border);
+    background: var(--ui-bg-surface);
+    color: var(--ui-text-primary);
+  }
+  .ant-modal-header, .ant-modal-footer { background: var(--dialog-chrome); }
+  .ant-modal-header { padding: 16px 24px; border-bottom: 1px solid var(--ui-border); }
+  .ant-modal-title { padding: 0; font-size: 16px; line-height: 22px; font-weight: 500; color: var(--ui-text-secondary); overflow-wrap: anywhere; }
+  .ant-modal-close-x { width: 48px; height: 48px; line-height: 48px; }
+  .ant-modal-close { width: 48px; min-height: 48px; color: var(--ui-text-secondary); }
+  .ant-modal-body { padding: 24px 28px; color: var(--ui-text-primary); background: var(--ui-bg-surface); }
+  .ant-modal-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 16px 28px; border-top: 1px solid var(--ui-border); }
+  .ant-modal-footer > .ant-btn { margin: 0; height: 42px; padding: 0 18px; }
+  .ant-btn-primary:not(:disabled) { color: var(--ui-action-primary-text); background: var(--ui-action-primary-bg); border-color: var(--ui-action-primary-bg); }
+  .ant-btn-primary:not(:disabled):hover, .ant-btn-primary:not(:disabled):focus { background: var(--ui-action-primary-hover); border-color: var(--ui-action-primary-hover); }
+  .ant-btn-primary.ant-btn-dangerous:not(:disabled) { background: var(--ui-action-danger-bg); border-color: var(--ui-action-danger-bg); }
+
+  .ant-input::placeholder, .ant-select-selection-placeholder { color: var(--ui-text-muted); }
+  .ant-input:not(:disabled), .ant-select:not(.ant-select-disabled) .ant-select-selector { border-color: var(--ui-border-strong); }
+  .ant-input:focus, .ant-select-focused:not(.ant-select-disabled) .ant-select-selector { border-color: var(--ui-focus); }
+}
+.dark-mode .mold-dialog-standard { --dialog-chrome: var(--ui-bg-elevated); }
+@media (max-width: 600px) {
+  .mold-dialog-standard {
+    max-width: calc(100vw - 24px);
+    .ant-modal-content { max-height: calc(100vh - 24px); max-height: calc(100dvh - 24px); }
+    .ant-modal-body, .ant-modal-footer { padding: 16px; }
+  }
+}
+
+/* Standard presets must win over legacy dark input selectors in every state. */
+body .mold-dialog-standard {
+  .ant-input:not(:disabled), .ant-select:not(.ant-select-disabled) .ant-select-selector {
+    color: var(--ui-text-primary);
+    background: var(--ui-bg-input);
+    border-color: var(--ui-border-strong);
+  }
+  .ant-input:not(:disabled):hover, .ant-input:not(:disabled):focus,
+  .ant-select-focused:not(.ant-select-disabled) .ant-select-selector { border-color: var(--ui-focus); }
+  .ant-input::placeholder, .ant-select-selection-placeholder { color: var(--ui-text-muted); opacity: 1; }
+  .ant-input:disabled { color: var(--ui-text-secondary); background: var(--ui-bg-disabled); }
+  .ant-form-item-has-error .ant-input:not(:disabled),
+  .ant-form-item-has-error .ant-select:not(.ant-select-disabled) .ant-select-selector {
+    color: var(--ui-text-primary) !important;
+    background: var(--ui-bg-input) !important;
+    border-color: var(--ui-error-icon) !important;
+  }
+}
+
+body .mold-dialog-standard {
+  .ant-checkbox .ant-checkbox-inner { background: var(--ui-bg-input); border-color: var(--ui-border-strong); }
+  .ant-checkbox-checked .ant-checkbox-inner { background: var(--ui-action-primary-bg); border-color: var(--ui-link); }
+  .ant-checkbox-checked .ant-checkbox-inner::after { border-color: var(--ui-action-primary-text); }
+  .ant-checkbox-input:focus-visible + .ant-checkbox-inner,
+  .ant-modal-footer .ant-btn:focus-visible, .ant-modal-close:focus-visible { outline: 2px solid var(--ui-link); outline-offset: 2px; }
+}

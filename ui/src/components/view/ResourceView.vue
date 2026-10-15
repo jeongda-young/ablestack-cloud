@@ -174,6 +174,11 @@ export default {
       this.wideLayout = false
       const query = Object.assign({}, this.$route.query)
       query.tab = key
+      if (this.$route.meta?.name === 'ssh') {
+        this.$router.push({ path: this.$route.path, query })
+        this.$emit('onTabChange', key)
+        return
+      }
       this.$route.query.tab = key
       history.pushState(
         {},
@@ -206,7 +211,8 @@ export default {
     },
     setActiveTab () {
       const requestedTab = this.$route.query.tab || this.historyTab
-      const selected = this.tabs.find(tab => tab.name === requestedTab) || this.tabs[0]
+      const available = this.$route.meta?.name === 'ssh' ? this.tabs.filter(tab => this.showTab(tab)) : this.tabs
+      const selected = available.find(tab => tab.name === requestedTab) || available[0]
       this.activeTab = selected ? selected.name : ''
     }
   }

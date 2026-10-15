@@ -172,6 +172,7 @@
         :resource="resource"
         :current-action="currentAction"
         dialog-only
+        @refresh-data="fetchData"
         @close-action="closeAction"
       />
       <keep-alive v-else-if="currentAction.component && (!currentAction.invokedAsGroupAction || currentAction.api === 'destroyVirtualMachine')">
@@ -811,18 +812,26 @@
         :retained="!!listLoadedScope"
         @retry="fetchData({ irefresh: true })" />
       <div v-if="dataView">
+        <a-spin v-if="isSshKeyPairDetail && !sshKeyPairDetailVisible" :spinning="loading">
+          <a-alert show-icon :type="loading ? 'info' : 'error'" :message="$t('message.ssh.keypair.detail.' + sshKeyPairDetailStatus)">
+            <template #action>
+              <a-button :disabled="loading" @click="fetchData({ irefresh: true })">{{ $t('label.refresh') }}</a-button>
+              <router-link to="/ssh" style="margin-left: 8px">{{ $t('label.ssh.key.pairs') }}</router-link>
+            </template>
+          </a-alert>
+        </a-spin>
         <slot
           name="resource"
           v-if="$route.path.startsWith('/publicip')"
         ></slot>
         <resource-view
-          v-else-if="$route.meta?.name !== 'vmgroup' || resource.id || loading"
-          :key="$route.path"
-          :readyForActions="$route.meta?.name !== 'vmgroup' || vmGroupQueryReady"
+          v-else-if="(!isSshKeyPairDetail || sshKeyPairDetailVisible) && ($route.meta?.name !== 'vmgroup' || resource.id || loading)"
+          :key="isSshKeyPairDetail ? listScope() : $route.path"
+          :readyForActions="isSshKeyPairDetail ? sshKeyPairDetailActionReady : ($route.meta?.name !== 'vmgroup' || vmGroupQueryReady)"
           :resource="resource"
           :loading="loading"
           :tabs="$route.meta.tabs"
-          :actions="$route.meta?.name === 'vmgroup' && !vmGroupQueryReady ? [] : actions"
+          :actions="(isSshKeyPairDetail && !sshKeyPairDetailActionReady) || ($route.meta?.name === 'vmgroup' && !vmGroupQueryReady) ? [] : actions"
           @exec-action="handleDataViewAction"
           @backup-controls-change="Object.assign(resource, $event)"
           @change-resource="resource = $event" />
@@ -920,6 +929,8 @@ import InstanceGroupDeleteSummary from '@/components/view/InstanceGroupDeleteSum
 import InstanceGroupQueryStatus from '@/components/view/InstanceGroupQueryStatus'
 import { vmGroupQuery, vmGroupQueryChanged, vmGroupQueryParams, vmGroupQueryScope, vmGroupQueryRows } from '@/utils/vmGroupQuery'
 import { vmGroupLookupStatus } from '@/utils/vmGroupLookup'
+import { sshKeyPairDeleteTargets } from '@/utils/sshKeyPairDeletion'
+import { isSshKeyPairDetailRoute, sshKeyPairDetailScope, sshKeyPairDetailTarget, sshKeyPairDetailParams, sshKeyPairMatchesTarget, sshKeyPairDetailResult, sshKeyPairDetailFailure, sshKeyPairVmParams } from '@/utils/sshKeyPairIdentity'
 import { normalizeVmGroupName, isVmGroupNameAction, isVmGroupAction, vmGroupErrorKey, vmGroupDeleteTargets } from '@/utils/vmGroupNames'
 
 export default {
@@ -1008,6 +1019,8 @@ export default {
       listLastUpdated: null,
       vmGroupContextScope: null,
       vmGroupQueryStatus: 'loading',
+      sshKeyPairDetailStatus: 'loading',
+      sshKeyPairDetailContext: null,
       autoRefreshInterval: 10000
     }
   },
@@ -1137,7 +1150,7 @@ export default {
 
     this.currentPath = this.$route.fullPath
     this.fetchData()
-    if ('projectid' in this.$route.query) {
+    if ('projectid' in this.$route.query && !isSshKeyPairDetailRoute(this.$route)) {
       this.switchProject(this.$route.query.projectid)
     }
     this.setModalWidthByScreen()
@@ -1160,7 +1173,7 @@ export default {
   },
   watch: {
     snapshotSecurityScope () {
-      if (this.$route.meta?.name === 'vmgroup') this.fetchData()
+      if (this.$route.meta?.name === 'vmgroup' || this.isSshKeyPairDetail) this.fetchData()
       if (['createVMSnapshot', 'revertToVMSnapshot', 'deleteVMSnapshot', 'createSnapshotFromVMSnapshot'].includes(this.currentAction.api)) this.closeAction()
     },
     '$route' (to, from) {
@@ -1178,7 +1191,7 @@ export default {
         this.clearAutoRefresh()
         this.fetchData()
         this.scheduleAutoRefresh()
-        if ('projectid' in to.query) {
+        if ('projectid' in to.query && !isSshKeyPairDetailRoute(to)) {
           this.switchProject(to.query.projectid)
         }
       }
@@ -1209,6 +1222,13 @@ export default {
     }
   },
   computed: {
+    isSshKeyPairDetail () { return isSshKeyPairDetailRoute(this.$route) },
+    sshKeyPairDetailVisible () {
+      return ['ready', 'refreshing'].includes(this.sshKeyPairDetailStatus) &&
+        this.sshKeyPairDetailContext === this.listScope() &&
+        sshKeyPairMatchesTarget(this.resource, sshKeyPairDetailTarget(this.$route, this.$store.getters.project, this.$store.getters.listAllProjects))
+    },
+    sshKeyPairDetailActionReady () { return this.sshKeyPairDetailVisible && this.sshKeyPairDetailStatus === 'ready' && !this.listRequestPending },
     vmGroupQueryReady () { return ['ready', 'empty'].includes(this.vmGroupQueryStatus) && this.listLoadedScope === this.listScope() && !this.listRequestPending },
     vmGroupEmptyText () {
       if (['error', 'forbidden', 'loading'].includes(this.vmGroupQueryStatus)) return this.$t('message.vm.group.query.' + this.vmGroupQueryStatus)
@@ -1295,6 +1315,7 @@ export default {
       return 'self'
     },
     visibleDataViewActions () {
+      if (this.isSshKeyPairDetail && !this.sshKeyPairDetailActionReady) return []
       if (this.$route.meta?.name === 'vmgroup' && !this.vmGroupQueryReady) return []
       if (!this.actions || !this.dataView) {
         return []
@@ -1335,11 +1356,30 @@ export default {
         !(this.currentAction.invokedAsGroupAction && this.selectedRowKeys.length > 0)
     },
     isSubmitDisabled () {
+      if (this.isSshKeyPairDetail && !this.sshKeyPairDetailActionReady) return true
       return this.requiresNameConfirmation &&
         (!this.resource?.name || this.actionConfirmText.trim() !== this.resource.name.trim())
     }
   },
   methods: {
+    rejectSshKeyPairDetail (status) {
+      this.sshKeyPairDetailStatus = status
+      this.items = []; this.resource = {}; this.itemCount = 0
+      this.listLoadedScope = null; this.listRefreshError = true
+      this.detailActionsVisible = false
+      if (this.showAction) this.closeAction()
+      if (this.showGroupActionModal) this.handleCancel()
+      this.$emit('change-resource', this.resource)
+    },
+    canExecuteSshKeyPairAction (action) {
+      if (!isSshKeyPairDetailRoute(this.$route)) return true
+      if (!this.sshKeyPairDetailActionReady) return false
+      if (action?.resource && (!sshKeyPairMatchesTarget(action.resource, sshKeyPairDetailTarget(this.$route, this.$store.getters.project, this.$store.getters.listAllProjects)) || action.resource.id !== this.resource.id)) {
+        this.rejectSshKeyPairDetail('mismatch')
+        return false
+      }
+      return true
+    },
     isScheduleListRoute () {
       return ['/snapshotpolicy', '/backupschedule'].some(path => this.$route.path.endsWith(path))
     },
@@ -1402,6 +1442,7 @@ export default {
       }
     },
     listScope () {
+      if (isSshKeyPairDetailRoute(this.$route)) return sshKeyPairDetailScope(this.$route, this.$store.getters, this.$store.state?.user?.token)
       if (this.$route.meta?.name === 'vmgroup') return vmGroupQueryScope(this.$route, this.$store.getters, this.$store.state?.user?.token)
       return JSON.stringify([this.$route.fullPath, this.$store.getters.project?.id,
         this.$store.getters.userInfo?.id, this.$store.getters.metrics, this.$store.getters.listAllProjects])
@@ -1483,6 +1524,18 @@ export default {
       })
     },
     fetchData (params = {}) {
+      if (isSshKeyPairDetailRoute(this.$route)) {
+        const context = this.listScope()
+        if (this.sshKeyPairDetailContext !== context) {
+          this.sshKeyPairDetailContext = context
+          this.items = []; this.resource = {}; this.itemCount = 0
+          this.listLoadedScope = null; this.listRefreshQueued = false
+          this.sshKeyPairDetailStatus = 'loading'
+          this.resetSelection()
+          if (this.showAction) this.closeAction()
+          if (this.showGroupActionModal) this.handleCancel()
+        }
+      }
       if (this.$route.meta?.name === 'vmgroup') {
         const clean = vmGroupQuery(this.$route.query)
         if (vmGroupQueryChanged(this.$route.query, clean)) {
@@ -1841,10 +1894,34 @@ export default {
         if (this.dataView) { params.page = 1; params.pagesize = 20 }
         this.vmGroupQueryStatus = sameList ? 'refreshing' : 'loading'
       }
-      const response = vmGroups ? getAPI(requestApi, params, { preserveOnFailure: true, timeout: 20000 }) : callAPI(requestApi, params)
+      const sshDetail = isSshKeyPairDetailRoute(this.$route)
+      const sshTarget = sshDetail ? sshKeyPairDetailTarget(this.$route, this.$store.getters.project, this.$store.getters.listAllProjects) : null
+      if (sshDetail) {
+        if (sshTarget.invalid) {
+          this.rejectSshKeyPairDetail('mismatch')
+          this.listRequestPending = false; this.loading = false
+          return
+        }
+        params = sshKeyPairDetailParams(params, sshTarget)
+        this.sshKeyPairDetailStatus = sameList ? 'refreshing' : 'loading'
+      }
+      if (['listVirtualMachines', 'listVirtualMachinesMetrics'].includes(requestApi)) {
+        params = sshKeyPairVmParams(params, this.$route.query)
+      }
+      const response = vmGroups || sshDetail ? getAPI(requestApi, params, { preserveOnFailure: true, timeout: 20000 }) : callAPI(requestApi, params)
       const request = response.then(async json => {
         if (version !== this.listRequestVersion || scope !== this.listScope()) return
         const groupResult = vmGroups ? vmGroupQueryRows(json) : null
+        if (sshDetail) {
+          const result = sshKeyPairDetailResult(json, sshTarget)
+          if (result.status !== 'ready') { this.rejectSshKeyPairDetail(result.status); return }
+          this.items = result.rows; this.itemCount = 1
+          this.resource = result.rows[0]
+          this.sshKeyPairDetailStatus = 'ready'
+          this.listLastUpdated = Date.now(); this.listLoadedScope = scope; this.listRefreshError = false
+          this.$emit('change-resource', this.resource)
+          return
+        }
         this.listLastUpdated = Date.now()
         this.listLoadedScope = scope
         this.listRefreshError = false
@@ -1872,7 +1949,7 @@ export default {
           this.apiName === 'quotaSummary' && this.$route.params.id === params.accountid ||
           this.apiName === 'quotaEmailTemplateList' && this.$route.params.id === params.templatetype
 
-        if ('id' in this.$route.params && !idFromRouteMatchesApiParameter && !['listSSHKeyPairs'].includes(this.apiName)) {
+        if ('id' in this.$route.params && !idFromRouteMatchesApiParameter) {
           console.log('DEBUG - Discarding API response as its `id` does not match the uuid on the browser path')
           return
         }
@@ -1948,6 +2025,7 @@ export default {
         }
       }).catch(error => {
         if (version !== this.listRequestVersion || scope !== this.listScope()) return
+        if (sshDetail) { this.rejectSshKeyPairDetail(sshKeyPairDetailFailure(error)); return }
         if (vmGroups) {
           this.vmGroupQueryStatus = vmGroupLookupStatus(error)
           this.listRefreshError = true
@@ -1995,7 +2073,7 @@ export default {
           this.$router.push({ path: '/dashboard' })
         }
       }).finally(f => {
-        if (version !== this.listRequestVersion) return
+        if (version !== this.listRequestVersion || scope !== this.listScope()) return
         this.listRequestPending = false
         this.loading = false
         this.searchParams = params
@@ -2021,13 +2099,16 @@ export default {
       }
       return request
     },
-    closeAction () {
+    closeAction (result) {
+      const deletedSshDetail = this.currentAction?.api === 'deleteSSHKeyPair' && isSshKeyPairDetailRoute(this.$route) && result?.removed?.includes(this.resource?.id)
+      if (this.currentAction?.api === 'deleteSSHKeyPair' && result?.clearSelection) { this.selectedRowKeys = []; this.selectedItems = [] }
       const trigger = this.actionTrigger
       this.actionTrigger = null
       this.actionLoading = false
       this.showAction = false
       this.currentAction = {}
       this.actionConfirmText = ''
+      if (deletedSshDetail) this.$router.push('/ssh')
       // Clearing currentAction unmounts the legacy modal before AntD can restore focus.
       this.$nextTick(() => {
         if (!this.showAction && trigger?.isConnected && trigger !== document.body) {
@@ -2077,7 +2158,16 @@ export default {
       }
     },
     execAction (action, isGroupAction) {
+      if (isSshKeyPairDetailRoute(this.$route) && !this.canExecuteSshKeyPairAction(action)) return
       this.actionTrigger = document.activeElement
+      if (action.api === 'deleteSSHKeyPair') {
+        if (this.actionTrigger?.closest('.resource-context-menu')) this.actionTrigger = this.$refs?.detailActionsTrigger?.$el || this.$el?.querySelector('.ant-table-selection-column input') || this.actionTrigger
+        const request = { ...action, invokedAsGroupAction: !!isGroupAction }
+        this.currentAction = { ...request, sshKeyPairTargets: sshKeyPairDeleteTargets(request, this.selectedItems) }
+        this.resource = action.resource || {}
+        this.showAction = true
+        return
+      }
       if (action.api === 'createVMSnapshot') action = { ...action, resource: Object.freeze({ ...action.resource }) }
       if (action.snapshotMode) {
         this.currentAction = { ...action, invokedAsGroupAction: !!isGroupAction, snapshotTargets: Object.freeze((isGroupAction ? this.selectedItems : [action.resource]).filter(Boolean).map(row => Object.freeze({ ...row }))) }
@@ -2627,8 +2717,12 @@ export default {
       } finally { if (snapshotSubmissions[id] === submission) delete snapshotSubmissions[id] }
     },
     execSubmit (e) {
+      if (isSshKeyPairDetailRoute(this.$route) && !this.canExecuteSshKeyPairAction(this.currentAction)) return
+      const sshActionScope = isSshKeyPairDetailRoute(this.$route) ? this.listScope() : null
+      const submittedAction = this.currentAction
       e.preventDefault()
       this.formRef.value.validate().then(() => {
+        if (sshActionScope && (sshActionScope !== this.listScope() || !this.canExecuteSshKeyPairAction(submittedAction))) return
         let values = toRaw(this.form)
         const params = {}
         const action = this.currentAction

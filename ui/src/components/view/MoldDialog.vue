@@ -8,7 +8,18 @@ agreed to in writing, software distributed under the License is distributed on
 an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND. See the License
 for the specific language governing permissions and limitations. -->
 <template>
-  <a-modal v-bind="$attrs" class="mold-dialog" centered :mask-closable="false" :width="width" :visible="visible" @cancel="$emit('cancel')">
+  <a-modal
+    v-bind="$attrs"
+    class="mold-dialog"
+    :class="{ 'mold-dialog-standard': size }"
+    :wrap-class-name="size ? 'mold-dialog-standard-wrap' : undefined"
+    :mask-style="size ? { ...($attrs.maskStyle || {}), width: '100vw' } : $attrs.maskStyle"
+    centered
+    :mask-closable="false"
+    :wrap-props="{ 'aria-modal': true }"
+    :width="dialogWidth"
+    :visible="visible"
+    @cancel="$emit('cancel')">
     <template #title><slot name="title">{{ title }}</slot></template>
     <slot />
     <template #footer><slot name="footer"><a-button @click="$emit('cancel')">{{ $t('label.close') }}</a-button></slot></template>
@@ -18,7 +29,8 @@ for the specific language governing permissions and limitations. -->
 export default {
   name: 'MoldDialog',
   inheritAttrs: false,
-  props: { visible: { type: Boolean, default: true }, title: { type: String, default: '' }, width: { type: [Number, String], default: 760 } },
-  emits: ['cancel']
+  props: { visible: { type: Boolean, default: true }, title: { type: String, default: '' }, width: { type: [Number, String], default: 760 }, size: { type: String, default: '', validator: value => ['', 'sm', 'md', 'lg', 'xl'].includes(value) } },
+  emits: ['cancel'],
+  computed: { dialogWidth () { return { sm: 480, md: 720, lg: 960, xl: 1120 }[this.size] || this.width } }
 }
 </script>

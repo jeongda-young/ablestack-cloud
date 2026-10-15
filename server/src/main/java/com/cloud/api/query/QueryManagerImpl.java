@@ -16,7 +16,6 @@
 // under the License.
 package com.cloud.api.query;
 
-import static com.cloud.vm.VmDetailConstants.SSH_PUBLIC_KEY;
 
 import java.lang.reflect.InvocationTargetException;
 import java.lang.reflect.Method;
@@ -350,10 +349,8 @@ import com.cloud.user.Account;
 import com.cloud.user.AccountManager;
 import com.cloud.user.AccountVO;
 import com.cloud.user.DomainManager;
-import com.cloud.user.SSHKeyPairVO;
 import com.cloud.user.User;
 import com.cloud.user.dao.AccountDao;
-import com.cloud.user.dao.SSHKeyPairDao;
 import com.cloud.user.dao.UserDao;
 import com.cloud.utils.DateUtil;
 import com.cloud.utils.NumbersUtil;
@@ -610,8 +607,6 @@ public class QueryManagerImpl extends MutualExclusiveIdsManagerBase implements Q
     @Inject
     VMInstanceDetailsDao vmInstanceDetailsDao;
 
-    @Inject
-    SSHKeyPairDao sshKeyPairDao;
 
     @Inject
     BackupOfferingDao backupOfferingDao;
@@ -1634,17 +1629,13 @@ public class QueryManagerImpl extends MutualExclusiveIdsManagerBase implements Q
             userVmSearchBuilder.join("serviceOffering", serviceOfferingSearch, serviceOfferingSearch.entity().getId(), userVmSearchBuilder.entity().getServiceOfferingId(), JoinBuilder.JoinType.INNER);
         }
 
+        List<Long> sshKeyPairVmIds = null;
         if (keyPairName != null) {
-            SearchBuilder<VMInstanceDetailVO> vmDetailSearchKeys = vmInstanceDetailsDao.createSearchBuilder();
-            SearchBuilder<VMInstanceDetailVO> vmDetailSearchVmIds = vmInstanceDetailsDao.createSearchBuilder();
-            vmDetailSearchKeys.and(vmDetailSearchKeys.entity().getName(), Op.EQ).values(SSH_PUBLIC_KEY);
-
-            SearchBuilder<SSHKeyPairVO> sshKeyPairSearch = sshKeyPairDao.createSearchBuilder();
-            sshKeyPairSearch.and("keyPairName", sshKeyPairSearch.entity().getName(), Op.EQ);
-
-            sshKeyPairSearch.join("keyPairToDetailValueJoin", vmDetailSearchKeys, vmDetailSearchKeys.entity().getValue(), sshKeyPairSearch.entity().getPublicKey(), JoinBuilder.JoinType.INNER);
-            userVmSearchBuilder.join("userVmToDetailJoin", vmDetailSearchVmIds, vmDetailSearchVmIds.entity().getResourceId(), userVmSearchBuilder.entity().getId(), JoinBuilder.JoinType.INNER);
-            userVmSearchBuilder.join("userVmToKeyPairJoin", sshKeyPairSearch, sshKeyPairSearch.entity().getAccountId(), userVmSearchBuilder.entity().getAccountId(), JoinBuilder.JoinType.INNER);
+            sshKeyPairVmIds = vmInstanceDetailsDao.listVmIdsBySSHKeyPairName(keyPairName, permittedAccounts);
+            if (CollectionUtils.isEmpty(sshKeyPairVmIds)) {
+                return new Pair<>(new ArrayList<>(), 0);
+            }
+            userVmSearchBuilder.and("sshKeyPairVmIds", userVmSearchBuilder.entity().getId(), Op.IN);
         }
 
         if (keyword != null) {
@@ -1789,7 +1780,7 @@ public class QueryManagerImpl extends MutualExclusiveIdsManagerBase implements Q
         }
 
         if (keyPairName != null) {
-            userVmSearchCriteria.setJoinParameters("userVmToKeyPairJoin", "keyPairName", keyPairName);
+            userVmSearchCriteria.setParameters("sshKeyPairVmIds", sshKeyPairVmIds.toArray());
         }
 
         if (networkId != null) {

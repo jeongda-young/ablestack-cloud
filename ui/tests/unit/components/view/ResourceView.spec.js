@@ -69,9 +69,9 @@ describe('ResourceView resource navigation', () => {
     expect(vm.fetchData).toHaveBeenCalledTimes(refresh ? 1 : 0)
   })
 
-  it('isolates detail instances by path, not tab query or delayed API resource ID', () => {
+  it('isolates general detail by path and SSH detail by its verified identity scope', () => {
     const source = fs.readFileSync(path.resolve(__dirname, '../../../../src/views/AutogenView.vue'), 'utf8')
-    expect(source).toMatch(/<resource-view\s+v-else(?:-if="[^"]*")?\s+:key="\$route.path"/)
+    expect(source).toMatch(/<resource-view\s+v-else(?:-if="[^"]*")?\s+:key="isSshKeyPairDetail \? listScope\(\) : \$route.path"/)
   })
 
   it.each([
