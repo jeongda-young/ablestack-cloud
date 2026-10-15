@@ -48,8 +48,8 @@ public class BackupStagingInfoResponse extends BaseResponse {
     @SerializedName("reconciliationerror") @Param(description = "Last manual requery error; unknown jobs retain their reservations") public String reconciliationerror;
     @SerializedName("cleanupstate") @Param(description = "Cleanup state") public String cleanupstate;
     @SerializedName("cleanupreason") @Param(description = "Reason cleanup is waiting") public String cleanupreason;
-    @SerializedName("sourcecleanupstate") @Param(description = "Retirement of the previous RBD source snapshot") public String sourcecleanupstate;
-    @SerializedName("sourcecleanupreason") @Param(description = "Why previous source snapshot cleanup is pending") public String sourcecleanupreason;
+    @SerializedName("sourcecleanupstate") @Param(description = "Retirement of the previous source RBD snapshot or QCOW2 bitmaps") public String sourcecleanupstate;
+    @SerializedName("sourcecleanupreason") @Param(description = "Why previous source snapshot or bitmap cleanup is pending") public String sourcecleanupreason;
     @SerializedName("jobcleanupstate") @Param(description = "Host job record cleanup after staging and capacity release") public String jobcleanupstate;
     @SerializedName("jobcleanupreason") @Param(description = "Why Host job record cleanup is pending") public String jobcleanupreason;
     @SerializedName("finalizationstate") @Param(description = "Logical backup finalization after every external transfer completes") public String finalizationstate;

@@ -314,3 +314,21 @@ test('reloaded cancellation remains pending while cleanup is outstanding', () =>
   expect(wrapper.vm.cancellationDetails).toBe('Cleanup pending')
   wrapper.unmount()
 })
+
+test.each([
+  ['QCOW2', '이전 QCOW2 비트맵 정리 상태'],
+  ['RBD_DIFF', '이전 RBD 스냅샷 정리 상태'],
+  [undefined, '이전 증분 기준 정리 상태']
+])('labels the previous source cleanup for %s separately from staging cleanup', (engine, label) => {
+  const wrapper = shallowMount(BackupProgress, {
+    props: { record: { id: 'backup-1', status: 'BackedUp', backupengine: engine, sourcecleanupstate: 'WAITING', catalogstate: 'PENDING', cleanupstate: 'COMPLETED' } },
+    global: {
+      stubs: { Status: statusWithTooltip },
+      mocks: { $t: key => korean[key] || key, $store: { getters: { apis: {} } } }
+    }
+  })
+  expect(wrapper.find('.status-tooltip').text()).toContain(label)
+  expect(wrapper.find('.status-tooltip').text()).toContain('WAITING')
+  expect(wrapper.find('.status-tooltip').text()).toContain('COMPLETED')
+  wrapper.unmount()
+})

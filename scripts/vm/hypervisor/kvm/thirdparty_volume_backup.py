@@ -152,6 +152,29 @@ def staging_identity(directory):
     return str(uuid.UUID(file.read_text().strip()))
 
 
+def parent_checkpoint_xml(plan):
+    parent = plan["parentCheckpointName"]
+    checkpoints = [ET.fromstring(xml) for xml in (plan.get("parentCheckpointXmlChain") or {}).values()]
+    matches = [checkpoint for checkpoint in checkpoints if checkpoint.findtext("name") == parent]
+    if len(matches) != 1:
+        raise RuntimeError("The exact parent checkpoint XML is unconfirmed")
+    return matches[0]
+
+
+def redefine_parent_checkpoint(plan, domain, job):
+    # Archived ancestors describe the backup chain, not the remaining source bitmaps.
+    # The immediate baseline is sufficient; never resurrect a retired ancestor.
+    checkpoint = parent_checkpoint_xml(plan)
+    parent = checkpoint.find("parent")
+    if parent is not None:
+        checkpoint.remove(parent)
+    names = run(["virsh", "-c", "qemu:///system", "checkpoint-list", domain, "--name"]).splitlines()
+    if plan["parentCheckpointName"] not in names:
+        file = job / "parent-checkpoint.xml"
+        atomic(file, ET.tostring(checkpoint, encoding="unicode"))
+        run(["virsh", "-c", "qemu:///system", "checkpoint-create", domain, "--xmlfile", str(file), "--redefine", "--redefine-validate"])
+
+
 class Backup:
     def __init__(self, plan_file):
         self.plan = json.loads(Path(plan_file).read_text())
@@ -377,14 +400,7 @@ class Backup:
         parent_checkpoint = self.plan.get("parentCheckpointName")
         if parent_checkpoint:
             ET.SubElement(backup_xml, "incremental").text = parent_checkpoint
-            for name, xml in (self.plan.get("parentCheckpointXmlChain") or {}).items():
-                path = self.job / ("checkpoint-" + str(uuid.uuid4()) + ".xml")
-                atomic(path, xml)
-                try:
-                    run(["virsh", "-c", "qemu:///system", "checkpoint-info", self.domain, name])
-                except RuntimeError:
-                    run(["virsh", "-c", "qemu:///system", "checkpoint-create", self.domain,
-                         "--xmlfile", str(path), "--redefine"])
+            redefine_parent_checkpoint(self.plan, self.domain, self.job)
         ET.SubElement(backup_xml, "server", transport="unix", socket=str(self.socket))
         disks = ET.SubElement(backup_xml, "disks")
         checkpoint_xml = ET.Element("domaincheckpoint")
@@ -774,8 +790,10 @@ def finalize_host(plan, job, manifest, purge_staging=False):
 def retire_parent_snapshots(plan, job):
     """Retain the current checkpoint and durably retry only the recorded parent."""
     receipt = job / "source-cleanup.json"
-    result = {"version": 1, "state": "WAITING", "backupUuid": plan["manifest"]["backupUuid"],
+    result = {"version": 1 if plan["rbd"] else 2, "state": "WAITING", "backupUuid": plan["manifest"]["backupUuid"],
               "checkpointName": plan["checkpointName"], "parentCheckpointName": plan.get("parentCheckpointName")}
+    if not plan["rbd"]:
+        result.update(engine="QCOW2", diskPaths=plan["diskPaths"])
     atomic(receipt, result)
     errors = []
     if plan["rbd"] and plan.get("parentCheckpointName"):
@@ -789,9 +807,146 @@ def retire_parent_snapshots(plan, job):
                     run(args + ["snap", "rm", image + "@" + plan["parentCheckpointName"]], 30)
             except Exception as exc:
                 errors.append("%s@%s: %s" % (image, plan["parentCheckpointName"], exc))
+    elif not plan["rbd"] and plan.get("parentCheckpointName"):
+        try:
+            retire_parent_qcow2(plan, job)
+        except Exception as exc:
+            errors.append(str(exc))
     result.update(state="WAITING" if errors else "COMPLETED", errors=errors)
     atomic(receipt, result)
     return not errors
+
+
+def checkpoint_bitmaps(checkpoint, name):
+    if checkpoint.tag != "domaincheckpoint" or checkpoint.findtext("name") != name:
+        raise RuntimeError("Source checkpoint identity is unconfirmed")
+    result = {}
+    for disk in checkpoint.findall("./disks/disk"):
+        if disk.get("checkpoint") == "bitmap":
+            label = disk.get("name")
+            if not label or label in result:
+                raise RuntimeError("Source checkpoint disk identity is unconfirmed")
+            result[label] = disk.get("bitmap") or name
+    if not result:
+        raise RuntimeError("Source checkpoint has no confirmed bitmap bindings")
+    return result
+
+
+def retire_parent_qcow2(plan, job):
+    """Retire only the immediate parent's bitmaps; retain checkpoint metadata/XML."""
+    parent, current = plan["parentCheckpointName"], plan["checkpointName"]
+    if parent == current:
+        raise RuntimeError("Refusing to retire the current QCOW2 checkpoint")
+    volumes = plan["manifest"]["volumes"]
+    if (job.name != plan["manifest"]["backupUuid"] or len(volumes) != len(plan["diskPaths"])
+            or any(v["chain"][-1].get("parentCheckpointName") != parent
+                   or v["chain"][-1].get("checkpointName") != current for v in volumes)):
+        raise RuntimeError("Parent checkpoint does not match the completed backup plan")
+    previous = checkpoint_bitmaps(parent_checkpoint_xml(plan), parent)
+    baseline = checkpoint_bitmaps(ET.fromstring((job / "checkpoint.xml").read_text()), current)
+    labels = [disk.get("name") for disk in ET.fromstring((job / "pull.xml").read_text()).findall("./disks/disk")]
+    if (len(labels) != len(volumes) or len(set(labels)) != len(labels)
+            or set(labels) != set(previous) or set(labels) != set(baseline)
+            or set(previous.values()).intersection(baseline.values())):
+        raise RuntimeError("Parent and current source bitmap bindings are unconfirmed")
+    domain = plan["vmName"]
+    offline = guest_is_off_or_absent(domain)
+    domains = run(["virsh", "-c", "qemu:///system", "list", "--all", "--name"]).splitlines()
+    present = domain in domains
+    names = run(["virsh", "-c", "qemu:///system", "checkpoint-list", domain, "--name"]).splitlines() if present else []
+    if parent in names:
+        actual = ET.fromstring(run(["virsh", "-c", "qemu:///system", "checkpoint-dumpxml", domain, parent, "--no-domain"]))
+        if checkpoint_bitmaps(actual, parent) != previous:
+            raise RuntimeError("Parent checkpoint metadata differs from the saved source plan")
+    paths = dict(zip(labels, plan["diskPaths"]))
+    if len({str(Path(path).resolve()) for path in paths.values()}) != len(paths):
+        raise RuntimeError("Source disk paths are not unique")
+
+    def monitor(command, arguments=None):
+        request = {"execute": command}
+        if arguments is not None:
+            request["arguments"] = arguments
+        response = json.loads(run(["virsh", "-c", "qemu:///system", "qemu-monitor-command", domain, json.dumps(request)]))
+        if "return" not in response or "error" in response:
+            raise RuntimeError("QCOW2 bitmap monitor operation is unconfirmed: " + command)
+        return response["return"]
+
+    def inventory():
+        if offline:
+            result = {}
+            for label, path in paths.items():
+                # Default image locking must succeed. Never use --force-share/-U.
+                chain = json.loads(run(["qemu-img", "info", "--backing-chain", "--output=json", path]))
+                if not isinstance(chain, list) or not chain:
+                    raise RuntimeError("Source image chain is unconfirmed")
+                info = chain[0]
+                if info.get("format") != "qcow2":
+                    raise RuntimeError("Source disk is no longer QCOW2")
+                if any(bitmap.get("name") == previous[label] for image in chain[1:]
+                       for bitmap in image.get("format-specific", {}).get("data", {}).get("bitmaps", [])):
+                    raise RuntimeError("Parent bitmap remains in a backing layer; cleanup requires the live source VM")
+                bitmaps = info.get("format-specific", {}).get("data", {}).get("bitmaps", [])
+                result[label] = (None, {bitmap["name"]: bitmap for bitmap in bitmaps})
+            return result
+        info = run(["virsh", "-c", "qemu:///system", "domjobinfo", domain])
+        if not re.search(r"Job type:\s+None", info, re.IGNORECASE):
+            raise RuntimeError("Source VM has an active job; parent cleanup is deferred")
+        result = {}
+        backing_nodes = None
+        for device in monitor("query-block"):
+            inserted = device.get("inserted", {})
+            source = inserted.get("image", {}).get("filename") or inserted.get("file")
+            for label, path in paths.items():
+                if source and Path(source).resolve() == Path(path).resolve():
+                    if label in result or not inserted.get("node-name"):
+                        raise RuntimeError("Live source disk identity is ambiguous")
+                    backing = inserted.get("image", {}).get("backing-filename")
+                    visited = {str(Path(path).resolve())}
+                    while backing:
+                        backing_path = str((Path(source).parent / backing).resolve())
+                        if backing_path in visited:
+                            raise RuntimeError("Source backing chain is cyclic")
+                        visited.add(backing_path)
+                        if backing_nodes is None:
+                            backing_nodes = monitor("query-named-block-nodes")
+                        matches = [node for node in backing_nodes if node.get("drv") != "file"
+                                   and node.get("image", {}).get("filename")
+                                   and str(Path(node["image"]["filename"]).resolve()) == backing_path]
+                        if len(matches) != 1:
+                            raise RuntimeError("Source backing bitmap ownership is unconfirmed")
+                        if any(bitmap.get("name") == previous[label] for bitmap in matches[0].get("dirty-bitmaps", [])):
+                            raise RuntimeError("Parent bitmap remains in a backing layer; shared backing data is protected")
+                        source = backing_path
+                        backing = matches[0].get("image", {}).get("backing-filename")
+                    result[label] = (inserted["node-name"], {bitmap["name"]: bitmap for bitmap in inserted.get("dirty-bitmaps", [])})
+        if set(result) != set(paths):
+            raise RuntimeError("Live source disks do not match the saved backup plan")
+        return result
+
+    def valid_baseline(bitmap):
+        return (bitmap and not bitmap.get("inconsistent") and "inconsistent" not in bitmap.get("flags", [])
+                and ("auto" in bitmap.get("flags", []) if offline else bitmap.get("recording") and bitmap.get("persistent")))
+
+    before = inventory()
+    if all(previous[label] not in bitmaps for label, (_, bitmaps) in before.items()):
+        return
+    # Validate every disk before touching the first one. An absent parent is idempotent.
+    for label, (_, bitmaps) in before.items():
+        bitmap = bitmaps.get(baseline[label])
+        if not valid_baseline(bitmap):
+            raise RuntimeError("Current incremental bitmap is unconfirmed on disk " + label)
+        if previous[label] in bitmaps and bitmaps[previous[label]].get("busy"):
+            raise RuntimeError("Parent bitmap is busy on disk " + label)
+    for label, (node, bitmaps) in before.items():
+        if previous[label] not in bitmaps:
+            continue
+        if offline:
+            run(["qemu-img", "bitmap", "--remove", paths[label], previous[label]])
+        else:
+            monitor("block-dirty-bitmap-remove", {"node": node, "name": previous[label]})
+    after = inventory()
+    if any(previous[label] in bitmaps or not valid_baseline(bitmaps.get(baseline[label])) for label, (_, bitmaps) in after.items()):
+        raise RuntimeError("Parent bitmap removal or current baseline preservation is unconfirmed")
 
 
 def guest_is_off_or_absent(vm):

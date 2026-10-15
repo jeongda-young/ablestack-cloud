@@ -26,6 +26,10 @@ async function mount (info, operation = 'BACKUP', resource = {}) {
   const wrapper = shallowMount(BackupStagingManagement, {
     props: { resource: { id: 'backup-1', status: 'Failed', stagingqueue: { operation }, ...resource } },
     global: {
+      stubs: {
+        ADescriptions: { template: '<div><slot /></div>' },
+        ADescriptionsItem: { props: ['label'], template: '<div>{{ label }}<slot /></div>' }
+      },
       mocks: {
         $store: { getters: { apis: { reconcileBackupStagingJob: {} } } },
         $t: key => key,
@@ -41,6 +45,17 @@ async function mount (info, operation = 'BACKUP', resource = {}) {
 }
 
 beforeEach(() => jest.clearAllMocks())
+
+test.each([
+  ['QCOW2', 'label.backup.qcow2.source.cleanup.state'],
+  ['RBD_DIFF', 'label.backup.source.cleanup.state'],
+  [undefined, 'label.backup.source.cleanup.generic.state']
+])('shows the %s parent cleanup state and waiting reason in staging management', async (backupengine, label) => {
+  const wrapper = await mount({ sourcecleanupstate: 'WAITING', sourcecleanupreason: 'Parent bitmap is busy' }, 'BACKUP', { backupengine })
+  expect(wrapper.html()).toContain(label)
+  expect(wrapper.text()).toContain('Parent bitmap is busy')
+  wrapper.unmount()
+})
 
 test('serialized staging details are unwrapped and their exact job ID is sent for recheck', async () => {
   const wrapper = await mount({ stagingjobid: 'exact-job-id', vmname: 'i-2-25-VM', hoststate: 'FAILED' })

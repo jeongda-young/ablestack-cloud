@@ -67,6 +67,34 @@ public class LibvirtAblestackAsyncBackupRunnerTest {
     }
 
     @Test
+    public void qcow2SourceCleanupRequiresNewReceiptForTheExactParentAndDiskPaths() throws Exception {
+        Path directory = temporaryFolder.newFolder().toPath();
+        var plan = new Gson().fromJson("{\"rbd\":false,\"manifest\":{\"backupUuid\":\"job-1\"},"
+                + "\"checkpointName\":\"current\",\"parentCheckpointName\":\"parent\",\"diskPaths\":[\"/primary/root\"]}",
+                com.google.gson.JsonObject.class);
+        Path receipt = directory.resolve("source-cleanup.json");
+        Files.writeString(receipt, "{\"backupUuid\":\"job-1\",\"state\":\"COMPLETED\"}");
+        assertFalse(LibvirtAblestackAsyncBackupRunner.sourceCleanupCompleted(directory, "job-1", plan));
+        var completed = plan.deepCopy();
+        completed.remove("rbd");
+        completed.remove("manifest");
+        completed.addProperty("version", 2);
+        completed.addProperty("engine", "QCOW2");
+        completed.addProperty("backupUuid", "job-1");
+        completed.addProperty("state", "COMPLETED");
+        completed.add("errors", new com.google.gson.JsonArray());
+        Files.writeString(receipt, completed.toString());
+        assertTrue(LibvirtAblestackAsyncBackupRunner.sourceCleanupCompleted(directory, "job-1", plan));
+        completed.addProperty("parentCheckpointName", "another-parent");
+        Files.writeString(receipt, completed.toString());
+        assertFalse(LibvirtAblestackAsyncBackupRunner.sourceCleanupCompleted(directory, "job-1", plan));
+        completed.addProperty("parentCheckpointName", "parent");
+        completed.add("diskPaths", new Gson().toJsonTree(new String[]{"/primary/another-disk"}));
+        Files.writeString(receipt, completed.toString());
+        assertFalse(LibvirtAblestackAsyncBackupRunner.sourceCleanupCompleted(directory, "job-1", plan));
+    }
+
+    @Test
     public void missingJobIdDoesNotFailProgressCapabilityChecks() {
         Properties properties = volumeJob("ablestack-commvault", "QCOW2_BACKUP");
         properties.remove("jobId");

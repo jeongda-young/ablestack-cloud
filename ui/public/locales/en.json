@@ -8567,6 +8567,8 @@
   "label.backup.catalog.checked": "Catalog checked at",
   "label.backup.cleanup.state": "Cleanup state",
   "label.backup.source.cleanup.state": "Previous RBD snapshot cleanup",
+  "label.backup.qcow2.source.cleanup.state": "Previous QCOW2 bitmap cleanup",
+  "label.backup.source.cleanup.generic.state": "Previous incremental baseline cleanup",
   "label.backup.restore.cleanup.state": "Restore cleanup state",
   "label.backup.primary.cleanup.state": "Primary volume cleanup state",
   "label.backup.vm.restore.result": "VM restore outcome",

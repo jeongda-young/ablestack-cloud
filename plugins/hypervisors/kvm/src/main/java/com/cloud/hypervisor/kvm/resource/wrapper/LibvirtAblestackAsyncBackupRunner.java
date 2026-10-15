@@ -557,11 +557,10 @@ final class LibvirtAblestackAsyncBackupRunner {
                         || Files.exists(Path.of(plan.get("stageRoot").getAsString(), ".volume-reservations", jobId + ".json"))) {
                     return new Answer(command, false, "Volume backup staging reservation is still present or its ownership is unconfirmed");
                 }
-                if (STATE_COMPLETED.equals(state) && plan.has("rbd") && plan.get("rbd").getAsBoolean()
-                        && plan.has("parentCheckpointName") && !plan.get("parentCheckpointName").isJsonNull()
+                if (STATE_COMPLETED.equals(state) && plan.has("parentCheckpointName") && !plan.get("parentCheckpointName").isJsonNull()
                         && !plan.get("parentCheckpointName").getAsString().isBlank()
                         && !sourceCleanupCompleted(jobDirectory, jobId, plan)) {
-                    return new Answer(command, false, "Previous RBD snapshot cleanup must complete before removing backup job records");
+                    return new Answer(command, false, "Previous source checkpoint cleanup must complete before removing backup job records");
                 }
             }
             if (Files.isRegularFile(jobDirectory.resolve("volume-restore-plan.json"))
@@ -605,8 +604,14 @@ final class LibvirtAblestackAsyncBackupRunner {
         final var cleanup = new Gson().fromJson(Files.readString(receipt), com.google.gson.JsonObject.class);
         if (cleanup == null || !cleanup.has("backupUuid") || !jobId.equals(cleanup.get("backupUuid").getAsString())
                 || !cleanup.has("state") || !STATE_COMPLETED.equals(cleanup.get("state").getAsString())) { return false; }
+        boolean qcow2 = plan.has("rbd") && !plan.get("rbd").getAsBoolean();
+        // Older helpers did no QCOW2 retirement. Their success receipt is not proof.
+        if (qcow2 && (!cleanup.has("version") || cleanup.get("version").getAsDouble() != 2
+                || !cleanup.has("engine") || !"QCOW2".equals(cleanup.get("engine").getAsString())
+                || !cleanup.has("diskPaths") || !cleanup.get("diskPaths").equals(plan.get("diskPaths")))) { return false; }
         if (cleanup.has("version") && (!cleanup.get("version").isJsonPrimitive()
-                || !cleanup.getAsJsonPrimitive("version").isNumber() || cleanup.get("version").getAsDouble() != 1
+                || !cleanup.getAsJsonPrimitive("version").isNumber()
+                || cleanup.get("version").getAsDouble() != (qcow2 ? 2 : 1)
                 || !cleanup.has("checkpointName") || !cleanup.has("parentCheckpointName") || !cleanup.has("errors"))) { return false; }
         for (String key : Set.of("checkpointName", "parentCheckpointName")) {
             if (!cleanup.has(key)) { continue; }

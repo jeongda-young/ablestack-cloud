@@ -1816,7 +1816,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
                 manifest.validate(true);
                 Host host = getWorkerHost(backup, "BACKUP");
                 if (host == null || !com.cloud.host.Status.Up.equals(host.getStatus())) {
-                    throw new CloudRuntimeException("Source Host is unavailable; snapshot cleanup remains pending");
+                    throw new CloudRuntimeException("Source Host is unavailable; parent checkpoint cleanup remains pending");
                 }
                 Answer answer = agentManager.send(host.getId(), new AblestackVolumeStagingCommand(backup.getUuid(), "CLEANUP_COMPLETED", -1, manifest.toJson()));
                 if (answer == null || !answer.getResult()) {
@@ -1828,7 +1828,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
             } catch (Exception e) {
                 try { backupDetailsDao.addDetail(id, ThirdPartyBackupManifest.SOURCE_CLEANUP_DETAILS_KEY, StringUtils.defaultString(e.getMessage()), false); }
                 catch (RuntimeException failure) { logger.warn("Unable to persist snapshot cleanup failure for backup [{}]", id, failure); }
-                logger.debug("Source snapshot cleanup remains pending for backup [{}]: {}", id, e.getMessage());
+                logger.debug("Source parent checkpoint cleanup remains pending for backup [{}]: {}", id, e.getMessage());
             } finally {
                 if (acquired) { lock.unlock(); }
                 if (lock != null) { lock.releaseRef(); }
@@ -3131,8 +3131,8 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
                     || !result.has("stagingCleanupState") || !"COMPLETED".equals(result.get("stagingCleanupState").getAsString())) {
                 throw new CloudRuntimeException("Host has not confirmed complete staging directory removal");
             }
-            if (manifest.getVolumes().stream().anyMatch(volume -> volume.engine.startsWith("RBD")
-                    && StringUtils.isNotBlank(volume.chain.get(volume.chain.size() - 1).parentCheckpointName))
+            if (manifest.getVolumes().stream().anyMatch(volume ->
+                    StringUtils.isNotBlank(volume.chain.get(volume.chain.size() - 1).parentCheckpointName))
                     && !"COMPLETED".equals(backup.getDetail(ThirdPartyBackupManifest.SOURCE_CLEANUP_STATE_KEY))) {
                 backupDetailsDao.addDetail(backup.getId(), ThirdPartyBackupManifest.SOURCE_CLEANUP_STATE_KEY, "WAITING", false);
                 trackSourceCleanup(backup.getId());

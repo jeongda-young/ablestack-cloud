@@ -87,7 +87,7 @@
               <span>{{ record.cleanupdetails }}</span>
             </div>
             <div v-if="record.sourcecleanupstate && record.sourcecleanupstate !== 'NONE'" class="backup-progress-tooltip-row">
-              <span>{{ $t('label.backup.source.cleanup.state') }} :</span><span>{{ record.sourcecleanupstate }}</span>
+              <span>{{ $t(sourceCleanupLabel) }} :</span><span>{{ record.sourcecleanupstate }}</span>
             </div>
             <div v-if="record.sourcecleanupdetails" class="backup-progress-tooltip-row">
               <span>{{ record.sourcecleanupdetails }}</span>
@@ -234,6 +234,11 @@ export default {
     },
     isRbdBackup () {
       return String(this.record?.backupengine || '').toUpperCase().startsWith('RBD')
+    },
+    sourceCleanupLabel () {
+      if (this.isRbdBackup) return 'label.backup.source.cleanup.state'
+      return this.record?.backupengine === 'QCOW2'
+        ? 'label.backup.qcow2.source.cleanup.state' : 'label.backup.source.cleanup.generic.state'
     },
     bandwidthStatusLabel () {
       if (this.isRbdBackup || !this.bandwidthStatus) {

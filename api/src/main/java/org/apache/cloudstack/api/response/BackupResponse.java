@@ -140,11 +140,11 @@ public class BackupResponse extends BaseResponse {
     private String cleanupDetails;
 
     @SerializedName("sourcecleanupstate")
-    @Param(description = "Retirement of the previous RBD source snapshot: NONE, WAITING or COMPLETED")
+    @Param(description = "Retirement of the previous source RBD snapshot or QCOW2 bitmaps: NONE, WAITING or COMPLETED")
     private String sourceCleanupState;
 
     @SerializedName("sourcecleanupdetails")
-    @Param(description = "Reason previous RBD snapshot cleanup is pending")
+    @Param(description = "Reason previous source snapshot or bitmap cleanup is pending")
     private String sourceCleanupDetails;
 
     @SerializedName("restorecleanupstate")

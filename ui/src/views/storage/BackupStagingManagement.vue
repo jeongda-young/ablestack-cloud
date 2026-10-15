@@ -66,6 +66,10 @@
           <small v-if="successfulBackup">{{ $t('message.backup.staging.metadata.persisted') }}</small>
         </a-descriptions-item>
         <a-descriptions-item v-if="operation === 'RESTORE' && info.vmrestore" :label="$t('label.backup.vm.restore.result')">{{ info.vmrestore.outcome }} · {{ info.vmrestore.phase }}</a-descriptions-item>
+        <a-descriptions-item v-if="operation === 'BACKUP' && info.sourcecleanupstate && info.sourcecleanupstate !== 'NONE'" :label="$t(sourceCleanupLabel)">
+          {{ info.sourcecleanupstate }}
+          <div v-if="info.sourcecleanupreason">{{ info.sourcecleanupreason }}</div>
+        </a-descriptions-item>
       </a-descriptions>
       <a-alert v-if="diagnosticErrors" type="warning" show-icon :message="diagnosticErrors" class="staging-alert" />
       <div v-if="canCleanup" class="staging-actions">
@@ -147,6 +151,11 @@ export default {
     return { operation: this.resource.stagingqueue?.operation || 'BACKUP', selectedRestoreJobId: '', info: null, selectedKeys: [], externalJobId: '', loading: false, busy: false, error: '', requestToken: 0, disposed: false }
   },
   computed: {
+    sourceCleanupLabel () {
+      const engine = String(this.resource.backupengine || '').toUpperCase()
+      if (engine.startsWith('RBD')) return 'label.backup.source.cleanup.state'
+      return engine === 'QCOW2' ? 'label.backup.qcow2.source.cleanup.state' : 'label.backup.source.cleanup.generic.state'
+    },
     canManage () { return 'reconcileBackupStagingJob' in this.$store.getters.apis },
     canMutate () { return this.canManage && typeof this.info?.stagingjobid === 'string' && !!this.info.stagingjobid.trim() && !this.info.historical },
     unresolvedArtifacts () {

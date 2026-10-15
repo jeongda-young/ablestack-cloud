@@ -8582,6 +8582,8 @@
   "label.backup.catalog.checked": "카탈로그 확인 시간",
   "label.backup.cleanup.state": "정리 상태",
   "label.backup.source.cleanup.state": "이전 RBD 스냅샷 정리 상태",
+  "label.backup.qcow2.source.cleanup.state": "이전 QCOW2 비트맵 정리 상태",
+  "label.backup.source.cleanup.generic.state": "이전 증분 기준 정리 상태",
   "label.backup.restore.cleanup.state": "복원 정리 상태",
   "label.backup.primary.cleanup.state": "기본 스토리지 볼륨 정리 상태",
   "label.backup.vm.restore.result": "가상머신 복원 결과",

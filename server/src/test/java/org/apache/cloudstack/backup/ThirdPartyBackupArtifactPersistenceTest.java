@@ -464,6 +464,28 @@ public class ThirdPartyBackupArtifactPersistenceTest {
     }
 
     @Test
+    public void qcow2IncrementalTracksParentSourceCleanupAfterSuccessfulFinalization() throws Exception {
+        prepareFinalization();
+        manifest.getCurrentArtifacts().forEach(artifact -> {
+            artifact.checkpointName = "current";
+            artifact.parentCheckpointName = "previous";
+        });
+        GlobalLock lock = mock(GlobalLock.class);
+        when(lock.lock(Mockito.anyInt())).thenReturn(true);
+        try (MockedStatic<GlobalLock> locks = Mockito.mockStatic(GlobalLock.class);
+                MockedStatic<Transaction> transactions = Mockito.mockStatic(Transaction.class)) {
+            locks.when(() -> GlobalLock.getInternLock(anyString())).thenReturn(lock);
+            transactions.when(() -> Transaction.execute(Mockito.<TransactionCallback<Boolean>>any()))
+                    .thenAnswer(invocation -> invocation.<TransactionCallback<Boolean>>getArgument(0).doInTransaction(null));
+            ReflectionTestUtils.invokeMethod(service, "finalizeBackup", backup, host, manifest,
+                    mock(ThirdPartyBackupVolumeService.Transfer.class));
+        }
+        assertEquals("WAITING", persisted.get(ThirdPartyBackupManifest.SOURCE_CLEANUP_STATE_KEY));
+        assertEquals("COMPLETED", persisted.get(ThirdPartyBackupManifest.CLEANUP_STATE_KEY));
+        verify(backup).setStatus(Backup.Status.BackedUp);
+    }
+
+    @Test
     public void legacyHostFinalizationWithoutDirectoryRemovalProofRemainsPending() throws Exception {
         prepareFinalization();
         when(agentManager.send(eq(HOST_ID), any(AblestackVolumeStagingCommand.class)))
