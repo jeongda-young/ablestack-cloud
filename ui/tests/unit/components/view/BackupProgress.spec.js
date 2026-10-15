@@ -21,6 +21,11 @@ import BackupProgress from '@/components/view/BackupProgress.vue'
 
 jest.mock('@/api', () => ({ getAPI: jest.fn() }))
 
+const statusWithTooltip = {
+  props: ['text'],
+  template: '<div><span class="status-text">{{ text }}</span><div class="status-tooltip"><slot name="tooltip" /></div></div>'
+}
+
 beforeEach(() => {
   jest.useFakeTimers()
   jest.clearAllMocks()
@@ -127,7 +132,7 @@ test('keeps restore step codes while translating the displayed label', () => {
   wrapper.unmount()
 })
 
-test('shows the restored volume, translated comparison phase and details from status polling', async () => {
+test('keeps restore status compact and shows volume, phase and details in the tooltip', async () => {
   getAPI.mockResolvedValue({
     getbackuprestorejobstatusresponse: {
       status: 'Restoring',
@@ -142,6 +147,7 @@ test('shows the restored volume, translated comparison phase and details from st
   const wrapper = shallowMount(BackupProgress, {
     props: { record: { id: 'backup-1', status: 'Restoring', restorejobstate: 'RUNNING', restorejobstep: 'RESTORE_DATA' } },
     global: {
+      stubs: { Status: statusWithTooltip },
       mocks: {
         $t: key => key === 'label.backup.restore.step.compare' ? '복원 데이터 비교' : key,
         $store: { getters: { apis: { getBackupRestoreJobStatus: {} } } }
@@ -153,7 +159,12 @@ test('shows the restored volume, translated comparison phase and details from st
   expect(wrapper.vm.volumeIndex).toBe(2)
   expect(wrapper.vm.volumeCount).toBe(2)
   expect(wrapper.vm.jobDetails).toBe('DATA · QCOW2 ↔ QCOW2')
-  expect(wrapper.find('.backup-restore-step').text()).toBe('2/2 · 복원 데이터 비교')
+  expect(wrapper.find('.status-text').text()).toBe('Restoring')
+  expect(wrapper.find('.backup-restore-step').exists()).toBe(false)
+  expect(wrapper.find('.status-tooltip').text()).toContain('2/2')
+  expect(wrapper.find('.status-tooltip').text()).toContain('복원 데이터 비교')
+  expect(wrapper.find('.status-tooltip').text()).toContain('DATA · QCOW2 ↔ QCOW2')
+  expect(wrapper.find('.backup-progress-line').exists()).toBe(false)
   expect(wrapper.vm.showProgress).toBe(false)
   wrapper.vm.applyStatus({ state: 'RUNNING', step: 'RESTORE_PROMOTE', volumeindex: 2, volumecount: 2, details: 'DATA' })
   expect(wrapper.vm.displayStepLabel).toBe('label.backup.restore.step.promote')
@@ -161,13 +172,17 @@ test('shows the restored volume, translated comparison phase and details from st
   wrapper.unmount()
 })
 
-test('shows unknown restore phases without hiding them', () => {
+test('keeps unknown restore phases available in the tooltip', () => {
   const wrapper = shallowMount(BackupProgress, {
     props: { record: { id: 'backup-1', status: 'Restoring', restorejobstate: 'RUNNING', restorejobstep: 'FUTURE_RESTORE_PHASE' } },
-    global: { mocks: { $t: key => key, $store: { getters: { apis: {} } } } }
+    global: {
+      stubs: { Status: statusWithTooltip },
+      mocks: { $t: key => key, $store: { getters: { apis: {} } } }
+    }
   })
   expect(wrapper.vm.displayStepLabel).toBe('FUTURE_RESTORE_PHASE')
-  expect(wrapper.find('.backup-restore-step').text()).toBe('FUTURE_RESTORE_PHASE')
+  expect(wrapper.find('.backup-restore-step').exists()).toBe(false)
+  expect(wrapper.find('.status-tooltip').text()).toContain('FUTURE_RESTORE_PHASE')
   wrapper.unmount()
 })
 

@@ -92,6 +92,7 @@ public final class ThirdPartyBackupRestore {
         public boolean legacy;
         public int legacyThroughSequence = -1;
         public String hostState;
+        public String hostStep;
         public long hostCheckedAt;
         public String hostError;
         public String cleanupState;

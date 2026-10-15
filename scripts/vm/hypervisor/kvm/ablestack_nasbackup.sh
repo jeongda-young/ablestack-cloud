@@ -229,7 +229,10 @@ backup_running_vm() {
       cleanup
       exit 1
     fi
-    redefine_checkpoint_if_needed "$VM" "$parent_checkpoint_file"
+    if ! redefine_checkpoint_if_needed "$VM" "$parent_checkpoint_file"; then
+      cleanup
+      exit 1
+    fi
   fi
 
   echo "<domainbackup mode='push'>" > "$dest/backup.xml"
@@ -779,14 +782,16 @@ redefine_checkpoint_if_needed() {
   local vm_name="$1"
   local checkpoint_file="$2"
   if [[ -z "$PARENT_CHECKPOINT_NAME" || -z "$checkpoint_file" || ! -f "$checkpoint_file" ]]; then
-    return
+    return 0
   fi
   if virsh -c qemu:///system checkpoint-info --domain "$vm_name" --checkpointname "$PARENT_CHECKPOINT_NAME" > /dev/null 2>&1; then
-    return
+    return 0
   fi
-  if ! virsh -c qemu:///system checkpoint-create --domain "$vm_name" --xmlfile "$checkpoint_file" --redefine > /dev/null 2>&1; then
-    echo "Failed to redefine checkpoint $PARENT_CHECKPOINT_NAME on domain $vm_name"
-    cleanup
+  local redefine_output=""
+  if ! redefine_output=$(virsh -c qemu:///system checkpoint-create --domain "$vm_name" --xmlfile "$checkpoint_file" --redefine 2>&1); then
+    log -ne "FAILED checkpoint redefine vm=[$vm_name] checkpoint=[$PARENT_CHECKPOINT_NAME] output=[${redefine_output:-Unknown error}]"
+    echo "Failed to redefine checkpoint $PARENT_CHECKPOINT_NAME on domain $vm_name: ${redefine_output:-Unknown error}"
+    return 1
   fi
 }
 

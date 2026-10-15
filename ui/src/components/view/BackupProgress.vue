@@ -127,9 +127,6 @@
         <info-circle-outlined class="backup-progress-restore-info" />
       </a-tooltip>
     </div>
-    <div v-if="isRestoring && isActive && displayStep" class="backup-restore-step">
-      <span v-if="volumeIndex && volumeCount">{{ volumeIndex }}/{{ volumeCount }} · </span>{{ displayStepLabel }}
-    </div>
     <div v-if="showProgress && isActive" class="backup-progress-line">
       <a-progress
         :percent="progress"
@@ -492,12 +489,6 @@ export default {
   align-items: center;
   display: flex;
   gap: 4px;
-}
-
-.backup-restore-step {
-  color: rgba(0, 0, 0, 0.65);
-  font-size: 12px;
-  margin-top: 4px;
 }
 
 .backup-progress-restore-info {

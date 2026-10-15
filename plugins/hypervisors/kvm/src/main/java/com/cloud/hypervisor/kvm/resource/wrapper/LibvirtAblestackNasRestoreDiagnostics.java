@@ -99,7 +99,7 @@ final class LibvirtAblestackNasRestoreDiagnostics {
     }
 
     void logSkipped(final String trace, final Logger logger, final String source, final String target) {
-        logger.info("{} phase=[QCOW2_TEST_SKIPPED], testCase=[{}], source=[{}], target=[{}], reason=[NOT_INCREMENTAL_QCOW2_FILE_RESTORE]",
+        logger.info("{} phase=[QCOW2_TEST_SKIPPED], testCase=[{}], source=[{}], target=[{}], reason=[NOT_QCOW2_FILE_RESTORE]",
                 trace, caseId, source, target);
     }
 

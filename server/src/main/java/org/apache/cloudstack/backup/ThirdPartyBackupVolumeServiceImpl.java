@@ -487,12 +487,20 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
         }
         info.hoststate = "UNKNOWN";
         info.reservationstate = "UNKNOWN";
-        if (info.historical) {
+        boolean restoreCleaned = recorded != null && "COMPLETED".equals(info.cleanupstate)
+                && (entry == null || (info.stagingjobid.equals(entry.jobId) && "RELEASED".equals(entry.state)));
+        if (info.historical || restoreCleaned) {
             info.hostname = plan.hostName;
-            info.hoststate = StringUtils.defaultString(recorded.hostState, "UNKNOWN");
+            info.hoststate = recordedRestoreState(recorded);
+            info.step = info.hoststate.equals(recorded.hostState)
+                    ? StringUtils.defaultIfBlank(recorded.hostStep, info.hoststate) : info.hoststate;
             info.hostcheckedat = historyDate(recorded.hostCheckedAt);
-            info.hosterror = recorded.hostError;
-            info.reservationstate = "NOT_QUERIED";
+            info.hosterror = info.historical ? recorded.hostError : null;
+            info.reservationstate = info.historical ? "NOT_QUERIED" : "RELEASED";
+            info.reservedbytes = info.historical ? null : 0L;
+            if ("COMPLETED".equals(info.hoststate)) { info.progress = 100; }
+            // Terminal staging cleanup permits removal of Host job/admission files.
+            // Inspect the durable attempt instead of querying those removed files again.
             return info;
         }
         Host host = getWorkerHost(backup, operation);
@@ -541,6 +549,25 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
             info.reservedbytes = ((Number) reservation.get("reservedBytes")).longValue();
         } catch (Exception e) { info.reservationerror = e.getMessage(); }
         return info;
+    }
+
+    private String recordedRestoreState(ThirdPartyBackupRestore.Operation operation) {
+        String state = StringUtils.defaultIfBlank(operation.hostState, "UNKNOWN");
+        if (java.util.Set.of("COMPLETED", "FAILED", "INTERRUPTED", "CANCELED").contains(state)) { return state; }
+        // Older inspections may have replaced the terminal engine state with UNKNOWN
+        // after job-file removal. Recover the display only from a validated final receipt;
+        // never use this fallback to authorize cleanup, release or another restore.
+        if ("COMPLETED".equals(operation.cleanupState) && operation.vmResult != null) {
+            ThirdPartyBackupRestore.VmResult result = operation.vmResult;
+            result.validate(operation.plan);
+            if ("COMMITTED".equals(result.outcome) && "COMPLETED".equals(result.phase)
+                    && "COMPLETED".equals(result.primaryCleanupState)) { return "COMPLETED"; }
+            if (("ROLLED_BACK".equals(result.outcome) && "COMPLETED".equals(result.primaryCleanupState))
+                    || ("FAILED".equals(result.outcome) && "NOT_REQUIRED".equals(result.primaryCleanupState))) {
+                return operation.cancelConfirmedAt > 0 ? "CANCELED" : "FAILED";
+            }
+        }
+        return state;
     }
 
     private BackupStagingInfoResponse.ArtifactInfo artifactInfo(ThirdPartyBackupManifest.Artifact artifact,
@@ -2033,6 +2060,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
         operation.startState = "START_FAILED";
         operation.startFailureReason = receipt.reason;
         operation.hostState = operation.cancelRequestedAt > 0 ? "CANCELED" : "FAILED";
+        operation.hostStep = operation.cancelRequestedAt > 0 ? "CANCELED" : "START_FAILED";
         if (operation.cancelRequestedAt > 0) {
             operation.cancelConfirmedAt = receipt.checkedAt;
             operation.cancelReason = "Restore canceled before Host engine initialization; no VM volumes were changed";
@@ -2172,6 +2200,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
         operation.plan = new Gson().fromJson(new Gson().toJson(plan), ThirdPartyBackupRestore.Plan.class);
         operation.legacy = true;
         operation.hostState = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_STATE_DETAIL);
+        operation.hostStep = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_STEP_DETAIL);
         operation.cleanupState = backup.getDetail(ThirdPartyBackupRestore.CLEANUP_STATE_KEY);
         operation.cleanupReason = backup.getDetail(ThirdPartyBackupRestore.CLEANUP_DETAILS_KEY);
         ThirdPartyBackupRestore.Result previous = new Gson().fromJson(backup.getDetail(ThirdPartyBackupRestore.TRANSFER_KEY), ThirdPartyBackupRestore.Result.class);
@@ -2346,6 +2375,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
         ThirdPartyBackupRestore.Operation operation = ensureRestoreOperation(backup, plan);
         if (status != null) {
             operation.hostState = status.getState();
+            operation.hostStep = status.getStep();
             operation.hostCheckedAt = System.currentTimeMillis();
         }
         operation.hostError = error;

@@ -111,6 +111,24 @@ public class LibvirtAblestackNasRestoreDiagnosticsTest {
     }
 
     @Test
+    public void independentFullBackupUsesTheSelectedConvertModeAndCompareWhenEnabled() throws Exception {
+        for (String mode : new String[]{"FULL_ALLOCATED", "SPARSE"}) {
+            final List<String> commands = restore(mode, 0, 0, 0, false, false, false, true, false);
+            final String sparseSize = "SPARSE".equals(mode) ? "4k" : "0";
+            assertTrue(commands.stream().anyMatch(command -> command.contains("convert -p -S " + sparseSize + " -f qcow2 -O qcow2")));
+            assertTrue(commands.stream().anyMatch(command -> command.contains("qemu-img compare")));
+            assertFalse(commands.stream().anyMatch(command -> command.contains("rsync") || command.contains("rebase") || command.contains("commit")));
+        }
+    }
+
+    @Test
+    public void fullBackupTestFailuresRetainTheOriginalVolume() throws Exception {
+        restore("SPARSE", 1, 0, 0, false, false, false, false, false);
+        restore("SPARSE", 0, 0, 2, false, false, false, false, false);
+        restore("SPARSE", 0, 0, 0, false, false, true, false, false);
+    }
+
+    @Test
     public void liveRestoreStatusDistinguishesConversionFromLongComparison() throws Exception {
         final List<LibvirtAblestackRestoreProgress.Update> updates = new ArrayList<>();
         try (LibvirtAblestackRestoreProgress scope = LibvirtAblestackRestoreProgress.begin(updates::add)) {
@@ -158,7 +176,7 @@ public class LibvirtAblestackNasRestoreDiagnosticsTest {
     }
 
     @Test
-    public void independentFullBackupKeepsRsyncEvenWhenSparseTestIsEnabled() throws Exception {
+    public void disabledDiagnosticsKeepRsyncForIndependentFullBackup() throws Exception {
         final Path directory = folder.newFolder().toPath();
         final Path source = Files.writeString(directory.resolve("FULL.qcow2"), "full");
         final Path target = Files.writeString(directory.resolve("volume"), "original");
@@ -179,8 +197,7 @@ public class LibvirtAblestackNasRestoreDiagnosticsTest {
                 return result("ok", 0);
             });
             assertTrue(LibvirtAblestackFileRestoreHelper.replaceFileVolumeWithBackup("RESTORE_TRACE", logger, target.toString(),
-                    List.of(source.toString()), 37, "cs-nas-restore-volume-",
-                    LibvirtAblestackNasRestoreDiagnostics.fromProperties(settings("SPARSE"))));
+                    List.of(source.toString()), 37, "cs-nas-restore-volume-", null));
         }
         assertEquals("restored-full", Files.readString(target));
         assertFalse(commands.stream().anyMatch(command -> command.contains("convert") || command.contains("compare") || command.contains("check -f")));
@@ -198,16 +215,22 @@ public class LibvirtAblestackNasRestoreDiagnosticsTest {
 
     private List<String> restore(final String mode, final int compareExit, final int sourceCheckExit, final int targetCheckExit,
             final boolean backingRemaining, final boolean wrongSize, final boolean convertTimeout, final boolean expectedSuccess) throws Exception {
+        return restore(mode, compareExit, sourceCheckExit, targetCheckExit, backingRemaining, wrongSize, convertTimeout, expectedSuccess, true);
+    }
+
+    private List<String> restore(final String mode, final int compareExit, final int sourceCheckExit, final int targetCheckExit,
+            final boolean backingRemaining, final boolean wrongSize, final boolean convertTimeout, final boolean expectedSuccess,
+            final boolean sourceHasBacking) throws Exception {
         final Path directory = folder.newFolder().toPath();
         final Path base = Files.writeString(directory.resolve("FULL.qcow2"), "base");
-        final Path leaf = Files.writeString(directory.resolve("INC3 '$(literal).qcow2"), "leaf");
+        final Path leaf = Files.writeString(directory.resolve((sourceHasBacking ? "INC3" : "FULL") + " '$(literal).qcow2"), "leaf");
         final Path target = Files.writeString(directory.resolve("volume"), "original");
         final List<String> commands = new ArrayList<>();
         final JsonArray chain = new JsonArray();
         final JsonObject leafInfo = image(leaf.toString(), 1048576L);
-        leafInfo.addProperty("backing-filename", base.toString());
+        if (sourceHasBacking) { leafInfo.addProperty("backing-filename", base.toString()); }
         chain.add(leafInfo);
-        chain.add(image(base.toString(), 1048576L));
+        if (sourceHasBacking) { chain.add(image(base.toString(), 1048576L)); }
         final JsonObject targetInfo = image("temporary", wrongSize ? 2097152L : 1048576L);
         if (backingRemaining) {
             targetInfo.addProperty("backing-filename", base.toString());
@@ -252,7 +275,8 @@ public class LibvirtAblestackNasRestoreDiagnosticsTest {
                 return result("ok", 0);
             });
             final boolean success = LibvirtAblestackFileRestoreHelper.replaceFileVolumeWithBackup("RESTORE_TRACE", logger, target.toString(),
-                    List.of(base.toString(), leaf.toString()), 37, "cs-nas-restore-volume-", diagnostics);
+                    sourceHasBacking ? List.of(base.toString(), leaf.toString()) : List.of(leaf.toString()),
+                    37, "cs-nas-restore-volume-", diagnostics);
             assertEquals(expectedSuccess, success);
         }
         assertEquals(expectedSuccess ? "restored" : "original", Files.readString(target));

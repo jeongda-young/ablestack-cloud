@@ -158,9 +158,9 @@ final class LibvirtAblestackFileRestoreHelper {
             final QemuImg.PhysicalDiskFormat targetFormat = getFileVolumeFormat(logger, volumePath);
             LibvirtAblestackRestoreProgress.phase("RESTORE_PREPARE_TARGET", targetFormat.toString());
             validatePrimaryStorageSpaceForFileRestore(trace, logger, backupPath, volumePath);
-            final boolean testIncrementalQcow2 = diagnostics != null && srcBackupFile.getFormat() == QemuImg.PhysicalDiskFormat.QCOW2
-                    && targetFormat == QemuImg.PhysicalDiskFormat.QCOW2 && hasBackingChain(backupPath);
-            if (testIncrementalQcow2) {
+            final boolean testQcow2 = diagnostics != null && srcBackupFile.getFormat() == QemuImg.PhysicalDiskFormat.QCOW2
+                    && targetFormat == QemuImg.PhysicalDiskFormat.QCOW2;
+            if (testQcow2) {
                 diagnostics.inspectSource(trace, logger, backupPath, backupPaths, timeout);
             } else if (diagnostics != null) {
                 diagnostics.logSkipped(trace, logger, backupPath, volumePath);
@@ -171,7 +171,7 @@ final class LibvirtAblestackFileRestoreHelper {
             final QemuImgFile temporaryVolumeFile = new QemuImgFile(temporaryVolumePath.toString(), targetFormat);
             logger.info("{} phase=[TEMP_TARGET_CREATED], source=[{}], target=[{}], temporaryTarget=[{}], sourceFormat=[{}], targetFormat=[{}]",
                     trace, srcBackupFile.getFileName(), volumePath, temporaryVolumeFile.getFileName(), srcBackupFile.getFormat(), targetFormat);
-            if (testIncrementalQcow2) {
+            if (testQcow2) {
                 convertFileVolumeWithQemuImg(trace, logger, backupPath, temporaryVolumeFile.getFileName(), srcBackupFile.getFormat(), targetFormat,
                         timeout, diagnostics);
                 try {

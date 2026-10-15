@@ -1,13 +1,15 @@
-# ABLESTACK NAS QCOW2 증분 복원: `-S 0` / `-S 4k` 비교 테스트
+# ABLESTACK NAS QCOW2 Full·증분 복원: `-S 0` / `-S 4k` 비교 테스트
 
 ## 목적과 범위
 
-원본 Disk Offering과 최종 convert의 sparse 옵션을 분리해 확인한다. 대상은 **ablestack-nas의 QCOW2 증분 백업을 파일 볼륨으로 복원하는 경로**다. 기존 최신 leaf 선택, backing chain 읽기, 임시 파일 생성 및 볼륨 교체 순서를 사용한다. 두 모드의 convert 명령 차이는 `-S` 값 하나다.
+원본 Disk Offering과 최종 convert의 sparse 옵션을 분리해 확인한다. 대상은 **ablestack-nas의 QCOW2 Full·증분 백업을 QCOW2 파일 볼륨으로 복원하는 경로**다. 기존 최신 leaf 선택, backing chain 읽기, 임시 파일 생성 및 볼륨 교체 순서를 사용한다. 독립 Full은 해당 QCOW2 파일 하나를 읽는다. 두 모드의 convert 명령 차이는 `-S` 값 하나다.
 
 - `FULL_ALLOCATED`: `qemu-img convert -p -S 0 -f qcow2 -O qcow2 <leaf> <temporary-target>`
 - `SPARSE`: `qemu-img convert -p -S 4k -f qcow2 -O qcow2 <leaf> <temporary-target>`
 
-rebase, 체인 재구성, preallocation, cache, coroutine, `--target-is-zero` 등의 옵션은 추가하지 않는다. 독립 FULL의 기존 복사 경로, RAW, RBD, 다른 백업 솔루션에는 테스트 모드를 적용하지 않는다. primary storage 공간 사전 검사는 기존 기준을 유지하므로 SPARSE 테스트에도 전체 가상 용량과 여유 공간을 준비한다.
+테스트 설정을 켜면 독립 Full도 기존 복사 대신 위 convert와 검사·비교를 거친다. 설정이 없거나 꺼져 있으면 독립 Full의 기존 복사 경로를 사용한다. `FULL_ALLOCATED`는 `-S 0`을 고르는 테스트 모드 이름이며 백업 유형 Full을 뜻하지 않는다. Full과 증분 각각에서 두 모드를 사용할 수 있다.
+
+rebase, 체인 재구성, preallocation, cache, coroutine, `--target-is-zero` 등의 옵션은 추가하지 않는다. RAW, RBD, 다른 백업 솔루션에는 테스트 모드를 적용하지 않는다. primary storage 공간 사전 검사는 기존 기준을 유지하므로 SPARSE 테스트에도 전체 가상 용량과 여유 공간을 준비한다.
 
 ## 테스트 모드 설정
 
@@ -33,14 +35,14 @@ source.disk.offering=THIN
 case.id=THIN-INC3-S4k-R1
 ```
 
-파일이 없거나 `enabled=false`이면 기존 운영 경로를 사용한다. 활성 설정의 잘못된 mode/boolean 값은 복원 전에 오류로 처리한다. 이 설정은 글로벌 설정이나 Disk Offering 정책이 아니라 **호스트별 테스트 설정**이며, 해당 호스트의 NAS 증분 파일 복원에 적용된다. 설정은 볼륨 복원 진입 시 읽고 해당 볼륨 처리 동안 유지한다. 다중 디스크 복원 중에는 설정을 바꾸지 않는다. 호스트 간 복원 배치가 달라지면 각 테스트 호스트의 설정도 확인한다.
+파일이 없거나 `enabled=false`이면 기존 운영 경로를 사용한다. 활성 설정의 잘못된 mode/boolean 값은 복원 전에 오류로 처리한다. 이 설정은 글로벌 설정이나 Disk Offering 정책이 아니라 **호스트별 테스트 설정**이며, 해당 호스트의 NAS QCOW2 Full·증분 파일 복원에 적용된다. 설정은 볼륨 복원 진입 시 읽고 해당 볼륨 처리 동안 유지한다. 다중 디스크 복원 중에는 설정을 바꾸지 않는다. 호스트 간 복원 배치가 달라지면 각 테스트 호스트의 설정도 확인한다.
 
 `source.disk.offering`은 테스트 담당자가 입력하는 원본 오퍼링 라벨이다. 실제 오퍼링을 자동 판별한 값이 아니다. 원본 VM/볼륨의 오퍼링, provisioning type 및 실제 할당량을 별도 기록하고 라벨과 일치시키며, 새 복원 VM의 오퍼링과 혼동하지 않는다. 테스트 후 `enabled=false`로 돌린다. 파일 설정만 바꾸는 경우 agent 재시작은 필요하지 않다.
 
 ## 검사 순서와 실패 처리
 
 1. 실제 선택 leaf 및 전달된 `backupPaths`를 기록한다.
-2. `qemu-img info --backing-chain --output=json <leaf>`를 기록한다. JSON 순서는 **leaf → FULL**이다. 각 이미지의 format, virtual-size, actual-size, backing-filename, cluster-size를 남긴다.
+2. `qemu-img info --backing-chain --output=json <leaf>`를 기록한다. JSON 순서는 **leaf → FULL**이다. 독립 Full이면 이미지 하나가 나온다. 각 이미지의 format, virtual-size, actual-size, backing-filename, cluster-size를 남긴다.
 3. 실제 chain의 QCOW2 및 전달된 QCOW2 경로에 `qemu-img check -f qcow2`를 실행한다. source check 결과는 관찰용이며, 실패만으로 복원을 중단하지 않는다. `-r`로 원본을 수리하지 않는다.
 4. 기존 볼륨을 moved-aside로 보존하고 임시 파일에 convert를 실행한다. 시작/종료 시각과 경과 시간을 기록한다.
 5. 임시 파일에 `qemu-img info --output=json`, `qemu-img check -f qcow2`, `stat -c '%s %b %B'`를 실행한다.
@@ -112,7 +114,7 @@ zgrep -H -E 'WORKER_LOGGING_INITIALIZED|QCOW2_|phase=\[CONVERT\]' \
    ```
 
    수집 터미널의 호스트가 `hostName`과 다르면 해당 실제 호스트에서도 수집한다. 수집 시작 전에 출력된 기록은 그 호스트의 기존 agent 로그에서 추출해 함께 보관한다.
-5. 새 복원이 시작되면 `WORKER_LOGGING_INITIALIZED`와 해당 작업의 command file 경로가 기록되는지 확인한다. 이어서 `QCOW2_CONVERT_BEGIN`의 mode와 `sparseSize`를 확인한다. `QCOW2_TEST_SKIPPED`가 있으면 해당 디스크는 이번 QCOW2 증분 파일 변환 테스트 대상이 아니다. 이 경우를 S0/S4k 성공 결과로 집계하지 않는다.
+5. 새 복원이 시작되면 `WORKER_LOGGING_INITIALIZED`와 해당 작업의 command file 경로가 기록되는지 확인한다. 이어서 `QCOW2_CONVERT_BEGIN`의 mode와 `sparseSize`를 확인한다. `QCOW2_TEST_SKIPPED`가 있으면 해당 디스크는 이번 QCOW2 파일 변환 테스트 대상이 아니다. 이 경우를 S0/S4k 성공 결과로 집계하지 않는다.
 6. 진행 중에는 다른 SSH 터미널에서 실제 명령을 확인한다.
 
    ```bash
@@ -170,8 +172,8 @@ zgrep -H -E 'WORKER_LOGGING_INITIALIZED|QCOW2_|phase=\[CONVERT\]' \
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\NasIncrementalTest.ps1 -Stage INC4 -DataDrive F
    ```
 
-3. `C:\NasRestoreTest\Results\INC4.csv`를 VM 밖에 보관한다. 원본 VM을 정상 종료하고 기존과 같은 백업 스케줄 또는 수동 백업 방식으로 NAS 백업을 완료한다. 실제 백업 유형이 `INCREMENTAL`인지 확인한다. 체인 한도 도달 등으로 `FULL`로 전환됐다면 이번 결과는 대용량 증분 체인 복원 검증으로 집계하지 않는다.
-4. 실제 복원 호스트의 테스트 설정을 `sparse.mode=SPARSE`, `fail.on.compare=true`, `source.disk.offering=THIN`, `case.id=THIN-INC4-900GiB-S4k-R1`로 지정하고 `enabled=true`로 둔다. 위의 로그 수집 절차에 따라 새 case ID로 수집을 시작한 뒤, 종료된 원본 VM에 INC4 백업을 직접 복원한다. 기존 VM과 새 인스턴스 복원은 같은 NAS 파일 볼륨 변환 함수를 사용하므로, 이번 대용량 변환·부팅 검증은 원본 VM 직접 복원으로 진행할 수 있다. 다중 디스크 복원이 끝날 때까지 설정을 유지하고, 결과에는 `기존 VM 직접 복원`으로 기록한다. 새 인스턴스 생성 절차 자체는 별도 검증 범위다.
+3. `C:\NasRestoreTest\Results\INC4.csv`를 VM 밖에 보관한다. 원본 VM을 정상 종료하고 기존과 같은 백업 스케줄 또는 수동 백업 방식으로 NAS 백업을 완료한다. **실제 백업 유형 Full 또는 증분을 기록한다.** 자동 재시도 등으로 Full이 됐어도 대용량 `-S 4k` 변환·부팅 검증에 사용할 수 있다. 데이터 생성 단계의 이름 `INC4`와 실제 백업 유형은 별개다. Full만 시험한 결과를 증분 체인 검증으로 집계하지 않는다.
+4. 실제 복원 호스트에 Full도 지원하는 수정된 KVM agent를 설치한다. 테스트 설정은 `sparse.mode=SPARSE`, `fail.on.compare=true`, `source.disk.offering=THIN`, `enabled=true`로 지정한다. `case.id`는 Full이면 `THIN-FULL-900GiB-S4k-R1`, 증분이면 `THIN-INC4-900GiB-S4k-R1`로 구분한다. 위의 로그 수집 절차에 따라 새 case ID로 수집을 시작한 뒤, 종료된 원본 VM에 900GiB 백업을 직접 복원한다. 기존 VM과 새 인스턴스 복원은 같은 NAS 파일 볼륨 변환 함수를 사용하므로, 이번 대용량 변환·부팅 검증은 원본 VM 직접 복원으로 진행할 수 있다. 다중 디스크 복원이 끝날 때까지 설정을 유지하고, 결과에는 `기존 VM 직접 복원`으로 기록한다. 새 인스턴스 생성 절차 자체는 별도 검증 범위다.
 5. ROOT/DATA 각각에서 `QCOW2_CONVERT_BEGIN`의 `sparseSize=[4k]`, 요약의 가상 용량 일치, `targetCheckExitCode=0`, `compareExitCode=0`, `backingFileRemaining=false`를 확인한다. `QCOW2_TEST_SKIPPED`이거나 실제 옵션을 확인하지 못한 결과는 `-S 4k` 성공으로 집계하지 않는다.
 6. 복원된 원본 VM을 부팅해 Windows 로그인과 데이터 볼륨 접근을 확인한다. 드라이브 문자가 F:인지 확인하고, VM 밖에 보관한 INC4.csv를 `C:\Temp\INC4.csv`로 가져와 검증한다. 검증은 기존 테스트 파일을 읽고 해시를 비교한다.
 
@@ -181,15 +183,15 @@ zgrep -H -E 'WORKER_LOGGING_INITIALIZED|QCOW2_|phase=\[CONVERT\]' \
 
    `PASS: both disks match the external INC4 manifest; deleted files are absent.`와 Windows 정상 부팅 결과를 함께 보관한다. 테스트 후 호스트 설정을 `enabled=false`로 돌린다.
 
-원본 VM에 복원이 완료되면 해당 VM의 활성 증분 체인은 `vm-restore-completed` 사유로 봉인된다. 이후 첫 백업이 FULL로 시작하는 것은 정상 동작이다. INC4 증분 백업을 먼저 완료한 뒤 직접 복원한다.
+원본 VM에 복원이 완료되면 해당 VM의 활성 증분 체인은 `vm-restore-completed` 사유로 봉인된다. 이후 첫 백업이 FULL로 시작하는 것은 정상 동작이다. 증분 체인까지 검증할 계획이면 해당 증분 백업을 먼저 완료한 뒤 직접 복원한다.
 
-판정은 **900GiB DATA를 가진 이번 VM·NAS/QCOW2 체인·QEMU 버전·스토리지 조합에서 `-S 4k` 변환, 이미지 검증, 부팅 및 파일 검증을 통과했음**으로 기록한다. 한 번의 부팅 성공이나 특정 용량만으로 다른 환경 전체의 안전성을 보장하지 않는다. 운영 적용 환경이 다르면 해당 조합에서 검증한다.
+판정은 **900GiB DATA를 가진 이번 VM·NAS/QCOW2 Full 또는 증분 체인·QEMU 버전·스토리지 조합에서 `-S 4k` 변환, 이미지 검증, 부팅 및 파일 검증을 통과했음**으로 실제 백업 유형과 함께 기록한다. 한 번의 부팅 성공이나 특정 용량만으로 다른 환경 전체의 안전성을 보장하지 않는다. 운영 적용 환경이 다르면 해당 조합에서 검증한다.
 
 ### 복원 진행 화면
 
-수정된 KVM 에이전트와 UI를 배포한 뒤 새로 시작한 NAS 복원은 현재 볼륨과 처리 단계를 상태 API로 전달한다. 목록에서 `2/2 · 복원 데이터 비교`처럼 표시하며, 상태 툴팁의 상세에는 `DATA · QCOW2 ↔ QCOW2` 또는 `DATA · QCOW2 → QCOW2 · -S 4k`가 나온다.
+수정된 KVM 에이전트와 UI를 배포한 뒤 새로 시작한 NAS 복원은 현재 볼륨과 처리 단계를 상태 API로 전달한다. 목록에는 `복원 중` 하나만 표시한다. 상태에 마우스를 올리면 볼륨 `2/2`, 단계 `복원 데이터 비교`와 상세 `DATA · QCOW2 ↔ QCOW2` 또는 `DATA · QCOW2 → QCOW2 · -S 4k`를 확인할 수 있다.
 
-일반 복원은 대상 준비, 이미지 복사/변환, 볼륨 적용, 원본 정리를 구분한다. QCOW2 테스트를 활성화하면 백업 이미지 검사, 복원 이미지 검사, 데이터 비교도 각각 구분한다. RBD 복원은 전체 백업 가져오기, 증분 적용, 이미지 변환, 볼륨 적용을 표시한다. 테스트 설정과 변환 옵션은 기존 동작을 유지한다.
+일반 복원은 대상 준비, 이미지 복사/변환, 볼륨 적용, 원본 정리를 구분한다. QCOW2 테스트를 활성화하면 백업 이미지 검사, 복원 이미지 검사, 데이터 비교도 각각 구분한다. RBD 복원은 전체 백업 가져오기, 증분 적용, 이미지 변환, 볼륨 적용을 표시한다. 실제 변환 옵션은 테스트 설정으로 정한다.
 
 `getBackupRestoreJobStatus`의 `volumeindex`/`volumecount`는 현재 볼륨의 순서와 전체 개수다. `step`은 현재 단계, `details`는 볼륨 종류와 작업 설명이다. 복원 화면은 개별 명령의 실제 완료율을 계측하지 않은 단계별 추정치를 퍼센트로 표시하지 않는다. 긴 compare 동안에도 볼륨과 데이터 비교 단계는 계속 확인할 수 있다.
 
