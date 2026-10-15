@@ -348,6 +348,68 @@ Full 재시도의 새 작업 UUID와 혼동하지 않는다. 실패 작업 정�
 증분 체인 복원 기능까지 확인하려면 새 Full 이후 증분 백업을 추가로 생성하여 그 시점도 복원한다.
 설정과 판정 절차는 [NAS QCOW2 sparse 복원 테스트](../../../../docs/validation/ablestack-nas-qcow2-sparse-restore.md)를 참고한다.
 
+### 백업 완료 처리와 완료 후 카탈로그 확인
+
+Commvault·NetBackup·Veeam의 볼륨별 백업은 데이터 전송, 완료 후 정리, 외부 카탈로그 확인을 각각 관리한다.
+백업 완료 전후에는 다음 순서로 처리한다.
+
+| 순서 | 처리 내용 | 확인할 표시 |
+| --- | --- | --- |
+| 1 | 각 볼륨의 외부 저장 완료를 확인하고 해당 볼륨의 스테이징 파일을 정리한다. | `BackingUp`, 해당 솔루션의 `*_TRANSFER` |
+| 2 | 모든 볼륨의 연결 관계와 VM 구성, 체크포인트 등 복원 메타데이터를 마지막으로 저장한다. | `BackingUp` / `METADATA_TRANSFER` |
+| 3 | Host 작업 종료를 확인하고, 다음 증분에 필요한 체크포인트 정보를 보관한다. 원본의 임시 작업 파일과 백업 스테이징 디렉터리를 정리하고 용량·실행 슬롯 예약을 해제한다. | `BackingUp` / `FINALIZING` |
+| 4 | 전체 백업의 크기·결과와 사용량을 확정한다. 별도의 카탈로그 확인 전에는 `PENDING`으로 표시한다. | `BackedUp`, 정리 상태 `COMPLETED`, 스테이징 `RELEASED`, 카탈로그 `PENDING` |
+| 5 | Management Server의 백그라운드 동기화가 외부 카탈로그에서 선택한 시점에 필요한 메타데이터와 Full·증분 파일의 존재 여부를 조회한다. | `PENDING` 또는 직전 카탈로그 확인 결과 |
+| 6 | 필요한 파일이 모두 있음을 확인하면 카탈로그 상태와 확인 시각을 저장한다. | 카탈로그 `AVAILABLE`, 카탈로그 확인 시간 |
+| 7 | 이후에도 같은 주기로 확인하여 외부 저장소의 파일 만료·누락 또는 조회 실패를 반영한다. | 확인 결과에 따른 카탈로그 상태·사유와 확인 시각 |
+
+카탈로그 동기화 주기는 `backup.framework.sync.interval`이며 기본 `300`초다.
+백업 완료 후 다음 동기화에서 확인하므로 완료 직후 `BackedUp / PENDING / 정리 COMPLETED`가 함께 표시될 수 있다.
+갱신에는 다음 동기화까지의 대기 시간과 외부 API 조회 시간이 필요하며, 여러 VM·백업을 순서대로 조회하면 더 걸릴 수 있다.
+진행 중 작업을 확인하는 `backup.framework.active.job.sync.interval`(기본 `10`초)과는 별도 주기다.
+
+**카탈로그 확인 시간**은 백업 완료 시간이 아니라 마지막으로 성공한 외부 카탈로그 조회의 시각이다.
+백업 목록을 새로고침하면 저장된 최신 확인 결과를 볼 수 있다.
+외부 API 조회가 실패하면 `UNKNOWN`과 사유를 표시하며, 이전에 성공한 확인 시각은 남을 수 있다.
+정리 상태 `COMPLETED`는 임시 파일 정리 결과이고, 카탈로그 `AVAILABLE`은 외부 백업 파일 확인 결과다.
+원본 체크포인트·스냅샷의 추가 정리가 필요한 작업은 **원본 정리 상태**로 별도 확인한다.
+
+### 공유 스테이징의 동시 사용과 예약 절차
+
+Commvault·NetBackup·Veeam의 백업과 복원은 공통 스테이징을 함께 사용한다.
+작업마다 provider·VM·백업 시점 또는 복원 작업 ID로 디렉터리를 구분하고,
+각 작업의 용량과 실행 슬롯을 확보한 뒤 실행한다. 한 VM의 여러 볼륨을 순서대로 처리하는 작업은 실행 슬롯 하나를 사용한다.
+
+| 글로벌 설정 | 기본값 | 적용 범위 |
+| --- | --- | --- |
+| `backup.thirdparty.staging.concurrent.jobs.per.host` | `1` | Host 하나에서 동시에 실행하는 백업·복원의 합 |
+| `backup.thirdparty.staging.concurrent.jobs.per.cluster` | `4` | Cluster 하나에서 동시에 실행하는 백업·복원의 합 |
+| `backup.thirdparty.staging.concurrent.jobs.total` | `4` | 세 솔루션과 모든 Host를 합친 동시 백업·복원 수 |
+| `backup.thirdparty.staging.queue.timeout` | `3600`초 | 새 작업이 실행 허용을 기다릴 수 있는 시간 |
+
+기본 설정에서는 같은 Host의 작업은 하나씩 실행하고, 여러 Host에서는 Cluster·전체 제한과 용량 범위 안에서 병렬로 실행한다.
+같은 Host에서 둘 이상 실행하려면 Host 제한을 조정하고 Cluster·전체 제한 및 각 작업의 필요 공간도 함께 확보한다.
+GFS2·NFS를 공유하는 Host들은 같은 파일시스템의 예약분을 함께 계산한다.
+`LOCAL`은 Host별 공간을 검사하되 Host·Cluster·전체 동시 실행 수 제한은 공통으로 적용한다.
+
+1. **대기 등록:** 작업을 `WAITING`으로 등록하고 실행 Host, 스테이징과 기본스토리지의 요구량을 확인한다.
+2. **공간·슬롯 확인:** 현재 가용 공간에서 다른 활성 작업의 예약분을 제외하여 판단하고,
+   Host·Cluster·전체 제한도 모두 확인한다. 같은 자원을 사용하며 실행 조건을 갖춘 앞선 대기 작업을 우선한다.
+3. **예약 확정:** 예약할 용량과 허용 요청을 저장하고 Host의 예약 완료를 확인하여 `ADMITTED`로 전환한다.
+   Host 응답을 확인 중인 `ADMITTING`도 용량과 슬롯을 점유한다.
+4. **작업 실행:** 볼륨별 생성·전송·임시 파일 정리를 반복한다. 볼륨 하나의 임시 파일 정리만으로 전체 작업의 예약을 해제하지 않는다.
+5. **종료와 정리 확인:** 실제 백업·복원 및 외부 작업의 종료와 필요한 임시 작업 공간 정리를 확인한 뒤 예약을 `RELEASED`로 바꾼다.
+   해제된 공간과 슬롯을 기준으로 다음 대기 작업의 실행 여부를 다시 판단한다.
+
+예약은 Mold 작업 사이의 용량 사용을 조정하는 기록이다. 예약 크기만큼 빈 파일을 미리 생성하는 방식은 아니므로,
+파일시스템의 실제 사용량과 예약량은 다를 수 있다. 기본스토리지와 스테이징이 같은 파일시스템이면
+두 요구량과 다른 작업의 예약분을 합산한다. 공간 여유율은 [솔루션별 복원 공간 여유율](#솔루션별-복원-공간-여유율)을 참고한다.
+
+대기 제한 시간이 지나면 대기 작업을 취소하는 절차를 수행한다. 실행 중인 작업의 예약은 경과 시간만으로 만료하지 않는다.
+실패·취소 요청 후에도 프로세스 종료, 외부 전송 종료 또는 정리를 확인하지 못하면 예약을 유지한다.
+취소 처리가 대기 중인 `CANCEL_PENDING`도 공간과 슬롯을 점유한다.
+이 경우 스테이징 관리에서 대기 사유를 확인하고 **작업 상태 다시 확인 → 필요한 임시 파일 정리 재시도 → 예약 해제 확인** 순서로 처리한다.
+
 ### 스테이징 대기와 정리 대기 구분
 
 스테이징의 `WAITING`은 실행 허용을 기다리는 상태다. 사유를 함께 확인한다.
@@ -359,15 +421,10 @@ Full 재시도의 새 작업 UUID와 혼동하지 않는다. 실패 작업 정�
 | `WAITING` / `PRIMARY_STORAGE_CAPACITY` | 원본을 유지하면서 임시 볼륨을 준비할 기본스토리지 공간이 부족하다. |
 | `WAITING` / `HOST_CONCURRENCY_LIMIT`, `CLUSTER_CONCURRENCY_LIMIT`, `STAGING_CONCURRENCY_LIMIT` | Host·Cluster·전체 동시 실행 수 제한 때문에 기다린다. |
 | `WAITING` / `EARLIER_WAITING_JOB` | 같은 자원을 사용하는 먼저 대기한 작업의 실행을 기다린다. |
+| `ADMITTING` | Host의 실행 허용 응답을 확인 중이며, 용량과 실행 슬롯을 확보한 상태다. |
 | `ADMITTED` | 용량과 실행 슬롯을 확보하여 작업 실행이 허용됐다. 작업 완료를 뜻하지 않는다. |
+| `CANCEL_PENDING` | 취소 요청 후 종료·정리 확인을 기다리며 예약을 유지한다. |
 | `RELEASED` | 작업의 자원 예약이 해제됐다. 복원 성공 여부는 별도 결과로 확인한다. |
-
-작업별 공간을 예약하므로 이미 사용 중인 작업의 예약을 제외한 공간으로 다음 작업의 실행 여부를 판단한다.
-활성화 시 검사와 별개로 실제 백업·복원 시작 시 다시 검사한다.
-동시 실행 수는 `backup.thirdparty.staging.concurrent.jobs.per.host`(기본 1),
-`backup.thirdparty.staging.concurrent.jobs.per.cluster`(기본 4),
-`backup.thirdparty.staging.concurrent.jobs.total`(기본 4)로 조정한다.
-대기 제한은 `backup.thirdparty.staging.queue.timeout`이며 기본 3600초다.
 
 **복원 정리 상태**는 실행 허용과 별개로 복원용 스테이징 파일의 정리 상태를 표시한다.
 복원 중 `WAITING`과 `Restore job has not finished`가 함께 나오는 것은
@@ -388,7 +445,7 @@ Commvault·NetBackup·Veeam의 QCOW2 백업은 실행 중인 VM과 정지 VM 모
 `QCOW2_BACKUP` 단계에서는 Mold에서 대역폭을 변경할 수 있으며 변경값은 다음 볼륨에도 적용된다.
 이 제한은 원본 디스크에서 스테이징 파일로 복사하는 작업에 적용한다.
 외부 솔루션 전송 단계와 메타데이터 전송·최종 완료 처리에는 적용하지 않는다.
-RBD export/export-diff의 실시간 대역폭 조정은 제공하지 않는다.
+RBD export/export-diff의 실시간 대역폭 조정은 제공하지 않으며, RBD 백업의 상태 툴팁에는 대역폭과 적용 상태를 표시하지 않는다.
 
 용량 대기 중인 작업과 `PREPARING`, `QCOW2_BACKUP`, `RBD_EXPORT`, `RBD_EXPORT_DIFF` 단계에서는
 백업 취소를 제공한다. 외부 작업이 실행 중이거나 종료 여부를 확인하지 못한 경우에는 취소할 수 없다.
@@ -591,17 +648,82 @@ QCOW2도 동일한 백업 시점의 Full·증분 파일을 사용한다.
 
 ### 임시 경로와 보존 범위
 
-GFS2 기본스토리지의 `/mnt/glue-gfs`를 마운트 경로와 스테이징 root로 함께 사용할 수 있다.
-실제 파일은 다음과 같이 provider 아래의 개별 작업 경로에 저장한다.
+#### 백업·복원 데이터 파일
 
-- 백업: `<root.path>/<provider>/<VM 인스턴스 이름>/<타임스탬프>`
-- 복원: `<root.path>/<provider>/restore/<restore-job-id>`
-- 예: `/mnt/glue-gfs/ablestack-commvault/i-2-25-VM/2026.10.12.15.00.00.000`
+아래의 `<root>`는 `backup.thirdparty.staging.root.path`이며,
+`<provider>`는 `ablestack-commvault`, `ablestack-netbackup`, `ablestack-veeam` 중 해당 솔루션이다.
+`<VM>`은 `i-2-220-VM`과 같은 VM 인스턴스 이름이고, `<시점>`은 `yyyy.MM.dd.HH.mm.ss.SSS` 형식이다.
+GFS2 기본스토리지의 `/mnt/glue-gfs`를 마운트 경로와 `<root>`로 함께 사용할 수 있다.
+
+| 구분 | 생성·접근 경로 | 파일과 용도 |
+| --- | --- | --- |
+| NAS 백업본 | `<NAS 공유 루트>/<VM>/<시점>/` | QCOW2 또는 RBD 백업 파일, VM 구성과 체크포인트 정보. NAS가 최종 보관 위치다. |
+| NAS 작업 중 마운트 | Host 임시 디렉터리의 `csbackup*` 아래 `<VM>/<시점>/` | NAS의 같은 백업 파일을 마운트하여 읽고 쓴다. 백업 스크립트의 기본 예는 `/tmp/csbackup.XXXXX/<VM>/<시점>/`이며, 복원은 JVM 임시 디렉터리를 사용한다. |
+| 세 솔루션의 백업 스테이징 | `<root>/<provider>/<VM>/<시점>/` | 외부 전송 전 볼륨 파일과 `domain-config.xml`, `backup-manifest.json`, 체크포인트 정보 등을 생성한다. |
+| 세 솔루션의 복원 메타데이터 | `<root>/<provider>/restore/<복원 작업 ID>/metadata/` | 외부 저장소에서 가져온 VM 구성, `backup-manifest.json` 등 해당 백업 시점의 메타데이터를 둔다. |
+| 세 솔루션의 복원 볼륨 파일 | `<root>/<provider>/restore/<복원 작업 ID>/payload/` | 필요한 Full·증분 파일을 가져와 기본스토리지의 새 볼륨을 준비하는 데 사용한다. |
+| 세 솔루션의 최종 백업본 | 각 외부 솔루션의 백업 저장소 | Mold의 스테이징 경로와 별도로 보관하며 외부 카탈로그의 작업·파일 정보로 조회한다. |
+
+볼륨 백업 파일의 기본 이름은 `root.<볼륨 UUID>` 또는 `datadisk.<볼륨 UUID>`에 확장자를 붙인다.
+QCOW2는 `.qcow2`, RBD Full은 `.raw`, RBD 증분은 `.rbdiff`이다.
+복원의 `metadata`와 `payload`에는 외부 복원 작업이 원래 백업 디렉터리 구조를 포함하여 파일을 생성할 수 있다.
+작업별 정확한 경로는 스테이징 관리의 **임시 파일 저장 경로**와 해당 작업 계획에서 확인한다.
+
+`root.path=/mnt/glue-gfs`인 Commvault의 경로 예는 다음과 같다.
+
+```text
+/mnt/glue-gfs/
+├── ablestack-commvault/
+│   ├── i-2-220-VM/2026.10.15.10.00.00.000/  # 백업 스테이징
+│   └── restore/<복원 작업 ID>/
+│       ├── metadata/                         # 복원 메타데이터
+│       └── payload/                          # 복원 볼륨 파일
+└── .volume-reservations/                     # 공유 스테이징 용량 예약 기록
+```
 
 여러 Host가 같은 GFS2 또는 NFS 공유를 마운트하면 같은 작업 경로와 파일이 모든 Host에서 보인다.
 Host마다 별도의 복원 파일을 한 벌씩 만든다는 의미가 아니다. 실제 복원은 선택한 작업 Host에서 실행한다.
 파일이 보이는 Host 수가 아니라 스테이징 관리의 **작업 호스트**로 실행 위치를 확인한다.
 `LOCAL` 스테이징은 Host별 파일시스템이므로 같은 경로명이라도 파일을 공유하지 않는다.
+
+#### 실행 Host의 작업·예약·복원 기록
+
+Host의 작업 기록 루트는 `/var/lib/ablestack/backup/jobs`이다.
+아래의 `<작업 ID>`는 백업에서는 백업 UUID, 복원에서는 별도로 발급한 복원 작업 ID다.
+각 파일은 해당 실행 방식과 진행 단계에서 필요할 때 생성되며, 모든 작업에 항상 존재하는 것은 아니다.
+
+| 구분 | 경로 | 주요 내용 |
+| --- | --- | --- |
+| 작업 상태 | `/var/lib/ablestack/backup/jobs/<작업 ID>.properties` | 상태·단계·실행 Host 작업 정보와 로그 경로 |
+| 작업 로그·실행 기록 | `/var/lib/ablestack/backup/jobs/<작업 ID>/` | `job.log`, `events.jsonl`, `run.sh`, `exit-code` |
+| 백업 계획과 진행 기록 | 위 백업 작업 디렉터리 | `backup-command.json`, `volume-plan.json`, `volume-progress.properties`, 외부 전송 요청·확인 및 정리 기록 |
+| 복원 계획과 진행 기록 | 위 복원 작업 디렉터리 | `restore-command.json`, `volume-restore-plan.json`, `restore-capacity-plan.json`, 외부 복원 요청·확인 및 정리 기록 |
+| 실행 허용 요청·확인 | 해당 작업 디렉터리 | `staging-admission-plan.json`, `staging-admission-request.json`, `staging-admission-granted` 등 |
+| 공유 스테이징 예약 | `<root>/.volume-reservations/` | `<작업 ID>.json` 예약량, `filesystem.id` 파일시스템 식별값, `capacity.lock` 동시 예약 제어 |
+| 실행 허용 종료 기록 | `/var/lib/ablestack/backup/staging-admission-closed/<작업 ID>.closed` | 작업 디렉터리 정리 후에도 같은 작업이 다시 공간을 예약하지 않도록 보관하는 기록 |
+| 복원 시작 기록 | `/var/lib/ablestack/backup/restore-start/<복원 작업 ID>.json` | 볼륨별 복원의 시작 요청·초기화 결과 |
+| 복원 볼륨 교체 기록 | `/var/lib/ablestack/backup/jobs/restore-transactions/<대상 VM>/<트랜잭션 ID>.properties` | 볼륨 준비·교체·원상 복구와 정리 진행 기록 |
+| VM 복원 결과 | `/var/lib/ablestack/backup/restore-outcomes/<복원 작업 ID>.json` | 볼륨별 복원의 결과와 기본스토리지 정리 상태. 작업 디렉터리와 별도로 보관한다. |
+
+이 기록들은 실행 Host에 생성한다. 공유 스테이징이 다른 Host에서도 보이는 것과 별개이므로
+`job.log`는 스테이징 관리에 표시된 작업 Host에서 확인한다.
+작업 디렉터리의 로그·계획 파일이 남아 있다는 사실만으로 데이터 파일이나 용량 예약이 남았다고 판단하지 않는다.
+
+#### 기본스토리지의 백업·복원 작업 파일
+
+백업 스테이징 파일 외에 원본 또는 복원 대상 기본스토리지에도 임시 작업 공간을 사용할 수 있다.
+
+| 구분 | 생성 위치와 이름 | 용도 |
+| --- | --- | --- |
+| 세 솔루션의 QCOW2 백업 작업 파일 | 원본 볼륨 파일과 같은 디렉터리의 `.backup-<백업 UUID>-<디스크 이름>.qcow2` | 백업 도중 원본 디스크의 데이터를 안정적으로 읽기 위한 임시 작업 파일 |
+| QCOW2 복원 준비·원본 보존 파일 | 대상 볼륨과 같은 디렉터리의 `<대상 볼륨>-csrestore-prepared-<ID>`, `<대상 볼륨>-csrestore-original-<ID>` 등 | 새 볼륨을 준비하고 교체 동안 기존 볼륨을 보존한다. 증분 적용 중에는 `csrestore-overlay-*.qcow2` 등의 작업 파일도 사용할 수 있다. |
+| RBD 복원 준비·원본 보존 이미지 | 대상 Glue pool의 `<대상 이미지>-csrestore-prepared-<ID>`, `<대상 이미지>-csrestore-original-<ID>`, `<대상 이미지>-csrestore-<ID>` 등 | 파일시스템 디렉터리 대신 Glue RBD 이미지로 새 볼륨 준비와 기존 볼륨 보존을 수행한다. |
+| 최종 복원 볼륨 | Mold에 등록된 대상 기본스토리지의 볼륨 경로 또는 Glue RBD 이미지 | 모든 준비와 교체가 성공한 뒤 VM이 사용하는 실제 디스크 |
+
+예를 들어 파일 기본스토리지의 최종 볼륨은 `/mnt/glue-gfs/<볼륨 경로>`일 수 있다.
+실제 파일·이미지 이름은 복원 계획, 작업 로그와 볼륨 교체 기록에서 확인한다.
+
+#### 보존과 정리 범위
 
 볼륨 백업 파일은 외부 저장 완료를 확인한 뒤 정리한다.
 복원 파일은 VM 복원 과정에서 필요한 처리가 끝난 뒤 정리한다.

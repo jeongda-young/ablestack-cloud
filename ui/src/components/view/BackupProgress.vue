@@ -53,7 +53,7 @@
               <div v-if="stagingQueue.reason" class="backup-progress-tooltip-row"><span>{{ $t('label.backup.staging.wait.reason') }} :</span><span>{{ stagingQueue.reason }}</span></div>
               <div v-if="stagingQueue.state === 'WAITING' && stagingQueue.deadline" class="backup-progress-tooltip-row"><span>{{ $t('label.backup.staging.queue.deadline') }} :</span><span>{{ $toLocaleDate(stagingQueue.deadline) }}</span></div>
             </template>
-            <div v-if="bandwidthLimitMbps !== null" class="backup-progress-tooltip-row">
+            <div v-if="!isRbdBackup && bandwidthLimitMbps !== null" class="backup-progress-tooltip-row">
               <span>{{ $t('label.bandwidth') }} :</span>
               <span>{{ bandwidthLimitMbps === 0 ? $t('label.unlimited') : bandwidthLimitMbps + ' Mbps' }}</span>
             </div>
@@ -232,15 +232,18 @@ export default {
       }
       return this.step
     },
+    isRbdBackup () {
+      return String(this.record?.backupengine || '').toUpperCase().startsWith('RBD')
+    },
     bandwidthStatusLabel () {
-      if (!this.bandwidthStatus) {
+      if (this.isRbdBackup || !this.bandwidthStatus) {
         return ''
       }
       return this.$t('message.backup.bandwidth.' + this.bandwidthStatus)
     },
     showJobDetails () {
       return !!this.vmRestore || !!this.stagingQueue || !!this.record?.catalogstate || !!this.record?.cleanupdetails || !!this.record?.sourcecleanupdetails || !!this.record?.restorecleanupdetails || !!this.failureDetails || (this.isActive && (this.showProgress || !!this.jobState || !!this.displayStep || !!this.logPath ||
-        this.bandwidthLimitMbps !== null || !!this.bandwidthStatus))
+        (!this.isRbdBackup && (this.bandwidthLimitMbps !== null || !!this.bandwidthStatus))))
     },
     showRestoreFailure () {
       return String(this.localStatus || this.record?.status || '').toLowerCase() === 'backedup' &&

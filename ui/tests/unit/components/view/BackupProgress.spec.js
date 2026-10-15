@@ -98,6 +98,73 @@ test('Commvault host capability enables live bandwidth only until transfer start
   wrapper.unmount()
 })
 
+test.each(['ablestack-nas', 'ablestack-commvault', 'ablestack-netbackup', 'ablestack-veeam'])(
+  'hides RBD bandwidth values and update status for %s before and after polling', async provider => {
+    const step = provider === 'ablestack-nas' ? 'RBD_EXPORT' : provider.substring('ablestack-'.length).toUpperCase() + '_TRANSFER'
+    getAPI.mockResolvedValue({
+      getbackupjobstatusresponse: {
+        status: 'BackingUp',
+        state: 'RUNNING',
+        step,
+        progress: 71,
+        volumeindex: 2,
+        volumecount: 2,
+        bandwidthlimitmbps: 0,
+        bandwidthstatus: 'applied'
+      }
+    })
+    const wrapper = shallowMount(BackupProgress, {
+      props: {
+        record: {
+          id: 'backup-1',
+          status: 'BackingUp',
+          provider,
+          backupengine: 'RBD_DIFF',
+          bandwidthlimitmbps: 100,
+          bandwidthstatus: 'pending'
+        }
+      },
+      global: {
+        stubs: { Status: statusWithTooltip },
+        mocks: { $t: key => key, $store: { getters: { apis: { getBackupJobStatus: {} } } } }
+      }
+    })
+
+    expect(wrapper.find('.status-tooltip').text()).not.toContain('label.bandwidth')
+    expect(wrapper.find('.status-tooltip').text()).not.toContain('message.backup.bandwidth.')
+    for (let i = 0; i < 5; i++) await Promise.resolve()
+    expect(wrapper.find('.status-tooltip').text()).toContain(step)
+    expect(wrapper.find('.status-tooltip').text()).toContain('2/2')
+    expect(wrapper.find('.status-tooltip').text()).not.toContain('label.bandwidth')
+    expect(wrapper.find('.status-tooltip').text()).not.toContain('label.unlimited')
+    expect(wrapper.find('.status-tooltip').text()).not.toContain('message.backup.bandwidth.')
+    wrapper.unmount()
+  }
+)
+
+test.each([0, 100])('shows the configured QCOW2 bandwidth %s and update status', bandwidth => {
+  const wrapper = shallowMount(BackupProgress, {
+    props: {
+      record: {
+        id: 'backup-1',
+        status: 'BackingUp',
+        backupengine: 'QCOW2',
+        bandwidthlimitmbps: bandwidth,
+        bandwidthstatus: 'applied'
+      }
+    },
+    global: {
+      stubs: { Status: statusWithTooltip },
+      mocks: { $t: key => key, $store: { getters: { apis: {} } } }
+    }
+  })
+
+  expect(wrapper.find('.status-tooltip').text()).toContain('label.bandwidth')
+  expect(wrapper.find('.status-tooltip').text()).toContain(bandwidth === 0 ? 'label.unlimited' : '100 Mbps')
+  expect(wrapper.find('.status-tooltip').text()).toContain('message.backup.bandwidth.applied')
+  wrapper.unmount()
+})
+
 test('shows the QCOW2 backup step separately from the running state', async () => {
   getAPI.mockResolvedValue({ getbackupjobstatusresponse: { status: 'BackingUp', state: 'RUNNING', step: 'QCOW2_BACKUP', progress: 16 } })
   const wrapper = shallowMount(BackupProgress, {
