@@ -136,7 +136,7 @@ test.each(['ablestack-nas', 'ablestack-commvault', 'ablestack-netbackup', 'ables
     expect(wrapper.find('.status-tooltip').text()).toContain(step)
     expect(wrapper.find('.status-tooltip').text()).toContain('2/2')
     expect(wrapper.find('.status-tooltip').text()).not.toContain('label.bandwidth')
-    expect(wrapper.find('.status-tooltip').text()).not.toContain('label.unlimited')
+    expect(wrapper.find('.status-tooltip').text()).not.toContain('label.backup.bandwidth.no.limit')
     expect(wrapper.find('.status-tooltip').text()).not.toContain('message.backup.bandwidth.')
     wrapper.unmount()
   }
@@ -160,7 +160,7 @@ test.each([0, 100])('shows the configured QCOW2 bandwidth %s and update status',
   })
 
   expect(wrapper.find('.status-tooltip').text()).toContain('label.bandwidth')
-  expect(wrapper.find('.status-tooltip').text()).toContain(bandwidth === 0 ? 'label.unlimited' : '100 Mbps')
+  expect(wrapper.find('.status-tooltip').text()).toContain(bandwidth === 0 ? 'label.backup.bandwidth.no.limit' : '100 Mbps')
   expect(wrapper.find('.status-tooltip').text()).toContain('message.backup.bandwidth.applied')
   wrapper.unmount()
 })

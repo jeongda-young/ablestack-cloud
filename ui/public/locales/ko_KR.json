@@ -604,6 +604,7 @@
   "label.balance": "할당 잔액",
   "label.bandwidth": "대역폭",
   "label.action.update.backup.bandwidth": "백업 대역폭 조정",
+  "label.backup.bandwidth.no.limit": "제한 없음",
   "label.bandwidthlimitmbps": "대역폭 제한 (Mbps)",
   "label.baremetal.dhcp.devices": "Baremetal DHCP 장치",
   "label.baremetal.pxe.device": "Baremetal PXE 장치 추가",

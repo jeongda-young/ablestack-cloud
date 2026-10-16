@@ -124,7 +124,7 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
     ConfigKey<Integer> BackupQosBandwidthLimitMbps = new ConfigKey<>("Advanced", Integer.class,
             "backup.qos.bandwidth.limit.mbps",
             "0",
-            "Limits KVM backup bandwidth in Mbps for running VM block jobs and ABLESTACK third-party QCOW2 volume staging copies of running or stopped VMs. A value of 0 means unlimited.",
+            "Limits KVM backup bandwidth in Mbps for running VM block jobs and ABLESTACK third-party QCOW2 volume staging copies of running or stopped VMs. A value of 0 means no bandwidth limit.",
             true,
             BackupFrameworkEnabled.key());
 

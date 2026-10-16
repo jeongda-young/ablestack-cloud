@@ -642,6 +642,7 @@
   "label.balance": "Balance",
   "label.bandwidth": "Bandwidth",
   "label.action.update.backup.bandwidth": "Update backup bandwidth",
+  "label.backup.bandwidth.no.limit": "No limit",
   "label.bandwidthlimitmbps": "Bandwidth limit (Mbps)",
   "label.baremetal.dhcp.devices": "Bare metal DHCP devices",
   "label.baremetal.pxe.device": "Add bare metal PXE device",

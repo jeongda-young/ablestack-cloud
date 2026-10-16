@@ -55,7 +55,7 @@
             </template>
             <div v-if="!isRbdBackup && bandwidthLimitMbps !== null" class="backup-progress-tooltip-row">
               <span>{{ $t('label.bandwidth') }} :</span>
-              <span>{{ bandwidthLimitMbps === 0 ? $t('label.unlimited') : bandwidthLimitMbps + ' Mbps' }}</span>
+              <span>{{ bandwidthLimitMbps === 0 ? $t('label.backup.bandwidth.no.limit') : bandwidthLimitMbps + ' Mbps' }}</span>
             </div>
             <div v-if="bandwidthStatusLabel" class="backup-progress-tooltip-row" :class="{ 'backup-progress-tooltip-error': bandwidthStatus === 'failed' }">
               <span>{{ $t('label.status') }} :</span>

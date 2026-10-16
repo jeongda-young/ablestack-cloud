@@ -551,7 +551,7 @@ GFS2·NFS를 공유하는 Host들은 같은 파일시스템의 예약분을 함�
 ### 대역폭 조정과 백업 취소
 
 Commvault·NetBackup·Veeam의 QCOW2 백업은 실행 중인 VM과 정지 VM 모두
-`backup.qos.bandwidth.limit.mbps`를 초기 제한값으로 사용한다. `0`은 무제한이다.
+`backup.qos.bandwidth.limit.mbps`를 초기 제한값으로 사용한다. `0`은 `제한 없음`을 뜻한다.
 `QCOW2_BACKUP` 단계에서는 Mold에서 대역폭을 변경할 수 있으며 변경값은 다음 볼륨에도 적용된다.
 이 제한은 원본 디스크에서 스테이징 파일로 복사하는 작업에 적용한다.
 외부 솔루션 전송 단계와 메타데이터 전송·최종 완료 처리에는 적용하지 않는다.
