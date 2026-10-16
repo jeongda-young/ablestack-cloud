@@ -37,7 +37,7 @@
         <a-button v-if="canManage" :disabled="!canMutate || busy || loading" @click="run('RECHECK')">{{ $t('label.backup.staging.recheck') }}</a-button>
       </a-tooltip>
     </div>
-    <a-alert v-if="error" type="warning" show-icon :message="error" class="staging-alert" />
+    <a-alert v-if="error" type="warning" show-icon :message="errorMessage" class="staging-alert" />
     <a-alert
       v-if="!loading && !error && !info"
       type="info"
@@ -151,6 +151,10 @@ export default {
     return { operation: this.resource.stagingqueue?.operation || 'BACKUP', selectedRestoreJobId: '', info: null, selectedKeys: [], externalJobId: '', loading: false, busy: false, error: '', requestToken: 0, disposed: false }
   },
   computed: {
+    errorMessage () {
+      return this.error === 'No staged restore attempt is recorded'
+        ? this.$t('message.backup.staging.no.restore.attempt') : this.error
+    },
     sourceCleanupLabel () {
       const engine = String(this.resource.backupengine || '').toUpperCase()
       if (engine.startsWith('RBD')) return 'label.backup.source.cleanup.state'

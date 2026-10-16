@@ -23,19 +23,15 @@
 # INC3 = rewrite 50GiB, add 50GiB. DATA file size = 600GiB.
 # INC4 = add 300GiB to the existing INC3 dataset. DATA file size = 900GiB.
 # Write sizes are not guarantees of changed-block counts or backup file sizes.
+# Data generation only: no file hashing, CSV manifest, or restored-file verification.
 [CmdletBinding()]
 param(
     [Parameter(Mandatory = $true)]
-    [ValidateSet('FULL', 'INC1', 'INC2', 'INC3', 'INC4', 'VERIFY')]
+    [ValidateSet('FULL', 'INC1', 'INC2', 'INC3', 'INC4')]
     [string]$Stage,
 
     [ValidatePattern('^[A-Za-z]$')]
-    [string]$DataDrive = 'D',
-
-    [string]$ExpectedManifest,
-
-    [ValidateSet('INC3', 'INC4')]
-    [string]$ExpectedStage = 'INC3'
+    [string]$DataDrive = 'D'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -112,51 +108,6 @@ function Write-TestFile {
     Write-Host "Written: $Path"
 }
 
-function Get-TestManifest {
-    foreach ($Disk in @('ROOT', 'DATA')) {
-        $Directory = if ($Disk -eq 'ROOT') { $RootDir } else { $DataDir }
-        foreach ($File in (Get-ChildItem -LiteralPath $Directory -File | Sort-Object Name)) {
-            $Hash = Get-FileHash -LiteralPath $File.FullName -Algorithm SHA256
-            [pscustomobject]@{
-                Disk = $Disk
-                File = $File.Name
-                Length = $File.Length
-                SHA256 = $Hash.Hash
-            }
-        }
-    }
-}
-
-if ($Stage -eq 'VERIFY') {
-    if ([string]::IsNullOrWhiteSpace($ExpectedManifest) -or -not (Test-Path -LiteralPath $ExpectedManifest -PathType Leaf)) {
-        throw "Supply -ExpectedManifest with the ${ExpectedStage}.csv saved OUTSIDE the source VM before its $ExpectedStage backup."
-    }
-    $Expected = @(Import-Csv -LiteralPath $ExpectedManifest)
-    if ($Expected.Count -eq 0) { throw 'Expected manifest is empty.' }
-    $Actual = @(Get-TestManifest)
-    $ExpectedKeys = @($Expected | ForEach-Object { $_.Disk + '/' + $_.File })
-    foreach ($Row in $Expected) {
-        $Matches = @($Actual | Where-Object { $_.Disk -eq $Row.Disk -and $_.File -eq $Row.File })
-        if ($Matches.Count -ne 1 -or $Matches[0].Length -ne [long]$Row.Length -or $Matches[0].SHA256 -ne $Row.SHA256) {
-            throw "Missing file, size mismatch, or SHA256 mismatch: $($Row.Disk)/$($Row.File)"
-        }
-        Write-Host "OK: $($Row.Disk)/$($Row.File)"
-    }
-    foreach ($Row in $Actual) {
-        if (($Row.Disk + '/' + $Row.File) -notin $ExpectedKeys) {
-            throw "Unexpected restored file: $($Row.Disk)/$($Row.File)"
-        }
-    }
-    foreach ($Path in @((Join-Path $RootDir 'delete.bin'), (Join-Path $DataDir 'delete.bin'))) {
-        if (Test-Path -LiteralPath $Path) { throw "Deleted file unexpectedly exists: $Path" }
-    }
-    if ((Get-Content -LiteralPath (Join-Path $RootDir 'stage.txt') -Raw).Trim() -ne $ExpectedStage) {
-        throw "Restored stage marker is not $ExpectedStage."
-    }
-    Write-Host "PASS: both disks match the external $ExpectedStage manifest; deleted files are absent."
-    exit 0
-}
-
 if ($Stage -eq 'FULL') {
     if ((Test-Path -LiteralPath $RootDir) -or (Test-Path -LiteralPath $DataDir) -or (Test-Path -LiteralPath $StatePath)) {
         throw 'FULL requires a fresh test dataset. Existing data will not be overwritten.'
@@ -210,13 +161,9 @@ switch ($Stage) {
 }
 
 Set-Content -LiteralPath (Join-Path $RootDir 'stage.txt') -Value $Stage -Encoding ASCII
-$ManifestPath = Join-Path $ResultDir ($Stage + '.csv')
-Write-Host 'Computing SHA256 for all current test files. Wait for this to finish.'
-Get-TestManifest | Export-Csv -LiteralPath $ManifestPath -NoTypeInformation -Encoding UTF8
 [pscustomobject]@{ Stage = $Stage; DataDrive = $DataDrive; Dataset = $Dataset } | ConvertTo-Json |
     Set-Content -LiteralPath $StatePath -Encoding UTF8
 Write-Host "DATA STAGE COMPLETE: $Stage"
-Write-Host "Manifest: $ManifestPath"
-Write-Host "Save the manifest outside the VM, shut down normally, and complete the $Stage NAS backup before continuing."
+Write-Host "Shut down normally and complete the $Stage NAS backup before continuing."
 Get-Volume -DriveLetter $RootDrive, $DataDrive |
     Select-Object DriveLetter, FileSystemType, Size, SizeRemaining

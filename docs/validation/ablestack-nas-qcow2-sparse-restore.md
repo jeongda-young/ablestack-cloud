@@ -13,6 +13,18 @@ rebase, 체인 재구성, preallocation, cache, coroutine, `--target-is-zero` �
 
 기본스토리지 복원 여유율은 글로벌 설정 `backup.restore.primary.storage.capacity.buffer.percent`로 지정한다. NAS·Commvault·NetBackup·Veeam의 공통 설정이다. 기본 `20`, 허용 범위 `0`~`100`이며 검사별 최소 여유 공간은 `10 GiB`다. `15`이면 필요 용량 1000 GiB인 검사에 1150 GiB의 가용 공간이 필요하다. 이 비율은 새 복원의 QCOW2 파일 및 Glue RBD 공간 검사에 적용된다. 진행 중인 복원은 시작할 때의 비율을 유지한다. 솔루션별 스테이징·기본스토리지 기준은 [BACKUP.md의 복원 공간 여유율](../../scripts/vm/hypervisor/kvm/BACKUP.md#솔루션별-복원-공간-여유율)을 참고한다.
 
+## Windows 게스트 데이터 생성
+
+[데이터 생성 스크립트](ablestack-nas-windows-incremental-test.ps1)를 VM의 `C:\NasIncrementalTest.ps1`로 복사한다. 새 VM의 데이터 디스크가 F:이면 관리자 PowerShell에서 실행한다.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\NasIncrementalTest.ps1 -Stage FULL -DataDrive F
+```
+
+FULL은 DATA 파일 합계 500GiB를 생성한다. 후속 단계는 `INC1 → INC2 → INC3 → INC4` 순서이며, INC3은 600GiB, INC4는 900GiB가 된다. 기존 파일 구성과 난수·제로 데이터 쓰기는 유지하며, 각 단계 완료 시 `DATA STAGE COMPLETE`를 출력한다.
+게스트 파일의 SHA256 계산, CSV 생성 및 `VERIFY` 단계는 수행하지 않는다. 단계 순서와 데이터 드라이브는 `state.json`으로 관리하고, 여유 공간과 기존 파일 덮어쓰기 방지는 확인한다.
+각 단계에서 백업을 만들려면 데이터 작성을 완료한 뒤 VM을 정상 종료하고 해당 백업을 완료한 후 다음 단계를 실행한다. 복원 후에는 Windows 부팅·로그인과 데이터 볼륨 접근을 확인한다. 호스트의 QCOW2 check·compare는 아래 테스트 설정에 따라 별도로 수행한다.
+
 ## 테스트 모드 설정
 
 새 KVM agent 코드를 설치한 **실제 복원 호스트**에 다음 파일을 만든다. NAS가 백업 데이터를 읽는 저장소 서버가 아니라 convert를 실행하는 KVM 호스트다.
@@ -94,7 +106,7 @@ zgrep -H -E 'WORKER_LOGGING_INITIALIZED|QCOW2_|phase=\[CONVERT\]' \
 
 ### 새 인스턴스 생성으로 복원할 때의 확인·보관 절차
 
-1. 현재 진행 중인 복원은 완료시킨 뒤 수정된 KVM 에이전트를 배포한다. 수정 이전에 시작한 Java 프로세스에는 이번 초기화 변경이 적용되지 않으며, 출력되지 않은 과거 INFO 로그를 소급 생성할 수 없다. 동일한 INC3 백업본과 Mac에 보관한 `INC3.csv`를 사용해 재시험한다.
+1. 실제 복원 호스트에 KVM 에이전트를 배포하고, 두 복원에 사용할 동일한 INC3 백업본을 준비한다.
 2. 복원 가능한 호스트에 테스트 설정을 적용한다. 첫 복원은 `FULL_ALLOCATED` / `case.id=INC3-S0-R2`, 두 번째는 `SPARSE` / `case.id=INC3-S4k-R2`로 구분한다. `enabled=true`, `fail.on.compare=true`, 실제 원본 오퍼링 라벨을 유지한다. 복원 중에는 설정을 바꾸지 않는다.
 3. 복원 로그를 저장할 SSH 터미널을 실제 복원 호스트에 열어 둔다. `rg` 설치 없이 다음 명령으로 원본 로그를 별도 파일에 저장할 수 있다. `CASE_ID`는 이번 복원 설정과 맞춘다. 이 명령은 계속 실행되며, 복원이 완료된 뒤 Ctrl+C로 수집을 끝낸다.
 
@@ -145,14 +157,8 @@ zgrep -H -E 'WORKER_LOGGING_INITIALIZED|QCOW2_|phase=\[CONVERT\]' \
    ```
 
    ROOT와 DATA 각각의 요약을 확인한다. `sourceVirtualSize=targetVirtualSize`, `targetCheckExitCode=0`, `compareExitCode=0`, `backingFileRemaining=false`가 정상 기준이다. 요약이 출력되지 않으면 결과를 확보한 것으로 처리하지 않는다.
-8. 복원 VM에서 데이터 드라이브 문자를 확인하고, 외부 `INC3.csv`로 검증한다. 아래는 스크립트를 `C:\NasIncrementalTest.ps1`로 복사한 경우이며, 출력도 파일로 보관한다.
-
-   ```powershell
-   powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\NasIncrementalTest.ps1 -Stage VERIFY -DataDrive F -ExpectedManifest C:\Temp\INC3.csv 2>&1 | Tee-Object -FilePath C:\Temp\VERIFY-S4k-R2.txt
-   ```
-
-   최종 `PASS`와 파일별 결과를 확인한다. 호스트의 case별 result/capture 로그, Windows 검증 출력, 사용한 외부 CSV를 Mac에 복사한 뒤 해당 테스트 VM을 정리한다.
-9. 동일한 조건으로 S0와 S4k 결과를 ROOT끼리, DATA끼리 비교한다. `allocatedBytes`와 `allocationRatio`는 실제 점유량, `convertElapsedMillis`는 변환 시간이다. 밀리초를 60,000으로 나누면 분이다. Windows `VERIFY`의 PASS와 호스트 check/compare 결과도 두 모드 모두 기록한다. 이벤트의 시작/완료 시각은 전체 작업 시간이며 convert 시간으로 대체하지 않는다. 두 케이스를 마치면 각 테스트 호스트의 설정을 `enabled=false`로 돌린다.
+8. 복원 VM에서 Windows 부팅·로그인, 데이터 볼륨 인식 및 접근을 확인한다. 호스트의 case별 result/capture 로그와 부팅 확인 결과를 VM 외부에 보관한 뒤 해당 테스트 VM을 정리한다.
+9. 동일한 조건으로 S0와 S4k 결과를 ROOT끼리, DATA끼리 비교한다. `allocatedBytes`와 `allocationRatio`는 실제 점유량, `convertElapsedMillis`는 변환 시간이다. 밀리초를 60,000으로 나누면 분이다. Windows 부팅 결과와 호스트 check/compare 결과도 두 모드 모두 기록한다. 이벤트의 시작/완료 시각은 전체 작업 시간이며 convert 시간으로 대체하지 않는다. 두 케이스를 마치면 각 테스트 호스트의 설정을 `enabled=false`로 돌린다.
 
 ### 원본 Windows VM의 DATA를 600GiB에서 900GiB로 늘려 재검증
 
@@ -168,26 +174,20 @@ zgrep -H -E 'WORKER_LOGGING_INITIALIZED|QCOW2_|phase=\[CONVERT\]' \
    ```
 
    기존 단계는 `INC3`, DataDrive는 `F`여야 한다. 추가 쓰기에는 300GiB와 2GiB의 여유 공간이 필요하며, 부족하거나 `inc4.bin`이 이미 있으면 스크립트가 중단한다.
-2. `INC4`를 실행한다. 난수 파일 생성 후 모든 ROOT/DATA 파일의 SHA256 계산까지 끝나서 `DATA STAGE COMPLETE: INC4`가 출력될 때까지 기다린다.
+2. `INC4`를 실행한다. 난수 파일 생성이 끝나서 `DATA STAGE COMPLETE: INC4`가 출력될 때까지 기다린다.
 
    ```powershell
    powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\NasIncrementalTest.ps1 -Stage INC4 -DataDrive F
    ```
 
-3. `C:\NasRestoreTest\Results\INC4.csv`를 VM 밖에 보관한다. 원본 VM을 정상 종료하고 기존과 같은 백업 스케줄 또는 수동 백업 방식으로 NAS 백업을 완료한다. **실제 백업 유형 Full 또는 증분을 기록한다.** 자동 재시도 등으로 Full이 됐어도 대용량 `-S 4k` 변환·부팅 검증에 사용할 수 있다. 데이터 생성 단계의 이름 `INC4`와 실제 백업 유형은 별개다. Full만 시험한 결과를 증분 체인 검증으로 집계하지 않는다.
+3. 원본 VM을 정상 종료하고 기존과 같은 백업 스케줄 또는 수동 백업 방식으로 NAS 백업을 완료한다. **실제 백업 유형 Full 또는 증분을 기록한다.** 자동 재시도 등으로 Full이 됐어도 대용량 `-S 4k` 변환·부팅 검증에 사용할 수 있다. 데이터 생성 단계의 이름 `INC4`와 실제 백업 유형은 별개다. Full만 시험한 결과를 증분 체인 검증으로 집계하지 않는다.
 4. 실제 복원 호스트에 Full도 지원하는 수정된 KVM agent를 설치한다. 테스트 설정은 `sparse.mode=SPARSE`, `fail.on.compare=true`, `source.disk.offering=THIN`, `enabled=true`로 지정한다. `case.id`는 Full이면 `THIN-FULL-900GiB-S4k-R1`, 증분이면 `THIN-INC4-900GiB-S4k-R1`로 구분한다. 위의 로그 수집 절차에 따라 새 case ID로 수집을 시작한 뒤, 종료된 원본 VM에 900GiB 백업을 직접 복원한다. 기존 VM과 새 인스턴스 복원은 같은 NAS 파일 볼륨 변환 함수를 사용하므로, 이번 대용량 변환·부팅 검증은 원본 VM 직접 복원으로 진행할 수 있다. 다중 디스크 복원이 끝날 때까지 설정을 유지하고, 결과에는 `기존 VM 직접 복원`으로 기록한다. 새 인스턴스 생성 절차 자체는 별도 검증 범위다.
 5. ROOT/DATA 각각에서 `QCOW2_CONVERT_BEGIN`의 `sparseSize=[4k]`, 요약의 가상 용량 일치, `targetCheckExitCode=0`, `compareExitCode=0`, `backingFileRemaining=false`를 확인한다. `QCOW2_TEST_SKIPPED`이거나 실제 옵션을 확인하지 못한 결과는 `-S 4k` 성공으로 집계하지 않는다.
-6. 복원된 원본 VM을 부팅해 Windows 로그인과 데이터 볼륨 접근을 확인한다. 드라이브 문자가 F:인지 확인하고, VM 밖에 보관한 INC4.csv를 `C:\Temp\INC4.csv`로 가져와 검증한다. 검증은 기존 테스트 파일을 읽고 해시를 비교한다.
-
-   ```powershell
-   powershell.exe -NoProfile -ExecutionPolicy Bypass -File C:\NasIncrementalTest.ps1 -Stage VERIFY -DataDrive F -ExpectedStage INC4 -ExpectedManifest C:\Temp\INC4.csv 2>&1 | Tee-Object -FilePath C:\Temp\VERIFY-INC4-900GiB-S4k-R1.txt
-   ```
-
-   `PASS: both disks match the external INC4 manifest; deleted files are absent.`와 Windows 정상 부팅 결과를 함께 보관한다. 테스트 후 호스트 설정을 `enabled=false`로 돌린다.
+6. 복원된 원본 VM을 부팅해 Windows 로그인과 F: 데이터 볼륨 접근을 확인한다. 호스트 진단 로그와 Windows 정상 부팅 결과를 함께 보관한다. 테스트 후 호스트 설정을 `enabled=false`로 돌린다.
 
 원본 VM에 복원이 완료되면 해당 VM의 활성 증분 체인은 `vm-restore-completed` 사유로 봉인된다. 이후 첫 백업이 FULL로 시작하는 것은 정상 동작이다. 증분 체인까지 검증할 계획이면 해당 증분 백업을 먼저 완료한 뒤 직접 복원한다.
 
-판정은 **900GiB DATA를 가진 이번 VM·NAS/QCOW2 Full 또는 증분 체인·QEMU 버전·스토리지 조합에서 `-S 4k` 변환, 이미지 검증, 부팅 및 파일 검증을 통과했음**으로 실제 백업 유형과 함께 기록한다. 한 번의 부팅 성공이나 특정 용량만으로 다른 환경 전체의 안전성을 보장하지 않는다. 운영 적용 환경이 다르면 해당 조합에서 검증한다.
+판정은 **900GiB DATA를 가진 이번 VM·NAS/QCOW2 Full 또는 증분 체인·QEMU 버전·스토리지 조합에서 `-S 4k` 변환, 이미지 검증 및 부팅을 통과했음**으로 실제 백업 유형과 함께 기록한다. 게스트 파일 해시 검증은 미실시로 기록한다. 한 번의 부팅 성공이나 특정 용량만으로 다른 환경 전체의 안전성을 보장하지 않는다. 운영 적용 환경이 다르면 해당 조합에서 검증한다.
 
 ### 복원 진행 화면
 
@@ -212,10 +212,10 @@ zgrep -H -E 'WORKER_LOGGING_INITIALIZED|QCOW2_|phase=\[CONVERT\]' \
 2. 원본 오퍼링 정보, 정지 상태에서의 `qemu-img info --output=json` / `stat`, QEMU/libvirt 버전, NAS와 primary의 filesystem/mount 설정, 여유 공간을 보관한다. 실행 중인 원본 디스크에는 `qemu-img check`를 실행하지 않는다.
 3. 게스트에 재현 가능한 동일한 데이터를 약 500 GB 작성하고 `sync` 후 FULL을 백업한다. 데이터에는 비제로 영역과 알려진 제로 영역을 포함한다.
 4. 약 100 GB를 추가해 INC1, 기존 파일 수정·삭제·신규 추가로 INC2, 약 100 GB의 추가 변경으로 INC3를 백업한다. 파일 삭제만으로 해당 블록이 0이 되지는 않을 수 있으므로 discard/fstrim 사용 여부를 통일하고 기록한다.
-5. 각 단계의 파일 목록·checksum·filesystem 상태를 보관하고, INC3 시점의 manifest를 VM 외부로 복사한다. 모든 오퍼링에서 동일한 데이터와 변경 패턴을 사용한다.
+5. 각 단계의 데이터 생성 완료 여부와 파일 논리 용량, filesystem 상태를 기록한다. 모든 오퍼링에서 동일한 데이터와 변경 패턴을 사용한다.
 6. 동일한 `INC3 → INC2 → INC1 → FULL`을 두 mode로 복원한다. 백업 chain에 쓰기가 진행되지 않는 상태에서 각 복원 전 대상 VM/볼륨 상태를 동일하게 맞춘다. 백업 파일 checksum도 복원 전후에 확인한다.
 7. 최초 부팅 전에 호스트 진단 로그를 보관한다. 부팅 이후에는 게스트가 데이터를 변경하므로 부팅한 디스크를 INC3와 compare하지 않는다.
-8. 복원 VM을 격리된 동일 네트워크/부팅 조건에서 시작하고 부팅 성공 여부, kernel I/O 오류, 전체 검증 파일 checksum, 삭제한 파일이 없는지 확인한다.
+8. 복원 VM을 격리된 동일 네트워크/부팅 조건에서 시작하고 부팅 성공 여부, kernel I/O 오류와 데이터 볼륨 접근을 확인한다. 게스트 파일 해시 검증은 미실시로 기록한다.
 9. filesystem 검사는 unmount 상태 또는 rescue 환경에서 수행한다. ext 계열은 `e2fsck -fn`, XFS는 `xfs_repair -n` 등 해당 filesystem의 읽기 검사 명령을 사용한다. 부팅·게스트 검사 결과는 호스트 compare/check 결과와 별도로 기록한다.
 10. 1회 성공만으로 대용량 안전성을 보장하지 않는다. 케이스 반복과 당시 문제 환경에 가까운 부하 조건으로 재확인한다.
 
