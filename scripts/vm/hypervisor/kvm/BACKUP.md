@@ -345,7 +345,7 @@ Mold의 백업 상태는 VM 백업 전체의 결과다. 단계는 현재 처리 
 
 | 표시 | 의미 |
 | --- | --- |
-| `BackingUp` | VM 백업을 진행 중이다. 현재 볼륨과 단계를 확인한다. |
+| `BackingUp` | VM 백업을 진행 중이다. 단계를 확인하고, 볼륨 정보를 제공하는 경로에서는 현재 볼륨도 확인한다. |
 | `BackedUp` | 필요한 볼륨과 메타데이터 저장을 완료했다. |
 | `Restoring` | 복원 파일을 가져오거나 실제 VM 볼륨을 복원 중이다. |
 | `Failed` | 작업이 실패했다. 실패 사유와 임시 파일 정리 상태를 함께 확인한다. |
@@ -364,7 +364,7 @@ VM 복원 완료나 게스트 OS 부팅 성공을 의미하지 않는다.
 | --- | --- |
 | `WAITING` | 공통 스테이징과 기본스토리지 용량, 동시 실행 수의 허용을 기다린다. |
 | `PREPARING` | 외부 기준 작업의 준비 완료를 기다리고 원본 디스크 읽기 작업을 준비한다. 볼륨별 외부 백업 경로에서 사용한다. |
-| `QCOW2_BACKUP` | QCOW2 볼륨의 데이터를 백업 파일로 복사 중이다. |
+| `QCOW2_BACKUP` | QCOW2 데이터를 백업 파일로 복사 중이다. NAS는 VM 단위 백업 작업을, 외부 솔루션의 볼륨별 경로는 현재 볼륨의 파일 생성을 표시한다. |
 | `RBD_EXPORT` / `RBD_EXPORT_DIFF` | RBD 볼륨의 전체 데이터 또는 변경분을 내보내는 중이다. |
 | `COMMVAULT_TRANSFER` / `NETBACKUP_TRANSFER` / `VEEAM_TRANSFER` | 생성한 볼륨 파일을 해당 솔루션의 저장소로 전송 중이다. |
 | `METADATA_TRANSFER` | 모든 볼륨을 연결하는 VM 정보와 복원용 메타데이터를 저장 중이다. |
@@ -380,7 +380,20 @@ WAITING → PREPARING
 ```
 
 NAS는 볼륨 파일을 NAS에 직접 저장하므로 외부 전송 단계가 없다.
-진행률은 작업 단계와 볼륨별 처리량을 바탕으로 계산하며, 전체 디스크 바이트의 복사 비율과 항상 같지는 않다.
+
+#### 솔루션·백업 엔진별 진행 표시
+
+단계 코드가 같더라도 작업을 실행하고 진행률을 제공하는 단위는 백업 경로에 따라 다르다.
+
+| 백업 경로 | 단계와 볼륨 표시 | 진행률 기준 |
+| --- | --- | --- |
+| NAS / QCOW2 | `QCOW2_BACKUP`을 표시하며 현재 볼륨 `1/2`, `2/2`는 제공하지 않는다. 여러 디스크를 하나의 libvirt VM 백업 작업으로 실행한다. | `virsh domjobinfo`의 VM 백업 작업 전체 처리량을 백업 진행 구간으로 환산한다. 특정 볼륨 하나의 진행률이 아니다. |
+| NAS / Glue RBD | `RBD_EXPORT` 또는 `RBD_EXPORT_DIFF`와 현재 볼륨 번호를 제공한다. 볼륨별로 내보내고 NAS에 저장한다. | 현재 볼륨 처리량과 볼륨 순서로 계산한다. 증분 내보내기처럼 총 처리량을 알 수 없는 경우 진행률을 표시하지 않을 수 있다. |
+| Commvault·NetBackup·Veeam / 볼륨별 백업 | 현재 볼륨 번호와 파일 생성·`*_TRANSFER` 단계를 제공한다. 볼륨별 생성·전송을 반복한 뒤 `METADATA_TRANSFER`로 진행한다. | 각 볼륨의 생성·전송 구간과 마지막 메타데이터 저장 구간에 배분한 비율로 계산한다. |
+
+화면은 작업 상태 API가 볼륨 번호와 전체 볼륨 수를 함께 제공할 때만 `볼륨: 1/2`처럼 표시한다.
+예를 들어 NAS QCOW2에서 `BackingUp / RUNNING / QCOW2_BACKUP / 11%`만 표시되는 것은 정상이며, ROOT·DATA 중 어느 볼륨을 처리 중인지 나타내는 값은 아니다.
+이 진행률들은 전체 백업의 모든 처리 시간을 측정한 값이나 모든 디스크의 단순 바이트 복사 비율과는 다르다. `BackedUp`이 되어야 전체 백업이 완료된다.
 
 #### NAS 증분 실패와 Full 재시도
 
@@ -785,7 +798,7 @@ Host마다 별도의 복원 파일을 한 벌씩 만든다는 의미가 아니�
 
 #### 실행 Host의 작업·예약·복원 기록
 
-Host의 작업 기록 루트는 `/var/lib/ablestack/backup/jobs`이다.
+Host의 백업·복원 관리 기록은 `/var/lib/ablestack/backup/` 아래에 보관하며, 작업별 상태와 실행 파일의 루트는 `jobs/`이다.
 아래의 `<작업 ID>`는 백업에서는 백업 UUID, 복원에서는 별도로 발급한 복원 작업 ID다.
 각 파일은 해당 실행 방식과 진행 단계에서 필요할 때 생성되며, 모든 작업에 항상 존재하는 것은 아니다.
 
@@ -796,16 +809,33 @@ Host의 작업 기록 루트는 `/var/lib/ablestack/backup/jobs`이다.
 | 백업 계획과 진행 기록 | 위 백업 작업 디렉터리 | `backup-command.json`, `volume-plan.json`, `volume-progress.properties`, 외부 전송 요청·확인 및 정리 기록 |
 | 이전 증분 기준 정리 기록 | `/var/lib/ablestack/backup/jobs/<백업 UUID>/source-cleanup.json` | 이번 백업이 사용한 parent와 현재 기준, RBD 스냅샷 또는 QCOW2 비트맵의 정리 결과·대기 사유 |
 | 복원 계획과 진행 기록 | 위 복원 작업 디렉터리 | `restore-command.json`, `volume-restore-plan.json`, `restore-capacity-plan.json`, 외부 복원 요청·확인 및 정리 기록 |
+| 백업 시작 기록 | `/var/lib/ablestack/backup/backup-start/<백업 UUID>.json`, 같은 이름의 `.lock` | 백업 시작 준비·요청 전달·실제 시작 여부를 기록한다. 잠금과 시작 기록으로 같은 작업의 중복 시작이나 시작이 차단된 요청의 뒤늦은 실행을 방지한다. |
 | 실행 허용 요청·확인 | 해당 작업 디렉터리 | `staging-admission-plan.json`, `staging-admission-request.json`, `staging-admission-granted` 등 |
 | 공유 스테이징 예약 | `<root>/.volume-reservations/` | `<작업 ID>.json` 예약량, `filesystem.id` 파일시스템 식별값, `capacity.lock` 동시 예약 제어 |
 | 실행 허용 종료 기록 | `/var/lib/ablestack/backup/staging-admission-closed/<작업 ID>.closed` | 작업 디렉터리 정리 후에도 같은 작업이 다시 공간을 예약하지 않도록 보관하는 기록 |
-| 복원 시작 기록 | `/var/lib/ablestack/backup/restore-start/<복원 작업 ID>.json` | 볼륨별 복원의 시작 요청·초기화 결과 |
+| 복원 시작 기록 | `/var/lib/ablestack/backup/restore-start/<복원 작업 ID>.json`, 같은 이름의 `.lock` | 볼륨별 복원의 시작 준비·초기화 결과를 기록한다. 잠금과 시작 기록으로 중복 시작이나 시작이 차단된 요청의 뒤늦은 실행을 방지한다. |
 | 복원 볼륨 교체 기록 | `/var/lib/ablestack/backup/jobs/restore-transactions/<대상 VM>/<트랜잭션 ID>.properties` | 볼륨 준비·교체·원상 복구와 정리 진행 기록 |
 | VM 복원 결과 | `/var/lib/ablestack/backup/restore-outcomes/<복원 작업 ID>.json` | 볼륨별 복원의 결과와 기본스토리지 정리 상태. 작업 디렉터리와 별도로 보관한다. |
 
 이 기록들은 실행 Host에 생성한다. 공유 스테이징이 다른 Host에서도 보이는 것과 별개이므로
 `job.log`는 스테이징 관리에 표시된 작업 Host에서 확인한다.
+필요한 실행 경로와 진행 단계에서 디렉터리를 생성하므로 Host마다 디렉터리 구성이 다를 수 있다. 같은 경로명이어도 각 Host의 기록은 별개다.
+백업·복원 시작 기록, 실행 허용 종료 기록과 VM 복원 결과는 작업 디렉터리 정리 후에도 중복 실행 제어와 결과 확인에 사용하므로 별도로 보존한다.
 작업 디렉터리의 로그·계획 파일이 남아 있다는 사실만으로 데이터 파일이나 용량 예약이 남았다고 판단하지 않는다.
+
+#### NetBackup Host 연동 기록
+
+NetBackup Host 연동 스크립트의 기본 상태 경로는 `/var/lib/ablestack/netbackup/`이며, `STATE_ROOT`로 지정할 수 있다.
+이 스크립트나 복원 감시기를 사용할 때 필요한 디렉터리와 파일을 생성한다. 공통 작업 기록인 `/var/lib/ablestack/backup/`과 함께 관리한다.
+
+| 디렉터리·파일 | 용도 |
+| --- | --- |
+| `contexts/` | 백업 시작·종료 알림 사이에 이어받을 작업 정보와 진행 표시를 저장한다. |
+| `locks/` | 같은 작업에 대한 연동 스크립트의 동시 실행을 제어한다. |
+| `sessions/` | 해당 연동 작업에서 조회한 Mold VM 목록 등 API 응답을 보관한다. |
+| `runtime/` | 정책별 실행 환경과 작업 기록을 저장한다. |
+| `restore-watcher-state.json` | 복원 감시기의 처리 상태를 저장한다. 기본 파일 경로이며 감시기 설정에 따라 지정할 수 있다. |
+| `restore-watcher.lock` | 복원 감시기의 중복 실행을 제어한다. 기본 파일 경로이며 감시기 설정에 따라 지정할 수 있다. |
 
 #### 기본스토리지의 백업·복원 작업 파일
 
