@@ -20,6 +20,8 @@ import { shallowMount } from '@vue/test-utils'
 import VmBackupsTab from '@/views/compute/VmBackupsTab.vue'
 import { getAPI, postAPI } from '@/api'
 import eventBus from '@/config/eventBus'
+import storage from '@/config/section/storage'
+import offering from '@/config/section/offering'
 jest.mock('@/api', () => ({ getAPI: jest.fn(), postAPI: jest.fn() }))
 jest.mock('@/store', () => ({ getters: { userInfo: { roletype: 'Admin' }, apis: {}, features: {} } }))
 jest.mock('@/utils/listRefresh', () => ({ ...jest.requireActual('@/utils/listRefresh'), canRefreshList: () => true }))
@@ -81,6 +83,58 @@ test('actual provider rules prohibit Veeam and NetBackup deletion but allow supp
   expect(w.vm.visible('deleteBackup', row)).toBe(true)
   expect(w.vm.disabled('restoreBackup', { ...row, status: 'Failed' })).toBe(true)
   delete w.vm.$store.getters.apis.deleteBackup; expect(w.vm.visible('deleteBackup', row)).toBe(false); w.unmount()
+})
+test('expunged source disables only in-place restore while retained backup actions stay available', async () => {
+  const w = mount(); await flush()
+  const retained = { ...row, provider: 'ablestack-nas', restoreavailable: true, vmrestoreavailable: false, isbackupvmexpunged: true }
+  expect(w.vm.disabled('restoreBackup', retained)).toBe(true)
+  expect(w.vm.disabled('restoreVolumeFromBackupAndAttachToVM', retained)).toBe(false)
+  expect(w.vm.disabled('createVMFromBackup', retained)).toBe(false)
+  expect(w.vm.disabled('deleteBackup', retained)).toBe(false)
+  expect(w.vm.definition('restoreBackup').tooltip(retained)).toBe('message.backup.original.vm.unavailable')
+  w.unmount()
+})
+test('opening restore rechecks whether the original instance was expunged', async () => {
+  const w = mount(); await flush()
+  const backup = { ...row, provider: 'ablestack-nas' }
+  getAPI.mockResolvedValue(response([{ ...backup, vmrestoreavailable: false }]))
+  await w.vm.openAction('restoreBackup', backup)
+  expect(w.vm.selected).toBeNull()
+  expect(w.vm.$notifyError).toHaveBeenCalled()
+  expect(postAPI).not.toHaveBeenCalled()
+  w.unmount()
+})
+test('original VM restore rules leave existing providers unchanged', async () => {
+  const w = mount(); await flush()
+  for (const provider of ['nas', 'commvault', 'netbackup', 'veeam', 'kboss']) {
+    const legacy = { ...row, provider, vmrestoreavailable: false, isbackupvmexpunged: true }
+    expect(w.vm.disabled('restoreBackup', legacy)).toBe(false)
+    expect(w.vm.definition('restoreBackup').tooltip(legacy)).toBe('label.backup.restore')
+  }
+  w.unmount()
+})
+test('offering removal explains each ABLESTACK providers retention policy', async () => {
+  const w = mount(); await flush()
+  const action = w.vm.definition('removeVirtualMachineFromBackupOffering')
+  for (const backupprovider of ['ablestack-nas', 'ablestack-commvault', 'ablestack-netbackup', 'ablestack-veeam']) {
+    expect(action.message({ backupprovider })).toBe('message.backup.offering.remove.preserve')
+    expect(action.args({ backupprovider })).toEqual(['virtualmachineid'])
+  }
+  expect(action.message({ backupprovider: 'nas' })).toBe('message.backup.offering.remove')
+  expect(action.args({ backupprovider: 'nas' })).toEqual(['virtualmachineid', 'forced'])
+  const backupAction = storage.children.find(item => item.name === 'backup').actions.find(item => item.api === 'removeVirtualMachineFromBackupOffering')
+  expect(backupAction.message({ provider: 'ablestack-nas' })).toBe('message.backup.offering.remove.preserve')
+  expect(backupAction.message({ provider: 'ablestack-commvault' })).toBe('message.backup.offering.remove.preserve')
+  expect(backupAction.mapping.forced.value({ provider: 'ablestack-commvault' })).toBe(false)
+  expect(backupAction.mapping.forced.value({ provider: 'commvault' })).toBe(true)
+  w.unmount()
+})
+
+test('deleting an imported Commvault offering explains BackupSet cleanup', () => {
+  const action = offering.children.find(item => item.name === 'backupoffering').actions.find(item => item.api === 'deleteBackupOffering')
+  expect(action.message({ provider: 'ablestack-commvault' })).toBe('message.backup.offering.delete.commvault')
+  expect(action.message({ provider: 'ablestack-nas' })).toBe('message.action.delete.backup.offering')
+  expect(action.message({ provider: 'commvault' })).toBe('message.action.delete.backup.offering')
 })
 test('Commvault cancel action disappears after the host export submits a Commvault job', async () => {
   const w = mount(); await flush()

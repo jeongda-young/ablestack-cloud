@@ -17,6 +17,7 @@
 
 import { shallowRef, defineAsyncComponent } from 'vue'
 import store from '@/store'
+import { getAblestackBackupOfferingRemovalMessage, isAblestackBackupProvider, isAblestackOriginalVmUnavailable } from '@/utils/ablestackBackupPolicy'
 import { isZoneCreated } from '@/utils/zone'
 import { isAdmin } from '@/role'
 
@@ -610,8 +611,10 @@ export default {
           isFetchData: false,
           dataView: true,
           show: (record) => { return ['BackingUp', 'BackedUp', 'Restoring'].includes(record.status) },
-          disabled: (record) => { return record.restoreavailable === false || isBackupOperationInProgress(record) },
-          tooltip: (record) => getBackupOperationActionTooltip(record, 'label.backup.restore'),
+          disabled: (record) => { return isAblestackOriginalVmUnavailable(record) || record.restoreavailable === false || isBackupOperationInProgress(record) },
+          tooltip: (record) => isAblestackOriginalVmUnavailable(record)
+            ? 'message.backup.original.vm.unavailable'
+            : getBackupOperationActionTooltip(record, 'label.backup.restore'),
           args: () => {
             const fields = []
             fields.push('quickrestore')
@@ -710,7 +713,7 @@ export default {
           api: 'removeVirtualMachineFromBackupOffering',
           icon: 'scissor-outlined',
           label: 'label.backup.offering.remove',
-          message: 'message.backup.offering.remove',
+          message: getAblestackBackupOfferingRemovalMessage,
           dataView: true,
           show: (record) => { return record.state !== 'Destroyed' && record.vmbackupofferingremoved !== true },
           disabled: (record) => { return isBackupOperationInProgress(record) },
@@ -718,7 +721,7 @@ export default {
           args: ['forced', 'virtualmachineid'],
           mapping: {
             forced: {
-              value: (record) => { return true }
+              value: (record) => !isAblestackBackupProvider(record)
             },
             virtualmachineid: {
               value: (record) => { return record.virtualmachineid }

@@ -82,6 +82,7 @@ import { listRefreshMixin } from '@/utils/listRefreshMixin'
 import compute from '@/config/section/compute'
 import storage from '@/config/section/storage'
 import eventBus from '@/config/eventBus'
+import { isAblestackOriginalVmUnavailable } from '@/utils/ablestackBackupPolicy'
 import BackupProgress from '@/components/view/BackupProgress'
 
 const vmApis = ['createBackup', 'assignVirtualMachineToBackupOffering', 'removeVirtualMachineFromBackupOffering', 'createBackupSchedule', 'finishBackupChain']
@@ -121,6 +122,7 @@ export default {
     definition (api) { return (vmApis.includes(api) ? compute.children.find(item => item.name === 'vm') : storage.children.find(item => item.name === 'backup'))?.actions.find(action => action.api === api) },
     provider (row) { return (row?.provider || this.resource.backupprovider || '').toLowerCase() },
     context (row = this.resource) { return row === this.resource ? row : { ...row, provider: this.provider(row) } },
+    originalVmUnavailable (api, row) { return api === 'restoreBackup' && isAblestackOriginalVmUnavailable({ ...row, provider: this.provider(row) }) },
     visible (api, row = this.resource) {
       if (api === 'deleteBackup' && ['veeam', 'ablestack-veeam', 'netbackup', 'ablestack-netbackup'].includes(this.provider(row)) && row.deleteallowed !== true) return false
       const action = this.definition(api)
@@ -162,7 +164,7 @@ export default {
           const result = await getAPI('listBackups', { id: row.id, virtualmachineid: this.resource.id, listvmdetails: true })
           fresh = result.listbackupsresponse.backup?.find(item => item.id === row.id && item.virtualmachineid === this.resource.id)
           if (scope !== this.scopeKey || this.listRefreshDisposed) return
-          if (!fresh || !this.visible(api, fresh) || (['restoreBackup', 'restoreVolumeFromBackupAndAttachToVM', 'createVMFromBackup'].includes(api) && fresh.restoreavailable === false)) throw new Error(this.$t('message.vmbackup.unavailable'))
+          if (!fresh || !this.visible(api, fresh) || this.originalVmUnavailable(api, fresh) || (['restoreBackup', 'restoreVolumeFromBackupAndAttachToVM', 'createVMFromBackup'].includes(api) && fresh.restoreavailable === false)) throw new Error(this.$t('message.vmbackup.unavailable'))
         }
         this.actionApi = api; this.selected = { ...fresh }; this.quickrestore = false; this.forced = false; this.hostId = undefined; this.hosts = []
         if (api === 'restoreBackup' && this.isAdmin && this.allowed('listHosts')) {
@@ -188,7 +190,7 @@ export default {
         if (scope !== this.scopeKey || this.listRefreshDisposed) return
         const fresh = backups.listbackupsresponse.backup?.find(item => item.id === selected.id && item.virtualmachineid === this.resource.id)
         const vm = machines.listvirtualmachinesresponse.virtualmachine?.find(item => item.id === this.resource.id)
-        if (!fresh || !vm || (!cancelWaiting && (vm.hostcontrolstate === 'Offline' || activeStates.includes(fresh.status))) || !this.visible(api, fresh) || (cancelWaiting && fresh.stagingqueue.stagingjobid !== params.stagingjobid) || (api === 'restoreBackup' && fresh.restoreavailable === false)) throw new Error(this.$t('message.vmbackup.unavailable'))
+        if (!fresh || !vm || this.originalVmUnavailable(api, fresh) || (!cancelWaiting && (vm.hostcontrolstate === 'Offline' || activeStates.includes(fresh.status))) || !this.visible(api, fresh) || (cancelWaiting && fresh.stagingqueue.stagingjobid !== params.stagingjobid) || (api === 'restoreBackup' && fresh.restoreavailable === false)) throw new Error(this.$t('message.vmbackup.unavailable'))
         if (!this.isAdmin || !this.quickrestore || !this.allowed('listHosts')) delete params.hostid
         sent = true
         const result = await postAPI(api, params)

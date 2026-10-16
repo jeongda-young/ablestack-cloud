@@ -326,6 +326,8 @@ public class UserVmManagerImplTest {
 
     @Mock
     BackupManager backupManager;
+    @Mock
+    org.apache.cloudstack.backup.AblestackBackupVmRemovalGuard ablestackBackupVmRemovalGuard;
 
     @Mock
     VirtualMachineManager virtualMachineManager;
@@ -3506,6 +3508,7 @@ public class UserVmManagerImplTest {
         when(backupDao.findById(backupId)).thenReturn(backup);
 
         UserVmVO userVmVO = new UserVmVO();
+        userVmVO.setRemoved(new Date());
         when(userVmDao.findByIdIncludingRemoved(vmId)).thenReturn(userVmVO);
         VMTemplateVO template = mock(VMTemplateVO.class);
         when(template.getFormat()).thenReturn(Storage.ImageFormat.QCOW2);
@@ -3832,6 +3835,18 @@ public class UserVmManagerImplTest {
     }
 
     @Test
+    public void testAblestackVmRemovalUsesDedicatedVolumePath() {
+        UserVmVO vm = mock(UserVmVO.class);
+        when(vm.getId()).thenReturn(vmId);
+        VolumeVO volume = mock(VolumeVO.class);
+        when(volume.getId()).thenReturn(4L);
+        when(ablestackBackupVmRemovalGuard.supports(vmId)).thenReturn(true);
+        ReflectionTestUtils.invokeMethod(userVmManagerImpl, "detachVolumeForVmRemoval", vm, volume);
+        verify(volumeApiService).detachVolumeForAblestackVmRemoval(vmId, 4L);
+        verify(volumeApiService, never()).detachVolumeViaDestroyVM(anyLong(), anyLong());
+    }
+
+    @Test
     public void testDestroyVm() throws ResourceUnavailableException {
         Long volumeId = 4L;
         Long accountId = 5L;
@@ -3873,6 +3888,7 @@ public class UserVmManagerImplTest {
             when(diskOfferingDao.findById(10L)).thenReturn(diskOffering);
 
             List<VolumeVO> dataVolumes = new ArrayList<>();
+            dataVolumes.add(vol);
             when(volumeDaoMock.findByInstanceAndType(vmId, Volume.Type.DATADISK)).thenReturn(dataVolumes);
 
             doReturn(vm).when(userVmManagerImpl).stopVirtualMachine(anyLong(), anyBoolean());
@@ -3887,6 +3903,8 @@ public class UserVmManagerImplTest {
                 assertEquals(vm, result);
                 Mockito.verify(userVmManagerImpl).stopVirtualMachine(vmId, false);
                 Mockito.verify(backupManager).checkAndRemoveBackupOfferingBeforeExpunge(vm);
+                Mockito.verify(volumeApiService).detachVolumeViaDestroyVM(vmId, volumeId);
+                Mockito.verify(volumeApiService, never()).detachVolumeForAblestackVmRemoval(anyLong(), anyLong());
             }
         }
     }

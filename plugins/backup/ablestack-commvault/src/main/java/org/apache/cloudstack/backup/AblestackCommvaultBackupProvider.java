@@ -50,6 +50,7 @@ import com.cloud.utils.Pair;
 import com.cloud.utils.Ternary;
 import com.cloud.utils.component.AdapterBase;
 import com.cloud.utils.exception.CloudRuntimeException;
+import com.cloud.utils.db.SearchCriteria;
 import com.cloud.event.ActionEventUtils;
 import com.cloud.event.EventTypes;
 import com.cloud.event.EventVO;
@@ -64,7 +65,6 @@ import com.cloud.vm.snapshot.dao.VMSnapshotDao;
 import com.cloud.vm.snapshot.dao.VMSnapshotDetailsDao;
 import org.apache.cloudstack.api.response.BackupStagingInfoResponse;
 import org.apache.cloudstack.api.ApiCommandResourceType;
-import org.apache.cloudstack.api.ServerApiException;
 import org.apache.cloudstack.storage.datastore.db.StoragePoolVO;
 import org.apache.cloudstack.storage.datastore.db.SnapshotDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.PrimaryDataStoreDao;
@@ -73,6 +73,7 @@ import org.apache.cloudstack.backup.commvault.AblestackCommvaultClient;
 import org.apache.cloudstack.backup.dao.BackupDao;
 import org.apache.cloudstack.backup.dao.BackupDetailsDao;
 import org.apache.cloudstack.backup.dao.BackupOfferingDao;
+import org.apache.cloudstack.backup.dao.BackupOfferingDetailsDao;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreManager;
 import org.apache.cloudstack.framework.config.ConfigKey;
@@ -119,7 +120,7 @@ import static org.apache.cloudstack.backup.BackupManager.BackupDataOperationTime
 import static org.apache.cloudstack.backup.BackupManager.BackupQosBandwidthLimitMbps;
 import static org.apache.cloudstack.backup.BackupManager.KvmIncrementalBackup;
 
-public class AblestackCommvaultBackupProvider extends AdapterBase implements BackupProvider, Configurable {
+public class AblestackCommvaultBackupProvider extends AdapterBase implements BackupProvider, Configurable, AblestackBackupOfferingLifecycle {
 
     private static final Logger LOG = LogManager.getLogger(AblestackCommvaultBackupProvider.class);
     private final ThreadLocal<Boolean> detachedRestoreStart = ThreadLocal.withInitial(() -> false);
@@ -129,6 +130,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
     private static final String BACKUP_TYPE_INCREMENTAL = "INCREMENTAL";
     private static final String BACKUP_ENGINE_QCOW2 = "QCOW2";
     private static final String BACKUP_ENGINE_RBD_DIFF = "RBD_DIFF";
+    private static final String MANAGED_BACKUP_SET_PREFIX = "commvault.managed.backupset.";
     private static final long COMMVAULT_INSTALL_JOB_POLL_INTERVAL_MS = TimeUnit.SECONDS.toMillis(30);
     private static final long COMMVAULT_INSTALL_JOB_WAIT_TIMEOUT_MS = TimeUnit.HOURS.toMillis(12);
     private static final String DETAIL_CHECKPOINT_NAME = "commvault.checkpoint.name";
@@ -192,6 +194,9 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
 
     @Inject
     private BackupOfferingDao backupOfferingDao;
+
+    @Inject
+    private BackupOfferingDetailsDao backupOfferingDetailsDao;
 
     @Inject
     private HostDao hostDao;
@@ -362,15 +367,8 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         BackupOfferingVO vmBackupOffering = backupOfferingDao.findById(vm.getBackupOfferingId());
         String planId = vmBackupOffering.getExternalId();
 
-        // 클라이언트의 백업세트 조회하여 호스트 정의
-        String checkVm = client.getVmBackupSetId(vmHost.getName(), vm.getInstanceName());
-        if (checkVm == null) {
-            String clientId = client.getClientId(vmHost.getName());
-            String applicationId = client.getApplicationId(clientId);
-            boolean result = client.createBackupSet(vm.getInstanceName(), applicationId, clientId, planId);
-            if (!result) {
-                throw new CloudRuntimeException("Execution of the API that creates a backup set of a virtual machine on the host failed.");
-            }
+        if (!prepareManagedBackupSet(client, vmHost, vm, vmBackupOffering)) {
+            throw new CloudRuntimeException("Unable to prepare the Commvault VM BackupSet with the selected Plan");
         }
 
         final String backupPath = buildBackupPath(vm);
@@ -2156,9 +2154,18 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         }
         final AblestackCommvaultClient client = getClient(vm.getDataCenterId());
         final Host host = getVMHypervisorHostForBackup(vm);
-        String clientId = client.getClientId(host.getName());
-        String applicationId = client.getApplicationId(clientId);
-        return client.createBackupSet(vm.getInstanceName(), applicationId, clientId, backupOffering.getExternalId());
+        return prepareManagedBackupSet(client, host, vm, backupOffering);
+    }
+
+    private boolean prepareManagedBackupSet(AblestackCommvaultClient client, Host host, VirtualMachine vm, BackupOffering offering) {
+        final String id = client.prepareVmBackupSet(host.getName(), vm.getInstanceName(), offering.getExternalId());
+        if (StringUtils.isBlank(id)) { return false; }
+        // VM이나 호스트의 DB 이력이 정리된 뒤에도 오퍼링 삭제 시 관리 대상 BackupSet을 찾을 수 있도록 기록한다.
+        final AblestackCommvaultClient.VmBackupSet managed = new AblestackCommvaultClient.VmBackupSet(
+                host.getName(), vm.getInstanceName(), id, offering.getExternalId());
+        backupOfferingDetailsDao.addDetail(offering.getId(), MANAGED_BACKUP_SET_PREFIX + host.getId() + "." + vm.getId(),
+                new Gson().toJson(managed), false);
+        return true;
     }
 
     private void validateNoKvmFileBasedVmSnapshots(VirtualMachine vm) {
@@ -2217,71 +2224,69 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
 
     @Override
     public boolean removeVMFromBackupOffering(VirtualMachine vm) {
-        final AblestackCommvaultClient client = getClient(vm.getDataCenterId());
-        final List<BackupVO> backupsToCleanup = listCommvaultBackupsForOfferingRemoval(vm);
-        List<HostVO> Hosts = hostDao.findByDataCenterId(vm.getDataCenterId());
-        boolean allDeleted = true;
-        for (final HostVO host : Hosts) {
-            if (host.getHypervisorType() == Hypervisor.HypervisorType.KVM) {
-                String backupSetId = client.getVmBackupSetId(host.getName(), vm.getInstanceName());
-                if (backupSetId != null) {
-                    try {
-                        boolean deleted = client.deleteBackupSet(backupSetId);
-                        if (!deleted) {
-                            allDeleted = false;
-                            LOG.error("Failed to delete backupSetId: " + backupSetId +" for VM: " + vm.getInstanceName());
-                        }
-                    } catch (ServerApiException e) {
-                        throw new CloudRuntimeException(String.format("Failed to delete Commvault backupSet [%s] for VM [%s] on host [%s]. %s",
-                                backupSetId, vm.getInstanceName(), host.getName(), e.getMessage()), e);
-                    }
+        // VM의 오퍼링 연결과 예약만 해제하며, 보관 백업이 사용하는 BackupSet은 유지한다.
+        return true;
+    }
+
+    @Override
+    public boolean cleanupBackupOffering(BackupOffering offering) {
+        if (!BackupProviderNameUtils.isCommvaultFamily(offering.getProvider())
+                || !backupDao.listByOfferingId(offering.getId()).isEmpty()
+                || !vmInstanceDao.listByZoneAndBackupOffering(offering.getZoneId(), offering.getId()).isEmpty()) {
+            throw new CloudRuntimeException("Commvault backup offering still has backups or assigned VMs.");
+        }
+        final Map<String, AblestackCommvaultClient.VmBackupSet> managed = new LinkedHashMap<>();
+        final Set<String> hostNames = new LinkedHashSet<>();
+        for (BackupOfferingDetailsVO detail : backupOfferingDetailsDao.listDetails(offering.getId())) {
+            if (!detail.getName().startsWith(MANAGED_BACKUP_SET_PREFIX)) { continue; }
+            final AblestackCommvaultClient.VmBackupSet reference = new Gson().fromJson(detail.getValue(), AblestackCommvaultClient.VmBackupSet.class);
+            if (reference == null || StringUtils.isAnyBlank(reference.hostName, reference.vmName, reference.backupSetId, reference.planId)
+                    || !offering.getExternalId().equals(reference.planId)) {
+                throw new CloudRuntimeException("Unable to confirm a managed Commvault BackupSet reference.");
+            }
+            managed.put(reference.hostName + ":" + reference.vmName, reference);
+            hostNames.add(reference.hostName);
+        }
+
+        // 기존 작업은 삭제된 VM·호스트 이력도 조회하여 내부 이름과 Zone으로 소유 대상을 확인한다.
+        final SearchCriteria<VMInstanceVO> vmSearch = vmInstanceDao.createSearchCriteria();
+        vmSearch.addAnd("dataCenterId", SearchCriteria.Op.EQ, offering.getZoneId());
+        vmSearch.addAnd("type", SearchCriteria.Op.EQ, VirtualMachine.Type.User);
+        final Set<String> vmNames = vmInstanceDao.searchIncludingRemoved(vmSearch, null, null, false).stream()
+                .filter(vm -> vm.getDataCenterId() == offering.getZoneId() && vm.getType() == VirtualMachine.Type.User
+                        && vm.getHypervisorType() == Hypervisor.HypervisorType.KVM)
+                .map(VirtualMachine::getInstanceName).collect(Collectors.toSet());
+        final SearchCriteria<HostVO> hostSearch = hostDao.createSearchCriteria();
+        hostSearch.addAnd("dataCenterId", SearchCriteria.Op.EQ, offering.getZoneId());
+        hostSearch.addAnd("type", SearchCriteria.Op.EQ, Host.Type.Routing);
+        hostDao.searchIncludingRemoved(hostSearch, null, null, false).stream()
+                .filter(host -> host.getDataCenterId() == offering.getZoneId() && host.getType() == Host.Type.Routing
+                        && host.getHypervisorType() == Hypervisor.HypervisorType.KVM)
+                .map(Host::getName).forEach(hostNames::add);
+
+        if (hostNames.isEmpty()) { return true; }
+        final AblestackCommvaultClient client = getClient(offering.getZoneId());
+        final List<AblestackCommvaultClient.VmBackupSet> targets = new ArrayList<>();
+        // 모든 호스트의 조회가 끝난 뒤 삭제하여 조회 오류를 대상 없음으로 처리하지 않는다.
+        for (String hostName : hostNames) {
+            for (AblestackCommvaultClient.VmBackupSet candidate : client.listVmBackupSets(hostName)) {
+                if ("defaultBackupSet".equalsIgnoreCase(candidate.vmName) || !offering.getExternalId().equals(candidate.planId)) { continue; }
+                final AblestackCommvaultClient.VmBackupSet reference = managed.get(hostName + ":" + candidate.vmName);
+                if (reference != null && !reference.backupSetId.equals(candidate.backupSetId)) {
+                    throw new CloudRuntimeException("A managed Commvault BackupSet ID has changed; verify the external configuration.");
                 }
+                if (reference != null || vmNames.contains(candidate.vmName)) { targets.add(candidate); }
             }
         }
-        if (allDeleted) {
-            cleanupCommvaultBackupsForOfferingRemoval(vm, client, backupsToCleanup);
+        for (AblestackCommvaultClient.VmBackupSet target : targets) {
+            if (!client.deleteVmBackupSet(target)) { return false; }
         }
-        return allDeleted;
+        return true;
     }
 
-    private List<BackupVO> listCommvaultBackupsForOfferingRemoval(VirtualMachine vm) {
-        return backupDao.listByVmId(null, vm.getId()).stream()
-                .filter(BackupVO.class::isInstance)
-                .map(BackupVO.class::cast)
-                .filter(this::isBackupManagedByThisProvider)
-                .peek(backupDao::loadDetails)
-                .sorted(Comparator.comparing(BackupVO::getDate, Comparator.nullsLast(Comparator.naturalOrder())).reversed())
-                .collect(Collectors.toList());
-    }
-
-    private void cleanupCommvaultBackupsForOfferingRemoval(VirtualMachine vm, AblestackCommvaultClient client, List<BackupVO> backups) {
-        for (BackupVO backup : backups) {
-            final Pair<String, String> externalIdParts = parseExternalId(backup.getExternalId());
-            final String path = externalIdParts.first();
-            final String stageHostName = getStageHostNameForCleanup(backup, client, externalIdParts.second());
-            cleanupBackupPathOnStageHost(stageHostName, path, true, vm.getInstanceName(),
-                    getBackupDetail(backup, DETAIL_CHECKPOINT_NAME), getUnreferencedQcow2CheckpointNamesAfterDelete(backup),
-                    getBackupDetail(backup, DETAIL_RBD_DISK_PATHS));
-        }
-    }
-
-    private String getStageHostNameForCleanup(Backup backup, AblestackCommvaultClient client, String jobId) {
-        final String stageHostName = getBackupDetail(backup, DETAIL_STAGE_HOST);
-        if (StringUtils.isNotBlank(stageHostName)) {
-            return stageHostName;
-        }
-        final String jobDetails = client.getJobDetails(jobId);
-        if (jobDetails != null) {
-            JSONObject jsonObject = new JSONObject(jobDetails);
-            return String.valueOf(jsonObject.getJSONObject("job").getJSONObject("jobDetail").getJSONObject("generalInfo").getJSONObject("subclient").get("clientName"));
-        }
-        throw new CloudRuntimeException(String.format("Unable to resolve stage host for Commvault backup [%s]", backup.getUuid()));
-    }
-
-    // BackupSet 삭제 시 해당 VM 백업본의 복원 가능성도 함께 영향을 받으므로 Mold 백업 이력도 정리
     @Override
     public boolean willDeleteBackupsOnOfferingRemoval() {
-        return true;
+        return false;
     }
 
     @Override

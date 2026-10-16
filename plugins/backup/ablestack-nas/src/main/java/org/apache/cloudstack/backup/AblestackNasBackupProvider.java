@@ -1140,7 +1140,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
     @Override
     public Pair<Boolean, String> restoreBackedUpVolume(Backup backup, Backup.VolumeInfo backupVolumeInfo, String hostIp, String dataStoreUuid, Pair<String, VirtualMachine.State> vmNameAndState, VirtualMachine targetVm, boolean quickRestore) {
         validateRestoreChainIntegrity(backup);
-        final VolumeVO volume = volumeDao.findByUuid(backupVolumeInfo.getUuid());
+        final VolumeVO volume = volumeDao.findByUuidIncludingRemoved(backupVolumeInfo.getUuid());
         final DiskOffering diskOffering = diskOfferingDao.findByUuid(backupVolumeInfo.getDiskOfferingId());
         if (diskOffering == null) {
             throw new CloudRuntimeException(String.format("Unable to find disk offering [%s] for backed up volume [%s]",
@@ -1177,18 +1177,17 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
             throw new CloudRuntimeException(String.format("Unable to find VM host [%s] for NAS volume restore", hostIp));
         }
 
-        Backup.VolumeInfo matchingVolume = getBackedUpVolumeInfo(backup.getBackedUpVolumes(), volume.getUuid());
+        Backup.VolumeInfo matchingVolume = getBackedUpVolumeInfo(backup.getBackedUpVolumes(), backupVolumeInfo.getUuid());
         if (matchingVolume == null) {
-            throw new CloudRuntimeException(String.format("Unable to find volume %s in the list of backed up volumes for backup %s, cannot proceed with restore", volume.getUuid(), backup));
+            throw new CloudRuntimeException(String.format("Unable to find volume %s in the list of backed up volumes for backup %s, cannot proceed with restore", backupVolumeInfo.getUuid(), backup));
         }
-        Long backedUpVolumeSize = matchingVolume.getSize();
 
         LOG.debug("Restoring vm volume {} from backup {} on the NAS Backup Provider", volume, backup);
         BackupRepository backupRepository = getBackupRepository(backup);
 
         VolumeVO restoredVolume = new VolumeVO(Volume.Type.DATADISK, null, backup.getZoneId(),
                 backup.getDomainId(), backup.getAccountId(), 0, null,
-                backup.getSize(), null, null, null);
+                backupVolumeInfo.getSize(), null, null, null);
         String volumeUUID = UUID.randomUUID().toString();
         String volumeName = volume != null ? volume.getName() : backupVolumeInfo.getUuid();
         restoredVolume.setName("RestoredVol-" + volumeName);

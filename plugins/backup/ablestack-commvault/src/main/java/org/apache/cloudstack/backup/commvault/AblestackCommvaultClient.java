@@ -936,40 +936,138 @@ public class AblestackCommvaultClient {
         return false;
     }
 
+    /** 기존 백업본과 하위 클라이언트의 백업 경로를 유지하면서 VM BackupSet을 재사용한다. */
+    public boolean ensureVmBackupSet(String hostName, String vmName, String planId) {
+        return prepareVmBackupSet(hostName, vmName, planId) != null;
+    }
+
+    // 생성 또는 재사용한 BackupSet ID를 반환하여 Mold가 관리 대상을 기록할 수 있도록 한다.
+    public String prepareVmBackupSet(String hostName, String vmName, String planId) {
+        if (StringUtils.isAnyBlank(hostName, vmName, planId) || !planId.matches("[1-9][0-9]*")) {
+            throw new CloudRuntimeException("Commvault host, VM and a valid Plan ID are required");
+        }
+        final JsonNode properties = getVmBackupSetProperties(hostName, vmName);
+        if (properties != null) {
+            if (!planId.equals(properties.path("planEntity").path("planId").asText())) {
+                throw new CloudRuntimeException("The existing Commvault VM BackupSet Plan does not match the Mold backup offering; verify the external configuration.");
+            }
+            return properties.path("backupSetEntity").path("backupsetId").asText();
+        }
+        final String clientId = getClientId(hostName);
+        final String applicationId = StringUtils.isNotBlank(clientId) ? getApplicationId(clientId) : null;
+        if (!"29".equals(applicationId) || !createBackupSet(vmName, applicationId, clientId, planId)) {
+            return null;
+        }
+        final JsonNode confirmed = getVmBackupSetProperties(hostName, vmName);
+        return confirmed != null && planId.equals(confirmed.path("planEntity").path("planId").asText())
+                ? confirmed.path("backupSetEntity").path("backupsetId").asText() : null;
+    }
+
     // GET https://<commserveIp>/commandcenter/api/Backupset?clientName=<hostName>
-    // 호스트의 VM File System BackupSet을 조회하는 API로 없는 경우 null, 있는 경우 backupsetId 반환
+    // 호스트의 VM File System BackupSet이 없으면 null, 있으면 backupsetId를 반환한다.
     public String getVmBackupSetId(String hostName, String vmName) {
+        final JsonNode properties = getVmBackupSetProperties(hostName, vmName);
+        return properties != null ? properties.path("backupSetEntity").path("backupsetId").asText() : null;
+    }
+
+    private JsonNode getVmBackupSetProperties(String hostName, String vmName) {
+        JsonNode matched = null;
+        for (JsonNode item : getBackupSetProperties(hostName)) {
+            final JsonNode entity = item.path("backupSetEntity");
+            if (vmName.equals(entity.path("backupsetName").asText()) && "29".equals(entity.path("applicationId").asText())) {
+                if (matched != null) {
+                    throw new CloudRuntimeException("Commvault VM BackupSet identity is ambiguous");
+                }
+                matched = item;
+            }
+        }
+        return matched;
+    }
+
+    // 조회 실패나 응답 오류를 BackupSet이 없는 경우로 판단하지 않는다.
+    private JsonNode getBackupSetProperties(String hostName) {
         try {
-            final HttpResponse response = get("/Backupset?clientName=" + hostName);
+            final HttpResponse response = get("/Backupset?clientName=" + java.net.URLEncoder.encode(hostName, StandardCharsets.UTF_8));
             checkResponseOK(response);
-            String jsonString = EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8);
-            ObjectMapper mapper = OBJECT_MAPPER;
-            JsonNode root = mapper.readTree(jsonString);
-            JsonNode backupSets = root.path("backupsetProperties");
-            if (!backupSets.isArray() || backupSets.isEmpty()) {
-                return null;
+            if (response.getEntity() == null) {
+                throw new CloudRuntimeException("Commvault BackupSet inventory is empty");
+            }
+            final JsonNode root = OBJECT_MAPPER.readTree(EntityUtils.toString(response.getEntity(), StandardCharsets.UTF_8));
+            if (root == null || !root.isObject()) {
+                throw new CloudRuntimeException("Commvault BackupSet inventory is invalid");
+            }
+            final JsonNode backupSets = root.path("backupsetProperties");
+            if (!backupSets.isArray() || root.path("errorCode").asInt(0) != 0) {
+                throw new CloudRuntimeException("Commvault BackupSet inventory could not be confirmed");
             }
             for (JsonNode item : backupSets) {
-                JsonNode entity = item.path("backupSetEntity");
-                String backupsetName = entity.path("backupsetName").asText();
-                String applicationId = entity.path("applicationId").asText();
-                if (vmName.equals(backupsetName) && "29".equals(applicationId)) {
-                    String backupsetId = entity.path("backupsetId").asText();
-                    if (StringUtils.isNotBlank(backupsetId)) {
-                        return backupsetId;
-                    }
+                final JsonNode entity = item.path("backupSetEntity");
+                if (!entity.isObject() || StringUtils.isBlank(entity.path("backupsetName").asText())
+                        || !entity.path("applicationId").asText().matches("[1-9][0-9]*")
+                        || !entity.path("backupsetId").asText().matches("[1-9][0-9]*")
+                        || (entity.hasNonNull("clientName") && !hostName.equalsIgnoreCase(entity.path("clientName").asText()))) {
+                    throw new CloudRuntimeException("Commvault BackupSet inventory contains an invalid entity");
                 }
             }
+            return backupSets;
         } catch (final IOException e) {
-            LOG.error("Failed to request getVmBackupSetId commvault api due to : ", e);
             checkResponseTimeOut(e);
+            throw new CloudRuntimeException("Unable to confirm the Commvault VM BackupSet", e);
         }
-        return null;
+    }
+
+    // 호스트에 등록된 File System BackupSet의 이름, ID, Plan 정보를 조회한다.
+    public List<VmBackupSet> listVmBackupSets(String hostName) {
+        final List<VmBackupSet> result = new java.util.ArrayList<>();
+        final java.util.Set<String> names = new java.util.HashSet<>();
+        for (JsonNode item : getBackupSetProperties(hostName)) {
+            final JsonNode entity = item.path("backupSetEntity");
+            if (!"29".equals(entity.path("applicationId").asText())) { continue; }
+            final String vmName = entity.path("backupsetName").asText();
+            if (!names.add(vmName)) {
+                throw new CloudRuntimeException("Commvault VM BackupSet identity is ambiguous");
+            }
+            result.add(new VmBackupSet(hostName, vmName, entity.path("backupsetId").asText(),
+                    item.path("planEntity").path("planId").asText()));
+        }
+        return result;
+    }
+
+    // 삭제 직전 관리 대상의 ID와 Plan을 재확인하고, 삭제 후 조회에서도 사라졌는지 확인한다.
+    public boolean deleteVmBackupSet(VmBackupSet expected) {
+        if (expected == null || StringUtils.isAnyBlank(expected.hostName, expected.vmName, expected.backupSetId, expected.planId)
+                || "defaultBackupSet".equalsIgnoreCase(expected.vmName)) {
+            throw new CloudRuntimeException("An exact managed VM BackupSet reference is required for deletion");
+        }
+        final JsonNode current = getVmBackupSetProperties(expected.hostName, expected.vmName);
+        if (current == null) { return true; }
+        if (!expected.backupSetId.equals(current.path("backupSetEntity").path("backupsetId").asText())
+                || !expected.planId.equals(current.path("planEntity").path("planId").asText())) {
+            throw new CloudRuntimeException("The Commvault BackupSet identity or Plan changed during offering deletion");
+        }
+        return deleteBackupSet(expected.backupSetId) && getVmBackupSetProperties(expected.hostName, expected.vmName) == null;
+    }
+
+    public static class VmBackupSet {
+        public String hostName;
+        public String vmName;
+        public String backupSetId;
+        public String planId;
+
+        public VmBackupSet(String hostName, String vmName, String backupSetId, String planId) {
+            this.hostName = hostName;
+            this.vmName = vmName;
+            this.backupSetId = backupSetId;
+            this.planId = planId;
+        }
     }
 
     // DELETE https://<commserveIp>/commandcenter/api/Backupset/<backupSetId>
-    // 가상머신에서 백업 오퍼링 삭제 시 관련된 BackupSet 삭제 API -> 삭제 승인 정책
-    // ABLESTACK이 관리하는 Commvault Client는 Delete Backup Set MPA 승인 대상 Client Group에서 제외해야 자동 BackupSet 삭제가 정상 동작
+    // BackupSet을 명시적으로 삭제하는 API. 백업 오퍼링 연결 해제 시에는 BackupSet을 유지한다.
+    // Commvault 11.44 환경에서는 Delete Backup Set MPA(다중 사용자 승인) 정책 적용 여부를 확인해야 한다.
+    // ABLESTACK이 관리하는 Commvault Client는 Delete Backup Set MPA 승인 대상 Client Group에서 제외해야 자동 BackupSet 삭제가 정상 동작한다.
+    // 승인 대기나 HTTP 성공 응답만으로 삭제 완료를 판단하지 않으며, deleteVmBackupSet에서 재조회하여 실제 삭제를 확인한다.
+    // 참고: https://docs.commvault.com/v11/software/authorization_operations_associated_with_get_and_process_authorization.html
     public boolean deleteBackupSet(String backupSetId) {
         try {
             final HttpResponse response = delete("/Backupset/" + backupSetId);

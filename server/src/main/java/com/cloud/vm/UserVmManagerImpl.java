@@ -748,6 +748,8 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
     @Inject
     private BackupManager backupManager;
     @Inject
+    private org.apache.cloudstack.backup.AblestackBackupVmRemovalGuard ablestackBackupVmRemovalGuard;
+    @Inject
     private ManagementServer _managementServer;
     @Inject
     private SnapshotApiService _snapshotService;
@@ -10320,7 +10322,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
 
             Volume detachResult = null;
             try {
-                detachResult = _volumeService.detachVolumeViaDestroyVM(volume.getInstanceId(), volume.getId());
+                detachResult = detachVolumeForVmRemoval(vm, volume);
             } finally {
                 // Remove volumeContext and pop vmContext back
                 CallContext.unregister();
@@ -10337,6 +10339,13 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         for (VolumeVO volume : volumes) {
             destroyVolumeInContext(vm, expunge, volume);
         }
+    }
+
+    private Volume detachVolumeForVmRemoval(UserVm vm, VolumeVO volume) {
+        if (ablestackBackupVmRemovalGuard.supports(vm.getId())) {
+            return _volumeService.detachVolumeForAblestackVmRemoval(vm.getId(), volume.getId());
+        }
+        return _volumeService.detachVolumeViaDestroyVM(volume.getInstanceId(), volume.getId());
     }
 
     private void destroyVolumeInContext(UserVmVO vm, boolean expunge, VolumeVO volume) {

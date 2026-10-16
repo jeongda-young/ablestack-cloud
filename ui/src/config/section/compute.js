@@ -17,6 +17,7 @@
 
 import { shallowRef, defineAsyncComponent } from 'vue'
 import store from '@/store'
+import { getAblestackBackupOfferingRemovalMessage, isAblestackBackupProvider } from '@/utils/ablestackBackupPolicy'
 import { snapshotBusy, snapshotActionReason } from '@/utils/vmSnapshotActions'
 import { isZoneCreated } from '@/utils/zone'
 import { partialScaleRecoverySize } from '@/utils/kubernetesScaleRecovery'
@@ -417,10 +418,10 @@ export default {
           api: 'removeVirtualMachineFromBackupOffering',
           icon: 'scissor-outlined',
           label: 'label.backup.offering.remove',
-          message: 'message.backup.offering.remove',
+          message: getAblestackBackupOfferingRemovalMessage,
           docHelp: 'adminguide/virtual_machines.html#restoring-vm-backups',
           dataView: true,
-          args: ['virtualmachineid', 'forced'],
+          args: (record) => isAblestackBackupProvider(record) ? ['virtualmachineid'] : ['virtualmachineid', 'forced'],
           show: (record) => { return record.backupofferingid },
           disabled: (record) => { return record.hostcontrolstate === 'Offline' },
           mapping: {

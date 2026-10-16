@@ -26,6 +26,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -131,7 +132,8 @@ public class ThirdPartyBackupStagingServiceImplTest {
 
     @Test
     public void failedHostAndInsufficientSpacePreventActivationFromBeingSaved() throws Exception {
-        when(hostDao.listByType(Host.Type.Routing)).thenReturn(List.of(host(1L, "cube1"), host(2L, "cube2")));
+        List<HostVO> hosts = List.of(host(1L, "cube1"), host(2L, "cube2"));
+        when(hostDao.listByType(Host.Type.Routing)).thenReturn(hosts);
         when(volumeDao.findLargestUserVmVolumeSize()).thenReturn(100L);
         when(agentManager.send(eq(1L), any(AblestackThirdPartyStagingCommand.class)))
                 .thenReturn(new Answer(null, false, "Staging mount is not writable"));
@@ -149,7 +151,8 @@ public class ThirdPartyBackupStagingServiceImplTest {
 
     @Test
     public void hostsInNasOnlyZonesAreExcludedFromActivation() {
-        when(hostDao.listByType(Host.Type.Routing)).thenReturn(List.of(host(1L, "cube1")));
+        HostVO host = host(1L, "cube1");
+        when(hostDao.listByType(Host.Type.Routing)).thenReturn(List.of(host));
         when(depot.getConfigStringValue(BackupManager.BackupProviderPlugin.key(), ConfigKey.Scope.Zone, 1L)).thenReturn("nas");
 
         assertThrows(InvalidParameterValueException.class,
@@ -176,6 +179,24 @@ public class ThirdPartyBackupStagingServiceImplTest {
         assertEquals(100L, service.getAvailableBytes(worker, "/mnt/staging/jobs/ablestack-commvault"));
         assertThrows(CloudRuntimeException.class,
                 () -> service.getAvailableBytes(worker, "/mnt/staging/jobs/ablestack-commvault"));
+    }
+
+    @Test
+    public void allStagingBackendsAreValidatedOnTheSelectedWorkerHost() throws Exception {
+        settings.put(BackupManager.ThirdPartyStagingEnable.key(), "true");
+        settings.put(BackupManager.ThirdPartyStagingNfsSource.key(), "nas:/staging");
+        HostVO worker = host(2L, "cube2");
+        when(agentManager.send(eq(2L), any(AblestackThirdPartyStagingCommand.class)))
+                .thenReturn(new Answer(null, true, "100"));
+        for (String type : List.of("NFS", "LOCAL", "GFS2")) {
+            settings.put(BackupManager.ThirdPartyStagingStorageType.key(), type);
+            assertEquals(100L, service.getAvailableBytes(worker, "/mnt/staging/jobs/ablestack-commvault"));
+        }
+        ArgumentCaptor<AblestackThirdPartyStagingCommand> commands = ArgumentCaptor.forClass(AblestackThirdPartyStagingCommand.class);
+        verify(agentManager, times(3)).send(eq(2L), commands.capture());
+        assertEquals(List.of("NFS", "LOCAL", "GFS2"), commands.getAllValues().stream()
+                .map(AblestackThirdPartyStagingCommand::getStorageType).collect(java.util.stream.Collectors.toList()));
+        verify(agentManager, never()).send(eq(1L), any(AblestackThirdPartyStagingCommand.class));
     }
 
     @Test

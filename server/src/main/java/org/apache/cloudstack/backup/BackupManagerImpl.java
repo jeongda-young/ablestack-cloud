@@ -242,6 +242,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     @Inject
     private ThirdPartyBackupVolumeService thirdPartyBackupVolumeService;
 
+    @Inject
+    private AblestackBackupVmRemovalGuard ablestackBackupVmRemovalGuard;
+
     private static final String BACKUP_ENGINE_DETAIL_SUFFIX = ".backup.engine";
 
     @Inject
@@ -400,6 +403,32 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     @Override
     @ActionEvent(eventType = EventTypes.EVENT_VM_BACKUP_IMPORT_OFFERING, eventDescription = "importing backup offering", async = true)
     public BackupOffering importBackupOffering(final ImportBackupOfferingCmd cmd) {
+        if (BackupProviderNameUtils.isCommvaultFamily(cmd.getProvider())) {
+            return importAblestackCommvaultBackupOffering(cmd);
+        }
+        return importBackupOfferingInternal(cmd);
+    }
+
+    private BackupOffering importAblestackCommvaultBackupOffering(final ImportBackupOfferingCmd cmd) {
+        final GlobalLock lock = GlobalLock.getInternLock("ablestack.commvault.offering." + cmd.getZoneId());
+        if (!lock.lock(5)) {
+            lock.releaseRef();
+            throw new CloudRuntimeException("Commvault backup offering registration is in progress for this zone; retry later.");
+        }
+        try {
+            validateBackupForZone(cmd.getZoneId());
+            if (backupOfferingDao.listAll().stream().anyMatch(offering -> Objects.equals(cmd.getZoneId(), offering.getZoneId())
+                    && BackupProviderNameUtils.isCommvaultFamily(offering.getProvider()))) {
+                throw new CloudRuntimeException("Only one ABLESTACK Commvault backup offering can be registered per zone.");
+            }
+            return importBackupOfferingInternal(cmd);
+        } finally {
+            lock.unlock();
+            lock.releaseRef();
+        }
+    }
+
+    private BackupOffering importBackupOfferingInternal(final ImportBackupOfferingCmd cmd) {
         validateBackupForZone(cmd.getZoneId());
 
         String providerName = cmd.getProvider();
@@ -568,6 +597,8 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             throw new InvalidParameterValueException("Unable to find backup offering with ID: " + cmd.getSourceOfferingId());
         }
 
+        validateAblestackCommvaultOfferingClone(sourceOffering);
+
         validateBackupForZone(sourceOffering.getZoneId());
 
         if (backupOfferingDao.findByName(cmd.getName(), sourceOffering.getZoneId()) != null) {
@@ -612,6 +643,12 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
 
         logger.debug("Successfully cloned backup offering '" + sourceOffering.getName() + "' (ID: " + cmd.getSourceOfferingId() + ") to '" + cmd.getName() + "' (ID: " + savedOffering.getId() + ")");
         return savedOffering;
+    }
+
+    private void validateAblestackCommvaultOfferingClone(BackupOffering sourceOffering) {
+        if (BackupProviderNameUtils.isCommvaultFamily(sourceOffering.getProvider())) {
+            throw new CloudRuntimeException("ABLESTACK Commvault backup offering cloning is unavailable; register one offering per zone.");
+        }
     }
 
     private void updateBackupOfferingDetails(BackupOfferingVO savedOffering, BackupOfferingVO sourceOffering, List<Long> filteredDomainIds) {
@@ -726,7 +763,33 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
 
         validateBackupForZone(offering.getZoneId());
+        if (BackupProviderNameUtils.isCommvaultFamily(offering.getProvider())) {
+            return deleteAblestackCommvaultBackupOffering(offering);
+        }
         return backupOfferingDao.remove(offering.getId());
+    }
+
+    private boolean deleteAblestackCommvaultBackupOffering(final BackupOffering offering) {
+        final GlobalLock lock = GlobalLock.getInternLock("ablestack.commvault.offering." + offering.getZoneId());
+        if (!lock.lock(5)) {
+            lock.releaseRef();
+            throw new CloudRuntimeException("Commvault backup offering configuration is in progress; retry later.");
+        }
+        try {
+            if (!backupDao.listByOfferingId(offering.getId()).isEmpty()
+                    || !vmInstanceDao.listByZoneAndBackupOffering(offering.getZoneId(), offering.getId()).isEmpty()) {
+                throw new CloudRuntimeException("Commvault backup offering still has backups or assigned VMs.");
+            }
+            final BackupProvider provider = getBackupProvider(offering.getProvider());
+            if (!(provider instanceof AblestackBackupOfferingLifecycle)
+                    || !((AblestackBackupOfferingLifecycle) provider).cleanupBackupOffering(offering)) {
+                throw new CloudRuntimeException("Commvault BackupSet cleanup is incomplete; the backup offering is retained for retry.");
+            }
+            return backupOfferingDao.remove(offering.getId());
+        } finally {
+            lock.unlock();
+            lock.releaseRef();
+        }
     }
 
     private String getNicDetailsAsJson(final Long vmId) {
@@ -840,7 +903,28 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 throw new CloudRuntimeException("Failed to get the backup provider for the zone, please contact the administrator");
             }
 
+            if (BackupProviderNameUtils.isCommvaultFamily(offering.getProvider())) {
+                return assignAblestackCommvaultBackupOffering(vm, offering, backupProvider);
+            }
             return transactionAssignVMToBackupOffering(vm, offering, backupProvider) != null;
+        }
+    }
+
+    private boolean assignAblestackCommvaultBackupOffering(final VMInstanceVO vm, final BackupOfferingVO offering,
+            final BackupProvider provider) {
+        final GlobalLock lock = GlobalLock.getInternLock("ablestack.commvault.offering." + offering.getZoneId());
+        if (!lock.lock(5)) {
+            lock.releaseRef();
+            throw new CloudRuntimeException("Commvault backup offering configuration is in progress; retry later.");
+        }
+        try {
+            if (backupOfferingDao.findById(offering.getId()) == null) {
+                throw new CloudRuntimeException("The Commvault backup offering has been deleted; refresh and retry.");
+            }
+            return transactionAssignVMToBackupOffering(vm, offering, provider) != null;
+        } finally {
+            lock.unlock();
+            lock.releaseRef();
         }
     }
 
@@ -902,6 +986,10 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             throw new CloudRuntimeException("Failed to get the backup provider for the zone, please contact the administrator");
         }
 
+        if (BackupProviderNameUtils.isCommvaultFamily(offering.getProvider())) {
+            return removeAblestackCommvaultBackupOffering(vm.getId(), backupProvider);
+        }
+
         if (!forced && backupProvider.willDeleteBackupsOnOfferingRemoval()) {
             String message = String.format("To remove Instance [id: %s, name: %s] from Backup Offering [id: %s, name: %s] using the provider [%s], please specify the "
                     + "forced:true option to allow the deletion of all jobs and backups for this Instance or remove the backups that this Instance has with the backup "
@@ -939,6 +1027,44 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             logger.error("Exception caught when trying to remove VM [{}] from the backup offering [{}] due to: [{}].", vm, offering, e.getMessage(), e);
         }
         return result;
+    }
+
+    private boolean removeAblestackCommvaultBackupOffering(final long vmId, final BackupProvider provider) {
+        try (BackupVolumeGuard.Lease volumeGuard = backupVolumeGuard.acquire(vmId);
+                BackupSnapshotGuard.Lease guard = backupSnapshotGuard.acquire(vmId);
+                ThirdPartyBackupVolumeService.Lease lifecycle = thirdPartyBackupVolumeService.acquireLifecycle(vmId)) {
+            final VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(vmId);
+            final BackupOffering offering = vm != null && vm.getBackupOfferingId() != null
+                    ? backupOfferingDao.findById(vm.getBackupOfferingId()) : null;
+            if (offering == null || !BackupProviderNameUtils.isCommvaultFamily(offering.getProvider())) {
+                throw new CloudRuntimeException("The Commvault backup offering assignment has changed; refresh and retry.");
+            }
+            ablestackBackupVmRemovalGuard.checkOfferingRemoval(vmId);
+            final List<Backup> backups = backupDao.listByVmId(null, vmId);
+            for (Backup backup : backups) {
+                checkForPendingBackupJobs((BackupVO) backup);
+            }
+            if (!provider.removeVMFromBackupOffering(vm)) {
+                return false;
+            }
+            final Long offeringId = vm.getBackupOfferingId();
+            vm.setBackupOfferingId(null);
+            vm.setBackupVolumes(null);
+            vm.setBackupExternalId(null);
+            if (!vmInstanceDao.update(vm.getId(), vm)) { return false; }
+            for (BackupSchedule schedule : backupScheduleDao.listByVM(vm.getId())) {
+                backupScheduleDao.remove(schedule.getId());
+            }
+            if (backups.isEmpty()) {
+                UsageEventUtils.publishUsageEvent(EventTypes.EVENT_VM_BACKUP_OFFERING_REMOVED_AND_BACKUPS_DELETED,
+                        vm.getAccountId(), vm.getDataCenterId(), vm.getId(), "Backup-" + vm.getHostName() + "-" + vm.getUuid(),
+                        offeringId, null, null, Backup.class.getSimpleName(), vm.getUuid());
+            }
+            return true;
+        } catch (Exception e) {
+            logger.error("Failed to remove ABLESTACK Commvault offering for VM ID [{}]", vmId, e);
+            return false;
+        }
     }
 
     @Override
@@ -2744,6 +2870,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         if (offering == null) {
             throw new CloudRuntimeException("Failed to find backup offering of the VM backup.");
         }
+        validateAblestackOriginalVmRestore(offering, vm);
         validateBackupVolumes(backup, vm, offering);
         String backupDetailsInMessage = ReflectionToStringBuilderUtils.reflectOnlySelectedFields(backup, "uuid", "externalId", "vmId", "name");
         final boolean netBackupRestore = isAblestackNetBackupOffering(offering);
@@ -3683,7 +3810,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         BackupProvider backupProvider = getBackupProvider(offering.getProvider());
         VolumeVO backedUpVolume = volumeDao.findByUuidIncludingRemoved(backedUpVolumeUuid);
         Pair<HostVO, StoragePoolVO> restoreInfo;
-        if ((BackupProviderNameUtils.isNasFamily(offering.getProvider()) ||
+        if (isAblestackHostSideRestoreProvider(offering) && isAblestackSourceVolumeRemoved(backedUpVolume)) {
+            restoreInfo = getAblestackRetainedVolumeRestoreTarget(vm);
+        } else if ((BackupProviderNameUtils.isNasFamily(offering.getProvider()) ||
                 BackupProviderNameUtils.isCommvaultFamily(offering.getProvider())) && backedUpVolume != null) {
             restoreInfo = getRestoreVolumeHostAndDatastoreForNas(vm, backedUpVolume);
         } else if (KBOSS_BACKUP_PROVIDER.equals(offering.getProvider())) {
@@ -4046,6 +4175,15 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 getFirstHostFromStoragePool(storagePoolVO) :
                 hostDao.findById(vm.getHostId());
         return new Pair<>(hostVO, storagePoolVO);
+    }
+
+    private boolean isAblestackSourceVolumeRemoved(final VolumeVO source) {
+        return source == null || source.getRemoved() != null || source.getState() == Volume.State.Destroy
+                || source.getState() == Volume.State.Expunging || source.getState() == Volume.State.Expunged;
+    }
+
+    private Pair<HostVO, StoragePoolVO> getAblestackRetainedVolumeRestoreTarget(final VMInstanceVO target) {
+        return getRestoreVolumeHostAndDatastore(target);
     }
 
     private Pair<HostVO, StoragePoolVO> getRestoreVolumeHostAndDatastoreForKboss(VMInstanceVO vm, VolumeVO backedVolume, boolean quickRestore, Long hostId) {
@@ -4711,6 +4849,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                             if (backupProvider.supportsBackgroundSync()) {
                                 backupProvider.syncBackupStorageStats(dataCenter.getId());
                                 syncOutOfBandBackups(backupProvider, dataCenter);
+                                if (ThirdPartyBackupStagingService.isStagingProvider(backupProvider.getName())) {
+                                    syncAblestackRetainedBackups(backupProvider, dataCenter);
+                                }
                             }
                             if (backupProvider.supportsBackgroundChainValidation()) {
                                 backupProvider.validateChains(dataCenter.getId());
@@ -5299,6 +5440,32 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             if (syncedVmCount == 0) {
                 logger.debug("No VMs assigned to backup provider [{}] in zone [{}] for out-of-band backup sync.",
                         backupProvider.getName(), dataCenter.getId());
+            }
+        }
+
+        protected void syncAblestackRetainedBackups(final BackupProvider provider, final DataCenter dataCenter) {
+            final List<Long> vmIds = backupDao.listVmIdsWithBackupsInZone(dataCenter.getId());
+            if (CollectionUtils.isEmpty(vmIds)) { return; }
+            for (final VMInstanceVO vm : vmInstanceDao.listByIdsIncludingRemoved(vmIds)) {
+                try {
+                    final BackupOffering current = vm.getBackupOfferingId() == null ? null
+                            : backupOfferingDao.findById(vm.getBackupOfferingId());
+                    if (current != null && isMatchingBackupProvider(provider.getName(), current.getProvider())) {
+                        continue; // Assigned VMs are already handled by the ordinary sync path.
+                    }
+                    boolean matches = false;
+                    for (Backup backup : backupDao.listByVmId(dataCenter.getId(), vm.getId())) {
+                        BackupOffering saved = backupOfferingDao.findByIdIncludingRemoved(backup.getBackupOfferingId());
+                        if (saved != null && isMatchingBackupProvider(provider.getName(), saved.getProvider())) {
+                            matches = true;
+                            break;
+                        }
+                    }
+                    if (matches) { provider.syncBackups(vm); }
+                } catch (RuntimeException e) {
+                    logger.warn("Failed to sync retained backups for VM [{}] with provider [{}]: {}",
+                            vm.getUuid(), provider.getName(), e.getMessage(), e);
+                }
             }
         }
 
@@ -6726,6 +6893,23 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         return null;
     }
 
+    private boolean isOriginalVmRemoved(final VMInstanceVO vm) {
+        return vm == null || vm.getRemoved() != null || VirtualMachine.State.Expunging.equals(vm.getState());
+    }
+
+    private void validateAblestackOriginalVmRestore(final BackupOffering offering, final VMInstanceVO vm) {
+        if (isAblestackHostSideRestoreProvider(offering) && isOriginalVmRemoved(vm)) {
+            throw new CloudRuntimeException("The original Instance has been expunged. Use Create Instance from Backup or restore and attach a volume to another Instance.");
+        }
+    }
+
+    private void populateAblestackOriginalVmRestoreFields(final BackupOffering offering, final VMInstanceVO vm,
+            final BackupResponse response) {
+        if (!isAblestackHostSideRestoreProvider(offering)) { return; }
+        response.setVmRestoreAvailable(!isOriginalVmRemoved(vm));
+        if (isOriginalVmRemoved(vm)) { response.setVmExpunged(true); }
+    }
+
     @Override
     public BackupResponse createBackupResponse(Backup backup, Boolean listVmDetails) {
         VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(backup.getVmId());
@@ -6749,6 +6933,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         if (vm == null || VirtualMachine.State.Expunging.equals(vm.getState())) {
             response.setVmExpunged(true);
         }
+        populateAblestackOriginalVmRestoreFields(offering, vm, response);
         response.setExternalId(backup.getExternalId());
         response.setType(backup.getType());
         response.setDate(backup.getDate());
