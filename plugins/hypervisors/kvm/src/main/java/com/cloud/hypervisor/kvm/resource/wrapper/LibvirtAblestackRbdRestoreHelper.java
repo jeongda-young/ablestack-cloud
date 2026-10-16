@@ -48,6 +48,12 @@ final class LibvirtAblestackRbdRestoreHelper {
     private LibvirtAblestackRbdRestoreHelper() {
     }
 
+    static String buildQemuImageUri(final KVMStoragePool storagePool, final String image) {
+        final String prefix = storagePool.getSourceDir() + "/";
+        final String qualifiedImage = image.startsWith(prefix) ? image : prefix + image;
+        return KVMPhysicalDisk.RBDStringBuilder(storagePool, qualifiedImage);
+    }
+
     static boolean restoreRbdBackup(final String tracePrefix, final KVMStoragePool storagePool, final String volumePath,
             final List<String> backupPaths, final int timeoutSeconds, final boolean createTargetVolume) {
         if (backupPaths == null || backupPaths.isEmpty()) {
@@ -130,7 +136,7 @@ final class LibvirtAblestackRbdRestoreHelper {
         QemuImgFile destVolumeFile = null;
         try {
             srcBackupFile = new QemuImgFile(backupPath, getBackupFileFormat(backupPath));
-            destVolumeFile = new QemuImgFile(KVMPhysicalDisk.RBDStringBuilder(storagePool, volumePath), QemuImg.PhysicalDiskFormat.RAW);
+            destVolumeFile = new QemuImgFile(buildQemuImageUri(storagePool, volumePath), QemuImg.PhysicalDiskFormat.RAW);
             LibvirtAblestackRestoreProgress.phase("RESTORE_CONVERT", srcBackupFile.getFormat() + " → RBD (RAW)");
             LOGGER.debug("{} phase=[RBD_CONVERT_BEGIN], source=[{}], targetVolume=[{}]", tracePrefix, backupPath, volumePath);
             qemu.convert(srcBackupFile, destVolumeFile);
@@ -564,6 +570,9 @@ final class LibvirtAblestackRbdRestoreHelper {
         }
         if (StringUtils.isNotBlank(storagePool.getAuthSecret())) {
             command.append(" --key ").append(quote(storagePool.getAuthSecret()));
+        }
+        if ("rbd".equals(tool)) {
+            command.append(" --pool ").append(quote(storagePool.getSourceDir()));
         }
         command.append(" ").append(action);
         for (final String arg : args) {

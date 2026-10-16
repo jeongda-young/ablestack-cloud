@@ -32,7 +32,6 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
 import com.cloud.hypervisor.kvm.resource.LibvirtComputingResource;
-import com.cloud.hypervisor.kvm.storage.KVMPhysicalDisk;
 import com.cloud.hypervisor.kvm.storage.KVMStoragePool;
 import com.cloud.hypervisor.kvm.storage.KVMStoragePoolManager;
 import com.cloud.storage.Storage;
@@ -500,7 +499,7 @@ final class LibvirtAblestackVolumeRestoreHelper {
             String original, String prepared, int index) {
         try {
             KVMStoragePool pool = to.getPoolType() == Storage.StoragePoolType.RBD ? manager.getStoragePool(to.getPoolType(), to.getUuid()) : null;
-            String preparedUri = pool == null ? prepared : KVMPhysicalDisk.RBDStringBuilder(pool, prepared);
+            String preparedUri = pool == null ? prepared : LibvirtAblestackRbdRestoreHelper.buildQemuImageUri(pool, prepared);
             QemuImg.PhysicalDiskFormat targetFormat = pool == null
                     ? LibvirtAblestackFileRestoreHelper.getFileVolumeFormat(logger, original) : QemuImg.PhysicalDiskFormat.RAW;
             String checkpoint = null;
@@ -516,8 +515,15 @@ final class LibvirtAblestackVolumeRestoreHelper {
                     if (file.toString().endsWith(".rbdiff")) { throw new CloudRuntimeException("Restore chain is missing its Full artifact"); }
                     QemuImg.PhysicalDiskFormat sourceFormat = file.toString().endsWith(".raw")
                             ? QemuImg.PhysicalDiskFormat.RAW : QemuImg.PhysicalDiskFormat.QCOW2;
-                    QemuImg qemu = new QemuImg(TimeUnit.SECONDS.toMillis(plan.timeout));
-                    qemu.convert(new QemuImgFile(file.toString(), sourceFormat), new QemuImgFile(preparedUri, targetFormat));
+                    if (pool != null && sourceFormat == QemuImg.PhysicalDiskFormat.RAW) {
+                        if (!LibvirtAblestackRbdRestoreHelper.restoreRbdBackupToImage(trace, pool, prepared,
+                                List.of(file.toString()), plan.timeout, true)) {
+                            throw new CloudRuntimeException("Unable to import the Full artifact into the prepared RBD image");
+                        }
+                    } else {
+                        QemuImg qemu = new QemuImg(TimeUnit.SECONDS.toMillis(plan.timeout));
+                        qemu.convert(new QemuImgFile(file.toString(), sourceFormat), new QemuImgFile(preparedUri, targetFormat));
+                    }
                     if (volume.engine.startsWith("RBD") && volume.chain.size() > 1) {
                         LibvirtAblestackRbdRestoreHelper.createPreparedCheckpoint(pool, prepared, artifact.checkpointName, plan.timeout);
                         checkpoint = artifact.checkpointName;
