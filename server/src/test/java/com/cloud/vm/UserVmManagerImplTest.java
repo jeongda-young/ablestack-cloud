@@ -328,6 +328,8 @@ public class UserVmManagerImplTest {
     BackupManager backupManager;
     @Mock
     org.apache.cloudstack.backup.AblestackBackupVmRemovalGuard ablestackBackupVmRemovalGuard;
+    @Mock
+    org.apache.cloudstack.backup.AblestackRestoreInstanceCleanup ablestackRestoreInstanceCleanup;
 
     @Mock
     VirtualMachineManager virtualMachineManager;
@@ -3778,6 +3780,38 @@ public class UserVmManagerImplTest {
         Mockito.verify(backupManager).requestRestoreBackupToVM(backupId, vmId, false, true);
         Mockito.verify(userVmManagerImpl, times(1))
                 .startVirtualMachine(anyLong(), isNull(), isNull(), isNull(), anyMap(), isNull());
+    }
+
+    @Test
+    public void testFailedAblestackInstancePreparationUsesTrackedVolumeCleanup() throws Exception {
+        CreateVMFromBackupCmd cmd = mock(CreateVMFromBackupCmd.class);
+        when(cmd.getBackupId()).thenReturn(5L);
+        when(cmd.getEntityId()).thenReturn(vmId);
+        doThrow(new CloudRuntimeException("Insufficient primary storage"))
+                .when(userVmManagerImpl).startVirtualMachine(eq(vmId), isNull(), isNull(), isNull(), anyMap(), isNull());
+        when(ablestackRestoreInstanceCleanup.cleanup(5L, vmId)).thenReturn(true);
+
+        assertThrows(CloudRuntimeException.class, () -> userVmManagerImpl.restoreVMFromBackup(cmd));
+
+        verify(ablestackRestoreInstanceCleanup).prepare(5L, vmId);
+        verify(ablestackRestoreInstanceCleanup).cleanup(5L, vmId);
+        verify(userVmManagerImpl, never()).expunge(any());
+    }
+
+    @Test
+    public void testFailedOtherProviderKeepsExistingInstanceCleanup() throws Exception {
+        CreateVMFromBackupCmd cmd = mock(CreateVMFromBackupCmd.class);
+        when(cmd.getBackupId()).thenReturn(5L);
+        when(cmd.getEntityId()).thenReturn(vmId);
+        UserVmVO vm = mock(UserVmVO.class);
+        when(userVmDao.findById(vmId)).thenReturn(vm);
+        doThrow(new CloudRuntimeException("Insufficient primary storage"))
+                .when(userVmManagerImpl).startVirtualMachine(eq(vmId), isNull(), isNull(), isNull(), anyMap(), isNull());
+        doReturn(true).when(userVmManagerImpl).expunge(vm);
+
+        assertThrows(CloudRuntimeException.class, () -> userVmManagerImpl.restoreVMFromBackup(cmd));
+
+        verify(userVmManagerImpl).expunge(vm);
     }
 
     @Test

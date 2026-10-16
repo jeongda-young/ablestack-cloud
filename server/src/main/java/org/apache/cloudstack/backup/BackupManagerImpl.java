@@ -312,6 +312,8 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     @Inject
     private UserVmManager userVmManager;
     @Inject
+    private AblestackRestoreInstanceCleanup ablestackRestoreInstanceCleanup;
+    @Inject
     private VolumeApiService volumeApiService;
     @Inject
     private ResourceLimitService resourceLimitMgr;
@@ -3580,6 +3582,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         if (offering == null) {
             throw new CloudRuntimeException("Failed to find backup offering");
         }
+        if (isAblestackHostSideRestoreProvider(offering)) {
+            validateNoActiveRestoreOperation(backupId);
+        }
         final BackupProvider backupProvider = getBackupProvider(offering.getProvider());
         return backupProvider.supportsInstanceFromBackup();
     }
@@ -3684,6 +3689,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                     vm.getId(), ApiCommandResourceType.VirtualMachine.toString(),
                     true, 0);
 
+            ablestackRestoreInstanceCleanup.prepare(backup.getId(), vm.getId());
             initializeRestoreOperation(backup.getId(), offering, AblestackBackupFrameworkUtils.RESTORE_OPERATION_CREATE_INSTANCE,
                     vm.getId(), null, null);
             final boolean detachedRestore = allowDetachedRestore && backupProvider.supportsDetachedRestoreOrchestration();
@@ -4134,6 +4140,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     }
 
     private void checkForPendingBackupJobs(final BackupVO backup) {
+        if (ablestackRestoreInstanceCleanup.isPending(backup.getId())) {
+            throw new CloudRuntimeException("Cannot delete Backup while failed instance cleanup is pending.");
+        }
         if (backupDetailsDao.findDetail(backup.getId(), AblestackBackupFrameworkUtils.RESTORE_CREATE_INSTANCE_PROGRESS_DETAIL) != null) {
             backupDao.loadDetails(backup);
             final RestoreCreationProgress creation = getCreateInstanceProgress(backup);
@@ -4875,6 +4884,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             try {
                 processPostRestoreMaintenanceTasks();
                 reconcilePendingRestoreJobCleanups();
+                ablestackRestoreInstanceCleanup.reconcilePending();
                 for (final DataCenter dataCenter : dataCenterDao.listAllZones()) {
                     if (dataCenter == null || isDisabled(dataCenter.getId())) {
                         logger.trace("Active Backup Job Sync Task is not enabled in zone [{}]. Skipping this zone!",
@@ -5020,6 +5030,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 }
                 reconcileExternalRestoreTracking(offering, backup, vm, true, null);
                 persistRestoreOperationPhase(backup.getId(), "COMPLETED", "COMPLETED", 100);
+                if (createInstance) { ablestackRestoreInstanceCleanup.complete(backup.getId(), vm.getId()); }
                 stopTrackingActiveRestoreJob(backup);
                 cleanupTerminalRestoreJobFiles(backup, restoreHost, restoreJobId, backupProvider.getName());
                 logger.info("Reconciled completed restore job [{}] for backup [{}], VM [{}].",
@@ -5102,9 +5113,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 return;
             }
             try {
-                persistRestoreOperationPhase(backup.getId(), "FAILED", "CLEANUP", 0);
-                virtualMachineManager.destroy(vm.getUuid(), true);
-                persistRestoreOperationPhase(backup.getId(), "FAILED", "CLEANUP_COMPLETED", 0);
+                ablestackRestoreInstanceCleanup.cleanup(backup.getId(), vm.getId());
             } catch (Exception e) {
                 persistRestoreOperationPhase(backup.getId(), "FAILED", "CLEANUP_REQUIRED", 0);
                 logger.warn("Failed to clean up Instance [{}] after detached restore [{}] failed. Cleanup will be retried: {}",
@@ -6260,6 +6269,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     }
 
     private void validateNoActiveRestoreOperation(final Long backupId) {
+        if (ablestackRestoreInstanceCleanup.isPending(backupId)) {
+            throw new CloudRuntimeException("Previous instance cleanup is still pending for backup " + backupId);
+        }
         final BackupVO operationBackup = backupDao.findById(backupId);
         if (operationBackup != null) {
             backupDao.loadDetails(operationBackup);
@@ -6676,7 +6688,10 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         response.setOperation(AblestackBackupFrameworkUtils.OPERATION_RESTORE);
         populateCreateInstanceRestoreContext(backup, response);
         if (isRestoreFailureState(creation.state)) {
-            response.setDetails(backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_FAILURE_REASON_DETAIL));
+            String reason = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_FAILURE_REASON_DETAIL);
+            String cleanupReason = backup.getDetail(AblestackRestoreInstanceCleanup.REASON_KEY);
+            response.setDetails(StringUtils.isBlank(cleanupReason) ? reason
+                    : StringUtils.defaultString(reason) + "; Instance cleanup pending: " + cleanupReason);
         }
         return true;
     }

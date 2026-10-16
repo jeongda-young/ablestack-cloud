@@ -24,6 +24,7 @@ import com.cloud.utils.exception.CloudRuntimeException;
 import com.google.gson.Gson;
 
 import org.apache.cloudstack.backup.AblestackBackupFrameworkUtils;
+import org.apache.cloudstack.backup.AblestackBackupJobCleanupCommand;
 import org.apache.cloudstack.backup.BackupAnswer;
 import org.apache.cloudstack.backup.StopBackupAnswer;
 import org.apache.cloudstack.backup.StopBackupCommand;
@@ -530,7 +531,7 @@ final class LibvirtAblestackAsyncBackupRunner {
         return new BackupAnswer(command, applied, applied ? details : "Failed to update backup bandwidth: " + result.second());
     }
 
-    static Answer cleanupJob(final Command command, final String jobId, final Logger logger) {
+    static synchronized Answer cleanupJob(final Command command, final String jobId, final Logger logger) {
         if (jobId == null || jobId.isBlank()) {
             return new Answer(command, false, "backup job id is required");
         }
@@ -542,8 +543,12 @@ final class LibvirtAblestackAsyncBackupRunner {
                 final Pair<Boolean, String> stopped = confirmJobStopped(jobId, job.getProperty("vmName"), logger);
                 if (!stopped.first()) { return new Answer(command, false, stopped.second()); }
             }
+            final Path closed = Path.of(AblestackBackupFrameworkUtils.STAGING_ADMISSION_CLOSED_ROOT, jobId + ".closed");
+            final boolean completedCleanup = LibvirtAblestackJobHistory.closed(jobId) || LibvirtAblestackBackupJobFiles.completed(closed, jobId);
+            final boolean backupDeleted = command instanceof AblestackBackupJobCleanupCommand
+                    && ((AblestackBackupJobCleanupCommand) command).isBackupDeleted();
             Path volumePlan = jobDirectory.resolve("volume-plan.json");
-            if (Files.isRegularFile(volumePlan) && !LibvirtAblestackBackupStartHelper.unstartedFenced(jobId)) {
+            if (Files.isRegularFile(volumePlan) && !completedCleanup && !LibvirtAblestackBackupStartHelper.unstartedFenced(jobId)) {
                 // An acknowledged pre-IO fence also covers a partially written launch plan.
                 String state = getJobState(jobId, logger);
                 if (!Set.of(STATE_COMPLETED, STATE_FAILED, STATE_INTERRUPTED, STATE_CANCELED).contains(state)
@@ -557,10 +562,10 @@ final class LibvirtAblestackAsyncBackupRunner {
                         || Files.exists(Path.of(plan.get("stageRoot").getAsString(), ".volume-reservations", jobId + ".json"))) {
                     return new Answer(command, false, "Volume backup staging reservation is still present or its ownership is unconfirmed");
                 }
-                if (STATE_COMPLETED.equals(state) && plan.has("parentCheckpointName") && !plan.get("parentCheckpointName").isJsonNull()
-                        && !plan.get("parentCheckpointName").getAsString().isBlank()
-                        && !sourceCleanupCompleted(jobDirectory, jobId, plan)) {
-                    return new Answer(command, false, "Previous source checkpoint cleanup must complete before removing backup job records");
+                if (backupDeleted) {
+                    LibvirtAblestackBackupJobFiles.confirmDeleted(jobDirectory, jobId, plan, closed);
+                } else if (STATE_COMPLETED.equals(state)) {
+                    LibvirtAblestackBackupJobFiles.confirmCompleted(jobDirectory, jobId, plan, closed);
                 }
             }
             if (Files.isRegularFile(jobDirectory.resolve("volume-restore-plan.json"))
@@ -568,8 +573,13 @@ final class LibvirtAblestackAsyncBackupRunner {
                 return new Answer(command, false, "Volume restore writer, transaction and staging cleanup must finish before removing job records");
             }
             if ((Files.isRegularFile(volumePlan) || Files.isRegularFile(jobDirectory.resolve("staging-admission-plan.json")))
-                    && !Files.isRegularFile(Path.of(AblestackBackupFrameworkUtils.STAGING_ADMISSION_CLOSED_ROOT, jobId + ".closed"))) {
+                    && !Files.isRegularFile(Path.of(AblestackBackupFrameworkUtils.STAGING_ADMISSION_CLOSED_ROOT, jobId + ".closed"))
+                    && !completedCleanup) {
                 return new Answer(command, false, "Durable staging admission closure must be recorded before removing volume job files");
+            }
+            final Path history = JOB_ROOT.getParent().resolve("failed-jobs");
+            if (job != null && Set.of(STATE_FAILED, STATE_INTERRUPTED, STATE_CANCELED).contains(getJobState(jobId, logger))) {
+                LibvirtAblestackBackupJobFiles.archiveFailure(jobDirectory, jobProperties, history, jobId);
             }
             if (Files.exists(jobDirectory)) {
                 try (Stream<Path> paths = Files.walk(jobDirectory)) {
@@ -584,6 +594,9 @@ final class LibvirtAblestackAsyncBackupRunner {
             }
             Files.deleteIfExists(jobProperties);
             ACTIVE_JOBS.remove(jobId);
+            LibvirtAblestackJobHistory.compact(jobId);
+            try { LibvirtAblestackBackupJobFiles.expireFailureHistory(history); }
+            catch (IOException e) { logger.warn("Failure history expiration remains pending", e); }
             logger.info("Cleaned ABLESTACK backup job files. jobId=[{}], jobDir=[{}], properties=[{}]",
                     jobId, jobDirectory, jobProperties);
             return new Answer(command, true, "Backup job files cleaned");

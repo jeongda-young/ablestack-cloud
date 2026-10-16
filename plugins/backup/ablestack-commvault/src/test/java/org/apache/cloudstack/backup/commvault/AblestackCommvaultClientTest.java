@@ -243,6 +243,149 @@ public class AblestackCommvaultClientTest {
     }
 
     @Test
+    public void completedBackupResponseSavesTheCapturedEndTime() throws Exception {
+        capturedJobInventory();
+        ThirdPartyBackupManifest.Artifact artifact = capturedJobArtifact();
+
+        newClient().backupVolumeArtifact(null, null, null, artifact);
+
+        assertTrue(artifact.completed);
+        assertEquals("1186", artifact.externalId);
+        assertEquals("1792122679", artifact.backupTime);
+    }
+
+    @Test
+    public void missingCatalogTimeIsReadFromTheExactCompletedBackupJob() throws Exception {
+        ThirdPartyBackupVolumeService.ArtifactInventory inventory = capturedJobInventory();
+        ThirdPartyBackupManifest.Artifact artifact = capturedJobArtifact();
+
+        assertTrue(inventory.exists(artifact));
+
+        assertNull(artifact.backupTime);
+        wireMockRule.verify(1, postRequestedFor(urlEqualTo("/api/JobDetails"))
+                .withRequestBody(equalToJson("{\"jobId\":1186}")));
+        wireMockRule.verify(postRequestedFor(urlEqualTo("/api/DoBrowse"))
+                .withRequestBody(matchingJsonPath("$.timeRange.toTime", equalTo("1792122679"))));
+    }
+
+    @Test
+    public void invalidSavedCatalogTimesAreRecheckedWithoutChangingTheSavedArtifact() throws Exception {
+        for (String value : List.of("", "invalid", "0", "-1", "999999999999999999999999999")) {
+            ThirdPartyBackupManifest.Artifact artifact = capturedJobArtifact();
+            artifact.backupTime = value;
+
+            assertTrue(capturedJobInventory().exists(artifact));
+            assertEquals(value, artifact.backupTime);
+        }
+        wireMockRule.verify(5, postRequestedFor(urlEqualTo("/api/JobDetails")));
+    }
+
+    @Test
+    public void validSavedCatalogTimeKeepsItsOriginalPointInTime() throws Exception {
+        ThirdPartyBackupVolumeService.ArtifactInventory inventory = capturedJobInventory();
+        ThirdPartyBackupManifest.Artifact artifact = capturedJobArtifact();
+        artifact.backupTime = "1791791903";
+
+        assertTrue(inventory.exists(artifact));
+
+        wireMockRule.verify(0, postRequestedFor(urlEqualTo("/api/JobDetails")));
+        wireMockRule.verify(postRequestedFor(urlEqualTo("/api/DoBrowse"))
+                .withRequestBody(matchingJsonPath("$.timeRange.toTime", equalTo("1791791903"))));
+    }
+
+    @Test
+    public void anotherJobRestoreJobAndIncompleteJobCannotSupplyTheBackupTime() throws Exception {
+        for (String changed : List.of("jobId", "operationType", "jobType", "state")) {
+            ThirdPartyBackupVolumeService.ArtifactInventory inventory = capturedJobInventory();
+            ObjectNode response = capturedBackupJobDetails();
+            if ("state".equals(changed)) {
+                ((ObjectNode) response.at("/job/jobDetail/progressInfo")).put("state", "Running");
+            } else {
+                ((ObjectNode) response.at("/job/jobDetail/generalInfo")).put(changed, "jobId".equals(changed) ? "1189" : "Restore");
+            }
+            stubBackupJobDetails(response);
+
+            assertThrows(CloudRuntimeException.class, () -> inventory.exists(capturedJobArtifact()));
+        }
+        wireMockRule.verify(0, postRequestedFor(urlEqualTo("/api/DoBrowse")));
+    }
+
+    @Test
+    public void anotherHostVmOrSubclientCannotSupplyTheBackupTime() throws Exception {
+        for (String field : List.of("clientName", "clientId", "applicationId", "backupsetName", "backupsetId", "instanceId", "subclientId")) {
+            ThirdPartyBackupVolumeService.ArtifactInventory inventory = capturedJobInventory();
+            ObjectNode response = capturedBackupJobDetails();
+            ((ObjectNode) response.at("/job/jobDetail/generalInfo/subclient")).put(field, "different-source");
+            stubBackupJobDetails(response);
+
+            assertThrows(CloudRuntimeException.class, () -> inventory.exists(capturedJobArtifact()));
+        }
+        wireMockRule.verify(0, postRequestedFor(urlEqualTo("/api/DoBrowse")));
+    }
+
+    @Test
+    public void unavailableJobDetailsRemainAQueryFailure() throws Exception {
+        ThirdPartyBackupVolumeService.ArtifactInventory inventory = capturedJobInventory();
+        wireMockRule.stubFor(post(urlEqualTo("/api/JobDetails")).willReturn(aResponse().withStatus(503)));
+
+        assertThrows(CloudRuntimeException.class, () -> inventory.exists(capturedJobArtifact()));
+
+        wireMockRule.verify(0, postRequestedFor(urlEqualTo("/api/DoBrowse")));
+    }
+
+    @Test
+    public void anUnconfirmedEndTimeCannotUseTheCurrentTimeOrReportMissing() throws Exception {
+        for (String value : List.of("", "0", "-1", "invalid", "999999999999999999999999999")) {
+            ThirdPartyBackupVolumeService.ArtifactInventory inventory = capturedJobInventory();
+            ObjectNode response = capturedBackupJobDetails();
+            ((ObjectNode) response.at("/job/jobDetail/detailInfo")).put("endTime", value);
+            stubBackupJobDetails(response);
+
+            assertThrows(CloudRuntimeException.class, () -> inventory.exists(capturedJobArtifact()));
+        }
+        wireMockRule.verify(0, postRequestedFor(urlEqualTo("/api/DoBrowse")));
+    }
+
+    private ObjectNode capturedBackupJobDetails() throws IOException {
+        try (InputStream stream = getClass().getResourceAsStream("/commvault/job-1186-backup-detail.json")) {
+            return (ObjectNode) new ObjectMapper().readTree(stream);
+        }
+    }
+
+    private void stubBackupJobDetails(ObjectNode response) {
+        wireMockRule.stubFor(post(urlEqualTo("/api/JobDetails"))
+                .withRequestBody(equalToJson("{\"jobId\":1186}"))
+                .willReturn(aResponse().withStatus(200).withBody(response.toString())));
+    }
+
+    private ThirdPartyBackupManifest.Artifact capturedJobArtifact() {
+        ThirdPartyBackupManifest.Artifact artifact = artifact();
+        artifact.sourceHost = "ablecube3";
+        artifact.jobId = "1186";
+        artifact.externalId = "1186";
+        artifact.backupTime = null;
+        return artifact;
+    }
+
+    private ThirdPartyBackupVolumeService.ArtifactInventory capturedJobInventory() throws Exception {
+        wireMockRule.stubFor(post(urlEqualTo("/api/Login"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"token\":\"test-token\"}")));
+        wireMockRule.stubFor(get(urlEqualTo("/api/Client"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"clientProperties\":[{\"client\":{\"clientEntity\":{\"clientId\":12,\"clientName\":\"ablecube3\"}}}]}")));
+        wireMockRule.stubFor(get(urlEqualTo("/api/Client/12"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"clientProperties\":[{}]}")));
+        ObjectNode response = capturedBackupJobDetails();
+        ObjectNode clients = new ObjectMapper().createObjectNode();
+        clients.putArray("subClientProperties").addObject().set("subClientEntity", response.at("/job/jobDetail/generalInfo/subclient"));
+        wireMockRule.stubFor(get(urlEqualTo("/api/Subclient?clientId=12"))
+                .willReturn(aResponse().withStatus(200).withBody(clients.toString())));
+        stubBackupJobDetails(response);
+        wireMockRule.stubFor(post(urlEqualTo("/api/DoBrowse"))
+                .willReturn(aResponse().withStatus(200).withBody(catalogResult("1186"))));
+        return newClient().volumeArtifactInventory("i-2-217-VM");
+    }
+
+    @Test
     public void metadataCatalogBrowseChecksTheManifestWithJsonOperationTypes() throws Exception {
         ThirdPartyBackupVolumeService.ArtifactInventory inventory = newInventory();
         ThirdPartyBackupManifest.Artifact metadata = artifact();

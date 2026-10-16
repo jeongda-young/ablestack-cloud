@@ -210,7 +210,8 @@ public class LibvirtAblestackVolumeStagingCommandWrapper
                 if (Files.exists(reservation)) {
                     return new Answer(command, false, "Backup engine cleanup retained its staging reservation; reconcile it before deleting artifacts");
                 }
-                if (!Files.isRegularFile(Path.of(AblestackBackupFrameworkUtils.STAGING_ADMISSION_CLOSED_ROOT, id + ".closed"))) {
+                if (!Files.isRegularFile(Path.of(AblestackBackupFrameworkUtils.STAGING_ADMISSION_CLOSED_ROOT, id + ".closed"))
+                        && !LibvirtAblestackJobHistory.closed(id)) {
                     return new Answer(command, false, "Durable staging admission closure is unconfirmed; reconcile cleanup before deleting job records");
                 }
                 return new Answer(command, true, "Volume backup engine no longer reserves staging capacity");
@@ -325,7 +326,8 @@ public class LibvirtAblestackVolumeStagingCommandWrapper
                 if (!java.util.Set.of("STARTED", "STARTING", "RUNNING").contains(LibvirtAblestackAsyncBackupRunner.getJobState(id, logger))
                         || Files.exists(directory.resolve("volume-cancel")) || Files.exists(directory.resolve("staging-admission-cancel"))
                         || Files.exists(directory.resolve("staging-admission-closed"))
-                        || Files.exists(Path.of(AblestackBackupFrameworkUtils.STAGING_ADMISSION_CLOSED_ROOT, id + ".closed"))) {
+                        || Files.exists(Path.of(AblestackBackupFrameworkUtils.STAGING_ADMISSION_CLOSED_ROOT, id + ".closed"))
+                        || LibvirtAblestackJobHistory.closed(id)) {
                     return new Answer(command, false, "Source engine is stopped or cancellation is pending");
                 }
                 @SuppressWarnings("unchecked")

@@ -21,17 +21,28 @@ import com.cloud.agent.api.Command;
 
 public class AblestackBackupJobCleanupCommand extends Command {
     private String backupJobId;
+    private boolean backupDeleted;
 
     protected AblestackBackupJobCleanupCommand() {
         super();
     }
 
     public AblestackBackupJobCleanupCommand(final String backupJobId) {
+        this(backupJobId, false);
+    }
+
+    /** backupDeleted acknowledges successful external artifact and local checkpoint/staging deletion. */
+    public AblestackBackupJobCleanupCommand(final String backupJobId, final boolean backupDeleted) {
         this.backupJobId = backupJobId;
+        this.backupDeleted = backupDeleted;
     }
 
     public String getBackupJobId() {
         return backupJobId;
+    }
+
+    public boolean isBackupDeleted() {
+        return backupDeleted;
     }
 
     @Override

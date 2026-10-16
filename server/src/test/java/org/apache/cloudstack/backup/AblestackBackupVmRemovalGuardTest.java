@@ -76,6 +76,13 @@ public class AblestackBackupVmRemovalGuardTest {
         verify(backupDao, never()).remove(anyLong());
     }
 
+    @Test public void failedInstanceCleanupKeepsBackupOwnershipRecords() {
+        BackupVO backup = retainedBackup("ablestack-nas");
+        backup.getDetails().put(AblestackRestoreInstanceCleanup.PENDING_KEY, "2");
+        assertThrows(CloudRuntimeException.class, () -> guard.checkVmRemoval(1L));
+        assertThrows(CloudRuntimeException.class, () -> guard.checkOfferingRemoval(1L));
+    }
+
     @Test public void vmRemovalRequiresStoppedVmAndRemovedProtection() {
         when(vm.getState()).thenReturn(com.cloud.vm.VirtualMachine.State.Running);
         assertThrows(CloudRuntimeException.class, () -> guard.checkVmRemoval(1L));

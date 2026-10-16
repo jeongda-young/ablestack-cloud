@@ -119,6 +119,15 @@ test('a successful backup reports confirmed full staging cleanup', async () => {
   wrapper.unmount()
 })
 
+test('successful staging permits retrying pending execution record cleanup only', async () => {
+  for (const jobcleanupstate of ['WAITING', 'RUNNING', 'COMPLETED']) {
+    const wrapper = await mount({ hoststate: 'COMPLETED', cleanupstate: 'COMPLETED', jobcleanupstate, stagingqueue: { state: 'RELEASED' } }, 'BACKUP', { status: 'BackedUp' })
+    expect(wrapper.vm.canCleanup).toBe(jobcleanupstate !== 'COMPLETED')
+    expect(wrapper.vm.situation.type).toBe(jobcleanupstate === 'COMPLETED' ? 'success' : 'warning')
+    wrapper.unmount()
+  }
+})
+
 test('completion is not shown while the staging reservation or source cleanup is pending', async () => {
   for (const info of [{ stagingqueue: { state: 'ADMITTED' } }, { stagingqueue: { state: 'RELEASED' }, sourcecleanupstate: 'WAITING' }, { stagingqueue: { state: 'RELEASED' }, cleanupstate: 'NONE' }]) {
     const wrapper = await mount({ hoststate: 'COMPLETED', cleanupstate: 'NONE', ...info }, 'BACKUP', { status: 'BackedUp' })

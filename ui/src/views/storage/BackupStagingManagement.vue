@@ -204,7 +204,7 @@ export default {
       const failedBackup = ['Failed', 'Canceled', 'Error'].includes(this.resource.status)
       if (this.info.cleanupstate === 'COMPLETED') {
         // Finished staging removal is durable proof for retrying the remaining records/slot release.
-        return this.operation === 'BACKUP' && failedBackup &&
+        return this.operation === 'BACKUP' && (failedBackup || this.successfulBackup) &&
           (['WAITING', 'RUNNING'].includes(this.info.jobcleanupstate) ||
             (!!this.info.stagingqueue && this.info.stagingqueue.state !== 'RELEASED'))
       }

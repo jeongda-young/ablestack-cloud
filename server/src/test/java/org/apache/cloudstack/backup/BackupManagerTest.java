@@ -169,6 +169,8 @@ public class BackupManagerTest {
     @Mock
     private AblestackBackupVmRemovalGuard ablestackBackupVmRemovalGuard;
     @Mock
+    private AblestackRestoreInstanceCleanup ablestackRestoreInstanceCleanup;
+    @Mock
     private ThirdPartyBackupVolumeService thirdPartyBackupVolumeService;
     @Mock
     private ThirdPartyBackupStagingService thirdPartyBackupStagingService;
@@ -2085,6 +2087,29 @@ public class BackupManagerTest {
         verify(backupDetailsDao).addDetail(backupId,
                 AblestackBackupFrameworkUtils.RESTORE_JOB_FAILURE_REASON_DETAIL, failureReason, false);
         verify(backupDetailsDao).removeDetail(backupId, AblestackBackupFrameworkUtils.RESTORE_JOB_ID_DETAIL);
+    }
+
+    @Test
+    public void testFailedDetachedCreateInstanceUsesTrackedResourceCleanup() {
+        BackupVO backup = mock(BackupVO.class);
+        VMInstanceVO vm = mock(VMInstanceVO.class);
+        when(backup.getId()).thenReturn(1L);
+        when(vm.getId()).thenReturn(2L);
+        backupManager.new BackupSyncTask(backupManager).cleanupFailedDetachedCreateInstance(backup, vm,
+                AblestackBackupFrameworkUtils.RESTORE_OPERATION_CREATE_INSTANCE);
+        verify(ablestackRestoreInstanceCleanup).cleanup(1L, 2L);
+    }
+
+    @Test
+    public void testCreateInstanceIsBlockedBeforeAllocationWhileCleanupIsPending() {
+        BackupVO backup = mock(BackupVO.class);
+        when(backup.getBackupOfferingId()).thenReturn(3L);
+        when(backupDao.findById(1L)).thenReturn(backup);
+        BackupOfferingVO offering = mock(BackupOfferingVO.class);
+        when(offering.getProvider()).thenReturn("ablestack-nas");
+        when(backupOfferingDao.findByIdIncludingRemoved(3L)).thenReturn(offering);
+        when(ablestackRestoreInstanceCleanup.isPending(1L)).thenReturn(true);
+        Assert.assertThrows(CloudRuntimeException.class, () -> backupManager.canCreateInstanceFromBackup(1L));
     }
 
     @Test

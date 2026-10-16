@@ -24,6 +24,23 @@ import org.apache.commons.lang3.StringUtils;
 
 /** Management-side handoff between one host artifact and one external backup job. */
 public interface ThirdPartyBackupVolumeService {
+    /** Persisted completion remains valid after the Host execution directory is removed. */
+    static boolean hasFinalizedBackupStaging(Backup backup) {
+        if (!ThirdPartyBackupManifest.hasCompletedTransfers(backup)
+                || !"COMPLETED".equals(backup.getDetail(ThirdPartyBackupManifest.FINALIZATION_STATE_KEY))
+                || !"COMPLETED".equals(backup.getDetail(ThirdPartyBackupManifest.CLEANUP_STATE_KEY))) { return false; }
+        try {
+            ThirdPartyBackupManifest manifest = ThirdPartyBackupManifest.fromJson(backup.getDetail(ThirdPartyBackupManifest.DETAIL_KEY));
+            boolean parent = manifest.getCurrentArtifacts().stream().anyMatch(artifact -> StringUtils.isNotBlank(artifact.parentCheckpointName));
+            if (parent && !"COMPLETED".equals(backup.getDetail(ThirdPartyBackupManifest.SOURCE_CLEANUP_STATE_KEY))) { return false; }
+            String json = backup.getDetail(ThirdPartyBackupAdmission.BACKUP_KEY);
+            if (StringUtils.isBlank(json)) { return false; }
+            ThirdPartyBackupAdmission.Entry entry = new Gson().fromJson(json, ThirdPartyBackupAdmission.Entry.class);
+            return entry != null && backup.getUuid().equals(entry.jobId) && "BACKUP".equals(entry.operation)
+                    && "RELEASED".equals(entry.state);
+        } catch (RuntimeException e) { return false; }
+    }
+
     /** Completed physical cleanup still needs reconciliation until its DB reservation is released. */
     static boolean needsBackupCleanup(Backup backup) {
         if (java.util.Set.of("WAITING", "RUNNING").contains(

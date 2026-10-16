@@ -1678,6 +1678,55 @@ public class AblestackCommvaultClient {
         } catch (IOException e) { throw new CloudRuntimeException("Unable to reconcile Commvault task submission", e); }
     }
 
+    // 저장된 조회 시각이 없으면 같은 백업 작업의 완료 시각을 확인한다.
+    private long artifactBackupTime(ThirdPartyBackupManifest.Artifact artifact, JsonNode source) {
+        final long saved = positiveArtifactBackupTime(artifact.backupTime);
+        if (saved > 0) { return saved; }
+        if (StringUtils.isBlank(artifact.jobId) || !artifact.jobId.matches("[1-9][0-9]*")) {
+            throw new CloudRuntimeException("Commvault artifact backup time is unavailable: a backup Job ID is required");
+        }
+        try {
+            final String response = getJobDetails(artifact.jobId);
+            if (StringUtils.isBlank(response)) {
+                throw new CloudRuntimeException("Commvault artifact backup time is unavailable for backup job " + artifact.jobId);
+            }
+            final JsonNode detail = OBJECT_MAPPER.readTree(response).path("job").path("jobDetail");
+            final JsonNode general = detail.path("generalInfo");
+            final String operation = general.path("operationType").asText(general.path("jobType").asText());
+            final String jobType = general.path("jobType").asText();
+            if (!artifact.jobId.equals(general.path("jobId").asText()) || !"Backup".equalsIgnoreCase(operation)
+                    || (StringUtils.isNotBlank(jobType) && !"Backup".equalsIgnoreCase(jobType))
+                    || !"Completed".equalsIgnoreCase(detail.path("progressInfo").path("state").asText())) {
+                throw new CloudRuntimeException("Commvault artifact backup time requires the matching completed Backup job: " + artifact.jobId);
+            }
+            final JsonNode entity = general.path("subclient");
+            if (!artifact.sourceHost.equalsIgnoreCase(entity.path("clientName").asText())) {
+                throw new CloudRuntimeException("Commvault backup job source host does not match the artifact: " + artifact.jobId);
+            }
+            for (String field : List.of("clientId", "applicationId", "backupsetId", "instanceId", "subclientId", "backupsetName")) {
+                if (StringUtils.isBlank(source.path(field).asText()) || !source.path(field).asText().equals(entity.path(field).asText())) {
+                    throw new CloudRuntimeException("Commvault backup job source does not match the artifact: " + artifact.jobId);
+                }
+            }
+            final long confirmed = positiveArtifactBackupTime(detail.path("detailInfo").path("endTime").asText(null));
+            if (confirmed <= 0) {
+                throw new CloudRuntimeException("Commvault artifact backup time is unavailable for backup job " + artifact.jobId);
+            }
+            // 복원 계획에 저장된 메타데이터는 바꾸지 않고 이번 카탈로그 조회에만 사용한다.
+            return confirmed;
+        } catch (IOException e) {
+            throw new CloudRuntimeException("Unable to read Commvault artifact backup time for job " + artifact.jobId, e);
+        }
+    }
+
+    private static long positiveArtifactBackupTime(String value) {
+        if (StringUtils.isBlank(value) || !value.matches("[0-9]+")) { return 0; }
+        try {
+            final long parsed = Long.parseLong(value);
+            return parsed > 0 ? parsed : 0;
+        } catch (NumberFormatException e) { return 0; }
+    }
+
     private boolean browseVolumeArtifact(ThirdPartyBackupManifest.Artifact artifact, JsonNode source, boolean recover) {
         java.nio.file.Path artifactPath = java.nio.file.Path.of(artifact.path).normalize();
         // Metadata is a directory backup; its manifest is the required metadata artifact.
@@ -1695,10 +1744,7 @@ public class AblestackCommvaultClient {
             entity.put(key, Long.parseLong(value));
         }
         entity.put("clientName", artifact.sourceHost);
-        if (!recover && (StringUtils.isBlank(artifact.backupTime) || !artifact.backupTime.matches("[0-9]+"))) {
-            throw new CloudRuntimeException("Commvault artifact backup time is unavailable");
-        }
-        long backupTime = recover ? System.currentTimeMillis() / 1000 : Long.parseLong(artifact.backupTime);
+        long backupTime = recover ? System.currentTimeMillis() / 1000 : artifactBackupTime(artifact, source);
         if (backupTime <= 0) { throw new CloudRuntimeException("Commvault artifact backup time is invalid"); }
         request.putObject("timeRange").put("toTime", backupTime);
         request.set("paths", buildPathsJson(directory));

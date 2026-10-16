@@ -750,6 +750,8 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
     @Inject
     private org.apache.cloudstack.backup.AblestackBackupVmRemovalGuard ablestackBackupVmRemovalGuard;
     @Inject
+    private org.apache.cloudstack.backup.AblestackRestoreInstanceCleanup ablestackRestoreInstanceCleanup;
+    @Inject
     private ManagementServer _managementServer;
     @Inject
     private SnapshotApiService _snapshotService;
@@ -10697,6 +10699,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
                 ? new BackupManager.RestoreVmStartOptions(podId, clusterId, cmd.getHostId(), cmd.getDeploymentPlanner(), cmd.getBootIntoSetup()) : null;
 
         try {
+            ablestackRestoreInstanceCleanup.prepare(cmd.getBackupId(), vmId);
             Pair<UserVmVO, Map<VirtualMachineProfile.Param, Object>> vmParamPair = null;
             // Preserve provider-specific restore host selection; placement choices apply at final startup.
             vmParamPair = startVirtualMachine(vmId, null, null, null, additonalParams, null);
@@ -10726,14 +10729,16 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         } catch (CloudRuntimeException | ResourceUnavailableException | ResourceAllocationException | InsufficientCapacityException  e) {
             UserVmVO vmVO = _vmDao.findById(vmId);
             try {
-                expunge(vmVO);
-                logger.debug("Successfully cleaned up Instance {} after create Instance from backup failed", vmId);
+                if (!ablestackRestoreInstanceCleanup.cleanup(cmd.getBackupId(), vmId)) {
+                    expunge(vmVO);
+                }
             } catch (Exception cleanupException) {
                 logger.debug("Failed to cleanup Instance {} after create Instance from backup failed", vmId, cleanupException);
             }
             throw e;
         }
 
+        ablestackRestoreInstanceCleanup.complete(cmd.getBackupId(), vmId);
         if (cmd.getStartVm() && !cmd.getQuickRestore()) {
             additonalParams.remove(VirtualMachineProfile.Param.ReturnAfterVolumePrepare);
             if (cmd.getBootIntoSetup() != null) {

@@ -117,6 +117,10 @@ def admission_closed_path(job):
 
 def admission_closed_reason(job):
     # The stable receipt survives removal of the Host job directory.
+    from thirdparty_job_history import read
+    history = read(Path(job).parent.parent, Path(job).name)
+    if history is not None:
+        return history["closedReason"]
     for path in (admission_closed_path(job), Path(job) / "staging-admission-closed"):
         if path.exists():
             return path.read_text()
@@ -125,6 +129,9 @@ def admission_closed_reason(job):
 
 def close_admission(job, reason):
     """Persist closure outside removable job records, under capacity.lock."""
+    from thirdparty_job_history import read
+    if read(Path(job).parent.parent, Path(job).name) is not None:
+        return
     path = admission_closed_path(job)
     path.parent.mkdir(mode=0o700, exist_ok=True)
     fd = os.open(path.parent.parent, os.O_RDONLY | os.O_DIRECTORY)
@@ -1136,12 +1143,17 @@ def claim_backup_start(plan_file):
     if plan is None:
         return  # Existing jobs keep their original engine protocol.
     job_id = file.parent.name
+    from thirdparty_job_history import read
+    if read(file.parent.parent.parent, job_id) is not None:
+        raise RuntimeError("Retired backup cannot start again")
     if (plan.get("version") != 1 or plan.get("jobId") != job_id
             or plan.get("manifest") != source.get("manifest") or plan.get("backupPath") != source.get("backupPath")):
         raise RuntimeError("Backup start plan differs from the source plan")
     directory = Path("/var/lib/ablestack/backup/backup-start")
     with (directory / (job_id + ".lock")).open("a") as lock:
         fcntl.lockf(lock, fcntl.LOCK_EX)
+        if read(file.parent.parent.parent, job_id) is not None:
+            raise RuntimeError("Retired backup cannot start again")
         receipt_file = directory / (job_id + ".json")
         receipt = json.loads(receipt_file.read_text())
         if receipt.get("version") != 1 or receipt.get("plan") != plan or receipt.get("state") != "DISPATCHED":

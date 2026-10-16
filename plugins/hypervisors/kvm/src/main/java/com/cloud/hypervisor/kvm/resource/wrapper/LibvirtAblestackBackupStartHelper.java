@@ -63,9 +63,17 @@ final class LibvirtAblestackBackupStartHelper {
 
     private static ThirdPartyBackupStart.Receipt read(ThirdPartyBackupStart.Plan plan) throws IOException {
         Path file = ROOT.resolve(plan.jobId + ".json");
-        if (!Files.exists(file, LinkOption.NOFOLLOW_LINKS)) { return null; }
-        if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) { throw new IOException("Backup start receipt is not a regular file"); }
-        ThirdPartyBackupStart.Receipt receipt = new Gson().fromJson(Files.readString(file), ThirdPartyBackupStart.Receipt.class);
+        JsonObject history = LibvirtAblestackJobHistory.read(plan.jobId);
+        String json;
+        if (history != null) {
+            if (!history.has("startReceipt") || history.get("startReceipt").isJsonNull()) { return null; }
+            json = history.get("startReceipt").toString();
+        } else {
+            if (!Files.exists(file, LinkOption.NOFOLLOW_LINKS)) { return null; }
+            if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) { throw new IOException("Backup start receipt is not a regular file"); }
+            json = Files.readString(file);
+        }
+        ThirdPartyBackupStart.Receipt receipt = new Gson().fromJson(json, ThirdPartyBackupStart.Receipt.class);
         if (receipt == null || receipt.version != ThirdPartyBackupStart.VERSION || receipt.plan == null
                 || !new Gson().toJsonTree(plan).equals(new Gson().toJsonTree(receipt.plan))
                 || !Set.of("PREPARED", "DISPATCHED", "STARTED", "START_FAILED").contains(receipt.state)) {
@@ -83,9 +91,15 @@ final class LibvirtAblestackBackupStartHelper {
     static ThirdPartyBackupStart.Receipt recorded(String jobId) throws IOException {
         if (jobId == null || !jobId.matches("[A-Za-z0-9-]+")) { return null; }
         Path file = ROOT.resolve(jobId + ".json");
-        if (!Files.exists(file, LinkOption.NOFOLLOW_LINKS)) { return null; }
-        if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) { throw new IOException("Backup start receipt is not a regular file"); }
-        ThirdPartyBackupStart.Receipt receipt = new Gson().fromJson(Files.readString(file), ThirdPartyBackupStart.Receipt.class);
+        JsonObject history = LibvirtAblestackJobHistory.read(jobId);
+        ThirdPartyBackupStart.Receipt receipt;
+        if (history != null && history.has("startReceipt") && !history.get("startReceipt").isJsonNull()) {
+            receipt = new Gson().fromJson(history.get("startReceipt"), ThirdPartyBackupStart.Receipt.class);
+        } else {
+            if (!Files.exists(file, LinkOption.NOFOLLOW_LINKS)) { return null; }
+            if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) { throw new IOException("Backup start receipt is not a regular file"); }
+            receipt = new Gson().fromJson(Files.readString(file), ThirdPartyBackupStart.Receipt.class);
+        }
         validate(receipt == null ? null : receipt.plan);
         if (!jobId.equals(receipt.plan.jobId)) { throw new CloudRuntimeException("Backup start receipt belongs to another job"); }
         return read(receipt.plan);
@@ -107,6 +121,11 @@ final class LibvirtAblestackBackupStartHelper {
 
     static ThirdPartyBackupStart.Receipt control(ThirdPartyBackupStart.Plan plan, String action, Logger logger) throws IOException {
         validate(plan);
+        if (LibvirtAblestackJobHistory.closed(plan.jobId)) {
+            ThirdPartyBackupStart.Receipt receipt = read(plan);
+            if (receipt == null) { throw new CloudRuntimeException("Retired backup cannot be prepared again"); }
+            return receipt;
+        }
         // Serialize local threads before opening the lock file. POSIX record locks
         // can be released by closing another descriptor for this file in the same process.
         synchronized (localLock(plan.jobId)) {
@@ -116,6 +135,10 @@ final class LibvirtAblestackBackupStartHelper {
                     StandardOpenOption.CREATE, StandardOpenOption.WRITE); FileLock lock = channel.tryLock()) {
                 if (lock == null) { throw new CloudRuntimeException("Backup launch is being reconciled; retry shortly"); }
                 ThirdPartyBackupStart.Receipt receipt = read(plan);
+                if (LibvirtAblestackJobHistory.closed(plan.jobId)) {
+                    if (receipt == null) { throw new CloudRuntimeException("Retired backup cannot be prepared again"); }
+                    return receipt;
+                }
                 if (receipt == null) {
                     if (!"BACKUP_START_PREPARE".equals(action)) { throw new CloudRuntimeException("Backup start preparation is unconfirmed"); }
                     Path job = Path.of(AblestackBackupFrameworkUtils.ASYNC_BACKUP_JOB_ROOT, plan.jobId);
@@ -163,6 +186,7 @@ final class LibvirtAblestackBackupStartHelper {
                     || !plan.manifest.getProvider().equals("ablestack-" + provider.toLowerCase(java.util.Locale.ROOT))) {
                 throw new CloudRuntimeException("Backup command differs from its prepared start plan");
             }
+            if (LibvirtAblestackJobHistory.closed(jobId)) { return new BackupAnswer(command, false, "Backup attempt is already retired"); }
             synchronized (localLock(plan.jobId)) {
                 Files.createDirectories(ROOT);
                 try (FileChannel channel = FileChannel.open(ROOT.resolve(jobId + ".lock"),

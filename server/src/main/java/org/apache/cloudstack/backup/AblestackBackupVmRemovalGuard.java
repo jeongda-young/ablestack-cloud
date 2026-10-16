@@ -117,6 +117,7 @@ public class AblestackBackupVmRemovalGuard extends ManagerBase {
         if ((StringUtils.isNotBlank(restoreState) && !Set.of("COMPLETED", "FAILED", "CANCELED", "CANCELLED", "INTERRUPTED").contains(restoreState))
                 || (StringUtils.isBlank(restoreState) && StringUtils.isNotBlank(tracked.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_ID_DETAIL)))
                 || StringUtils.isNotBlank(tracked.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_CLEANUP_ID_DETAIL))
+                || StringUtils.isNotBlank(tracked.getDetail(AblestackRestoreInstanceCleanup.PENDING_KEY))
                 || (Boolean.parseBoolean(tracked.getDetail(AblestackBackupFrameworkUtils.BACKUP_CANCEL_REQUESTED_DETAIL))
                     && !"COMPLETED".equals(tracked.getDetail(AblestackBackupFrameworkUtils.BACKUP_CLEANUP_STATE_DETAIL)))) {
             throw new CloudRuntimeException("VOLUME_BACKUP_BUSY: Backup or restore termination is unconfirmed; removal is unavailable.");
