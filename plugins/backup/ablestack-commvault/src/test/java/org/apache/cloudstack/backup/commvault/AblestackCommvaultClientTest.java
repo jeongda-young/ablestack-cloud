@@ -484,9 +484,10 @@ public class AblestackCommvaultClientTest {
         AblestackCommvaultClient client = newClient();
         for (String plan : List.of("8", "0", "")) {
             stubVmBackupSet(vmBackupSet(plan));
+            stubVmBackupSetDetails("9", vmBackupSet(plan));
             CloudRuntimeException error = assertThrows(CloudRuntimeException.class,
                     () -> client.ensureVmBackupSet("ablecube4", "i-2-220-VM", "7"));
-            assertTrue(error.getMessage().contains("Plan does not match"));
+            assertTrue(error.getMessage().contains("8".equals(plan) ? "Plan does not match" : "Unable to confirm"));
         }
         wireMockRule.verify(0, postRequestedFor(urlEqualTo("/api/Backupset")));
         wireMockRule.verify(0, postRequestedFor(urlEqualTo("/api/Backupset/9")));
@@ -505,7 +506,8 @@ public class AblestackCommvaultClientTest {
                 .willSetStateTo("created"));
         wireMockRule.stubFor(get(urlEqualTo("/api/Backupset?clientName=ablecube4"))
                 .inScenario("backupset creation").whenScenarioStateIs("created")
-                .willReturn(aResponse().withStatus(200).withBody(vmBackupSet("7"))));
+                .willReturn(aResponse().withStatus(200).withBody(vmBackupSet(""))));
+        stubVmBackupSetDetails("9", vmBackupSet("7"));
 
         assertTrue(newClient().ensureVmBackupSet("ablecube4", "i-2-220-VM", "7"));
 
@@ -514,6 +516,93 @@ public class AblestackCommvaultClientTest {
                 .withRequestBody(matchingJsonPath("$.backupSetInfo.backupSetEntity.backupsetName", equalTo("i-2-220-VM")))
                 .withRequestBody(matchingJsonPath("$.backupSetInfo.planEntity.planId", equalTo("7"))));
         wireMockRule.verify(2, getRequestedFor(urlEqualTo("/api/Backupset?clientName=ablecube4")));
+        wireMockRule.verify(1, getRequestedFor(urlEqualTo("/api/Backupset/9")));
+    }
+
+    @Test
+    public void capturedInventoryWithoutPlanReusesTheBackupSetUsingItsDetails() throws Exception {
+        stubTokenRenewal();
+        stubVmBackupSet(capturedBackupSetResponse("backupsets-plan-omitted.json").toString());
+        stubVmBackupSetDetails("30", capturedBackupSetResponse("backupset-30-detail.json").toString());
+
+        assertEquals("30", newClient().prepareVmBackupSet("ablecube4", "i-2-220-VM", "1"));
+
+        wireMockRule.verify(1, getRequestedFor(urlEqualTo("/api/Backupset/30")));
+        wireMockRule.verify(0, getRequestedFor(urlEqualTo("/api/Backupset/25")));
+        wireMockRule.verify(0, getRequestedFor(urlEqualTo("/api/Backupset/28")));
+        wireMockRule.verify(0, postRequestedFor(urlEqualTo("/api/Backupset")));
+        wireMockRule.verify(0, postRequestedFor(urlEqualTo("/api/Backupset/30")));
+    }
+
+    @Test
+    public void detailedPlanMismatchReportsBothIdsWithoutChangingTheBackupSet() throws Exception {
+        stubTokenRenewal();
+        stubVmBackupSet(capturedBackupSetResponse("backupsets-plan-omitted.json").toString());
+        stubVmBackupSetDetails("30", capturedBackupSetResponse("backupset-30-detail.json").toString());
+
+        CloudRuntimeException error = assertThrows(CloudRuntimeException.class,
+                () -> newClient().prepareVmBackupSet("ablecube4", "i-2-220-VM", "2"));
+
+        assertTrue(error.getMessage().contains("expectedPlanId=[2]"));
+        assertTrue(error.getMessage().contains("actualPlanId=[1]"));
+        wireMockRule.verify(0, postRequestedFor(urlEqualTo("/api/Backupset")));
+        wireMockRule.verify(0, postRequestedFor(urlEqualTo("/api/Backupset/30")));
+    }
+
+    @Test
+    public void missingDetailedPlanRemainsUnconfirmedAndNeverCreatesAReplacement() throws Exception {
+        stubTokenRenewal();
+        stubVmBackupSet(vmBackupSet(""));
+        stubVmBackupSetDetails("9", vmBackupSet(""));
+
+        CloudRuntimeException error = assertThrows(CloudRuntimeException.class,
+                () -> newClient().prepareVmBackupSet("ablecube4", "i-2-220-VM", "7"));
+
+        assertTrue(error.getMessage().contains("Unable to confirm"));
+        wireMockRule.verify(0, postRequestedFor(urlEqualTo("/api/Backupset")));
+    }
+
+    @Test
+    public void invalidOrFailedDetailsCannotSupplyTheSelectedBackupSetsPlan() throws Exception {
+        stubTokenRenewal();
+        stubVmBackupSet(capturedBackupSetResponse("backupsets-plan-omitted.json").toString());
+        AblestackCommvaultClient client = newClient();
+        for (String field : List.of("backupsetId", "backupsetName", "clientName", "applicationId", "clientId", "instanceId")) {
+            ObjectNode response = capturedBackupSetResponse("backupset-30-detail.json");
+            ((ObjectNode) response.at("/backupsetProperties/0/backupSetEntity")).put(field, "unexpected");
+            stubVmBackupSetDetails("30", response.toString());
+            assertThrows(CloudRuntimeException.class, () -> client.prepareVmBackupSet("ablecube4", "i-2-220-VM", "1"));
+        }
+        for (String body : List.of("{}", "null", "invalid-json", "{\"backupsetProperties\":[]}",
+                "{\"errorCode\":4,\"backupsetProperties\":[]}")) {
+            stubVmBackupSetDetails("30", body);
+            assertThrows(CloudRuntimeException.class, () -> client.prepareVmBackupSet("ablecube4", "i-2-220-VM", "1"));
+        }
+        wireMockRule.stubFor(get(urlEqualTo("/api/Backupset/30"))
+                .willReturn(aResponse().withStatus(500).withBody("server unavailable")));
+        assertThrows(ServerApiException.class, () -> client.prepareVmBackupSet("ablecube4", "i-2-220-VM", "1"));
+        wireMockRule.verify(0, postRequestedFor(urlEqualTo("/api/Backupset")));
+    }
+
+    @Test
+    public void cleanupInventoryResolvesDetailedPlansAndSkipsTheDefaultBackupSet() throws Exception {
+        stubTokenRenewal();
+        stubVmBackupSet(capturedBackupSetResponse("backupsets-plan-omitted.json").toString());
+        ObjectNode otherVm = capturedBackupSetResponse("backupset-30-detail.json");
+        ((ObjectNode) otherVm.at("/backupsetProperties/0/backupSetEntity"))
+                .put("backupsetId", 28).put("backupsetName", "i-2-218-VM");
+        stubVmBackupSetDetails("28", otherVm.toString());
+        stubVmBackupSetDetails("30", capturedBackupSetResponse("backupset-30-detail.json").toString());
+
+        List<AblestackCommvaultClient.VmBackupSet> inventory = newClient().listVmBackupSets("ablecube4");
+
+        assertEquals(3, inventory.size());
+        assertEquals("", inventory.get(0).planId);
+        assertEquals("1", inventory.get(1).planId);
+        assertEquals("1", inventory.get(2).planId);
+        wireMockRule.verify(0, getRequestedFor(urlEqualTo("/api/Backupset/25")));
+        wireMockRule.verify(1, getRequestedFor(urlEqualTo("/api/Backupset/28")));
+        wireMockRule.verify(1, getRequestedFor(urlEqualTo("/api/Backupset/30")));
     }
 
     @Test
@@ -564,6 +653,17 @@ public class AblestackCommvaultClientTest {
                 .willReturn(aResponse().withStatus(200).withBody(body)));
     }
 
+    private void stubVmBackupSetDetails(String id, String body) {
+        wireMockRule.stubFor(get(urlEqualTo("/api/Backupset/" + id))
+                .willReturn(aResponse().withStatus(200).withBody(body)));
+    }
+
+    private ObjectNode capturedBackupSetResponse(String name) throws IOException {
+        try (InputStream stream = getClass().getResourceAsStream("/commvault/" + name)) {
+            return (ObjectNode) new ObjectMapper().readTree(stream);
+        }
+    }
+
     private String vmBackupSet(String planId) {
         return "{\"backupsetProperties\":[{\"planEntity\":{\"planId\":\"" + planId + "\"},"
                 + "\"backupSetEntity\":{\"backupsetId\":9,\"backupsetName\":\"i-2-220-VM\","
@@ -584,7 +684,8 @@ public class AblestackCommvaultClientTest {
         stubTokenRenewal();
         wireMockRule.stubFor(get(urlEqualTo("/api/Backupset?clientName=ablecube4"))
                 .inScenario("backupset deletion").whenScenarioStateIs(Scenario.STARTED)
-                .willReturn(aResponse().withStatus(200).withBody(vmBackupSet("7"))));
+                .willReturn(aResponse().withStatus(200).withBody(vmBackupSet(""))));
+        stubVmBackupSetDetails("9", vmBackupSet("7"));
         wireMockRule.stubFor(delete(urlEqualTo("/api/Backupset/9"))
                 .inScenario("backupset deletion").whenScenarioStateIs(Scenario.STARTED)
                 .willReturn(aResponse().withStatus(200).withBody("{\"errorCode\":0}"))
@@ -597,6 +698,7 @@ public class AblestackCommvaultClientTest {
 
         wireMockRule.verify(1, deleteRequestedFor(urlEqualTo("/api/Backupset/9")));
         wireMockRule.verify(2, getRequestedFor(urlEqualTo("/api/Backupset?clientName=ablecube4")));
+        wireMockRule.verify(1, getRequestedFor(urlEqualTo("/api/Backupset/9")));
     }
 
     @Test

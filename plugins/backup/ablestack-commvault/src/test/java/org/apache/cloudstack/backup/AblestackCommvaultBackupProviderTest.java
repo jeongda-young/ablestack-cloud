@@ -247,6 +247,21 @@ public class AblestackCommvaultBackupProviderTest {
     }
 
     @Test
+    public void offeringDeletionStopsWhenARecordedPlanIsUnconfirmedOrChanged() {
+        CleanupFixture fixture = new CleanupFixture();
+        AblestackCommvaultClient.VmBackupSet own = fixture.reference("i-2-220-VM", "9", "7");
+        when(fixture.details.listDetails(3L)).thenReturn(List.of(new BackupOfferingDetailsVO(3L,
+                "commvault.managed.backupset.4.220", new com.google.gson.Gson().toJson(own), false)));
+        for (String plan : List.of("", "8")) {
+            AblestackCommvaultClient.VmBackupSet current = fixture.reference("i-2-220-VM", "9", plan);
+            when(fixture.client.listVmBackupSets("ablecube4")).thenReturn(List.of(current));
+
+            assertThrows(CloudRuntimeException.class, () -> fixture.provider.cleanupBackupOffering(fixture.offering));
+        }
+        verify(fixture.client, never()).deleteVmBackupSet(any());
+    }
+
+    @Test
     public void offeringDeletionRefusesToCleanWhileBackupsOrAssignmentsRemain() {
         CleanupFixture fixture = new CleanupFixture();
         when(fixture.backups.listByOfferingId(3L)).thenReturn(List.of(mock(Backup.class)));

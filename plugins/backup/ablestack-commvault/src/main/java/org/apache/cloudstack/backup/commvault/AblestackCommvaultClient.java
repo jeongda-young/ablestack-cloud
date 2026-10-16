@@ -948,9 +948,7 @@ public class AblestackCommvaultClient {
         }
         final JsonNode properties = getVmBackupSetProperties(hostName, vmName);
         if (properties != null) {
-            if (!planId.equals(properties.path("planEntity").path("planId").asText())) {
-                throw new CloudRuntimeException("The existing Commvault VM BackupSet Plan does not match the Mold backup offering; verify the external configuration.");
-            }
+            validateVmBackupSetPlan(hostName, properties, planId);
             return properties.path("backupSetEntity").path("backupsetId").asText();
         }
         final String clientId = getClientId(hostName);
@@ -959,8 +957,46 @@ public class AblestackCommvaultClient {
             return null;
         }
         final JsonNode confirmed = getVmBackupSetProperties(hostName, vmName);
-        return confirmed != null && planId.equals(confirmed.path("planEntity").path("planId").asText())
-                ? confirmed.path("backupSetEntity").path("backupsetId").asText() : null;
+        if (confirmed == null) { return null; }
+        validateVmBackupSetPlan(hostName, confirmed, planId);
+        return confirmed.path("backupSetEntity").path("backupsetId").asText();
+    }
+
+    private void validateVmBackupSetPlan(String hostName, JsonNode properties, String expectedPlanId) {
+        final String actualPlanId = getVmBackupSetPlanId(hostName, properties);
+        final JsonNode entity = properties.path("backupSetEntity");
+        final String identity = String.format("host=[%s], vm=[%s], backupSetId=[%s]", hostName,
+                entity.path("backupsetName").asText(), entity.path("backupsetId").asText());
+        if (StringUtils.isBlank(actualPlanId)) {
+            throw new CloudRuntimeException("Unable to confirm the Commvault VM BackupSet Plan; " + identity);
+        }
+        if (!expectedPlanId.equals(actualPlanId)) {
+            throw new CloudRuntimeException("The existing Commvault VM BackupSet Plan does not match the Mold backup offering; "
+                    + identity + ", expectedPlanId=[" + expectedPlanId + "], actualPlanId=[" + actualPlanId + "]. Verify the external configuration.");
+        }
+    }
+
+    // 목록의 planEntity는 비어 있을 수 있으므로, 이 경우 BackupSet ID로 상세 Plan을 확인한다.
+    // GET /Backupset/{backupsetId}: 목록·Subclient 응답의 Plan 생략을 실제 Plan 불일치로 판단하지 않는다.
+    private String getVmBackupSetPlanId(String hostName, JsonNode properties) {
+        final String listedPlanId = properties.path("planEntity").path("planId").asText();
+        if (listedPlanId.matches("[1-9][0-9]*")) { return listedPlanId; }
+
+        final JsonNode expectedEntity = properties.path("backupSetEntity");
+        final String backupSetId = expectedEntity.path("backupsetId").asText();
+        final JsonNode details = getBackupSetProperties(hostName, "/Backupset/" + backupSetId);
+        if (details.size() != 1) {
+            throw new CloudRuntimeException("Commvault BackupSet detail identity could not be confirmed: " + backupSetId);
+        }
+        final JsonNode detailed = details.get(0);
+        final JsonNode actualEntity = detailed.path("backupSetEntity");
+        for (String field : List.of("backupsetId", "backupsetName", "applicationId", "clientId", "instanceId")) {
+            if (expectedEntity.hasNonNull(field) && !expectedEntity.path(field).asText().equals(actualEntity.path(field).asText())) {
+                throw new CloudRuntimeException("Commvault BackupSet detail identity does not match the selected BackupSet: " + backupSetId);
+            }
+        }
+        final String detailedPlanId = detailed.path("planEntity").path("planId").asText();
+        return detailedPlanId.matches("[1-9][0-9]*") ? detailedPlanId : "";
     }
 
     // GET https://<commserveIp>/commandcenter/api/Backupset?clientName=<hostName>
@@ -986,8 +1022,12 @@ public class AblestackCommvaultClient {
 
     // 조회 실패나 응답 오류를 BackupSet이 없는 경우로 판단하지 않는다.
     private JsonNode getBackupSetProperties(String hostName) {
+        return getBackupSetProperties(hostName, "/Backupset?clientName=" + java.net.URLEncoder.encode(hostName, StandardCharsets.UTF_8));
+    }
+
+    private JsonNode getBackupSetProperties(String hostName, String path) {
         try {
-            final HttpResponse response = get("/Backupset?clientName=" + java.net.URLEncoder.encode(hostName, StandardCharsets.UTF_8));
+            final HttpResponse response = get(path);
             checkResponseOK(response);
             if (response.getEntity() == null) {
                 throw new CloudRuntimeException("Commvault BackupSet inventory is empty");
@@ -1028,7 +1068,7 @@ public class AblestackCommvaultClient {
                 throw new CloudRuntimeException("Commvault VM BackupSet identity is ambiguous");
             }
             result.add(new VmBackupSet(hostName, vmName, entity.path("backupsetId").asText(),
-                    item.path("planEntity").path("planId").asText()));
+                    "defaultBackupSet".equalsIgnoreCase(vmName) ? "" : getVmBackupSetPlanId(hostName, item)));
         }
         return result;
     }
@@ -1041,10 +1081,10 @@ public class AblestackCommvaultClient {
         }
         final JsonNode current = getVmBackupSetProperties(expected.hostName, expected.vmName);
         if (current == null) { return true; }
-        if (!expected.backupSetId.equals(current.path("backupSetEntity").path("backupsetId").asText())
-                || !expected.planId.equals(current.path("planEntity").path("planId").asText())) {
-            throw new CloudRuntimeException("The Commvault BackupSet identity or Plan changed during offering deletion");
+        if (!expected.backupSetId.equals(current.path("backupSetEntity").path("backupsetId").asText())) {
+            throw new CloudRuntimeException("The Commvault BackupSet identity changed during offering deletion");
         }
+        validateVmBackupSetPlan(expected.hostName, current, expected.planId);
         return deleteBackupSet(expected.backupSetId) && getVmBackupSetProperties(expected.hostName, expected.vmName) == null;
     }
 

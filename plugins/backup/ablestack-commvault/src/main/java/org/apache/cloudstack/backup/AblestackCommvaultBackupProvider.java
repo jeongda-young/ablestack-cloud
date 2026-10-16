@@ -2270,12 +2270,16 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         // 모든 호스트의 조회가 끝난 뒤 삭제하여 조회 오류를 대상 없음으로 처리하지 않는다.
         for (String hostName : hostNames) {
             for (AblestackCommvaultClient.VmBackupSet candidate : client.listVmBackupSets(hostName)) {
-                if ("defaultBackupSet".equalsIgnoreCase(candidate.vmName) || !offering.getExternalId().equals(candidate.planId)) { continue; }
+                if ("defaultBackupSet".equalsIgnoreCase(candidate.vmName)) { continue; }
                 final AblestackCommvaultClient.VmBackupSet reference = managed.get(hostName + ":" + candidate.vmName);
-                if (reference != null && !reference.backupSetId.equals(candidate.backupSetId)) {
-                    throw new CloudRuntimeException("A managed Commvault BackupSet ID has changed; verify the external configuration.");
+                if (reference == null && !vmNames.contains(candidate.vmName)) { continue; }
+                if (StringUtils.isBlank(candidate.planId)) {
+                    throw new CloudRuntimeException("Unable to confirm a managed Commvault BackupSet Plan; the backup offering is retained for retry.");
                 }
-                if (reference != null || vmNames.contains(candidate.vmName)) { targets.add(candidate); }
+                if (reference != null && (!reference.backupSetId.equals(candidate.backupSetId) || !reference.planId.equals(candidate.planId))) {
+                    throw new CloudRuntimeException("A managed Commvault BackupSet ID or Plan has changed; verify the external configuration.");
+                }
+                if (offering.getExternalId().equals(candidate.planId)) { targets.add(candidate); }
             }
         }
         for (AblestackCommvaultClient.VmBackupSet target : targets) {
