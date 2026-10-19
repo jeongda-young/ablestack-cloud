@@ -68,7 +68,6 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
     private static final String ATTACH_RBD_DISK_XML_COMMAND = " virsh attach-device %s /dev/stdin <<EOF%sEOF";
     private static final String CURRENT_DEVICE = "virsh domblklist --domain %s --details | awk '($3 ~ /^(vd|sd|hd)[a-z]+$/) {print $3} "
             + "($4 ~ /^(vd|sd|hd)[a-z]+$/) {print $4}' | sort -V | tail -n 1";
-    private static final String QEMU_IMG_HAS_BACKING_COMMAND = "qemu-img info --output=json %s 2>/dev/null | grep -q '\"backing-filename\"'";
     @Override
     public Answer execute(AblestackNasRestoreBackupCommand command, LibvirtComputingResource serverResource) {
         if (!command.isWaitForCompletion()) {
@@ -362,7 +361,7 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
 
     private boolean replaceFileVolumeWithBackup(String volumePath, List<String> backupPaths, int timeout) {
         return LibvirtAblestackFileRestoreHelper.replaceFileVolumeWithBackup(RESTORE_TRACE, logger, volumePath, backupPaths, timeout,
-                "cs-nas-restore-volume-", LibvirtAblestackNasRestoreDiagnostics.load(logger));
+                "cs-nas-restore-volume-");
     }
 
     private boolean replaceFileVolumeWithBackup(String volumePath, String backupPath, int timeout) {
@@ -415,13 +414,12 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
         QemuImgFile srcBackupFile = null;
         QemuImgFile destVolumeFile = null;
         try {
-            QemuImg qemu = new QemuImg(timeout * 1000, true, false);
             srcBackupFile = new QemuImgFile(sourceImage.buildQemuUri(tempImage), QemuImg.PhysicalDiskFormat.RAW);
             destVolumeFile = new QemuImgFile(volumePath, getFileVolumeFormat(volumePath));
-            LibvirtAblestackRestoreProgress.phase("RESTORE_CONVERT", "RBD (RAW) → " + destVolumeFile.getFormat());
-            qemu.convert(srcBackupFile, destVolumeFile);
+            LibvirtAblestackFileRestoreHelper.convertFileVolumeWithQemuImg(RESTORE_TRACE, logger, srcBackupFile.getFileName(),
+                    destVolumeFile.getFileName(), srcBackupFile.getFormat(), destVolumeFile.getFormat(), timeout);
             return true;
-        } catch (QemuImgException | LibvirtException e) {
+        } catch (QemuImgException e) {
             String srcFilename = srcBackupFile != null ? srcBackupFile.getFileName() : tempImage;
             String destFilename = destVolumeFile != null ? destVolumeFile.getFileName() : volumePath;
             logger.error("Failed to convert temporary RBD {} to volume {}, the error was: {}", srcFilename, destFilename, e.getMessage());
@@ -501,54 +499,6 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
             logger.error("{} phase=[TARGET_MOVED_ASIDE_RESTORE_FAILED], target=[{}], movedAside=[{}], error=[{}]",
                     RESTORE_TRACE, volumePath, movedAsideTarget, e.getMessage());
         }
-    }
-
-    private void restoreFileVolumeData(String backupPath, String volumePath, QemuImg.PhysicalDiskFormat backupFormat,
-                                       QemuImg.PhysicalDiskFormat volumeFormat, int timeout) throws QemuImgException {
-        if (backupFormat == QemuImg.PhysicalDiskFormat.QCOW2 && volumeFormat == QemuImg.PhysicalDiskFormat.QCOW2) {
-            if (hasBackingChain(backupPath)) {
-                convertFileVolumeWithQemuImg(backupPath, volumePath, backupFormat, volumeFormat, timeout);
-            } else {
-                rsyncQcow2BackupFile(backupPath, volumePath, timeout);
-            }
-            return;
-        }
-        convertFileVolumeWithQemuImg(backupPath, volumePath, backupFormat, volumeFormat, timeout);
-    }
-
-    private boolean hasBackingChain(String qcow2Path) {
-        return runCommandWithOutput(String.format(QEMU_IMG_HAS_BACKING_COMMAND, quote(qcow2Path)), 0).first() == 0;
-    }
-
-    private void rsyncQcow2BackupFile(String backupPath, String volumePath, int timeout) throws QemuImgException {
-        String rsyncCommand = String.format("rsync -az %s %s", quote(backupPath), quote(volumePath));
-        Pair<Integer, String> result = runCommandWithOutput(rsyncCommand, timeout * 1000);
-        String output = formatTraceOutput(result.second());
-        if (result.first() == 0) {
-            logger.info("{} phase=[RSYNC], source=[{}], target=[{}], command=[rsync-qcow2]",
-                    RESTORE_TRACE, backupPath, volumePath);
-            return;
-        }
-        logger.warn("{} phase=[RSYNC], source=[{}], target=[{}], command=[rsync-qcow2], exitCode=[{}], output=[{}]",
-                RESTORE_TRACE, backupPath, volumePath, result.first(), output);
-        throw new QemuImgException(String.format("rsync qcow2 backup failed with exitCode [%s], output [%s]", result.first(), output));
-    }
-
-    private void convertFileVolumeWithQemuImg(String backupPath, String volumePath, QemuImg.PhysicalDiskFormat backupFormat,
-                                              QemuImg.PhysicalDiskFormat volumeFormat, int timeout) throws QemuImgException {
-        String convertCommand = String.format("qemu-img convert -p -S 0 -f %s -O %s %s %s",
-                backupFormat.toString().toLowerCase(Locale.ROOT), volumeFormat.toString().toLowerCase(Locale.ROOT),
-                quote(backupPath), quote(volumePath));
-        Pair<Integer, String> result = runCommandWithOutput(convertCommand, timeout * 1000);
-        String output = formatTraceOutput(result.second());
-        if (result.first() == 0) {
-            logger.info("{} phase=[CONVERT], source=[{}], target=[{}], command=[qemu-img-convert-nosparse]",
-                    RESTORE_TRACE, backupPath, volumePath);
-            return;
-        }
-        logger.warn("{} phase=[CONVERT], source=[{}], target=[{}], command=[qemu-img-convert-nosparse], exitCode=[{}], output=[{}]",
-                RESTORE_TRACE, backupPath, volumePath, result.first(), output);
-        throw new QemuImgException(String.format("qemu-img convert failed with exitCode [%s], output [%s]", result.first(), output));
     }
 
     private Pair<Integer, String> runCommandWithOutput(String command, int timeout) {

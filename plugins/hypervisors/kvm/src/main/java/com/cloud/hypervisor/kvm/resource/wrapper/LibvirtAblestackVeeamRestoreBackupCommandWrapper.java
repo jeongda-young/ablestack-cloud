@@ -64,7 +64,6 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
     private static final String ATTACH_RBD_DISK_XML_COMMAND = " virsh attach-device %s /dev/stdin <<EOF%sEOF";
     private static final String CURRENT_DEVICE = "virsh domblklist --domain %s --details | awk '($3 ~ /^(vd|sd|hd)[a-z]+$/) {print $3} "
             + "($4 ~ /^(vd|sd|hd)[a-z]+$/) {print $4}' | sort -V | tail -n 1";
-    private static final String QEMU_IMG_HAS_BACKING_COMMAND = "qemu-img info --output=json %s 2>/dev/null | grep -q '\"backing-filename\"'";
     private static final String RESTORE_TRACE = AblestackBackupFrameworkUtils.buildTracePrefix("veeam", AblestackBackupFrameworkUtils.OPERATION_RESTORE);
 
     @Override
@@ -367,7 +366,8 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
             final QemuImgFile temporaryVolumeFile = new QemuImgFile(temporaryVolumePath.toString(), targetFormat);
             logger.info("{} phase=[TEMP_TARGET_CREATED], source=[{}], target=[{}], temporaryTarget=[{}], sourceFormat=[{}], targetFormat=[{}]",
                     RESTORE_TRACE, srcBackupFile.getFileName(), volumePath, temporaryVolumeFile.getFileName(), srcBackupFile.getFormat(), targetFormat);
-            restoreFileVolumeData(backupPath, temporaryVolumeFile.getFileName(), srcBackupFile.getFormat(), targetFormat, timeout);
+            LibvirtAblestackFileRestoreHelper.convertFileVolumeWithQemuImg(RESTORE_TRACE, logger, backupPath,
+                    temporaryVolumeFile.getFileName(), srcBackupFile.getFormat(), targetFormat, timeout);
             Files.move(temporaryVolumePath, Paths.get(volumePath), StandardCopyOption.REPLACE_EXISTING);
             logger.info("{} phase=[TEMP_TARGET_PROMOTED], target=[{}], temporaryTarget=[{}]",
                     RESTORE_TRACE, volumePath, temporaryVolumePath);
@@ -553,39 +553,6 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
             logger.error("{} phase=[TARGET_MOVED_ASIDE_RESTORE_FAILED], target=[{}], movedAside=[{}], error=[{}]",
                     RESTORE_TRACE, volumePath, movedAsideTarget, e.getMessage());
         }
-    }
-
-    private boolean hasBackingChain(final String qcow2Path) {
-        return Script.runSimpleBashScriptForExitValue(String.format(QEMU_IMG_HAS_BACKING_COMMAND, quote(qcow2Path)), 0, false) == 0;
-    }
-
-    private void restoreFileVolumeData(final String backupPath, final String volumePath, final QemuImg.PhysicalDiskFormat backupFormat,
-            final QemuImg.PhysicalDiskFormat volumeFormat, final int timeout) throws QemuImgException, LibvirtException {
-        if (backupFormat == QemuImg.PhysicalDiskFormat.QCOW2 && volumeFormat == QemuImg.PhysicalDiskFormat.QCOW2 && !hasBackingChain(backupPath)) {
-            rsyncQcow2BackupFile(backupPath, volumePath, timeout);
-            return;
-        }
-        convertFileVolumeWithQemuImg(backupPath, volumePath, backupFormat, volumeFormat, timeout);
-    }
-
-    private void rsyncQcow2BackupFile(final String backupPath, final String volumePath, final int timeout) throws QemuImgException {
-        final String rsyncCommand = String.format("rsync -az %s %s", quote(backupPath), quote(volumePath));
-        final CommandExecutionResult result = executeBashCommandWithResult(rsyncCommand, timeout, "Rsync standalone QCOW2 backup to file volume");
-        if (result.exitCode != 0) {
-            logger.warn("{} phase=[RSYNC], source=[{}], target=[{}], command=[rsync-qcow2], exitCode=[{}], output=[{}]",
-                    RESTORE_TRACE, backupPath, volumePath, result.exitCode, result.output);
-            throw new QemuImgException(String.format("rsync qcow2 backup failed with exitCode [%s], output [%s]", result.exitCode, result.output));
-        }
-        logger.info("{} phase=[RSYNC], source=[{}], target=[{}], command=[rsync-qcow2]",
-                RESTORE_TRACE, backupPath, volumePath);
-    }
-
-    private void convertFileVolumeWithQemuImg(final String backupPath, final String volumePath, final QemuImg.PhysicalDiskFormat backupFormat,
-            final QemuImg.PhysicalDiskFormat volumeFormat, final int timeout) throws QemuImgException, LibvirtException {
-        final QemuImg qemu = new QemuImg(timeout * 1000, true, false);
-        qemu.convert(new QemuImgFile(backupPath, backupFormat), new QemuImgFile(volumePath, volumeFormat));
-        logger.info("{} phase=[CONVERT], source=[{}], target=[{}], command=[qemu-img-convert]",
-                RESTORE_TRACE, backupPath, volumePath);
     }
 
     private boolean replaceFileVolumeWithBackup(final String volumePath, final List<String> backupPaths, final int timeout) {

@@ -63,7 +63,6 @@ public class LibvirtAblestackNetBackupRestoreBackupCommandWrapper extends Comman
     private static final String ATTACH_RBD_DISK_XML_COMMAND = " virsh attach-device %s /dev/stdin <<EOF%sEOF";
     private static final String CURRENT_DEVICE = "virsh domblklist --domain %s --details | awk '($3 ~ /^(vd|sd|hd)[a-z]+$/) {print $3} "
             + "($4 ~ /^(vd|sd|hd)[a-z]+$/) {print $4}' | sort -V | tail -n 1";
-    private static final String QEMU_IMG_HAS_BACKING_COMMAND = "qemu-img info --output=json %s 2>/dev/null | grep -q '\"backing-filename\"'";
     private static final String RESTORE_TRACE = AblestackBackupFrameworkUtils.buildTracePrefix("netbackup", AblestackBackupFrameworkUtils.OPERATION_RESTORE);
 
     @Override
@@ -432,46 +431,6 @@ public class LibvirtAblestackNetBackupRestoreBackupCommandWrapper extends Comman
         }
     }
 
-    private boolean hasBackingChain(final String qcow2Path) {
-        return Script.runSimpleBashScriptForExitValue(String.format(QEMU_IMG_HAS_BACKING_COMMAND, quote(qcow2Path)), 0, false) == 0;
-    }
-
-    private void restoreFileVolumeData(final String backupPath, final String volumePath, final QemuImg.PhysicalDiskFormat backupFormat,
-            final QemuImg.PhysicalDiskFormat volumeFormat, final int timeout) throws QemuImgException, LibvirtException {
-        if (backupFormat == QemuImg.PhysicalDiskFormat.QCOW2 && volumeFormat == QemuImg.PhysicalDiskFormat.QCOW2 && !hasBackingChain(backupPath)) {
-            rsyncQcow2BackupFile(backupPath, volumePath, timeout);
-            return;
-        }
-        convertFileVolumeWithQemuImg(backupPath, volumePath, backupFormat, volumeFormat, timeout);
-    }
-
-    private void rsyncQcow2BackupFile(final String backupPath, final String volumePath, final int timeout) throws QemuImgException {
-        final String rsyncCommand = String.format("rsync -az %s %s", quote(backupPath), quote(volumePath));
-        final CommandExecutionResult result = executeBashCommandWithResult(rsyncCommand, timeout, "Rsync standalone QCOW2 backup to file volume");
-        if (result.exitCode != 0) {
-            logger.warn("{} phase=[RSYNC], source=[{}], target=[{}], command=[rsync-qcow2], exitCode=[{}], output=[{}]",
-                    RESTORE_TRACE, backupPath, volumePath, result.exitCode, result.output);
-            throw new QemuImgException(String.format("rsync qcow2 backup failed with exitCode [%s], output [%s]", result.exitCode, result.output));
-        }
-        logger.info("{} phase=[RSYNC], source=[{}], target=[{}], command=[rsync-qcow2]",
-                RESTORE_TRACE, backupPath, volumePath);
-    }
-
-    private void convertFileVolumeWithQemuImg(final String backupPath, final String volumePath, final QemuImg.PhysicalDiskFormat backupFormat,
-            final QemuImg.PhysicalDiskFormat volumeFormat, final int timeout) throws QemuImgException, LibvirtException {
-        final String convertCommand = String.format("qemu-img convert -p -S 0 -f %s -O %s %s %s",
-                backupFormat.toString().toLowerCase(Locale.ROOT), volumeFormat.toString().toLowerCase(Locale.ROOT),
-                quote(backupPath), quote(volumePath));
-        final CommandExecutionResult result = executeBashCommandWithResult(convertCommand, timeout, "Convert backup to file volume without sparse detection");
-        if (result.exitCode != 0) {
-            logger.warn("{} phase=[CONVERT], source=[{}], target=[{}], command=[qemu-img-convert-nosparse], exitCode=[{}], output=[{}]",
-                    RESTORE_TRACE, backupPath, volumePath, result.exitCode, result.output);
-            throw new QemuImgException(String.format("qemu-img convert failed with exitCode [%s], output [%s]", result.exitCode, result.output));
-        }
-        logger.info("{} phase=[CONVERT], source=[{}], target=[{}], command=[qemu-img-convert-nosparse]",
-                RESTORE_TRACE, backupPath, volumePath);
-    }
-
     private boolean replaceFileVolumeWithBackup(final String volumePath, final List<String> backupPaths, final int timeout) {
         return LibvirtAblestackFileRestoreHelper.replaceFileVolumeChain(RESTORE_TRACE, logger, volumePath, backupPaths, timeout,
                 "cs-netbackup-restore-volume-");
@@ -483,17 +442,10 @@ public class LibvirtAblestackNetBackupRestoreBackupCommandWrapper extends Comman
         try {
             srcBackupFile = new QemuImgFile(sourceImage.buildQemuUri(tempImage), QemuImg.PhysicalDiskFormat.RAW);
             destVolumeFile = new QemuImgFile(volumePath, getFileVolumeFormat(volumePath));
-            final String convertCommand = String.format("qemu-img convert -p -S 0 -f %s -O %s %s %s",
-                    srcBackupFile.getFormat().toString().toLowerCase(Locale.ROOT), destVolumeFile.getFormat().toString().toLowerCase(Locale.ROOT),
-                    quote(srcBackupFile.getFileName()), quote(destVolumeFile.getFileName()));
-            final CommandExecutionResult result = executeBashCommandWithResult(convertCommand, timeout, "Convert temporary RBD backup to file volume without sparse detection");
-            if (result.exitCode != 0) {
-                logger.warn("{} phase=[CONVERT_TEMP_RBD_TO_FILE], source=[{}], target=[{}], command=[qemu-img-convert-nosparse], exitCode=[{}], output=[{}]",
-                        RESTORE_TRACE, srcBackupFile.getFileName(), destVolumeFile.getFileName(), result.exitCode, result.output);
-                return false;
-            }
+            LibvirtAblestackFileRestoreHelper.convertFileVolumeWithQemuImg(RESTORE_TRACE, logger, srcBackupFile.getFileName(),
+                    destVolumeFile.getFileName(), srcBackupFile.getFormat(), destVolumeFile.getFormat(), timeout);
             return true;
-        } catch (final RuntimeException e) {
+        } catch (final QemuImgException | RuntimeException e) {
             final String srcFilename = srcBackupFile != null ? srcBackupFile.getFileName() : tempImage;
             final String destFilename = destVolumeFile != null ? destVolumeFile.getFileName() : volumePath;
             logger.error("Failed to convert temporary RBD {} to volume {}, the error was: {}", srcFilename, destFilename, e.getMessage());

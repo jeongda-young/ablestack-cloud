@@ -124,22 +124,18 @@ public class LibvirtAblestackRbdVolumeRestoreTest {
         try (MockedStatic<KVMPhysicalDisk> disks = Mockito.mockStatic(KVMPhysicalDisk.class);
                 MockedStatic<Script> scripts = Mockito.mockStatic(Script.class);
                 MockedStatic<LibvirtAblestackAsyncBackupRunner> runner = Mockito.mockStatic(LibvirtAblestackAsyncBackupRunner.class);
-                MockedStatic<LibvirtAblestackFileRestoreHelper> files = Mockito.mockStatic(LibvirtAblestackFileRestoreHelper.class);
                 MockedConstruction<QemuImg> qemu = Mockito.mockConstruction(QemuImg.class, (mock, context) -> {
                     Mockito.when(mock.info(any(QemuImgFile.class))).thenReturn(Map.of(QemuImg.VIRTUAL_SIZE, String.valueOf(VOLUME_BYTES)));
-                    Mockito.doAnswer(call -> {
-                        if (!rbd) { Files.writeString(Path.of(((QemuImgFile) call.getArgument(1)).getFileName()), "prepared"); }
-                        return null;
-                    }).when(mock).convert(any(QemuImgFile.class), any(QemuImgFile.class));
                 })) {
             disks.when(() -> KVMPhysicalDisk.RBDStringBuilder(eq(pool), anyString()))
                     .thenAnswer(call -> "rbd:" + call.getArgument(1));
-            files.when(() -> LibvirtAblestackFileRestoreHelper.getFileVolumeFormat(any(), eq(original)))
-                    .thenReturn(QemuImg.PhysicalDiskFormat.QCOW2);
-            files.when(() -> LibvirtAblestackFileRestoreHelper.getRestorableFileBackupPath(any()))
-                    .thenAnswer(call -> ((List<String>) call.getArgument(0)).get(0));
             scripts.when(() -> Script.runSimpleBashScriptWithFullResult(anyString(), anyInt())).thenAnswer(call -> {
-                commands.add(call.getArgument(0));
+                String command = call.getArgument(0);
+                commands.add(command);
+                if (command.contains("qemu-img convert")) {
+                    Files.writeString(Path.of(prepared), "prepared");
+                    return "__CMD_EXIT__=0";
+                }
                 return "__CS_COMMAND_EXIT__=0";
             });
 
@@ -157,10 +153,10 @@ public class LibvirtAblestackRbdVolumeRestoreTest {
                     Mockito.verify(command, never()).convert(any(QemuImgFile.class), any(QemuImgFile.class));
                 }
             } else {
-                assertTrue(commands.isEmpty());
-                ArgumentCaptor<QemuImgFile> converted = ArgumentCaptor.forClass(QemuImgFile.class);
-                Mockito.verify(qemu.constructed().get(0)).convert(any(QemuImgFile.class), converted.capture());
-                assertEquals(QemuImg.PhysicalDiskFormat.QCOW2, converted.getValue().getFormat());
+                assertEquals(1, commands.size());
+                assertTrue(commands.get(0).contains("qemu-img convert -p -S 4k -f raw -O qcow2"));
+                assertTrue(commands.get(0), commands.get(0).contains("'" + payload + "' '" + prepared + "'"));
+                assertEquals("prepared", Files.readString(Path.of(prepared)));
             }
         }
     }

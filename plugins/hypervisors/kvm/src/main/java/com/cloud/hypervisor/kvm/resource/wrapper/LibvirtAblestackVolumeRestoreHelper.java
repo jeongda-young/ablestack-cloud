@@ -520,6 +520,9 @@ final class LibvirtAblestackVolumeRestoreHelper {
                                 List.of(file.toString()), plan.timeout, true)) {
                             throw new CloudRuntimeException("Unable to import the Full artifact into the prepared RBD image");
                         }
+                    } else if (pool == null) {
+                        LibvirtAblestackFileRestoreHelper.convertFileVolumeWithQemuImg(trace, logger, file.toString(),
+                                preparedUri, sourceFormat, targetFormat, plan.timeout);
                     } else {
                         QemuImg qemu = new QemuImg(TimeUnit.SECONDS.toMillis(plan.timeout));
                         qemu.convert(new QemuImgFile(file.toString(), sourceFormat), new QemuImgFile(preparedUri, targetFormat));

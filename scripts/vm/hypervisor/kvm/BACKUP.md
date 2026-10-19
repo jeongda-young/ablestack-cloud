@@ -418,11 +418,11 @@ QCOW2 증분 시작 전 부모 체크포인트를 libvirt에 재등록해야 할
 Full 재시도의 새 작업 UUID와 혼동하지 않는다. 실패 작업 정리가 끝나면 이 파일은 이미 없어질 수 있다.
 체크포인트 재등록 오류는 작업 로그와 Agent 로그에 함께 기록한다.
 
-대용량 NAS QCOW2의 `-S 4k` 변환·부팅 검증은 **Full과 증분 백업 모두** 대상으로 할 수 있다.
-테스트 설정을 활성화하면 독립 Full도 단순 복사 대신 지정한 `-S` 값으로 변환하고 검사·비교한다.
-예를 들어 900GiB 데이터를 담은 Full을 `-S 4k`로 복원하여 부팅과 파일 해시를 검증할 수 있다.
-증분 체인 복원 기능까지 확인하려면 새 Full 이후 증분 백업을 추가로 생성하여 그 시점도 복원한다.
-설정과 판정 절차는 [NAS QCOW2 sparse 복원 테스트](../../../../docs/validation/ablestack-nas-qcow2-sparse-restore.md)를 참고한다.
+ABLESTACK NAS·Commvault·NetBackup·Veeam의 파일 볼륨 복원은 `qemu-img convert -S 4k`를 사용한다.
+독립 Full도 복사 대신 변환하며, 연속된 4 KiB 이상의 0 영역은 sparse로 저장한다.
+NAS 증분 체인은 선택한 시점의 데이터를 변환하고, 볼륨별 복원은 Full을 변환한 뒤 후속 증분을 순서대로 적용한다.
+RBD 백업을 파일 볼륨으로 복원하는 경우에도 같은 변환을 사용한다.
+별도 시험 설정 없이 적용되며, 변환 결과를 준비한 뒤 기존 볼륨과 교체한다.
 
 ### 백업 완료 처리와 완료 후 카탈로그 확인
 
@@ -640,8 +640,6 @@ Commvault·NetBackup·Veeam은 기존 VM 볼륨을 유지하면서 새 볼륨을
 변경값은 새로 요청한 복원부터 적용하며, 진행 중인 복원은 시작할 때의 값을 유지한다.
 Host 로그의 `PRIMARY_CAPACITY_POLICY`, `PRIMARY_SPACE_PLAN_CHECK`, `PRIMARY_SPACE_CHECK`, `RBD_SPACE_CHECK`,
 `VM_RESTORE_PRIMARY_CAPACITY`와 용량 예약 정보에서 적용값과 요구·가용 바이트를 확인한다.
-NAS의 `-S 4k` 테스트 설정과는 별개이며,
-`/etc/cloudstack/agent/ablestack-nas-restore-test.properties`에 여유율을 추가하지 않는다.
 
 **스테이징:** Commvault·NetBackup·Veeam은 공통 스테이징 설정 하나를 함께 사용한다.
 RBD 원본도 `.raw`·`.rbdiff` 파일로 스테이징하므로 QCOW2와 같은 스테이징 여유율을 사용한다.
@@ -699,18 +697,12 @@ NAS는 백업 저장소의 Full·증분 체인을 읽어 복원한다.
 | `PREPARE_SOURCE` | NAS 백업 저장소를 연결하고 복원 파일에 접근할 준비를 한다. |
 | `RESTORE_DATA` | 현재 볼륨의 데이터 복원을 시작한다. 하위 단계로 바뀔 수 있다. |
 | `RESTORE_PREPARE_TARGET` | 대상 파일 형식과 임시 볼륨, 기본스토리지의 작업 공간을 준비한다. |
-| `RESTORE_SOURCE_CHECK` | NAS QCOW2 복원 테스트 설정을 사용한 경우 원본 Full 또는 증분 체인의 구조를 점검한다. |
-| `RESTORE_CONVERT` | 백업 파일 또는 체인을 대상 디스크 형식으로 변환한다. sparse 테스트의 `-S 4k` 적용 여부는 상세 문구와 로그로 확인한다. |
-| `RESTORE_COPY` | 별도 변환이 필요하지 않은 QCOW2 백업 파일을 복원 대상에 복사한다. |
+| `RESTORE_CONVERT` | Full 백업 파일 또는 증분 체인을 대상 디스크 형식으로 `-S 4k` 변환한다. 상세 문구와 로그에서 적용 옵션을 확인할 수 있다. |
 | `RESTORE_RBD_IMPORT` / `RESTORE_RBD_DIFF` | Full 데이터를 RBD로 가져오거나 후속 RBD 증분을 적용한다. |
-| `RESTORE_TARGET_CHECK` / `RESTORE_COMPARE` | NAS QCOW2 복원 테스트 설정을 사용한 경우 결과 파일을 점검하고 원본 Full 또는 증분 체인과 데이터를 비교한다. |
 | `RESTORE_PROMOTE` | 준비한 임시 볼륨을 복원 대상 경로 또는 이미지로 반영한다. |
 | `ATTACH_VOLUME` | 복원 방식에 따라 생성한 볼륨의 연결을 처리한다. |
 | `CLEANUP_SOURCE` | 복원에 사용한 NAS 연결과 임시 자원을 정리한다. |
 | `FINALIZING` | Host 작업 종료 후 Mold가 최종 결과를 반영 중일 때 UI에서 표시할 수 있다. |
-
-테스트용 검사·비교가 비활성화된 복원에서는 `RESTORE_SOURCE_CHECK`, `RESTORE_TARGET_CHECK`,
-`RESTORE_COMPARE`가 표시되지 않아도 정상이다.
 
 ### 가상머신 복원 결과와 기본스토리지 정리 상태
 

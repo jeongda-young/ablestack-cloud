@@ -685,16 +685,16 @@ final class LibvirtAblestackRbdRestoreHelper {
         QemuImgFile srcBackupFile = null;
         QemuImgFile destVolumeFile = null;
         try {
-            final QemuImg qemu = new QemuImg(timeoutSeconds * 1000, true, false);
             srcBackupFile = new QemuImgFile(sourceImage.buildQemuUri(temporaryVolumePath), QemuImg.PhysicalDiskFormat.RAW);
             destVolumeFile = new QemuImgFile(volumePath, detectFileVolumeFormat(volumePath));
             LOGGER.debug("{} phase=[RBD_FILE_CONVERT_BEGIN], source=[{}], targetVolume=[{}]",
                     tracePrefix, srcBackupFile.getFileName(), volumePath);
-            qemu.convert(srcBackupFile, destVolumeFile);
+            LibvirtAblestackFileRestoreHelper.convertFileVolumeWithQemuImg(tracePrefix, LOGGER, srcBackupFile.getFileName(),
+                    destVolumeFile.getFileName(), srcBackupFile.getFormat(), destVolumeFile.getFormat(), timeoutSeconds);
             LOGGER.debug("{} phase=[RBD_FILE_CONVERT_DONE], source=[{}], targetVolume=[{}]",
                     tracePrefix, srcBackupFile.getFileName(), volumePath);
             return true;
-        } catch (final QemuImgException | LibvirtException e) {
+        } catch (final QemuImgException e) {
             final String srcFilename = srcBackupFile != null ? srcBackupFile.getFileName() : temporaryVolumePath;
             final String destFilename = destVolumeFile != null ? destVolumeFile.getFileName() : volumePath;
             LOGGER.error("Failed to convert temporary RBD {} to volume {}, the error was: {}", srcFilename, destFilename, e.getMessage());
