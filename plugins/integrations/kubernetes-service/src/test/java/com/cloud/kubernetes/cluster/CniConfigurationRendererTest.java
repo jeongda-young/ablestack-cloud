@@ -17,8 +17,13 @@
 
 package com.cloud.kubernetes.cluster;
 
-import static org.junit.Assert.*;
-import static org.mockito.Mockito.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
+import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 import com.cloud.network.Network;
 import com.cloud.dc.ASNumberVO;
 import com.cloud.dc.dao.ASNumberDao;

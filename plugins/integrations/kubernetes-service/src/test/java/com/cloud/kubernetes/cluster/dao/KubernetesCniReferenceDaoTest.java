@@ -16,10 +16,12 @@
 // under the License.
 package com.cloud.kubernetes.cluster.dao;
 
-import static org.junit.Assert.*;
-import static org.mockito.ArgumentMatchers.*;
-import static org.mockito.Mockito.*;
-import com.cloud.kubernetes.cluster.KubernetesClusterVO;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.doReturn;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.verify;
 import com.cloud.utils.db.SearchCriteria;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
