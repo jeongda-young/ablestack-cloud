@@ -16,8 +16,12 @@
 // under the License.
 package org.apache.cloudstack.api.command.user.userdata;
 
-import static org.junit.Assert.*;
-import static org.mockito.Mockito.*;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertSame;
+import static org.junit.Assert.assertTrue;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.when;
 
 import com.cloud.server.ManagementService;
 import com.cloud.user.AccountService;
