@@ -1210,6 +1210,21 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         }
         _accountMgr.checkAccess(caller, null, true, userVm);
 
+        userVm = _vmDao.acquireInLockTable(vmId, 1);
+        if (userVm == null) {
+            throw new CloudRuntimeException("Another operation is changing this instance; retry the user data reset after it finishes");
+        }
+        try {
+            return resetVMUserDataLocked(cmd, userVm);
+        } finally {
+            _vmDao.releaseFromLockTable(vmId);
+        }
+    }
+
+    protected UserVm resetVMUserDataLocked(ResetVMUserDataCmd cmd, UserVmVO userVm)
+            throws ResourceUnavailableException, InsufficientCapacityException {
+        Account caller = CallContext.current().getCallingAccount();
+        Long vmId = userVm.getId();
         VMTemplateVO template = _templateDao.findByIdIncludingRemoved(userVm.getTemplateId());
 
         // Do parameters input validation
@@ -1236,16 +1251,81 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
         userData = finalizeUserData(userData, userDataId, template);
         userData = userDataManager.validateUserData(userData, cmd.getHttpMethod());
 
-        userVm.setUserDataId(userDataId);
-        userVm.setUserData(userData);
-        userVm.setUserDataDetails(userDataDetails);
-        _vmDao.update(userVm.getId(), userVm);
-
-        updateUserData(userVm);
+        List<Nic> targets = userDataResetTargets(userVm);
+        String originalData = userVm.getUserData();
+        Long originalId = userVm.getUserDataId();
+        String originalDetails = userVm.getUserDataDetails();
+        try {
+            // Providers receive a candidate; failed requests must never create a
+            // new library reference or publish an unaccepted body in Cloud DB.
+            userVm.setUserDataId(userDataId);
+            userVm.setUserData(userData);
+            userVm.setUserDataDetails(userDataDetails);
+            for (Nic nic : targets) {
+                if (!applyUserData(userVm.getHypervisorType(), userVm, nic, true)) {
+                    throw new CloudRuntimeException("User data provider rejected the update for NIC " + nic.getUuid());
+                }
+            }
+            UserVmVO current = _vmDao.findById(vmId);
+            if (current == null || current.getState() != State.Stopped) {
+                throw new CloudRuntimeException("Instance state changed during user data reset");
+            }
+            UserVmVO change = _vmDao.createForUpdate(vmId);
+            change.setUserDataId(userDataId);
+            change.setUserData(userData);
+            change.setUserDataDetails(userDataDetails);
+            if (!_vmDao.update(vmId, change)) {
+                throw new CloudRuntimeException("Unable to save the accepted user data");
+            }
+        } catch (ResourceUnavailableException | InsufficientCapacityException | RuntimeException failure) {
+            userVm.setUserDataId(originalId);
+            userVm.setUserData(originalData);
+            userVm.setUserDataDetails(originalDetails);
+            boolean restored = true;
+            // Include the failing NIC: a timeout may follow a partial remote
+            // write. Do not short-circuit restoration of the remaining NICs.
+            for (Nic nic : targets) {
+                try {
+                    restored &= applyUserData(userVm.getHypervisorType(), userVm, nic, true);
+                } catch (Exception restoreFailure) {
+                    restored = false;
+                    logger.warn("Could not restore userdata provider for VM {} NIC {}", vmId, nic.getId(), restoreFailure);
+                }
+            }
+            throw new CloudRuntimeException("User data reset failed; Cloud data and library references were not changed. " +
+                    (restored ? "Previous provider data was restored." :
+                            "Provider restoration could not be confirmed; retry before starting the instance."), failure);
+        }
 
         UserVmVO vm = _vmDao.findById(vmId);
         _vmDao.loadDetails(vm);
         return vm;
+    }
+
+    protected List<Nic> userDataResetTargets(UserVm vm) {
+        List<? extends Nic> nics = _nicDao.listByVmId(vm.getId());
+        List<Nic> targets = new ArrayList<>();
+        if (nics != null) {
+            for (Nic nic : nics) {
+                Network network = _networkDao.findById(nic.getNetworkId());
+                if (network == null || !_networkModel.areServicesSupportedByNetworkOffering(network.getNetworkOfferingId(), Service.UserData)) {
+                    continue;
+                }
+                UserDataServiceProvider provider = _networkModel.getUserDataUpdateProvider(network);
+                if (provider == null) {
+                    throw new InvalidParameterValueException("UserData provider is unavailable for network " + network.getUuid());
+                }
+                // ConfigDrive is generated by the default NIC at next start.
+                if (Provider.ConfigDrive.equals(provider.getProvider()) && !nic.isDefaultNic()) {
+                    continue;
+                }
+                targets.add(nic);
+            }
+        }
+        if (targets.isEmpty()) {
+            throw new InvalidParameterValueException("User data reset is unsupported: no NIC has a UserData provider (ConfigDrive requires the default NIC). Cloud data was not changed.");
+        }
+        return targets;
     }
 
     @Override
@@ -1768,31 +1848,49 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
 
         NicProfile guestNic = null;
         boolean cleanUp = true;
+        RuntimeException addFailure = null;
 
         try {
             guestNic = _itMgr.addVmToNetwork(vmInstance, network, profile);
+            if (guestNic == null) {
+                throw new CloudRuntimeException("NIC addition did not return a NIC; refresh the VM networks before retrying");
+            }
             saveExtraDhcpOptions(guestNic.getId(), cmd.getDhcpOptionsMap());
             _networkMgr.configureExtraDhcpOptions(network, guestNic.getId(), cmd.getDhcpOptionsMap());
             cleanUp = false;
-        } catch (ResourceUnavailableException e) {
-            throw new CloudRuntimeException("Unable to add NIC to " + vmInstance + ": " + e);
-        } catch (InsufficientCapacityException e) {
-            throw new CloudRuntimeException("Insufficient capacity when adding NIC to " + vmInstance + ": " + e);
-        } catch (ConcurrentOperationException e) {
-            throw new CloudRuntimeException("Concurrent operations on adding NIC to " + vmInstance + ": " + e);
+        } catch (ResourceUnavailableException | InsufficientCapacityException | ConcurrentOperationException error) {
+            addFailure = new CloudRuntimeException("Unable to add NIC to " + vmInstance.getInstanceName() + ": " + error.getMessage(), error);
+            throw addFailure;
+        } catch (RuntimeException error) {
+            addFailure = error;
+            throw error;
         } finally {
-            if(cleanUp) {
-                try {
-                    _itMgr.removeVmFromNetwork(vmInstance, network, null);
-                } catch (ResourceUnavailableException e) {
-                    throw new CloudRuntimeException("Error while cleaning up NIC " + e);
-                }
+            if (cleanUp && guestNic != null) {
+                rollbackAddedNic(vmInstance, network, guestNic, addFailure);
             }
         }
         CallContext.current().putContextParameter(Nic.class, guestNic.getUuid());
         logger.debug(String.format("Successful addition of %s from %s through %s", network, vmInstance, guestNic));
         publishNicEventMessageBus(vmInstance.getId(), vmInstance.getAccountId(), guestNic.getId(), EVENT_NIC_CREATE);
         return _vmDao.findById(vmInstance.getId());
+    }
+
+    protected void rollbackAddedNic(UserVmVO vm, NetworkVO network, NicProfile added, RuntimeException original) {
+        try {
+            NicVO nic = _nicDao.findById(added.getId());
+            if (nic == null || nic.getRemoved() != null) { return; }
+            if (nic.getInstanceId() != vm.getId() || nic.getNetworkId() != network.getId()
+                    || !Objects.equals(nic.getUuid(), added.getUuid())) {
+                throw new CloudRuntimeException("NIC rollback identity changed; refresh the VM networks");
+            }
+            if (!_itMgr.removeNicFromVm(vm, nic)) {
+                throw new CloudRuntimeException("NIC rollback did not complete; refresh the VM networks");
+            }
+        } catch (Exception cleanupError) {
+            logger.warn("Unable to roll back newly added NIC {}", added.getId(), cleanupError);
+            if (original == null) { throw new CloudRuntimeException("Unable to roll back newly added NIC", cleanupError); }
+            original.addSuppressed(cleanupError);
+        }
     }
 
     private void validateVmZoneTypeForAddNic(UserVmVO vmInstance, DataCenter dc) {
@@ -3933,10 +4031,17 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
     }
 
     protected boolean applyUserData(HypervisorType hyperVisorType, UserVm vm, Nic nic) throws ResourceUnavailableException, InsufficientCapacityException {
+        return applyUserData(hyperVisorType, vm, nic, false);
+    }
+
+    protected boolean applyUserData(HypervisorType hyperVisorType, UserVm vm, Nic nic, boolean resetCandidate) throws ResourceUnavailableException, InsufficientCapacityException {
         Network network = _networkDao.findById(nic.getNetworkId());
         NicProfile nicProfile = new NicProfile(nic, network, null, null, null, _networkModel.isSecurityGroupSupportedInNetwork(network), _networkModel.getNetworkTag(
                 hyperVisorType, network));
         VirtualMachineProfile vmProfile = new VirtualMachineProfileImpl(vm);
+        if (resetCandidate) {
+            vmProfile.setParameter(com.cloud.network.rules.UserdataToRouterRules.RESET_CANDIDATE, Boolean.TRUE);
+        }
 
         if (_networkModel.areServicesSupportedByNetworkOffering(network.getNetworkOfferingId(), Service.UserData)) {
             UserDataServiceProvider element = _networkModel.getUserDataUpdateProvider(network);

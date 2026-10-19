@@ -826,19 +826,17 @@
                                   @tabChange="key => onUserdataTabChange(key, 'userdataTabKey')">
                                   <div v-if="userdataTabKey === 'userdataregistered'">
                                     <a-step
-                                      v-if="isUserAllowedToListUserDatas"
                                       :status="zoneSelected ? 'process' : 'wait'">
                                       <template #description>
                                         <div v-if="zoneSelected">
                                           <user-data-selection
-                                            :items="options.userDatas"
-                                            :row-count="rowCount.userDatas"
+                                            :scope="userDataOwner"
+                                            :value="form.userdataid"
                                             :zoneId="zoneId"
                                             :disabled="template.userdatapolicy === 'DENYOVERRIDE'"
-                                            :loading="loading.userDatas"
                                             :preFillContent="dataPreFill"
-                                            @select-user-data-item="($event) => updateUserData($event)"
-                                            @handle-search-filter="($event) => handleSearchFilter('userData', $event)"
+                                            @select-user-data-item="updateUserData"
+                                            @ready="userDataSelectionReady = $event"
                                           />
                                           <div v-if="userDataParams.length > 0">
                                             <a-input-group>
@@ -971,7 +969,7 @@
           <div class="card-footer autoscale-create-mobile-footer" v-if="!showSideSummary">
             <deploy-buttons
               :loading="loading.deploy || submitting || creationBusy"
-              :disabled="Boolean(hasUnresolvedCreation)"
+              :disabled="Boolean(hasUnresolvedCreation) || userDataSelectionBlocked"
               :deployButtonText="$t('label.create')"
               @handle-cancel="() => $router.back()"
               @handle-deploy="handleSubmit" />
@@ -985,7 +983,7 @@
             <template #footer-content>
               <deploy-buttons
                 :loading="loading.deploy || submitting || creationBusy"
-                :disabled="Boolean(hasUnresolvedCreation)"
+                :disabled="Boolean(hasUnresolvedCreation) || userDataSelectionBlocked"
                 :deployButtonText="$t('label.create')"
                 @handle-cancel="() => $router.back()"
                 @handle-deploy="handleSubmit" />
@@ -1041,6 +1039,7 @@ import NetworkConfiguration from '@views/compute/wizard/NetworkConfiguration'
 import LoadBalancerSelection from '@views/compute/wizard/LoadBalancerSelection'
 import SshKeyPairSelection from '@views/compute/wizard/SshKeyPairSelection'
 import UserDataSelection from '@views/compute/wizard/UserDataSelection'
+import { applyUserDataSelection, userDataSelectionConsumer } from '@/utils/userDataSelection'
 import SecurityGroupSelection from '@views/compute/wizard/SecurityGroupSelection'
 import TooltipLabel from '@/components/widgets/TooltipLabel'
 import InstanceNicsNetworkSelectListView from '@/components/view/InstanceNicsNetworkSelectListView.vue'
@@ -1085,7 +1084,7 @@ export default {
       default: () => {}
     }
   },
-  mixins: [mixin, mixinDevice],
+  mixins: [mixin, mixinDevice, userDataSelectionConsumer],
   data () {
     return {
       creationViewportHeight: '',
@@ -1160,7 +1159,6 @@ export default {
         affinityGroups: false,
         networks: false,
         sshKeyPairs: false,
-        userDatas: false,
         loadbalancers: false,
         zones: false
       },
@@ -1365,15 +1363,6 @@ export default {
         },
         sshKeyPairs: {
           list: 'listSSHKeyPairs',
-          options: {
-            page: 1,
-            pageSize: 10,
-            keyword: undefined,
-            listall: false
-          }
-        },
-        userDatas: {
-          list: 'listUserData',
           options: {
             page: 1,
             pageSize: 10,
@@ -2318,7 +2307,14 @@ export default {
       this.form.keypairs = names
       this.sshKeyPairs = names.map((sshKeyPair) => { return sshKeyPair.name })
     },
-    updateUserData (id) {
+    updateUserData (id, item) {
+      this.userDataValues = {}
+      if (item) {
+        this.userDataLookupVersions.userDataParams++
+        this.userDataLookupErrors.userDataParams = false
+        applyUserDataSelection(this, id, item)
+        return
+      }
       this.form.userdataid = id && id !== '0' ? id : undefined
       return this.loadUserDataParams(this.form.userdataid, 'userDataParams')
     },
@@ -2539,7 +2535,7 @@ export default {
     },
     async handleSubmit (e, recovery = false) {
       if (e && e.preventDefault) e.preventDefault()
-      if (this.submitting || this.creationBusy || (this.hasUnresolvedCreation && !recovery) || this.loading.deploy || this.checkingEligibility) return
+      if (this.userDataSelectionBlocked || this.submitting || this.creationBusy || (this.hasUnresolvedCreation && !recovery) || this.loading.deploy || this.checkingEligibility) return
       this.submitting = true
       return this.formRef.value.validate().then(async () => {
         const values = toRaw(this.form)

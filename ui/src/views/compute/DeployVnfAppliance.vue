@@ -622,19 +622,17 @@
                                   @tabChange="key => onUserdataTabChange(key, 'userdataTabKey')">
                                   <div v-if="userdataTabKey === 'userdataregistered'">
                                     <a-step
-                                      v-if="isUserAllowedToListUserDatas"
                                       :status="zoneSelected ? 'process' : 'wait'">
                                       <template #description>
                                         <div v-if="zoneSelected">
                                           <user-data-selection
-                                            :items="options.userDatas"
-                                            :row-count="rowCount.userDatas"
+                                            :scope="userDataOwner"
+                                            :value="form.userdataid"
                                             :zoneId="zoneId"
                                             :disabled="template.userdatapolicy === 'DENYOVERRIDE'"
-                                            :loading="loading.userDatas"
                                             :preFillContent="dataPreFill"
-                                            @select-user-data-item="($event) => updateUserData($event)"
-                                            @handle-search-filter="($event) => handleSearchFilter('userData', $event)"
+                                            @select-user-data-item="updateUserData"
+                                            @ready="userDataSelectionReady = $event"
                                           />
                                           <div v-if="userDataParams.length > 0">
                                             <a-input-group>
@@ -808,6 +806,7 @@
             <div class="card-footer" v-if="isMobile()">
               <deploy-buttons
                 :loading="loading.deploy"
+                :disabled="userDataSelectionBlocked"
                 :deployButtonText="$t('label.launch.vnf.appliance')"
                 :deployButtonMenuOptions="deployMenuOptions"
                 @handle-cancel="() => $router.back()"
@@ -823,6 +822,7 @@
             <template #footer-content>
               <deploy-buttons
                 :loading="loading.deploy"
+                :disabled="userDataSelectionBlocked"
                 :deployButtonText="$t('label.launch.vnf.appliance')"
                 :deployButtonMenuOptions="deployMenuOptions"
                 @handle-cancel="() => $router.back()"
@@ -861,6 +861,7 @@ import NetworkSelection from '@views/compute/wizard/NetworkSelection'
 import NetworkConfiguration from '@views/compute/wizard/NetworkConfiguration'
 import SshKeyPairSelection from '@views/compute/wizard/SshKeyPairSelection'
 import UserDataSelection from '@views/compute/wizard/UserDataSelection'
+import { applyUserDataSelection, userDataSelectionConsumer } from '@/utils/userDataSelection'
 import SecurityGroupSelection from '@views/compute/wizard/SecurityGroupSelection'
 import VnfNicsSelection from '@views/compute/wizard/VnfNicsSelection.vue'
 import TooltipLabel from '@/components/widgets/TooltipLabel'
@@ -900,7 +901,7 @@ export default {
       default: () => {}
     }
   },
-  mixins: [mixin, mixinDevice],
+  mixins: [mixin, mixinDevice, userDataSelectionConsumer],
   data () {
     return {
       zoneId: '',
@@ -968,7 +969,6 @@ export default {
         affinityGroups: false,
         networks: false,
         sshKeyPairs: false,
-        userDatas: false,
         zones: false,
         pods: false,
         clusters: false,
@@ -1119,15 +1119,6 @@ export default {
         },
         sshKeyPairs: {
           list: 'listSSHKeyPairs',
-          options: {
-            page: 1,
-            pageSize: 10,
-            keyword: undefined,
-            listall: false
-          }
-        },
-        userDatas: {
-          list: 'listUserData',
           options: {
             page: 1,
             pageSize: 10,
@@ -1948,32 +1939,11 @@ export default {
       this.form.keypairs = names
       this.sshKeyPairs = names.map((sshKeyPair) => { return sshKeyPair.name })
     },
-    updateUserData (id) {
-      if (id === '0') {
-        this.form.userdataid = undefined
-        return
-      }
-      this.form.userdataid = id
-      this.userDataParams = []
-      getAPI('listUserData', { id: id }).then(json => {
-        const resp = json.listuserdataresponse?.userdata || []
-        if (resp.length > 0) {
-          var params = resp[0]?.params || null
-          if (params) {
-            var dataParams = params.split(',')
-          }
-          var that = this
-          dataParams.forEach(function (val, index) {
-            that.userDataParams.push({
-              id: index,
-              key: val
-            })
-          })
-        }
-      })
+    updateUserData (id, item) {
+      applyUserDataSelection(this, id, item)
     },
     updateTemplateLinkedUserData (id) {
-      if (id === '0') {
+      if (!id || id === '0') {
         return
       }
       this.templateUserDataParams = []
@@ -2068,7 +2038,7 @@ export default {
     handleSubmit (e) {
       console.log('wizard submit')
       e.preventDefault()
-      if (this.loading.deploy) return
+      if (this.loading.deploy || this.userDataSelectionBlocked) return
       this.formRef.value.validate().then(async () => {
         const values = toRaw(this.form)
 

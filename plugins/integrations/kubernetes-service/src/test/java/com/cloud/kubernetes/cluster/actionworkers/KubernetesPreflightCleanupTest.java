@@ -89,14 +89,10 @@ public class KubernetesPreflightCleanupTest {
                 .thenReturn(Collections.singletonList(Mockito.mock(KubernetesClusterVmMapVO.class)));
         assertFalse(worker.isUnprovisionedFailure());
     }
-    @Test public void verifiedNodeProvisioningFailureSkipsUnreachableCsiButMissingReceiptDoesNot() {
-        KubernetesClusterDestroyWorker worker=destroyer(KubernetesCluster.State.Error,"NodeProvisioningFailed");
+    @Test public void nodeFailureReceiptAloneCannotSkipCleanupWithoutVerifiedJobAndOwnership() {
+        KubernetesClusterDestroyWorker worker = destroyer(KubernetesCluster.State.Error, "NodeProvisioningFailed");
+        Mockito.when(worker.kubernetesClusterDetailsDao.findDetail(7L, "lifecycle.creation.failed.job"))
+                .thenReturn(new KubernetesClusterDetailsVO(7L, "lifecycle.creation.failed.job", "unverified-job", false));
         assertFalse(worker.isUnprovisionedFailure());
-        Mockito.when(worker.kubernetesClusterDetailsDao.findDetail(7L,"lifecycle.creation.failed.job"))
-                .thenReturn(new KubernetesClusterDetailsVO(7L,"lifecycle.creation.failed.job","actual-failed-create-job",false));
-        assertTrue(worker.isUnprovisionedFailure());
-        worker.prepareNodeRemoval();
-        Mockito.verify(worker,Mockito.never()).prepareCsiCleanupBeforeNodeRemoval();
-        Mockito.verify(worker,Mockito.never()).prepareServiceCleanupBeforeNodeRemoval();
     }
 }

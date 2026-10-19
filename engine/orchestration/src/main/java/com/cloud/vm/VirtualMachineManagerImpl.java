@@ -4688,16 +4688,25 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
         } else {
             final Outcome<VirtualMachine> outcome = addVmToNetworkThroughJobQueue(vm, network, requested);
 
-            retrieveVmFromJobOutcome(outcome, vm.getUuid(), "addVmToNetwork");
-
-            Object jobResult = retrieveResultFromJobOutcomeAndThrowExceptionIfNeeded(outcome);
-
-            if (jobResult != null && jobResult instanceof NicProfile) {
-                return (NicProfile) jobResult;
-            }
-
-            throw new RuntimeException("null job execution result");
+            return retrieveAddedNicFromOutcome(outcome, vm.getUuid());
         }
+    }
+
+    protected NicProfile retrieveAddedNicFromOutcome(Outcome<VirtualMachine> outcome, String vmUuid)
+            throws ResourceUnavailableException, InsufficientCapacityException {
+        try {
+            outcome.get();
+        } catch (InterruptedException error) {
+            Thread.currentThread().interrupt();
+            throw new CloudRuntimeException("Interrupted while waiting for NIC addition to VM " + vmUuid, error);
+        } catch (java.util.concurrent.ExecutionException error) {
+            // A failed VM work item carries the actual agent error in its serialized result.
+            retrieveResultFromJobOutcomeAndThrowExceptionIfNeeded(outcome);
+            throw new CloudRuntimeException("NIC addition job failed for VM " + vmUuid, error);
+        }
+        Object result = retrieveResultFromJobOutcomeAndThrowExceptionIfNeeded(outcome);
+        if (result instanceof NicProfile) { return (NicProfile) result; }
+        throw new CloudRuntimeException("NIC addition did not return a NIC for VM " + vmUuid + "; refresh the VM networks before retrying");
     }
 
     /**
@@ -4742,6 +4751,7 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
             logger.debug("Plugging NIC for Instance {} in Network {}", vm, network);
 
             boolean result = false;
+            Exception plugFailure = null;
             try {
                 result = plugNic(network, nicTO, vmTO, context, dest);
                 if (result) {
@@ -4755,13 +4765,21 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
                     }
                     return nic;
                 } else {
-                    logger.warn("Failed to plug NIC to the Instance {} in Network {}", vm, network);
-                    return null;
+                    throw new ResourceUnavailableException("NIC hotplug was rejected by the host", Host.class, host.getId());
                 }
+            } catch (Exception error) {
+                plugFailure = error;
+                throw error;
             } finally {
                 if (!result) {
                     logger.debug("Removing NIC {} from Instance {} as NIC plug failed on the backend.", nic, vmProfile.getVirtualMachine());
-                    _networkMgr.removeNic(vmProfile, _nicsDao.findById(nic.getId()));
+                    try {
+                        _networkMgr.removeNic(vmProfile, _nicsDao.findById(nic.getId()));
+                    } catch (RuntimeException cleanupError) {
+                        if (plugFailure == null) { throw cleanupError; }
+                        plugFailure.addSuppressed(cleanupError);
+                        logger.warn("NIC cleanup did not complete after host hotplug rejection", cleanupError);
+                    }
                 }
             }
         } else if (vm.getState() == State.Stopped) {
@@ -5251,8 +5269,10 @@ public class VirtualMachineManagerImpl extends ManagerBase implements VirtualMac
                 _agentMgr.send(dest.getHost().getId(), cmds);
                 final PlugNicAnswer plugNicAnswer = cmds.getAnswer(PlugNicAnswer.class);
                 if (plugNicAnswer == null || !plugNicAnswer.getResult()) {
-                    logger.warn("Unable to plug nic for vm {}", vm.getName());
-                    result = false;
+                    String reason = plugNicAnswer == null ? "No response from the host NIC hotplug command"
+                            : StringUtils.defaultIfBlank(plugNicAnswer.getDetails(), "The host rejected the NIC hotplug command");
+                    throw new ResourceUnavailableException("Unable to add NIC to VM " + vm.getName() + ": " + reason,
+                            Host.class, dest.getHost().getId());
                 }
             } catch (final OperationTimedoutException e) {
                 throw new AgentUnavailableException("Unable to plug nic for router " + vm.getName() + " in network " + network, dest.getHost().getId(), e);

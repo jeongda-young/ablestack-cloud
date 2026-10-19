@@ -39,6 +39,9 @@ import com.cloud.network.vpc.NetworkACL;
 import com.cloud.storage.VMTemplateVO;
 import com.cloud.user.UserDataVO;
 import org.apache.cloudstack.api.BaseCmd;
+import org.apache.cloudstack.api.command.user.kubernetes.cluster.CreateKubernetesClusterCmd;
+import org.apache.cloudstack.framework.jobs.AsyncJob;
+import org.apache.cloudstack.framework.jobs.AsyncJobExecutionContext;
 import org.apache.cloudstack.api.InternalIdentity;
 import org.apache.cloudstack.framework.ca.Certificate;
 import org.apache.cloudstack.utils.security.CertUtils;
@@ -58,6 +61,9 @@ import com.cloud.exception.ResourceAllocationException;
 import com.cloud.exception.ResourceUnavailableException;
 import com.cloud.hypervisor.Hypervisor;
 import com.cloud.kubernetes.cluster.KubernetesCluster;
+import com.cloud.kubernetes.cluster.CniConfigurationRenderer;
+import com.cloud.dc.dao.ASNumberDao;
+import javax.inject.Inject;
 import com.cloud.kubernetes.cluster.KubernetesClusterDetailsVO;
 import com.cloud.kubernetes.cluster.KubernetesClusterManagerImpl;
 import com.cloud.kubernetes.cluster.KubernetesClusterService;
@@ -91,6 +97,7 @@ import static com.cloud.kubernetes.cluster.KubernetesServiceHelper.KubernetesClu
 public class KubernetesClusterStartWorker extends KubernetesClusterResourceModifierActionWorker {
 
     private KubernetesSupportedVersion kubernetesClusterVersion;
+    @Inject private ASNumberDao cniAsNumberDao;
 
     public KubernetesClusterStartWorker(final KubernetesCluster kubernetesCluster, final KubernetesClusterManagerImpl clusterManager) {
         super(kubernetesCluster, clusterManager);
@@ -257,11 +264,9 @@ public class KubernetesClusterStartWorker extends KubernetesClusterResourceModif
         if (Objects.nonNull(userDataId)) {
             logger.info("concatenating userdata");
             UserDataVO cniConfigVo = userDataDao.findById(userDataId);
-            String cniConfig = new String(Base64.decodeBase64(cniConfigVo.getUserData()));
-            if (Objects.nonNull(asNumber)) {
-                cniConfig = substituteASNumber(cniConfig, asNumber);
-            }
-            cniConfig = Base64.encodeBase64String(cniConfig.getBytes(com.cloud.utils.StringUtils.getPreferredCharset()));
+            String cniConfig = CniConfigurationRenderer.requireValues(cniConfigVo.getUserData(), cniConfigVo.getParams(),
+                    CniConfigurationRenderer.deserialize(kubernetesCluster.getCniConfigDetails()),
+                    CniConfigurationRenderer.resolveAsNumber(network, cniAsNumberDao, asNumber)).userdata;
             String mergedCloudConfig = KubernetesCniUserData.mergeCloudConfig(base64UserData, cniConfig);
             base64UserData = mergedCloudConfig != null ? mergedCloudConfig
                     : userDataManager.concatenateUserData(base64UserData, cniConfig, null);
@@ -296,13 +301,6 @@ public class KubernetesClusterStartWorker extends KubernetesClusterResourceModif
             logger.info("Created control VM: {}, {} in the Kubernetes cluster: {}", controlVm, hostName, kubernetesCluster);
         }
         return new Pair<>(controlVm, k8sControlNodeConfigAndControlIp.second());
-    }
-
-    private String substituteASNumber(String cniConfig, Long asNumber) {
-        final String asNumberKey = "{{ AS_NUMBER }}";
-        cniConfig = cniConfig.replace(asNumberKey, String.valueOf(asNumber));
-        return cniConfig;
-
     }
 
     private String getKubernetesAdditionalControlNodeConfig(final String joinIp, final boolean ejectIso) throws IOException {
@@ -778,6 +776,9 @@ public class KubernetesClusterStartWorker extends KubernetesClusterResourceModif
     public void recordCreationOperationFailure() {
         KubernetesCluster current = kubernetesClusterDao.findById(kubernetesCluster.getId());
         if (current == null) { return; }
+        if (current.getState() == KubernetesCluster.State.Starting || current.getState() == KubernetesCluster.State.Error) {
+            recordNodeProvisioningFailure(current);
+        }
         if (current.getState() == KubernetesCluster.State.Created
                 && CollectionUtils.isEmpty(kubernetesClusterVmMapDao.listByClusterId(kubernetesCluster.getId()))) {
             kubernetesClusterDetailsDao.addDetail(kubernetesCluster.getId(), "lifecycle.provisioning.phase", "Preflight", false);
@@ -786,6 +787,25 @@ public class KubernetesClusterStartWorker extends KubernetesClusterResourceModif
         } else if (current.getState() == KubernetesCluster.State.Starting) {
             stateTransitTo(kubernetesCluster.getId(), KubernetesCluster.Event.CreateFailed);
         }
+    }
+
+    protected void recordNodeProvisioningFailure(KubernetesCluster current) {
+        KubernetesClusterDetailsVO phase = kubernetesClusterDetailsDao.findDetail(current.getId(), "lifecycle.provisioning.phase");
+        KubernetesClusterDetailsVO ownership = kubernetesClusterDetailsDao.findDetail(current.getId(), "provider.ownership.v1");
+        AsyncJobExecutionContext context = AsyncJobExecutionContext.getCurrent();
+        AsyncJob job = context == null ? null : context.getJob();
+        if (current.getClusterType() != KubernetesCluster.ClusterType.CloudManaged
+                || phase == null || !"Nodes".equals(phase.getValue())
+                || StringUtils.isNotBlank(current.getEndpoint())
+                || kubernetesClusterDetailsDao.findDetail(current.getId(), "lifecycle.bootstrap.started") != null
+                || (ownership != null && "true".equals(ownership.getValue()))
+                || job == null || !CreateKubernetesClusterCmd.class.getName().equals(job.getCmd())
+                || !"KubernetesCluster".equals(job.getInstanceType())
+                || !Long.valueOf(current.getId()).equals(job.getInstanceId()) || StringUtils.isBlank(job.getUuid())) {
+            return;
+        }
+        kubernetesClusterDetailsDao.addDetail(current.getId(), "lifecycle.creation.failed.job", job.getUuid(), false);
+        kubernetesClusterDetailsDao.addDetail(current.getId(), "lifecycle.provisioning.phase", "NodeProvisioningFailed", false);
     }
 
     protected boolean initializeCreationComponent(String component, java.util.function.BooleanSupplier initialize) {

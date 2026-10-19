@@ -288,22 +288,11 @@ centered
       </template>
     </a-modal>
 
-    <a-modal
-class="mold-dialog autoscale-dialog"
-centered
-:width="760"
-      :visible="showUpdateUserDataForm"
-      :title="$t('label.reset.user.data.on.autoscale.vm.group')"
-      :closable="true"
-      :maskClosable="false"
-      :footer="null"
-      @cancel="showUpdateUserDataForm = false"
->
       <reset-user-data
+        v-if="showUpdateUserDataForm"
         :resource="{ ...resource, ...{ resetUserDataApiName: 'updateAutoScaleVmProfile', resetUserDataResourceId: this.resource.vmprofileid, templateid: this.templateid}}"
         @close-action="onUserDataClose"
       />
-    </a-modal>
   </div>
 </template>
 

@@ -23,11 +23,12 @@
         v-if="'addAnnotation' in $store.getters.apis"
         @click="saveNote"
         type="primary"
-        :disabled="!annotation.trim() || loadingAnnotations"
+        :disabled="!annotation.trim() || loadingAnnotations || annotationSaving"
+        :loading="annotationSaving"
         ref="submit">
         {{ $t('label.submit') }}
       </a-button>
-      <a-button :loading="loadingAnnotations || listRefreshing > 0" @click="getAnnotations">
+      <a-button :disabled="annotationSaving" :loading="loadingAnnotations || listRefreshing > 0" @click="getAnnotations">
         <template #icon><reload-outlined /></template>{{ $t('label.refresh') }}
       </a-button>
     </div>
@@ -46,7 +47,7 @@
               @change="handleNoteChange"
               v-model:value="annotation"
               :placeholder="$t('label.add.note')" />
-            <a-checkbox @change="toggleNoteVisibility" v-if="['Admin'].includes($store.getters.userInfo.roletype)" style="margin-top: 10px">
+            <a-checkbox :checked="annotationAdminsOnly" :disabled="annotationSaving" @change="toggleNoteVisibility" v-if="['Admin'].includes($store.getters.userInfo.roletype)" style="margin-top: 10px">
               {{ $t('label.adminsonly') }}
             </a-checkbox>
           </div>
@@ -66,7 +67,7 @@
           <a-list-item>
             <a-comment
               class="comment"
-              :content="item.annotation"
+              :content="annotationText(item)"
               :datetime="$toLocaleDate(item.created)"
               :author="item.username" >
               <template #avatar>
@@ -150,6 +151,8 @@ export default {
   data () {
     return {
       loadingAnnotations: false,
+      annotationSaving: false,
+      annotationVersion: 0,
       notes: [],
       annotation: '',
       annotationType: '',
@@ -160,7 +163,13 @@ export default {
       itemCount: 0
     }
   },
+  computed: {
+    annotationContext () { return JSON.stringify([this.resource?.id, this.annotationType, this.$store.getters.userInfo?.id, this.$store.getters.userInfo?.roletype, this.$store.state?.user?.token, this.$store.getters.project?.id]) }
+  },
   watch: {
+    annotationContext () {
+      this.annotationVersion++; this.annotationSaving = false; this.notes = []; this.annotation = ''; this.annotationAdminsOnly = false; this.page = 1; this.itemCount = 0
+    },
     resource: {
       deep: true,
       handler () {
@@ -176,6 +185,10 @@ export default {
     this.fetchData()
   },
   methods: {
+    annotationText (item) {
+      return this.$route.path?.startsWith('/cniconfiguration/') && item.annotation?.startsWith('MOLD_CNI_CLONE/1\n')
+        ? this.$t('label.cni.clone.relation') : item.annotation
+    },
     generateAnnotationType () {
       switch (this.resourceType) {
         case 'UserVm': return 'VM'
@@ -259,23 +272,22 @@ export default {
       return ['Admin'].includes(this.$store.getters.userInfo.roletype) || this.$store.getters.userInfo.id === annotation.userid
     },
     saveNote () {
-      if (this.annotation.length < 1) {
-        return
-      }
-      this.loadingAnnotations = true
-      this.showNotesInput = false
-      const args = {}
-      args.entityid = this.resource.id
-      args.entitytype = this.annotationType
-      args.annotation = this.annotation
-      args.adminsonly = this.annotationAdminsOnly
-      postAPI('addAnnotation', args).catch(error => {
-        this.$notifyError(error)
-      }).finally(e => {
+      if (this.annotationSaving || !this.annotation.trim()) return
+      const args = { entityid: this.resource.id, entitytype: this.annotationType, annotation: this.annotation, adminsonly: this.annotationAdminsOnly }
+      const scope = this.annotationContext; const version = this.annotationVersion
+      const current = () => !this.listRefreshDisposed && scope === this.annotationContext && version === this.annotationVersion
+      this.annotationSaving = true
+      return postAPI('addAnnotation', args, { preserveOnFailure: true }).then(() => {
+        if (!current()) return
+        // Preserve anything typed while the submitted snapshot was in flight.
+        if (this.annotation === args.annotation) { this.annotation = ''; this.annotationAdminsOnly = false; this.showNotesInput = false }
+      }).catch(error => {
+        if (current()) this.$notifyError(error)
+      }).finally(() => {
+        if (!current()) return
+        this.annotationSaving = false
         this.getAnnotations()
       })
-      this.annotation = ''
-      this.annotationAdminsOnly = false
     },
     deleteNote (annotation) {
       this.loadingAnnotations = true

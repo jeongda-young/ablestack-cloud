@@ -27,6 +27,11 @@ Epic #1369 및 기존 PR #1378에 누적한다. 기준 upstream Europa와 기존
 
 설명→이름→공개 키→도메인→계정 순서와 기존 input/select를 유지한다. 공개 키는 등록 모드에만 해당하는 조건부 필드로 처리한다. 계정 필드는 선택 도메인이 있을 때만 표시한다. 생성과 등록은 API별 독립 액션으로 노출하고 각 권한이 있어야 열고 제출할 수 있다. 목록의 생성은 기존 텍스트 primary 버튼을 유지하고 등록은 import 아이콘만 표시하며 기존 공통 ActionButton의 마우스 오버 툴팁과 aria-label로 작업명을 제공한다. 등록 빈 공개 키는 검증 오류이며 생성으로 전환되지 않는다. 생성 모드는 오래된 공개 키 값이 있어도 register API를 실행하지 않는다. 각 Footer 문구는 생성/등록이다.
 
+2026-10-16 공통 스타일 보완(#1383): VM 대화상자 버튼 크기에 맞추라는 사용자 요청으로
+preset의 42px 높이와 별도 여백 지정을 제거했다. SSH 생성/등록/삭제를 포함한 preset
+Footer는 VM과 동일한 기본 `a-button` 크기를 상속한다(31번 실측 높이 32px,
+padding 4px 15px). 위의 42px 설명은 최초 적용 이력이며 현재 버튼 크기 계약은 이 보완을 따른다.
+
 ## 요청·오류·포커스
 
 Footer·Enter·기존 Ctrl+Enter는 같은 제출 경로다. Footer의 외부 submit 버튼을 form 속성으로 연결하고, Ctrl+Enter는 keydown에서 직접 처리한다. 기존 directive가 Footer로 포커스를 옮겨 form 밖의 keyup을 놓치는 문제를 피한다. 검증 시작부터 loading을 잠그며 요청 중 취소/닫기/Escape를 비활성화하고 Body 상태 문구를 표시한다. #1373 preserveOnFailure 정책과 값·소유 범위를 보존한다. API 오류를 Body에 표시하고 기존 포커스/Body 스크롤을 복원하며 필수값 검증은 loading 해제 후 nextTick에서 첫 오류로 스크롤하고 명시적 Input ref에 포커스를 적용한다. AFormItem의 fragment $el과 비활성 입력에 대한 이른 포커스 호출에 의존하지 않는다. 성공 등록은 갱신 후 닫고 성공 생성만 결과로 전환한다. 열 때 첫 입력, 결과 전환 시 복사, 닫기 후 기존 AutogenView 트리거에 포커스를 복원한다. 기본 maskClosable=false와 AntD focus trap을 재사용한다.

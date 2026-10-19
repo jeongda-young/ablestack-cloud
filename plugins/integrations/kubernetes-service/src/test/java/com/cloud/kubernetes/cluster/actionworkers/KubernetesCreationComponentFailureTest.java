@@ -32,6 +32,7 @@ public class KubernetesCreationComponentFailureTest {
         KubernetesCluster c = Mockito.mock(KubernetesCluster.class);
         Mockito.when(c.getId()).thenReturn(8L);
         KubernetesClusterStartWorker w = Mockito.spy(new KubernetesClusterStartWorker(c, Mockito.mock(KubernetesClusterManagerImpl.class)));
+        w.kubernetesClusterDetailsDao = Mockito.mock(com.cloud.kubernetes.cluster.dao.KubernetesClusterDetailsDao.class);
         Mockito.doReturn(true).when(w).stateTransitTo(Mockito.eq(8L), Mockito.any());
         return w;
     }

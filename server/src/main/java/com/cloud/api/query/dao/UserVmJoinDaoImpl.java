@@ -566,6 +566,9 @@ public class UserVmJoinDaoImpl extends GenericDaoBaseWithTagInformation<UserVmJo
 
         if (BooleanUtils.isTrue(showUserData)) {
             userVmResponse.setUserData(userVm.getUserData());
+            // Template-only and inline data have no library ID. Explicit
+            // userdata reads still need their variables for a safe reset.
+            userVmResponse.setUserDataDetails(userVm.getUserDataDetails());
         }
 
         // set resource details map

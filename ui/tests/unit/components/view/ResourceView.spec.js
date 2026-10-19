@@ -203,3 +203,25 @@ describe('ResourceView standard tab layout', () => {
     expect(mixinDevice.computed.resourceTabPosition.call({ device })).toBe(device === 'mobile' ? 'top' : 'left')
   })
 })
+
+test('userdata invalid or hidden deep links replace the URL with the visible fallback without dropping filters', () => {
+  for (const tab of ['invalid', 'hidden']) {
+    const vm = { $route: { meta: { name: 'userdata' }, path: '/userdata/id', query: { tab, vmskeyword: 'kept' } }, $router: { replace: jest.fn() }, tabs: [{ name: 'details' }, { name: 'hidden', hidden: true }], showTab: tab => !tab.hidden }
+    ResourceView.methods.setActiveTab.call(vm)
+    expect(vm.activeTab).toBe('details')
+    expect(vm.$router.replace).toHaveBeenCalledWith({ path: '/userdata/id', query: { tab: 'details', vmskeyword: 'kept' } })
+  }
+})
+
+test('departing VM or image views cannot rewrite a valid destination library tab before unmount', () => {
+  const libraryTabs = [{ name: 'details' }, { name: 'userdata.content' }, { name: 'userdata.usage.vms' }]
+  for (const tabs of [[{ name: 'details' }, { name: 'volumes' }], [{ name: 'details' }, { name: 'comments' }]]) {
+    const vm = { $route: { meta: { name: 'userdata', tabs: libraryTabs }, path: '/userdata/id', query: { tab: 'userdata.usage.vms', vmspage: '2' } }, $router: { replace: jest.fn() }, tabs, showTab: () => true }
+    ResourceView.methods.setActiveTab.call(vm)
+    expect(vm.$router.replace).not.toHaveBeenCalled()
+    vm.tabs = libraryTabs
+    ResourceView.methods.setActiveTab.call(vm)
+    expect(vm.activeTab).toBe('userdata.usage.vms')
+    expect(vm.$router.replace).not.toHaveBeenCalled()
+  }
+})

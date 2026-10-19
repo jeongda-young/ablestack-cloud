@@ -240,7 +240,8 @@ body .detail-tab-toolbar > .ant-btn { margin: 0; }
   .ant-modal-close { width: 48px; min-height: 48px; color: var(--ui-text-secondary); }
   .ant-modal-body { padding: 24px 28px; color: var(--ui-text-primary); background: var(--ui-bg-surface); }
   .ant-modal-footer { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 16px 28px; border-top: 1px solid var(--ui-border); }
-  .ant-modal-footer > .ant-btn { margin: 0; height: 42px; padding: 0 18px; }
+  /* Inherit the same default button dimensions as VM dialogs. */
+  .ant-modal-footer > .ant-btn { margin: 0; }
   .ant-btn-primary:not(:disabled) { color: var(--ui-action-primary-text); background: var(--ui-action-primary-bg); border-color: var(--ui-action-primary-bg); }
   .ant-btn-primary:not(:disabled):hover, .ant-btn-primary:not(:disabled):focus { background: var(--ui-action-primary-hover); border-color: var(--ui-action-primary-hover); }
   .ant-btn-primary.ant-btn-dangerous:not(:disabled) { background: var(--ui-action-danger-bg); border-color: var(--ui-action-danger-bg); }

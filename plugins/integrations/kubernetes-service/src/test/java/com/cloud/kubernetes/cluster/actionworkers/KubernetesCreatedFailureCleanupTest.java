@@ -163,6 +163,7 @@ public class KubernetesCreatedFailureCleanupTest {
     private java.util.List<KubernetesClusterVmMapVO> uninstalledNodes() {
         Mockito.when(cluster.getState()).thenReturn(KubernetesCluster.State.Error);
         Mockito.when(cluster.getAccountId()).thenReturn(22L);
+        Mockito.when(cluster.getClusterType()).thenReturn(KubernetesCluster.ClusterType.CloudManaged);
         Mockito.when(details.findDetail(3L, "lifecycle.provisioning.phase"))
                 .thenReturn(new com.cloud.kubernetes.cluster.KubernetesClusterDetailsVO(3L,"lifecycle.provisioning.phase","Nodes",false));
         Mockito.when(failed.getResult()).thenReturn(serializedFailure("Provisioning node VM failed in the Kubernetes cluster : test-cluster"));
@@ -227,7 +228,8 @@ public class KubernetesCreatedFailureCleanupTest {
         Mockito.when(maps.listByClusterId(3L)).thenReturn(Collections.singletonList(Mockito.mock(KubernetesClusterVmMapVO.class)));
         assertTrue(worker.reconcileFailedCreationBeforeDelete());
         Mockito.verify(worker).stateTransitTo(3L, KubernetesCluster.Event.CreateFailed);
-        Mockito.verifyNoInteractions(details, worker.vmInstanceDao);
+        Mockito.verifyNoInteractions(worker.vmInstanceDao);
+        Mockito.verify(details, Mockito.never()).addDetail(Mockito.anyLong(), Mockito.anyString(), Mockito.anyString(), Mockito.anyBoolean());
     }
     @Test public void activeStartingCreateCannotBeReconciledForDeletion() {
         Mockito.when(cluster.getState()).thenReturn(KubernetesCluster.State.Starting);
@@ -271,4 +273,105 @@ public class KubernetesCreatedFailureCleanupTest {
         rejectsWithoutCleanupMarker();
     }
 
+
+    @Test public void legacyUnexpectedRuntimeFailureRecoversWithoutParsingErrorText() {
+        uninstalledNodes(); Mockito.when(failed.getResult()).thenReturn(serializedFailure("StringIndexOutOfBoundsException"));
+        assertTrue(worker.reconcileFailedCreationBeforeDelete());
+        Mockito.verify(details).addDetail(3L, "lifecycle.creation.failed.job", "failed-create-job", false);
+    }
+    @Test public void legacyAsyncStartFailureWithNoSerializedResultStillUsesActualFailedJob() {
+        uninstalledNodes(); Mockito.when(failed.getResult()).thenReturn(null);
+        assertTrue(worker.reconcileFailedCreationBeforeDelete());
+    }
+    @Test public void failureBeforeFirstNodeMappingRecoversOnlyWhenNetworkHasNoVms() {
+        uninstalledNodes(); Mockito.when(maps.listByClusterId(3L)).thenReturn(Collections.emptyList());
+        Mockito.when(worker.vmInstanceDao.listNonRemovedVmsByTypeAndNetwork(Mockito.eq(7L), Mockito.any())).thenReturn(Collections.emptyList());
+        assertTrue(worker.reconcileFailedCreationBeforeDelete());
+    }
+    @Test public void unmappedVmBeforeFirstNodeMappingIsPreserved() {
+        uninstalledNodes(); Mockito.when(maps.listByClusterId(3L)).thenReturn(Collections.emptyList());
+        assertFalse(worker.reconcileUninstalledNodeProvisioningFailure(Collections.emptyList()));
+    }
+    @Test public void endpointOrProviderOwnershipCannotUseNodeFailureShortcut() {
+        java.util.List<KubernetesClusterVmMapVO> nodes = uninstalledNodes();
+        Mockito.when(cluster.getEndpoint()).thenReturn("https://192.0.2.1:6443/");
+        assertFalse(worker.reconcileUninstalledNodeProvisioningFailure(nodes));
+        Mockito.when(cluster.getEndpoint()).thenReturn(null); Mockito.doReturn(true).when(worker).ownershipCleanupEnabled();
+        assertFalse(worker.reconcileUninstalledNodeProvisioningFailure(nodes));
+    }
+    @Test public void duplicateOrExternalNodeMappingIsPreserved() {
+        java.util.List<KubernetesClusterVmMapVO> nodes = uninstalledNodes();
+        Mockito.when(nodes.get(1).getVmId()).thenReturn(11L);
+        assertFalse(worker.reconcileUninstalledNodeProvisioningFailure(nodes));
+        Mockito.when(nodes.get(1).getVmId()).thenReturn(12L); Mockito.when(nodes.get(1).isExternalNode()).thenReturn(true);
+        assertFalse(worker.reconcileUninstalledNodeProvisioningFailure(nodes));
+    }
+    private void nodeFailureReceipt(String uuid) {
+        Mockito.when(details.findDetail(3L, "lifecycle.provisioning.phase"))
+                .thenReturn(new KubernetesClusterDetailsVO(3L, "lifecycle.provisioning.phase", "NodeProvisioningFailed", false));
+        Mockito.when(details.findDetail(3L, "lifecycle.creation.failed.job"))
+                .thenReturn(uuid == null ? null : new KubernetesClusterDetailsVO(3L, "lifecycle.creation.failed.job", uuid, false));
+    }
+    @Test public void matchingReceiptAndActualFailedJobSkipOnlyUnreachableKubernetesCleanup() {
+        uninstalledNodes(); nodeFailureReceipt("failed-create-job");
+        assertTrue(worker.isUnprovisionedFailure()); worker.prepareNodeRemoval();
+        Mockito.verify(worker, Mockito.never()).requireCleanupNetworkAccess();
+        Mockito.verify(worker, Mockito.never()).prepareCsiCleanupBeforeNodeRemoval();
+        Mockito.verify(worker, Mockito.never()).prepareServiceCleanupBeforeNodeRemoval();
+    }
+    @Test public void missingOrMismatchedNodeFailureReceiptIsPreserved() {
+        uninstalledNodes(); nodeFailureReceipt(null); assertFalse(worker.isUnprovisionedFailure());
+        nodeFailureReceipt("unrelated-job"); assertFalse(worker.isUnprovisionedFailure());
+    }
+    @Test public void newerSuccessOrConcurrentCreationInvalidatesOldFailureReceipt() {
+        uninstalledNodes(); nodeFailureReceipt("failed-create-job");
+        AsyncJobVO other = Mockito.mock(AsyncJobVO.class); Mockito.when(other.getId()).thenReturn(6L);
+        Mockito.when(other.getStatus()).thenReturn(AsyncJob.Status.SUCCEEDED);
+        Mockito.when(worker.asyncJobDao.searchIncludingRemoved(Mockito.any(), Mockito.isNull(), Mockito.isNull(), Mockito.eq(false))).thenReturn(Arrays.asList(failed, other));
+        assertFalse(worker.isUnprovisionedFailure());
+        Mockito.when(other.getId()).thenReturn(4L); Mockito.when(other.getStatus()).thenReturn(AsyncJob.Status.IN_PROGRESS);
+        assertFalse(worker.isUnprovisionedFailure());
+    }
+    @Test public void scannerAlertAndRemovalRetryRetainVerifiedNodeFailure() {
+        uninstalledNodes(); nodeFailureReceipt("failed-create-job");
+        Mockito.when(cluster.getState()).thenReturn(KubernetesCluster.State.Alert); assertTrue(worker.isUnprovisionedFailure());
+        Mockito.when(cluster.getState()).thenReturn(KubernetesCluster.State.Destroying); assertTrue(worker.isUnprovisionedFailure());
+        Mockito.when(cluster.getState()).thenReturn(KubernetesCluster.State.Running); assertFalse(worker.isUnprovisionedFailure());
+    }
+    @Test public void removedNativeNodeOnRetryDoesNotRequireLiveNetworkMembership() {
+        uninstalledNodes(); nodeFailureReceipt("failed-create-job");
+        Mockito.when(worker.userVmDao.findById(11L).isRemoved()).thenReturn(true);
+        VMInstanceVO remaining = worker.userVmDao.findById(12L);
+        Mockito.when(worker.vmInstanceDao.listNonRemovedVmsByTypeAndNetwork(Mockito.eq(7L), Mockito.any()))
+                .thenReturn(Collections.singletonList(remaining));
+        assertTrue(worker.isUnprovisionedFailure());
+    }
+
+    @Test public void ownedNativeReceiptsValidateBeforeStopAndCleanupWithoutKubernetesApi() throws Exception {
+        uninstalledNodes(); nodeFailureReceipt("failed-create-job");
+        Mockito.when(details.listDetailsKeyPairs(3L)).thenReturn(Collections.singletonMap("cleanup.native.FirewallRule.uuid", "verified-by-parser"));
+        Mockito.doReturn(Mockito.mock(com.cloud.network.dao.NetworkVO.class)).when(worker).requireCleanupNetworkAccess();
+        Mockito.doReturn(Collections.emptyList()).when(worker).recordOwnedNetworkResources(true);
+        Mockito.doNothing().when(worker).stopNodesForOfflineOwnedCleanup();
+        Mockito.doNothing().when(worker).cleanupNativeAclResources();
+        Mockito.doNothing().when(worker).cleanupOwnedNetworkResources(true);
+        worker.prepareNodeRemoval();
+        org.mockito.InOrder order = Mockito.inOrder(worker);
+        order.verify(worker).recordOwnedNetworkResources(true);
+        order.verify(worker).stopNodesForOfflineOwnedCleanup();
+        order.verify(worker).cleanupNativeAclResources(); order.verify(worker).cleanupOwnedNetworkResources(true);
+        Mockito.verify(worker, Mockito.never()).prepareServiceCleanupBeforeNodeRemoval();
+        Mockito.verify(worker, Mockito.never()).prepareCsiCleanupBeforeNodeRemoval();
+    }
+    @Test public void invalidOwnedReceiptPreservesNodesAndDoesNotMarkRemovalPrepared() {
+        uninstalledNodes(); nodeFailureReceipt("failed-create-job");
+        Mockito.when(details.listDetailsKeyPairs(3L)).thenReturn(Collections.singletonMap("cleanup.native.FirewallRule.uuid", "bad-receipt"));
+        Mockito.doReturn(Mockito.mock(com.cloud.network.dao.NetworkVO.class)).when(worker).requireCleanupNetworkAccess();
+        Mockito.doThrow(new CloudRuntimeException("identity changed")).when(worker).recordOwnedNetworkResources(true);
+        try { worker.prepareNodeRemoval(); fail("invalid receipt must block cleanup"); }
+        catch (CloudRuntimeException expected) {
+            Mockito.verify(worker, Mockito.never()).stopNodesForOfflineOwnedCleanup();
+            Mockito.verify(details, Mockito.never()).addDetail(3L, "cleanup.nodes.prepared", "v1", false);
+        }
+    }
 }

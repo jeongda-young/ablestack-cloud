@@ -27,6 +27,13 @@ import com.google.gson.annotations.SerializedName;
 
 @SuppressWarnings("unused")
 public class CapabilitiesResponse extends BaseResponse {
+    @SerializedName("userdatamaxlength")
+    @Param(description = "Maximum user data length in canonical Base64 encoded bytes")
+    private Integer userDataMaxLength;
+
+    public void setUserDataMaxLength(Integer userDataMaxLength) {
+        this.userDataMaxLength = userDataMaxLength;
+    }
     @SerializedName("securitygroupsenabled")
     @Param(description = "True if security groups support is enabled, false otherwise")
     private boolean securityGroupsEnabled;

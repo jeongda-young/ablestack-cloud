@@ -127,6 +127,7 @@ export default {
         },
         {
           api: 'updateTemplate',
+          selfManagedDialog: true,
           icon: 'edit-outlined',
           label: 'label.action.edit.template',
           dataView: true,
@@ -288,6 +289,7 @@ export default {
         },
         {
           api: 'updateIso',
+          selfManagedDialog: true,
           icon: 'edit-outlined',
           label: 'label.action.edit.iso',
           dataView: true,

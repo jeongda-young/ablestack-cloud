@@ -735,6 +735,9 @@ import org.apache.cloudstack.storage.datastore.db.TemplateDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.TemplateDataStoreVO;
 import org.apache.cloudstack.storage.datastore.db.VolumeDataStoreDao;
 import org.apache.cloudstack.storage.datastore.db.VolumeDataStoreVO;
+import org.apache.cloudstack.userdata.CniConfigurationReferenceChecker;
+import com.cloud.user.CniConfigurationReferences;
+import com.cloud.utils.component.ComponentContext;
 import org.apache.cloudstack.userdata.UserDataManager;
 import org.apache.cloudstack.utils.CloudStackVersion;
 import org.apache.cloudstack.utils.identity.ManagementServerNode;
@@ -956,6 +959,7 @@ import com.cloud.utils.db.JoinBuilder.JoinType;
 import com.cloud.utils.db.SearchBuilder;
 import com.cloud.utils.db.SearchCriteria;
 import com.cloud.utils.db.Transaction;
+import com.cloud.utils.db.TransactionCallback;
 import com.cloud.utils.db.TransactionCallbackNoReturn;
 import com.cloud.utils.db.TransactionStatus;
 import com.cloud.utils.db.UUIDManager;
@@ -7766,6 +7770,7 @@ public class ManagementServerImpl extends MutualExclusiveIdsManagerBase implemen
     @Override
     public Map<String, Object> listCapabilities(final ListCapabilitiesCmd cmd) {
         final Map<String, Object> capabilities = new HashMap<>();
+        capabilities.put("userdatamaxlength", UserDataManager.VM_USERDATA_MAX_LENGTH.value());
 
         final Account caller = getCaller();
         Long domainId = cmd.getDomainId();
@@ -8196,6 +8201,11 @@ public class ManagementServerImpl extends MutualExclusiveIdsManagerBase implemen
 
     @Override
     public boolean deleteUserData(final DeleteUserDataCmd cmd) {
+        return deleteUserDataOfType(cmd, false);
+    }
+
+    private boolean deleteUserDataOfType(final DeleteUserDataCmd cmd, final boolean forCks) {
+        final String resourceType = forCks ? "CNI configuration" : "UserData";
         final Account caller = getCaller();
         final String accountName = cmd.getAccountName();
         final Long domainId = cmd.getDomainId();
@@ -8216,7 +8226,7 @@ public class ManagementServerImpl extends MutualExclusiveIdsManagerBase implemen
         final UserDataVO userData = userDataDao.findById(cmd.getId());
         if (userData == null) {
             final InvalidParameterValueException ex = new InvalidParameterValueException(
-                    "A UserData with id '" + cmd.getId() + "' does not exist for account " + owner.getAccountName() + " in specified domain id");
+                    "A " + resourceType + " with id '" + cmd.getId() + "' does not exist for account " + owner.getAccountName() + " in specified domain id");
             final DomainVO domain = ApiDBUtils.findDomainById(owner.getDomainId());
             String domainUuid = String.valueOf(owner.getDomainId());
             if (domain != null) {
@@ -8224,6 +8234,27 @@ public class ManagementServerImpl extends MutualExclusiveIdsManagerBase implemen
             }
             ex.addProxyObject(domainUuid, "domainId");
             throw ex;
+        }
+
+        // UUID ACL checks run in the API layer; reject the wrong resource type
+        // before checking references or mutating either the record or its comments.
+        if (userData.isForCks() != forCks) {
+            throw new InvalidParameterValueException("The requested resource is not a " + resourceType + ". Use "
+                    + (forCks ? "deleteUserData for ordinary user data." : "deleteCniConfiguration for CNI configurations."));
+        }
+
+        if (forCks) {
+            // Integration beans live in delegated plugin contexts, initialized after server.
+            final CniConfigurationReferenceChecker checker;
+            try {
+                checker = ComponentContext.getDelegateComponentOfType(CniConfigurationReferenceChecker.class);
+            } catch (org.springframework.beans.factory.NoSuchBeanDefinitionException e) {
+                throw new CloudRuntimeException("CNI reference validation is unavailable; retry after Kubernetes service initialization.", e);
+            }
+            if (checker.hasActiveCniReferences(userData.getId())) {
+                // Do not disclose cluster names or counts outside the caller's ACL scope.
+                throw new InvalidParameterValueException("CNI configuration cannot be removed while referenced by an active Kubernetes cluster.");
+            }
         }
 
         List<VMTemplateVO> templatesLinkedToUserData = templateDao.findTemplatesLinkedToUserdata(userData.getId());
@@ -8236,15 +8267,20 @@ public class ManagementServerImpl extends MutualExclusiveIdsManagerBase implemen
             throw new CloudRuntimeException(String.format("Userdata %s cannot be removed as it is being used by some instances", userData.getName()));
         }
 
-        annotationDao.removeByEntityType(AnnotationService.EntityType.USER_DATA.name(), userData.getUuid());
-
-        return userDataDao.remove(userData.getId());
+        return Transaction.execute((TransactionCallback<Boolean>) status -> {
+            if (!userDataDao.remove(userData.getId())) {
+                throw new CloudRuntimeException("Failed to delete " + resourceType + ".");
+            }
+            // A false annotation result means there were no comments; that is valid.
+            annotationDao.removeByEntityType(AnnotationService.EntityType.USER_DATA.name(), userData.getUuid());
+            return true;
+        });
     }
 
     @Override
     @ActionEvent(eventType = EventTypes.EVENT_DELETE_CNI_CONFIG, eventDescription = "CNI Configuration deletion")
     public boolean deleteCniConfiguration(DeleteCniConfigurationCmd cmd) {
-        return deleteUserData(cmd);
+        return CniConfigurationReferences.withLock(cmd.getId(), () -> deleteUserDataOfType(cmd, true));
     }
 
     @Override
@@ -8295,56 +8331,79 @@ public class ManagementServerImpl extends MutualExclusiveIdsManagerBase implemen
     @ActionEvent(eventType = EventTypes.EVENT_REGISTER_CNI_CONFIG, eventDescription = "registering CNI configuration", async = true)
     public UserData registerCniConfiguration(RegisterCniConfigurationCmd cmd) {
         final Account owner = getOwner(cmd);
-        checkForUserDataByName(cmd, owner);
-        final String name = cmd.getName();
+        final String name = UserDataRegistrationValidation.name(cmd.getName(), "CNI configuration");
+        final String userdata;
+        final String params;
+        try {
+            userdata = userDataManager.validateUserData(cmd.getCniConfig(), cmd.getHttpMethod());
+            params = UserDataRegistrationValidation.params(cmd.getParams(), "CNI configuration");
+        } catch (InvalidParameterValueException error) {
+            throw new InvalidParameterValueException("Invalid CNI configuration: " + error.getMessage()
+                    .replace("User data", "CNI content").replace("user data", "CNI content"));
+        }
+        UserDataRegistrationValidation.requireContent(userdata, "CNI configuration");
 
-        String userdata = cmd.getCniConfig();
-        final String params = cmd.getParams();
-
-        userdata = userDataManager.validateUserData(userdata, cmd.getHttpMethod());
-
-        return createAndSaveUserData(name, userdata, params, owner, true);
+        // Share the owner/name namespace and DB lock with normal UserData registration.
+        // CNI deliberately permits identical content under a different name.
+        final GlobalLock lock = GlobalLock.getInternLock("userdata-register-" + owner.getDomainId() + "-" + owner.getAccountId());
+        try {
+            if (!lock.lock(10)) {
+                throw new CloudRuntimeException("Another CNI or user data registration is in progress for this account. Please retry.");
+            }
+            try {
+                if (userDataDao.findByName(owner.getAccountId(), owner.getDomainId(), name) != null) {
+                    throw new InvalidParameterValueException("A CNI configuration or user data with the same name already exists for this account.");
+                }
+                return createAndSaveUserData(name, userdata, params, owner, true);
+            } finally {
+                lock.unlock();
+            }
+        } finally {
+            lock.releaseRef();
+        }
     }
 
     @Override
     @ActionEvent(eventType = EventTypes.EVENT_REGISTER_USER_DATA, eventDescription = "registering userdata", async = true)
     public UserData registerUserData(final RegisterUserDataCmd cmd) {
         final Account owner = getOwner(cmd);
-        checkForUserDataByName(cmd, owner);
-        final String name = cmd.getName();
+        final String name = UserDataRegistrationValidation.name(cmd.getName());
+        final String userdata = userDataManager.validateUserData(cmd.getUserData(), cmd.getHttpMethod());
+        UserDataRegistrationValidation.requireContent(userdata);
+        final String params = UserDataRegistrationValidation.params(cmd.getParams());
 
-        String userdata = cmd.getUserData();
-        checkForUserData(cmd, owner);
-        final String params = cmd.getParams();
-
-        userdata = userDataManager.validateUserData(userdata, cmd.getHttpMethod());
-
-        return createAndSaveUserData(name, userdata, params, owner, false);
+        // A DB-backed lock covers both duplicate checks and persistence across management nodes.
+        final GlobalLock lock = GlobalLock.getInternLock("userdata-register-" + owner.getDomainId() + "-" + owner.getAccountId());
+        try {
+            if (!lock.lock(10)) {
+                throw new CloudRuntimeException("Another user data registration is in progress for this account. Please retry.");
+            }
+            try {
+                if (userDataDao.findByName(owner.getAccountId(), owner.getDomainId(), name) != null) {
+                    throw new InvalidParameterValueException("A userdata with the same name already exists for this account.");
+                }
+                checkForUserData(userdata, owner);
+                return createAndSaveUserData(name, userdata, params, owner, false);
+            } finally {
+                lock.unlock();
+            }
+        } finally {
+            lock.releaseRef();
+        }
     }
 
     /**
-     * @param cmd
+     * @param canonicalUserData
      * @param owner
      * @throws InvalidParameterValueException
      */
-    private void checkForUserData(final RegisterUserDataCmd cmd, final Account owner) throws InvalidParameterValueException {
-        final UserDataVO userData = userDataDao.findByUserData(owner.getAccountId(), owner.getDomainId(), cmd.getUserData());
+    private void checkForUserData(final String canonicalUserData, final Account owner) throws InvalidParameterValueException {
+        final UserDataVO userData = userDataDao.findByUserData(owner.getAccountId(), owner.getDomainId(), canonicalUserData);
         if (userData != null) {
             throw new InvalidParameterValueException(String.format("Userdata %s with same content already exists for this account.", userData.getName()));
         }
     }
 
-    /**
-     * @param cmd
-     * @param owner
-     * @throws InvalidParameterValueException
-     */
-    private void checkForUserDataByName(final BaseRegisterUserDataCmd cmd, final Account owner) throws InvalidParameterValueException {
-        final UserDataVO userData = userDataDao.findByName(owner.getAccountId(), owner.getDomainId(), cmd.getName());
-        if (userData != null) {
-            throw new InvalidParameterValueException(String.format("A userdata with name %s already exists for this account.", cmd.getName()));
-        }
-    }
 
     /**
      * @param cmd

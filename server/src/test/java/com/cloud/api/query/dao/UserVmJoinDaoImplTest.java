@@ -184,6 +184,23 @@ public class UserVmJoinDaoImplTest extends GenericDaoBaseWithTagInformationBaseT
     }
 
     @Test
+    public void explicitUserDataReadIncludesVariablesWithoutLibraryId() {
+        prepareNewUserVmResponseForVnfAppliance();
+        Mockito.when(userVmMock.getUserDataDetails()).thenReturn("{VAR1=한글, value=1}");
+        UserVmResponse response = _userVmJoinDaoImpl.newUserVmResponse(ResponseObject.ResponseView.Full, "virtualmachine", userVmMock,
+                EnumSet.of(ApiConstants.VMDetails.all), null, true, caller);
+        Assert.assertEquals("{VAR1=한글, value=1}", response.getUserDataDetails());
+    }
+
+    @Test
+    public void ordinaryReadDoesNotExposeTemplateOnlyVariables() {
+        prepareNewUserVmResponseForVnfAppliance();
+        UserVmResponse response = _userVmJoinDaoImpl.newUserVmResponse(ResponseObject.ResponseView.Full, "virtualmachine", userVmMock,
+                EnumSet.of(ApiConstants.VMDetails.all), null, false, caller);
+        Assert.assertNull(response.getUserDataDetails());
+    }
+
+    @Test
     public void testNewUserVmResponseForVnfApplianceVnfNics() {
         prepareNewUserVmResponseForVnfAppliance();
 

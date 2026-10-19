@@ -52,6 +52,7 @@ public class ListCapabilitiesCmd extends BaseCmd {
     public void execute() {
         Map<String, Object> capabilities = _mgr.listCapabilities(this);
         CapabilitiesResponse response = new CapabilitiesResponse();
+        response.setUserDataMaxLength((Integer) capabilities.get("userdatamaxlength"));
         response.setSecurityGroupsEnabled((Boolean)capabilities.get("securityGroupsEnabled"));
         response.setDynamicRolesEnabled(roleService.isEnabled());
         response.setCloudStackVersion((String)capabilities.get("cloudStackVersion"));
