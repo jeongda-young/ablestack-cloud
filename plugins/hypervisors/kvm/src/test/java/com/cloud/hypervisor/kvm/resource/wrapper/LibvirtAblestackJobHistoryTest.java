@@ -182,6 +182,7 @@ public class LibvirtAblestackJobHistoryTest {
         }
         assertFalse(Files.exists(root.resolve("staging-admission-closed/" + plan.jobId + ".closed")));
         assertEquals(retired, LibvirtAblestackJobHistory.execute(root, plan.jobId, "compact-restore", helper()));
+        assertNull(LibvirtAblestackJobHistory.execute(root, "unseen-attempt", "read", helper()));
         try (MockedStatic<LibvirtAblestackJobHistory> index = Mockito.mockStatic(LibvirtAblestackJobHistory.class)) {
             index.when(() -> LibvirtAblestackJobHistory.retiredRestore(plan.jobId)).thenReturn(retired);
             assertThrows(CloudRuntimeException.class, () -> LibvirtAblestackVolumeRestoreHelper.controlStart(plan, false));

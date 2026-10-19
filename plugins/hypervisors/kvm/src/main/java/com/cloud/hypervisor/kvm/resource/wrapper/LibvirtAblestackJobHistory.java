@@ -69,7 +69,10 @@ final class LibvirtAblestackJobHistory {
                 "python3", helper.toString(), action, "--root", root.toString(), "--job-id", id);
         if (result.first() != 0) { throw new IOException("Host job history " + action + " failed: " + result.second()); }
         try {
-            JsonObject record = new Gson().fromJson(result.second().trim(), JsonObject.class);
+            var value = new Gson().fromJson(result.second().trim(), com.google.gson.JsonElement.class);
+            if (value == null || value.isJsonNull()) { return null; }
+            if (!value.isJsonObject()) { throw new IOException("Host job history response is not an object"); }
+            JsonObject record = value.getAsJsonObject();
             if (record != null && (!record.has("version") || record.get("version").getAsInt() != 1
                     || !record.has("jobId") || !id.equals(record.get("jobId").getAsString()))) {
                 throw new IOException("Host job history belongs to another job");
