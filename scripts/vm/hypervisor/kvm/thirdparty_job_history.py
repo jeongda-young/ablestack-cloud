@@ -17,7 +17,7 @@
 
 """Host-local, transactional index of retired backup execution records."""
 import argparse
-from contextlib import closing
+from contextlib import closing, ExitStack
 import fcntl
 import json
 import os
@@ -60,6 +60,10 @@ def compact(root, job_id):
 
 
 def compact_locked(root, job_id):
+    # Restore receipts belong to a separately acknowledged deletion, not backup GC.
+    if any((root / directory / (job_id + ".json")).exists()
+           for directory in ("restore-start", "restore-outcomes")):
+        return None
     start = root / "backup-start" / (job_id + ".json")
     closed = root / "staging-admission-closed" / (job_id + ".closed")
     if (root / "jobs" / job_id).exists() or (root / "jobs" / (job_id + ".properties")).exists():
@@ -96,6 +100,84 @@ def compact_locked(root, job_id):
         if directory.exists():
             sync_directory(directory)
     return record
+
+
+def compact_restore(root, job_id):
+    """Forget a deleted backup's terminal restore details, retaining a small replay fence."""
+    root = Path(root).resolve(strict=True)
+    if not re.fullmatch(r"[A-Za-z0-9_.-]+", job_id) or job_id in (".", ".."):
+        raise RuntimeError("Invalid retired restore ID")
+    start = root / "restore-start" / (job_id + ".json")
+    outcome = root / "restore-outcomes" / (job_id + ".json")
+    closed = root / "staging-admission-closed" / (job_id + ".closed")
+    with ExitStack() as stack:
+        for file in (start, outcome):
+            if file.parent.exists():
+                if file.is_symlink() or file.with_suffix(".lock").is_symlink():
+                    raise RuntimeError("Restore history cannot be a symbolic link")
+                lock = stack.enter_context(file.with_suffix(".lock").open("a"))
+                fcntl.lockf(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        if (root / "jobs" / job_id).exists() or (root / "jobs" / (job_id + ".properties")).exists():
+            raise RuntimeError("Restore execution records must be cleaned before retirement")
+        existing = read(root, job_id)
+        if existing is not None and existing.get("kind") == "RESTORE":
+            record = existing
+            for file, is_start in ((start, True), (outcome, False)):
+                if file.is_file():
+                    saved = json.loads(file.read_text())
+                    identity = (saved.get("plan") or {}) if is_start else saved
+                    backup = (identity.get("manifest") or {}).get("backupUuid") if is_start else identity.get("sourceBackupUuid")
+                    if (identity.get("jobId") != job_id or backup != record.get("sourceBackupUuid")
+                            or identity.get("targetVmName") != record.get("targetVmName")):
+                        raise RuntimeError("Restore files conflict with their retired identity")
+        else:
+            receipt = json.loads(start.read_text()) if start.is_file() else None
+            plan = (receipt or {}).get("plan") or {}
+            manifest = plan.get("manifest") or {}
+            if (receipt is None or receipt.get("version") != 1 or plan.get("jobId") != job_id
+                    or not manifest.get("backupUuid") or not plan.get("targetVmName")
+                    or receipt.get("state") not in ("INITIALIZED", "START_FAILED")):
+                raise RuntimeError("Restore start ownership or termination is unconfirmed")
+            if Path(plan["destination"]).exists() or (Path(plan["stageRoot"]) / ".volume-reservations" / (job_id + ".json")).exists():
+                raise RuntimeError("Restore staging or reservation cleanup is incomplete")
+            if receipt["state"] == "INITIALIZED":
+                result = json.loads(outcome.read_text()) if outcome.is_file() else None
+                if (result is None or result.get("version") != 1 or result.get("jobId") != job_id
+                        or result.get("sourceBackupUuid") != manifest["backupUuid"]
+                        or result.get("targetVmName") != plan["targetVmName"]
+                        or result.get("outcome") not in ("COMMITTED", "ROLLED_BACK", "FAILED")
+                        or (result.get("transactionId") and (result.get("outcome") == "FAILED"
+                            or result.get("primaryCleanupState") != "COMPLETED"))
+                        or (not result.get("transactionId") and result.get("outcome") != "FAILED")
+                        or (not closed.is_file() and not (existing or {}).get("closedReason"))):
+                    raise RuntimeError("Restore outcome or admission closure is unconfirmed")
+            elif outcome.exists():
+                raise RuntimeError("Unstarted restore conflicts with a VM outcome")
+            if existing is not None and (existing.get("startReceipt") is not None or existing.get("kind") is not None):
+                raise RuntimeError("Restore conflicts with existing job history")
+            record = {"version": 1, "kind": "RESTORE", "jobId": job_id,
+                      "sourceBackupUuid": manifest["backupUuid"], "targetVmName": plan["targetVmName"],
+                      "hostId": plan.get("hostId"), "provider": manifest.get("provider"),
+                      "closedReason": "Restore records removed after backup deletion",
+                      "retiredAt": int(time.time() * 1000)}
+            path = database(root)
+            initialize(root, path)
+            with closing(sqlite3.connect(path, timeout=30)) as connection:
+                with connection:
+                    connection.execute("PRAGMA synchronous=FULL")
+                    actual = connection.execute("SELECT record FROM retired_jobs WHERE job_id = ?", (job_id,)).fetchone()
+                    if (json.loads(actual[0]) if actual else None) != existing:
+                        raise RuntimeError("Restore history changed during retirement")
+                    connection.execute("INSERT OR REPLACE INTO retired_jobs VALUES (?, ?)", (job_id, json.dumps(record)))
+            sync_directory(root)
+        # Every reader/initializer checks the committed fence after taking its file lock.
+        # This order also makes a lost deletion response safe to retry.
+        for file in (start, start.with_suffix(".lock"), outcome, outcome.with_suffix(".lock"), closed):
+            file.unlink(missing_ok=True)
+        for directory in (start.parent, outcome.parent, closed.parent):
+            if directory.exists():
+                sync_directory(directory)
+        return record
 
 
 def initialize(root, path):
@@ -136,8 +218,8 @@ def compact_retired(root, limit=100):
         if (root / "jobs" / job_id).exists() or (root / "jobs" / (job_id + ".properties")).exists():
             continue
         try:
-            compact(root, job_id)
-            count += 1
+            if compact(root, job_id) is not None:
+                count += 1
         except (OSError, ValueError, RuntimeError):
             # Unconfirmed legacy records stay in place; another job can still finish.
             continue
@@ -147,12 +229,12 @@ def compact_retired(root, limit=100):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("action", choices=("read", "compact"))
+    parser.add_argument("action", choices=("read", "compact", "compact-restore"))
     parser.add_argument("--root", required=True)
     parser.add_argument("--job-id", required=True)
     args = parser.parse_args()
     root = Path(args.root).absolute()
-    result = (read if args.action == "read" else compact)(root, args.job_id)
+    result = {"read": read, "compact": compact, "compact-restore": compact_restore}[args.action](root, args.job_id)
     if args.action == "compact":
         compact_retired(root)
     print(json.dumps(result))

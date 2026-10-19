@@ -43,6 +43,15 @@ final class LibvirtAblestackJobHistory {
                 && !record.get("closedReason").getAsString().isBlank();
     }
 
+    static JsonObject retiredRestore(String id) throws IOException {
+        JsonObject record = read(id);
+        return record != null && record.has("kind") && "RESTORE".equals(record.get("kind").getAsString()) ? record : null;
+    }
+
+    static JsonObject compactRestore(String id) throws IOException {
+        return execute(ROOT, id, "compact-restore");
+    }
+
     static void compact(String id) throws IOException {
         if (Files.notExists(ROOT, java.nio.file.LinkOption.NOFOLLOW_LINKS)) { return; }
         execute(ROOT, id, "compact");

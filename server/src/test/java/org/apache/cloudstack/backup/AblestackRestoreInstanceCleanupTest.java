@@ -31,6 +31,8 @@ import org.apache.cloudstack.engine.subsystem.api.storage.VolumeDataFactory;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.framework.async.AsyncCompletionCallback;
 import org.apache.cloudstack.storage.command.CommandResult;
+import org.apache.cloudstack.storage.datastore.db.VolumeDataStoreDao;
+import org.apache.cloudstack.storage.datastore.db.VolumeDataStoreVO;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -79,6 +81,7 @@ public class AblestackRestoreInstanceCleanupTest {
     private final UserVmManager userVms = mock(UserVmManager.class);
     private final VolumeApiService volumeApi = mock(VolumeApiService.class);
     private final VolumeDataFactory factory = mock(VolumeDataFactory.class);
+    private final VolumeDataStoreDao volumeStores = mock(VolumeDataStoreDao.class);
     private final AccountDao accounts = mock(AccountDao.class);
     private final UserVmVO vm = mock(UserVmVO.class);
     private final VolumeVO root = mock(VolumeVO.class);
@@ -162,6 +165,7 @@ public class AblestackRestoreInstanceCleanupTest {
         ReflectionTestUtils.setField(service, "userVmManager", userVms);
         ReflectionTestUtils.setField(service, "volumeApiService", volumeApi);
         ReflectionTestUtils.setField(service, "volumeFactory", factory);
+        ReflectionTestUtils.setField(service, "volumeStoreDao", volumeStores);
         ReflectionTestUtils.setField(service, "accountDao", accounts);
         return service;
     }
@@ -343,6 +347,52 @@ public class AblestackRestoreInstanceCleanupTest {
         cleanup.cleanup(3L, 2L);
         assertTrue(cleanup.isPending(3L));
         assertTrue(details.get(AblestackRestoreInstanceCleanup.REASON_KEY).contains("storage is unavailable"));
+    }
+
+    @Test
+    public void removedDestroyedRootWithoutAnyStorageCompletesCleanup() throws Exception {
+        prepareRemovedUnprovisionedRoot();
+        cleanup.cleanup(3L, 2L);
+        assertFalse(cleanup.isPending(3L));
+        assertEquals("CLEANUP_COMPLETED", details.get(AblestackBackupFrameworkUtils.RESTORE_JOB_STEP_DETAIL));
+        verify(factory, never()).getVolume(10L);
+        verify(volumeApi, never()).deleteVolume(eq(10L), any());
+        verify(vmManager, never()).destroy(anyString(), eq(true));
+    }
+
+    @Test
+    public void removedDestroyedRootWithSecondaryStorageRemainsPending() {
+        prepareRemovedUnprovisionedRoot();
+        when(volumeStores.findByVolume(10L)).thenReturn(mock(VolumeDataStoreVO.class));
+        cleanup.cleanup(3L, 2L);
+        assertTrue(cleanup.isPending(3L));
+        assertTrue(details.get(AblestackRestoreInstanceCleanup.REASON_KEY).contains("storage is unavailable"));
+    }
+
+    @Test
+    public void removedDestroyedRootWithPoolButNoPathRemainsPending() {
+        prepareRemovedUnprovisionedRoot();
+        when(root.getPoolId()).thenReturn(8L);
+        cleanup.cleanup(3L, 2L);
+        assertTrue(cleanup.isPending(3L));
+    }
+
+    @Test
+    public void removedDestroyedRootWithPathButNoPoolRemainsPending() {
+        prepareRemovedUnprovisionedRoot();
+        when(root.getPath()).thenReturn("restore-root.qcow2");
+        cleanup.cleanup(3L, 2L);
+        assertTrue(cleanup.isPending(3L));
+    }
+
+    private void prepareRemovedUnprovisionedRoot() {
+        cleanup.prepare(3L, 2L);
+        when(vm.getRemoved()).thenReturn(new Date());
+        when(root.getRemoved()).thenReturn(new Date());
+        when(root.getState()).thenReturn(Volume.State.Destroy);
+        when(root.getPoolId()).thenReturn(null);
+        when(data.getRemoved()).thenReturn(new Date());
+        when(data.getState()).thenReturn(Volume.State.Expunged);
     }
 
     @Test

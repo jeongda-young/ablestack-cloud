@@ -103,6 +103,7 @@ public final class ThirdPartyBackupRestore {
         public String hostError;
         public String cleanupState;
         public String cleanupReason;
+        public long hostRecordsRetiredAt;
         public String startState;
         public long startSubmittedAt;
         public long startCheckedAt;

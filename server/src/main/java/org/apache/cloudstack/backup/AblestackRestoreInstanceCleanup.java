@@ -30,6 +30,7 @@ import org.apache.cloudstack.engine.subsystem.api.storage.VolumeDataFactory;
 import org.apache.cloudstack.engine.subsystem.api.storage.VolumeInfo;
 import org.apache.cloudstack.framework.async.AsyncCallFuture;
 import org.apache.cloudstack.storage.command.CommandResult;
+import org.apache.cloudstack.storage.datastore.db.VolumeDataStoreDao;
 import org.apache.commons.lang3.StringUtils;
 
 import com.cloud.storage.Volume;
@@ -65,6 +66,7 @@ public class AblestackRestoreInstanceCleanup extends ManagerBase {
     @Inject private UserVmManager userVmManager;
     @Inject private VolumeApiService volumeApiService;
     @Inject private VolumeDataFactory volumeFactory;
+    @Inject private VolumeDataStoreDao volumeStoreDao;
     @Inject private AccountDao accountDao;
 
     private boolean supports(BackupVO backup) {
@@ -249,7 +251,10 @@ public class AblestackRestoreInstanceCleanup extends ManagerBase {
 
     private boolean isDeleted(VolumeVO volume) {
         return volume.getRemoved() != null && (volume.getState() == Volume.State.Expunged
-                || (volume.getState() == Volume.State.Allocated && volume.getPoolId() == null && StringUtils.isBlank(volume.getPath())));
+                // VM expunge can destroy an allocated volume without ever provisioning it.
+                || ((volume.getState() == Volume.State.Allocated || volume.getState() == Volume.State.Destroy)
+                    && volume.getPoolId() == null && StringUtils.isBlank(volume.getPath())
+                    && volumeStoreDao.findByVolume(volume.getId()) == null));
     }
 
     /** Removed rows are excluded by the ordinary volume reaper; retry the recorded target explicitly. */

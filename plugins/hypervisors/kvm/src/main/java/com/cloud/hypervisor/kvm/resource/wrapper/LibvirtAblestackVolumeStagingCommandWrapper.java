@@ -43,6 +43,11 @@ public class LibvirtAblestackVolumeStagingCommandWrapper
                 return new Answer(command, false, "Invalid volume staging job ID");
             }
             Path directory = Path.of(AblestackBackupFrameworkUtils.ASYNC_BACKUP_JOB_ROOT, id);
+            if ("RESTORE_RETIRE".equals(command.getAction())) {
+                var plan = new Gson().fromJson(command.getManifest(), org.apache.cloudstack.backup.ThirdPartyBackupRestore.Plan.class);
+                if (plan == null || !id.equals(plan.jobId)) { return new Answer(command, false, "Record deletion belongs to another restore job"); }
+                return new Answer(command, true, LibvirtAblestackVolumeRestoreHelper.retire(plan, logger).toString());
+            }
             if (java.util.Set.of("BACKUP_START_PREPARE", "BACKUP_START_STATUS", "BACKUP_START_ABORT").contains(command.getAction())) {
                 var plan = new Gson().fromJson(command.getManifest(), org.apache.cloudstack.backup.ThirdPartyBackupStart.Plan.class);
                 if (plan == null || !id.equals(plan.jobId)) { return new Answer(command, false, "Start control belongs to another backup"); }

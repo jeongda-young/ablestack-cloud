@@ -336,9 +336,13 @@ Commvault의 Plan 자체는 유지한다.
 ABLESTACK 백업에서 새 인스턴스 생성 중 복원이 실패하면 생성한 대상 VM과 ROOT·DATA 볼륨을 모두 삭제한다.
 볼륨 ID와 UUID는 VM 정리 전에 DB에 기록하여 DATA 볼륨이 분리되거나 VM이 먼저 삭제된 뒤에도 같은 대상을 정리한다.
 VM 제거 요청만으로 정리 완료를 표시하지 않으며, 모든 대상의 삭제를 확인한 뒤 `CLEANUP_COMPLETED`로 표시한다.
+삭제 표시된 볼륨이 `Allocated` 또는 `Destroy` 상태이고 기본스토리지 풀·파일 경로·보조스토리지 연결이 모두 없으면 정리할 스토리지 자원이 없는 것으로 처리한다.
 호스트·스토리지 연결 오류 등으로 삭제가 끝나지 않으면 `CLEANUP_REQUIRED` 상태와 사유를 보관하고 주기적으로 재시도한다.
 Management Server 재시작 뒤에도 재시도하며, 정리가 끝나기 전에는 해당 백업으로 새 복원을 시작하거나 백업을 삭제할 수 없다.
 이 정리는 실패한 생성 작업의 대상에만 적용하며 원본 VM과 백업본은 유지한다.
+복원 대상 VM이 삭제되었거나 영구 삭제 중이면 자동 재조회에서 복원 후처리와 VM 시작을 진행하지 않는다.
+외부 볼륨 복원은 새 전송 요청을 중단하고 호스트 복원 취소를 요청하며, 이미 요청한 외부 전송의 종료와 자원 정리를 확인한다.
+원본 VM이 삭제되었어도 별도로 생성한 복원 대상 VM이 유효하면 새 인스턴스 복원을 계속할 수 있다.
 
 ## 작업 상태와 제어
 
@@ -649,6 +653,15 @@ RBD 원본도 `.raw`·`.rbdiff` 파일로 스테이징하므로 QCOW2와 같은 
 스테이징 비율과 기본스토리지 비율은 독립적이다. 예를 들어 스테이징만 15%로 바꾸고 기본스토리지는 20%로 유지하거나,
 기본스토리지 설정도 15%로 변경할 수 있다. 백업 시 원본 기본스토리지의 작업 공간 예약은 별도 기준을 사용한다.
 
+**예약과 실제 디스크 사용량:** Commvault·NetBackup·Veeam의 용량 예약은 작업 허용을 위한 논리적 계산이다.
+Mold의 작업 예약 정보와 스테이징의 `.volume-reservations/<jobId>.json`에 요구 바이트를 기록하며,
+그 크기의 파일을 만들거나 `fallocate`로 블록을 미리 할당하지 않는다.
+작업은 공간과 실행 슬롯을 확보한 뒤 시작하며, 스테이징과 기본스토리지가 같으면 두 요구량을 합산한다.
+예약 기록의 생성·해제 자체는 작은 관리 파일과 메타데이터를 제외하면 `df`·`du` 사용량을 바꾸지 않는다.
+백업 파일 가져오기, 기본스토리지의 복원 임시 볼륨 생성, 원본 보호용 볼륨 유지 및 이 파일들의 삭제가 실제 사용량을 바꾼다.
+실패·취소 시에는 외부 쓰기 작업의 종료와 정리를 확인한 뒤 예약을 해제하며, 종료가 불확실하면 예약을 유지한다.
+따라서 정리 작업으로 `df` 사용량이 크게 줄었어도 예약 수치만 해제되어 공간이 반환된 것으로 해석해서는 안 된다.
+
 ### Commvault·NetBackup·Veeam 볼륨별 복원 단계
 
 | 단계 | 수행하는 작업 |
@@ -738,8 +751,12 @@ NAS는 백업 저장소의 Full·증분 체인을 읽어 복원한다.
 | `COMPLETED` | 해당 결과에 필요한 기본스토리지 볼륨 정리를 완료했다. |
 
 따라서 복원 중 `RUNNING / PREPARING`, 스테이징 `ADMITTED`,
-복원 정리 `WAITING (Restore job has not finished)`, 기본스토리지 정리 `NOT_STARTED`가
+복원 정리 `WAITING (Scheduled after restoration finishes)`, 기본스토리지 정리 `NOT_STARTED`가
 함께 표시되는 것은 정상 흐름이다. 각 항목은 서로 다른 대상과 처리 시점을 나타낸다.
+복원 진행 툴팁에는 카탈로그 상태·확인 시간, 과거 백업 정리 상태, 이전 RBD 스냅샷·QCOW2 비트맵 정리 상태를 표시하지 않는다.
+항목명은 선택한 언어로 표시하고 오른쪽 상태·단계·상세 값은 영어로 표시한다. 메타데이터 복원 중에는 볼륨 진행 번호를 표시하지 않는다.
+복원 완료 후 기본 상태는 백업본의 보관 상태인 `BackedUp`을 유지하고 툴팁의 **최근 복원 결과**에 `COMPLETED`를 표시한다.
+완료된 작업의 볼륨 번호와 실행 단계는 표시하지 않는다. 최근 복원 결과를 표시하는 동안에는 과거 백업의 카탈로그·증분 기준 정리 항목을 함께 표시하지 않는다.
 
 ### NetBackup/Veeam 외부 UI의 RBD·QCOW2 복원
 
@@ -836,6 +853,61 @@ Host의 백업·복원 관리 기록은 `/var/lib/ablestack/backup/` 아래에 �
 | VM별 복원 잠금 | `/var/lib/ablestack/backup/jobs/restore-transactions/<대상 VM>/transaction.lock` | 같은 VM의 볼륨 교체·복구가 동시에 실행되지 않도록 제어한다. 트랜잭션 정리 후에도 VM 디렉터리와 잠금 파일은 남을 수 있다. |
 | VM 복원 결과 | `/var/lib/ablestack/backup/restore-outcomes/<복원 작업 ID>.json`, 같은 이름의 `.lock` | 볼륨별 복원의 결과와 기본스토리지 정리 상태. 작업 디렉터리와 별도로 보관한다. |
 
+**UUID로 VM과 백업 작업 확인**
+
+`backup-start/<UUID>.json`의 UUID는 Mold 백업 UUID이며 VM UUID나 Commvault 외부 Job ID가 아니다.
+같은 UUID의 `.json`과 `.lock`은 한 백업 시작 기록의 한 쌍이다.
+JSON의 `plan.manifest.vmName`은 원본 VM의 내부 이름, `provider`는 공급자, `timestamp`는 백업 시점이다.
+`plan.hostId`는 실행 Host의 Mold DB ID다. 아래 조회는 실행 Host의 시작 기록만 읽고 파일을 변경하지 않는다.
+
+```bash
+python3 - <<'PY'
+import json
+import socket
+from pathlib import Path
+
+print('HOST\tBACKUP_UUID\tVM\tPROVIDER\tBACKUP_TIME\tSTART_STATE\tHOST_ID')
+for file in sorted(Path('/var/lib/ablestack/backup/backup-start').glob('*.json')):
+    try:
+        receipt = json.loads(file.read_text())
+        plan = receipt.get('plan') or {}
+        manifest = plan.get('manifest') or {}
+        print('\t'.join(str(value) for value in (
+            socket.gethostname(), file.stem, manifest.get('vmName', ''),
+            manifest.get('provider', ''), manifest.get('timestamp', ''),
+            receipt.get('state', ''), plan.get('hostId', ''))))
+    except (OSError, ValueError, TypeError, AttributeError) as error:
+        print(f'{file.name}\tREAD_ERROR\t{error}')
+PY
+```
+
+시작 기록의 `STARTED`는 과거의 시작 확인 값이며 현재 백업이 실행 중이라는 뜻은 아니다.
+현재 실행·정리 여부는 Mold의 작업 상태와 정리 상태로 확인한다. `.lock` 파일의 존재도 실행 여부의 증거가 아니다.
+출력한 UUID는 `cloud.backups.uuid`와 대조하여 백업 ID와 `vm_id`를 확인한다.
+각 Host의 로컬 기록이므로 작업이 분산되었다면 해당 실행 Host마다 조회해야 한다.
+
+**중앙 DB와 Host 기록의 관계**
+
+현재 백업·복원은 Host 파일만으로 관리하지 않는다. Mold DB의 `backup_details`에도 다음 제어 정보를 JSON 등으로 저장한다.
+
+| 중앙 DB 키 | 저장 내용 |
+| --- | --- |
+| `thirdparty.volume.manifest` | 볼륨 식별자, Full·증분 파일 경로와 체인, 외부 백업 Job 참조 |
+| `thirdparty.volume.restore.plan` | 복원 작업 ID, 실행 Host, 대상 VM, 스테이징 경로와 선택한 볼륨 |
+| `thirdparty.volume.restore.history.*` | 복원 시도별 상태, 외부 전송 요청·결과, Host에서 확인한 VM 복원 결과 |
+| `thirdparty.staging.admission.backup` / `thirdparty.staging.admission.restore` | 대기열, 실행 Host, 스테이징·기본스토리지 요구량과 예약 상태 |
+| `ablestack.restore.instance.resources` / `ablestack.restore.instance.cleanup.pending` | 실패한 새 인스턴스 복원의 대상 VM·볼륨 소유 정보와 정리 대기 |
+
+일반 비동기 작업의 `async_job`·`vm_work_job`·`sync_queue_item`, VM 스냅샷의 `vm_snapshots`,
+볼륨·스냅샷 저장소 참조의 `volume_store_ref`·`snapshot_store_ref`도 작업 상태나 경로·연결 정보를 중앙 DB에서 관리하는 기존 사례다.
+Management Server 사이의 배타 제어에는 `GlobalLock`의 MySQL 명명 잠금을 사용한다.
+Host의 `job-history.sqlite`는 중앙 DB와 별개인 로컬 종료 색인이며, DB라는 이름만으로 Mold의 MySQL 기록과 혼동하지 않는다.
+
+Host 파일은 실제 프로세스 실행·종료 확인, 뒤늦은 재실행 차단, 볼륨 이름 교체 중 장애 복구에도 사용한다.
+중앙 DB의 상태만 변경하거나 DB 잠금이 풀렸다는 사실만으로 Host의 외부 전송·변환 프로세스가 종료된 것으로 판단하지 않는다.
+작업·자원·경로의 중앙 조회와 삭제 연동은 DB 중심으로 개선할 수 있지만, Host가 독립적으로 복구하는 데 필요한 최소 기록과 실행 잠금은 함께 설계해야 한다.
+이 설명은 현재 저장 구조와 개선 방향이며, 별도 작업 테이블로 이전하거나 Host 실행 제어 전체를 중앙 MySQL로 옮긴 구현은 아니다.
+
 이 기록들은 실행 Host에 생성한다. 공유 스테이징이 다른 Host에서도 보이는 것과 별개이므로
 `job.log`는 스테이징 관리에 표시된 작업 Host에서 확인한다.
 필요한 실행 경로와 진행 단계에서 디렉터리를 생성하므로 Host마다 디렉터리 구성이 다를 수 있다. 같은 경로명이어도 각 Host의 기록은 별개다.
@@ -857,6 +929,18 @@ Commvault·NetBackup·Veeam의 볼륨별 백업은 성공 결과의 DB 저장, �
 중복 실행 방지용 최소 기록과 정리 대기는 구분하며, 실행 작업 파일이 남아 있으면 작업 종료 확인,
 스테이징 예약 해제와 이전 증분 기준 정리 등 후속 정리 상태를 확인한다.
 작업 디렉터리의 로그·계획 파일이 남아 있다는 사실만으로 데이터 파일이나 용량 예약이 남았다고 판단하지 않는다.
+
+현재 백업 삭제는 해당 백업의 자원·실행 기록을 정리하며 이 공통 경로 전체를 비우지 않는다.
+세 외부 솔루션의 볼륨별 백업을 삭제할 때는 `backup_details`의 현재 복원 계획과 이전 복원 시도 이력을 모두 확인한다.
+각 시도의 원래 실행 Host에 `RESTORE_RETIRE`를 보내 `restore-start/`·`restore-outcomes/`의 JSON·잠금 파일과 남은 실행 기록을 정리한다.
+복원·롤백·기본스토리지·외부 전송·예약·실패 인스턴스 정리가 끝나지 않았거나 Host가 응답하지 않으면 백업 삭제를 대기시키고 DB의 소유 정보를 보존한다.
+Host 응답의 작업 ID·백업 UUID·대상 VM을 확인한 뒤 각 시도의 `hostRecordsRetiredAt`을 DB에 저장하므로,
+여러 Host 중 일부만 정리했거나 응답이 유실되어도 확인된 단계부터 안전하게 재시도한다.
+Host에서는 실제 실행 기록·볼륨 교체 저널·스테이징·예약이 남아 있지 않은지 다시 검사한다.
+파일을 제거하기 전에 로컬 SQLite에 작업 ID·백업 UUID·대상 VM·Host와 종료 이유만 보존하며 복원 계획·볼륨별 결과 전체는 남기지 않는다.
+이 최소 종료 기록은 지연된 시작·결과 재생성과 공간 재예약을 차단한다. 모든 Host 정리 확인 후 기존 백업 삭제 흐름에서 중앙 DB 상세·복원 이력을 제거한다.
+정리 확인 전의 복원 기록은 날짜만으로 만료시키지 않는다. 변경 적용 전에 이미 중앙 DB 이력까지 삭제되어 소유자를 대조할 수 없는 Host 기록도 일괄 삭제하지 않는다.
+이 동작은 공통 볼륨별 복원 경로를 사용하는 Commvault·NetBackup·Veeam에 적용한다. NAS의 기존 복원 실행 기록 정리는 유지한다.
 
 #### NetBackup Host 연동 기록
 

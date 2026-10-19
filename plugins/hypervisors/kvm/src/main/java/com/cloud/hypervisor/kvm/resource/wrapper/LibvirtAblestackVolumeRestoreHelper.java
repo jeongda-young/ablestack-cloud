@@ -117,10 +117,12 @@ final class LibvirtAblestackVolumeRestoreHelper {
         // Closing another same-file descriptor in this JVM can release its POSIX record lock.
         // Serialize local threads before either control or initialization opens the descriptor.
         synchronized (localStartLock(plan.jobId)) {
+            requireNotRetired(plan.jobId);
             Files.createDirectories(startDirectory());
             try (FileChannel channel = FileChannel.open(startDirectory().resolve(plan.jobId + ".lock"),
                     StandardOpenOption.CREATE, StandardOpenOption.WRITE); java.nio.channels.FileLock lock = channel.tryLock()) {
                 if (lock == null) { throw new CloudRuntimeException("Restore initialization is being inspected; retry shortly"); }
+                requireNotRetired(plan.jobId);
                 ThirdPartyBackupRestore.StartReceipt receipt = readStart(plan);
                 Path job = Path.of(AblestackBackupFrameworkUtils.ASYNC_BACKUP_JOB_ROOT, plan.jobId);
                 Path hostPlan = job.resolve("volume-restore-plan.json");
@@ -161,6 +163,8 @@ final class LibvirtAblestackVolumeRestoreHelper {
 
     static String startFailure(String jobId) throws IOException {
         if (jobId == null || !jobId.matches("[A-Za-z0-9_.-]+") || jobId.equals(".") || jobId.equals("..")) { return null; }
+        var retired = LibvirtAblestackJobHistory.retiredRestore(jobId);
+        if (retired != null) { return retired.get("closedReason").getAsString(); }
         Path file = startFile(jobId);
         if (!Files.isRegularFile(file, LinkOption.NOFOLLOW_LINKS)) { return null; }
         ThirdPartyBackupRestore.StartReceipt receipt = new Gson().fromJson(Files.readString(file), ThirdPartyBackupRestore.StartReceipt.class);
@@ -181,6 +185,7 @@ final class LibvirtAblestackVolumeRestoreHelper {
         }
         LibvirtAblestackVolumeRestoreHelper helper = new LibvirtAblestackVolumeRestoreHelper(plan, logger);
         try (LibvirtAblestackRestoreCapacity capacity = LibvirtAblestackRestoreCapacity.begin(plan.getPrimaryStorageCapacityBufferPercent())) {
+            requireNotRetired(plan.jobId);
             logger.info("{} phase=[PRIMARY_CAPACITY_POLICY], bufferPercent=[{}], minimumBufferGiB=[10]",
                     helper.trace, LibvirtAblestackRestoreCapacity.bufferPercent());
             Files.createDirectories(helper.job);
@@ -198,6 +203,7 @@ final class LibvirtAblestackVolumeRestoreHelper {
                         try (FileChannel start = FileChannel.open(startDirectory().resolve(plan.jobId + ".lock"),
                                 StandardOpenOption.CREATE, StandardOpenOption.WRITE); java.nio.channels.FileLock startLock = start.tryLock()) {
                             if (startLock == null) { throw new CloudRuntimeException("Restore start control is active; dispatch will not be repeated"); }
+                            requireNotRetired(plan.jobId);
                             ThirdPartyBackupRestore.StartReceipt receipt = readStart(plan);
                             if (receipt == null || !"PREPARED".equals(receipt.state)) {
                                 throw new CloudRuntimeException("Restore was not prepared or has already started or been blocked");
@@ -220,6 +226,58 @@ final class LibvirtAblestackVolumeRestoreHelper {
                 }
             }
         } catch (IOException e) { throw new CloudRuntimeException("Unable to persist volume restore initialization", e); }
+    }
+
+    private static void requireNotRetired(String jobId) throws IOException {
+        if (LibvirtAblestackJobHistory.retiredRestore(jobId) != null) {
+            throw new CloudRuntimeException("Restore records were retired after backup deletion; this attempt cannot run again");
+        }
+    }
+
+    /** Called only after the controller confirms every external writer and reservation is closed. */
+    static com.google.gson.JsonObject retire(ThirdPartyBackupRestore.Plan plan, Logger logger) throws IOException {
+        validateStartPlan(plan);
+        synchronized (localStartLock(plan.jobId)) {
+            ThirdPartyBackupRestore.StartReceipt receipt = readStart(plan);
+            var retired = LibvirtAblestackJobHistory.retiredRestore(plan.jobId);
+            if (retired != null) {
+                validateRetired(plan, retired);
+                return LibvirtAblestackJobHistory.compactRestore(plan.jobId);
+            }
+            if (receipt == null || !java.util.Set.of("INITIALIZED", "START_FAILED").contains(receipt.state)) {
+                throw new CloudRuntimeException("Restore start ownership and termination must be confirmed before record deletion");
+            }
+            if (LibvirtAblestackRestoreTransaction.hasJournal(plan.jobId, plan.targetVmName)
+                    || Files.exists(Path.of(plan.destination), LinkOption.NOFOLLOW_LINKS)
+                    || Files.exists(Path.of(plan.stageRoot, ".volume-reservations", plan.jobId + ".json"), LinkOption.NOFOLLOW_LINKS)) {
+                throw new CloudRuntimeException("Restore transaction, staging or capacity cleanup remains pending");
+            }
+            if ("INITIALIZED".equals(receipt.state)) {
+                var outcome = LibvirtAblestackRestoreOutcome.read(plan.jobId);
+                if (outcome == null) { throw new CloudRuntimeException("VM restore outcome is unavailable"); }
+                outcome.validate(plan);
+                if (outcome.transactionId != null
+                        ? !java.util.Set.of("COMMITTED", "ROLLED_BACK").contains(outcome.outcome)
+                            || !"COMPLETED".equals(outcome.primaryCleanupState)
+                        : !"FAILED".equals(outcome.outcome)) {
+                    throw new CloudRuntimeException("VM restore outcome or primary cleanup remains unconfirmed");
+                }
+            }
+            var command = new org.apache.cloudstack.backup.AblestackBackupJobCleanupCommand(plan.jobId);
+            var cleanup = LibvirtAblestackAsyncBackupRunner.cleanupJob(command, plan.jobId, logger);
+            if (!cleanup.getResult()) { throw new CloudRuntimeException(cleanup.getDetails()); }
+            var record = LibvirtAblestackJobHistory.compactRestore(plan.jobId);
+            validateRetired(plan, record);
+            return record;
+        }
+    }
+
+    private static void validateRetired(ThirdPartyBackupRestore.Plan plan, com.google.gson.JsonObject record) {
+        if (record == null || !record.has("kind") || !"RESTORE".equals(record.get("kind").getAsString())
+                || !record.has("sourceBackupUuid") || !plan.manifest.getBackupUuid().equals(record.get("sourceBackupUuid").getAsString())
+                || !record.has("targetVmName") || !plan.targetVmName.equals(record.get("targetVmName").getAsString())) {
+            throw new CloudRuntimeException("Retired restore history belongs to another backup or VM");
+        }
     }
 
     /** Controller calls this only after the exact external writer has terminated. */
@@ -587,7 +645,7 @@ final class LibvirtAblestackVolumeRestoreHelper {
         Path acknowledgment = job.resolve("volume-restore-ack-" + request.sequence + ".json");
         transferUncertain = true;
         step(provider.toUpperCase(java.util.Locale.ROOT) + "_RESTORE", metadata ? "Restoring backup metadata" : "Fetching volume " + (volume + 1));
-        progress(provider.toUpperCase(java.util.Locale.ROOT) + "_RESTORE", metadata ? 1 : volume + 1,
+        progress(provider.toUpperCase(java.util.Locale.ROOT) + "_RESTORE", metadata ? 0 : volume + 1,
                 15 + 65 * request.sequence / artifactCount);
         atomic(job.resolve("volume-restore-request.json"), new Gson().toJson(request));
         while (!Files.isRegularFile(acknowledgment)) {

@@ -178,9 +178,15 @@ final class LibvirtAblestackRestoreOutcome {
 
     private static void publish(VmResult result) throws IOException {
         Path output = file(result.jobId);
+        if (LibvirtAblestackJobHistory.retiredRestore(result.jobId) != null) {
+            throw new CloudRuntimeException("Retired restore outcome cannot be recreated");
+        }
         Files.createDirectories(ROOT);
         try (FileChannel channel = FileChannel.open(ROOT.resolve(result.jobId + ".lock"), StandardOpenOption.CREATE, StandardOpenOption.WRITE);
                 java.nio.channels.FileLock lock = channel.lock()) {
+            if (LibvirtAblestackJobHistory.retiredRestore(result.jobId) != null) {
+                throw new CloudRuntimeException("Retired restore outcome cannot be recreated");
+            }
             VmResult previous = read(result.jobId);
             if (previous != null) {
                 if (!java.util.Objects.equals(previous.sourceBackupUuid, result.sourceBackupUuid)

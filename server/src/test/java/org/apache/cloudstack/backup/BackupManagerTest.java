@@ -1988,6 +1988,7 @@ public class BackupManagerTest {
         when(vm.getId()).thenReturn(2L);
         when(vm.getUuid()).thenReturn("vm-uuid");
         when(vm.getState()).thenReturn(VirtualMachine.State.Stopped);
+        when(vmInstanceDao.findByIdIncludingRemoved(2L)).thenReturn(vm);
         when(volumeDao.findIncludingRemovedByInstanceAndType(2L, null)).thenReturn(Collections.emptyList());
         VMInstanceVO startedVm = mock(VMInstanceVO.class);
         when(startedVm.getState()).thenReturn(VirtualMachine.State.Running);
@@ -2012,6 +2013,7 @@ public class BackupManagerTest {
         when(backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_VM_START_OPTIONS_DETAIL)).thenReturn(new Gson().toJson(options));
         when(vm.getId()).thenReturn(2L);
         when(vm.getState()).thenReturn(VirtualMachine.State.Stopped);
+        when(vmInstanceDao.findByIdIncludingRemoved(2L)).thenReturn(vm);
         when(volumeDao.findIncludingRemovedByInstanceAndType(2L, null)).thenReturn(Collections.emptyList());
         VMInstanceVO startedVm = mock(VMInstanceVO.class);
         when(startedVm.getState()).thenReturn(VirtualMachine.State.Running);
@@ -2098,6 +2100,85 @@ public class BackupManagerTest {
         backupManager.new BackupSyncTask(backupManager).cleanupFailedDetachedCreateInstance(backup, vm,
                 AblestackBackupFrameworkUtils.RESTORE_OPERATION_CREATE_INSTANCE);
         verify(ablestackRestoreInstanceCleanup).cleanup(1L, 2L);
+    }
+
+    @Test
+    public void testRemovedRestoreTargetStopsTrackingWithoutFinalizationOrProviderResume() throws Exception {
+        VMInstanceVO vm = mock(VMInstanceVO.class);
+        when(vm.getId()).thenReturn(2L);
+        when(vm.getRemoved()).thenReturn(new Date());
+        deletedRestoreTargetBackup(vm);
+
+        try (MockedStatic<ActionEventUtils> ignored = Mockito.mockStatic(ActionEventUtils.class)) {
+            backupManager.new BackupSyncTask(backupManager).reconcileInterruptedRestoreJob(backupProvider, restoreZone(), 1L);
+        }
+
+        verify(ablestackRestoreInstanceCleanup).cleanup(1L, 2L);
+        verify(backupProvider, never()).reconcileRestoreJob(any());
+        verify(agentManager, never()).send(anyLong(), any(AblestackRestoreJobStatusCommand.class));
+        verify(backupDetailsDao).removeDetail(1L, AblestackBackupFrameworkUtils.RESTORE_JOB_ID_DETAIL);
+        verify(backupDetailsDao).addDetail(1L, AblestackBackupFrameworkUtils.RESTORE_JOB_FAILURE_REASON_DETAIL,
+                "Restore target instance was deleted: 2", false);
+    }
+
+    @Test
+    public void testMissingRestoreTargetStopsTrackingWithoutProviderResume() throws Exception {
+        deletedRestoreTargetBackup(null);
+        try (MockedStatic<ActionEventUtils> ignored = Mockito.mockStatic(ActionEventUtils.class)) {
+            backupManager.new BackupSyncTask(backupManager).reconcileInterruptedRestoreJob(backupProvider, restoreZone(), 1L);
+        }
+        verify(backupProvider, never()).reconcileRestoreJob(any());
+        verify(backupDetailsDao).removeDetail(1L, AblestackBackupFrameworkUtils.RESTORE_JOB_ID_DETAIL);
+    }
+
+    @Test
+    public void testDestroyedRestoreTargetCannotBeFinalizedOrStarted() throws Exception {
+        VMInstanceVO vm = mock(VMInstanceVO.class);
+        when(vm.getState()).thenReturn(VirtualMachine.State.Destroyed);
+        Assert.assertThrows(CloudRuntimeException.class, () -> backupManager.new BackupSyncTask(backupManager)
+                .finalizeDetachedRestoreOperation(backupProvider, mock(BackupOffering.class), mock(BackupVO.class), vm,
+                        AblestackBackupFrameworkUtils.RESTORE_OPERATION_CREATE_INSTANCE));
+        verify(backupProvider, never()).runPostRestoreMaintenance(any(), any(), Mockito.anyBoolean());
+        verify(virtualMachineManager, never()).start(anyString(), Mockito.anyMap());
+    }
+
+    @Test
+    public void testRestoreTargetRemovedAfterHostCompletionCannotBeFinalized() throws Exception {
+        VMInstanceVO vm = mock(VMInstanceVO.class);
+        when(vm.getId()).thenReturn(2L);
+        when(vm.getState()).thenReturn(VirtualMachine.State.Stopped);
+        VMInstanceVO removed = mock(VMInstanceVO.class);
+        when(removed.getRemoved()).thenReturn(new Date());
+        when(vmInstanceDao.findByIdIncludingRemoved(2L)).thenReturn(removed);
+        Assert.assertThrows(CloudRuntimeException.class, () -> backupManager.new BackupSyncTask(backupManager)
+                .finalizeDetachedRestoreOperation(backupProvider, mock(BackupOffering.class), mock(BackupVO.class), vm,
+                        AblestackBackupFrameworkUtils.RESTORE_OPERATION_CREATE_INSTANCE));
+        verify(backupProvider, never()).runPostRestoreMaintenance(any(), any(), Mockito.anyBoolean());
+        verify(virtualMachineManager, never()).start(anyString(), Mockito.anyMap());
+    }
+
+    private BackupVO deletedRestoreTargetBackup(VMInstanceVO vm) {
+        BackupVO backup = mock(BackupVO.class);
+        when(backup.getId()).thenReturn(1L);
+        when(backup.getZoneId()).thenReturn(1L);
+        when(backup.getBackupOfferingId()).thenReturn(4L);
+        when(backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_ID_DETAIL)).thenReturn("deleted-target-restore");
+        when(backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_OPERATION_TYPE_DETAIL))
+                .thenReturn(AblestackBackupFrameworkUtils.RESTORE_OPERATION_CREATE_INSTANCE);
+        when(backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_TARGET_VM_ID_DETAIL)).thenReturn("2");
+        BackupOfferingVO offering = mock(BackupOfferingVO.class);
+        when(offering.getProvider()).thenReturn("ablestack-nas");
+        when(backupProvider.getName()).thenReturn("ablestack-nas");
+        when(backupDao.findById(1L)).thenReturn(backup);
+        when(backupOfferingDao.findById(4L)).thenReturn(offering);
+        when(vmInstanceDao.findByIdIncludingRemoved(2L)).thenReturn(vm);
+        return backup;
+    }
+
+    private DataCenter restoreZone() {
+        DataCenter zone = mock(DataCenter.class);
+        when(zone.getId()).thenReturn(1L);
+        return zone;
     }
 
     @Test

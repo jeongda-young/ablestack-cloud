@@ -28,19 +28,22 @@
         <template v-if="showJobDetails" #tooltip>
           <div class="backup-progress-tooltip">
             <div class="backup-progress-tooltip-title">{{ displayStatus }}</div>
+            <div v-if="showRestoreDetails && !isRestoring && latestRestoreState" class="backup-progress-tooltip-row">
+              <span>{{ $t('label.latest.restore.result') }} :</span><span>{{ latestRestoreState }}</span>
+            </div>
             <div v-if="showProgress" class="backup-progress-tooltip-row">
               <span>{{ $t('label.progress') }} :</span>
               <span>{{ progress }}%</span>
             </div>
-            <div v-if="jobState" class="backup-progress-tooltip-row">
+            <div v-if="isActive && jobState" class="backup-progress-tooltip-row">
               <span>{{ $t('label.state') }} :</span>
               <span>{{ jobState }}</span>
             </div>
-            <div v-if="displayStep" class="backup-progress-tooltip-row">
+            <div v-if="isActive && displayStep" class="backup-progress-tooltip-row">
               <span>{{ $t('label.step') }} :</span>
               <span>{{ displayStep }}</span>
             </div>
-            <div v-if="volumeIndex && volumeCount" class="backup-progress-tooltip-row">
+            <div v-if="isActive && volumeIndex && volumeCount" class="backup-progress-tooltip-row">
               <span>{{ $t('label.volume') }} :</span>
               <span>{{ volumeIndex }}/{{ volumeCount }}</span>
             </div>
@@ -53,11 +56,11 @@
               <div v-if="stagingQueue.reason" class="backup-progress-tooltip-row"><span>{{ $t('label.backup.staging.wait.reason') }} :</span><span>{{ stagingQueue.reason }}</span></div>
               <div v-if="stagingQueue.state === 'WAITING' && stagingQueue.deadline" class="backup-progress-tooltip-row"><span>{{ $t('label.backup.staging.queue.deadline') }} :</span><span>{{ $toLocaleDate(stagingQueue.deadline) }}</span></div>
             </template>
-            <div v-if="!isRbdBackup && bandwidthLimitMbps !== null" class="backup-progress-tooltip-row">
+            <div v-if="!showRestoreDetails && !isRbdBackup && bandwidthLimitMbps !== null" class="backup-progress-tooltip-row">
               <span>{{ $t('label.bandwidth') }} :</span>
               <span>{{ bandwidthLimitMbps === 0 ? $t('label.backup.bandwidth.no.limit') : bandwidthLimitMbps + ' Mbps' }}</span>
             </div>
-            <div v-if="bandwidthStatusLabel" class="backup-progress-tooltip-row" :class="{ 'backup-progress-tooltip-error': bandwidthStatus === 'failed' }">
+            <div v-if="!showRestoreDetails && bandwidthStatusLabel" class="backup-progress-tooltip-row" :class="{ 'backup-progress-tooltip-error': bandwidthStatus === 'failed' }">
               <span>{{ $t('label.status') }} :</span>
               <span>{{ bandwidthStatusLabel }}</span>
             </div>
@@ -71,34 +74,36 @@
               <span>{{ $t('label.failure.reason') }} :</span>
               <span>{{ failureDetails }}</span>
             </div>
-            <div v-if="record.catalogstate" class="backup-progress-tooltip-row">
-              <span>{{ $t('label.backup.catalog.state') }} :</span><span>{{ record.catalogstate }}</span>
-            </div>
-            <div v-if="record.catalogchecked" class="backup-progress-tooltip-row">
-              <span>{{ $t('label.backup.catalog.checked') }} :</span><span>{{ $toLocaleDate(record.catalogchecked) }}</span>
-            </div>
-            <div v-if="record.catalogdetails" class="backup-progress-tooltip-row backup-progress-tooltip-error">
-              <span>{{ record.catalogdetails }}</span>
-            </div>
-            <div v-if="record.cleanupstate && record.cleanupstate !== 'NONE'" class="backup-progress-tooltip-row">
-              <span>{{ $t('label.backup.cleanup.state') }} :</span><span>{{ record.cleanupstate }}</span>
-            </div>
-            <div v-if="record.cleanupdetails" class="backup-progress-tooltip-row">
-              <span>{{ record.cleanupdetails }}</span>
-            </div>
-            <div v-if="record.sourcecleanupstate && record.sourcecleanupstate !== 'NONE'" class="backup-progress-tooltip-row">
-              <span>{{ $t(sourceCleanupLabel) }} :</span><span>{{ record.sourcecleanupstate }}</span>
-            </div>
-            <div v-if="record.sourcecleanupdetails" class="backup-progress-tooltip-row">
-              <span>{{ record.sourcecleanupdetails }}</span>
-            </div>
-            <div v-if="record.restorecleanupstate && record.restorecleanupstate !== 'NONE'" class="backup-progress-tooltip-row">
+            <template v-if="!showRestoreDetails">
+              <div v-if="record.catalogstate" class="backup-progress-tooltip-row">
+                <span>{{ $t('label.backup.catalog.state') }} :</span><span>{{ record.catalogstate }}</span>
+              </div>
+              <div v-if="record.catalogchecked" class="backup-progress-tooltip-row">
+                <span>{{ $t('label.backup.catalog.checked') }} :</span><span>{{ $toLocaleDate(record.catalogchecked) }}</span>
+              </div>
+              <div v-if="record.catalogdetails" class="backup-progress-tooltip-row backup-progress-tooltip-error">
+                <span>{{ record.catalogdetails }}</span>
+              </div>
+              <div v-if="record.cleanupstate && record.cleanupstate !== 'NONE'" class="backup-progress-tooltip-row">
+                <span>{{ $t('label.backup.cleanup.state') }} :</span><span>{{ record.cleanupstate }}</span>
+              </div>
+              <div v-if="record.cleanupdetails" class="backup-progress-tooltip-row">
+                <span>{{ record.cleanupdetails }}</span>
+              </div>
+              <div v-if="record.sourcecleanupstate && record.sourcecleanupstate !== 'NONE'" class="backup-progress-tooltip-row">
+                <span>{{ $t(sourceCleanupLabel) }} :</span><span>{{ record.sourcecleanupstate }}</span>
+              </div>
+              <div v-if="record.sourcecleanupdetails" class="backup-progress-tooltip-row">
+                <span>{{ record.sourcecleanupdetails }}</span>
+              </div>
+            </template>
+            <div v-if="showRestoreDetails && record.restorecleanupstate && record.restorecleanupstate !== 'NONE'" class="backup-progress-tooltip-row">
               <span>{{ $t('label.backup.restore.cleanup.state') }} :</span><span>{{ record.restorecleanupstate }}</span>
             </div>
-            <div v-if="record.restorecleanupdetails" class="backup-progress-tooltip-row">
-              <span>{{ record.restorecleanupdetails }}</span>
+            <div v-if="showRestoreDetails && record.restorecleanupdetails" class="backup-progress-tooltip-row">
+              <span>{{ isRestoreCleanupDeferred ? 'Scheduled after restoration finishes' : record.restorecleanupdetails }}</span>
             </div>
-            <template v-if="vmRestore && (!vmRestore.stagingjobid || !restoreJobId || vmRestore.stagingjobid === restoreJobId)">
+            <template v-if="showRestoreDetails && hasCurrentVmRestore">
               <div class="backup-progress-tooltip-row"><span>{{ $t('label.backup.vm.restore.result') }} :</span><span>{{ vmRestore.outcome }} / {{ vmRestore.phase }}</span></div>
               <div class="backup-progress-tooltip-row"><span>{{ $t('label.backup.primary.cleanup.state') }} :</span><span>{{ vmRestore.primarycleanupstate }}</span></div>
               <div v-if="vmRestore.recoveryerror || vmRestore.queryerror" class="backup-progress-tooltip-row backup-progress-tooltip-error">
@@ -204,6 +209,19 @@ export default {
       const status = String(this.localStatus || this.record?.status || '').toLowerCase()
       return status === 'restoring' || (this.hasTrackedRestoreJob && status !== 'backingup')
     },
+    hasCurrentVmRestore () {
+      return !!this.vmRestore && (!this.vmRestore.stagingjobid || !this.restoreJobId || this.vmRestore.stagingjobid === this.restoreJobId)
+    },
+    latestRestoreState () {
+      return this.restoreJobState || (this.hasCurrentVmRestore ? this.vmRestore.outcome : '')
+    },
+    showRestoreDetails () {
+      return this.isRestoring || (!this.isActive && (this.isTerminalJobState(this.restoreJobState) || this.hasCurrentVmRestore))
+    },
+    isRestoreCleanupDeferred () {
+      return this.isRestoring && !this.isTerminalJobState(this.jobState) &&
+        this.record.restorecleanupstate === 'WAITING' && this.record.restorecleanupdetails === 'Restore job has not finished'
+    },
     hasTrackedRestoreJob () {
       return this.restorePending || (!!this.restoreJobId && !this.restoreFinished)
     },
@@ -247,8 +265,9 @@ export default {
       return this.$t('message.backup.bandwidth.' + this.bandwidthStatus)
     },
     showJobDetails () {
-      return !!this.vmRestore || !!this.stagingQueue || !!this.record?.catalogstate || !!this.record?.cleanupdetails || !!this.record?.sourcecleanupdetails || !!this.record?.restorecleanupdetails || !!this.failureDetails || (this.isActive && (this.showProgress || !!this.jobState || !!this.displayStep || !!this.logPath ||
-        (!this.isRbdBackup && (this.bandwidthLimitMbps !== null || !!this.bandwidthStatus))))
+      const backupDetails = !this.showRestoreDetails && (this.record?.catalogstate || this.record?.cleanupdetails || this.record?.sourcecleanupdetails)
+      return !!this.vmRestore || !!this.stagingQueue || !!backupDetails || !!this.record?.restorecleanupdetails || !!this.failureDetails || (this.isActive && (this.showProgress || !!this.jobState || !!this.displayStep || !!this.logPath ||
+        (!this.isRestoring && !this.isRbdBackup && (this.bandwidthLimitMbps !== null || !!this.bandwidthStatus))))
     },
     showRestoreFailure () {
       return String(this.localStatus || this.record?.status || '').toLowerCase() === 'backedup' &&
@@ -321,6 +340,8 @@ export default {
       this.restoreFailureDetails = this.getRestoreFailureDetails(this.record)
       if (!this.isActive) {
         this.progress = null
+        this.volumeIndex = null
+        this.volumeCount = null
         this.jobState = ''
         this.step = ''
         this.logPath = ''
@@ -402,6 +423,14 @@ export default {
       if (this.isTerminalJobState(response.state)) {
         this.restoreFinished = true
         this.restorePending = false
+        if (wasRestoring) {
+          this.progress = null
+          this.volumeIndex = null
+          this.volumeCount = null
+          this.step = ''
+          this.jobDetails = ''
+          this.logPath = ''
+        }
         this.$emit('restore-finished', response.state)
       } else if (['starting', 'running'].includes(String(response.state || '').toLowerCase())) {
         this.restoreFinished = false

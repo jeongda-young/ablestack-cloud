@@ -4946,19 +4946,35 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             if (StringUtils.isBlank(restoreJobId)) {
                 return;
             }
-            backupProvider.reconcileRestoreJob(backup);
             final String operationType = backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_OPERATION_TYPE_DETAIL);
             final long targetVmId = NumberUtils.toLong(
                     backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_TARGET_VM_ID_DETAIL), backup.getVmId());
             final VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(targetVmId);
             final boolean volumeAttach = AblestackBackupFrameworkUtils.RESTORE_OPERATION_VOLUME_ATTACH.equals(operationType);
             final boolean createInstance = AblestackBackupFrameworkUtils.RESTORE_OPERATION_CREATE_INSTANCE.equals(operationType);
+            if (isRestoreTargetDeleted(vm)) {
+                final String reason = "Restore target instance was deleted: " + targetVmId;
+                persistRestoreOperationPhase(backupId, "FAILED", "TARGET_REMOVED", 0);
+                if (StringUtils.isNotBlank(backup.getDetail(ThirdPartyBackupRestore.PLAN_KEY))
+                        && !"COMPLETED".equals(backup.getDetail(ThirdPartyBackupRestore.CLEANUP_STATE_KEY))) {
+                    // The volume coordinator stops new transfers and confirms existing writers before cleanup.
+                    persistBackupDetail(backupId, AblestackBackupFrameworkUtils.RESTORE_JOB_FAILURE_REASON_DETAIL, reason);
+                    backupProvider.reconcileRestoreJob(backup);
+                    return;
+                }
+                if (createInstance && vm != null) {
+                    cleanupFailedDetachedCreateInstance(backup, vm, operationType);
+                }
+                completeFailedRestoreTracking(backup, reason);
+                return;
+            }
+            backupProvider.reconcileRestoreJob(backup);
             final boolean cleanupRequired = createInstance && "CLEANUP_REQUIRED".equalsIgnoreCase(
                     backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_STEP_DETAIL));
             final boolean finalizationRequired = "FINALIZATION_FAILED".equalsIgnoreCase(
                     backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_JOB_STEP_DETAIL))
                     || (createInstance && isCreateInstanceFinalizationPending(backup));
-            if (vm == null || (!volumeAttach && !isRestoreStatePending(vm) && !cleanupRequired && !finalizationRequired)) {
+            if (!volumeAttach && !isRestoreStatePending(vm) && !cleanupRequired && !finalizationRequired) {
                 return;
             }
             final HostVO restoreHost = findRestoreJobHost(backup, vm);
@@ -5063,6 +5079,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         protected void finalizeDetachedRestoreOperation(final BackupProvider backupProvider,
                 final BackupOffering offering, final BackupVO backup, final VMInstanceVO vm,
                 final String operationType) throws Exception {
+            if (isRestoreTargetDeleted(vm) || isRestoreTargetDeleted(vmInstanceDao.findByIdIncludingRemoved(vm.getId()))) {
+                throw new CloudRuntimeException("Restore target instance was deleted");
+            }
             if (AblestackBackupFrameworkUtils.RESTORE_OPERATION_VOLUME_ATTACH.equals(operationType)) {
                 finalizeDetachedVolumeRestore(backupProvider, backup, vm);
                 return;
@@ -5277,7 +5296,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                         final BackupProvider backupProvider = getBackupProvider(task.providerName);
                         final BackupVO backup = backupDao.findByIdIncludingRemoved(task.backupId);
                         final VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(task.vmId);
-                        if (backup == null || vm == null || !backupProvider.supportsPostRestoreMaintenance()) {
+                        if (backup == null || isRestoreTargetDeleted(vm) || !backupProvider.supportsPostRestoreMaintenance()) {
                             iterator.remove();
                             continue;
                         }
@@ -6505,6 +6524,11 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         final long targetVmId = NumberUtils.toLong(
                 backup.getDetail(AblestackBackupFrameworkUtils.RESTORE_TARGET_VM_ID_DETAIL), backup.getVmId());
         return vmInstanceDao.findByIdIncludingRemoved(targetVmId);
+    }
+
+    private boolean isRestoreTargetDeleted(final VMInstanceVO vm) {
+        return vm == null || vm.getRemoved() != null || vm.getState() == VirtualMachine.State.Destroyed
+                || vm.getState() == VirtualMachine.State.Expunging;
     }
 
     private void persistBackupDetail(final Long backupId, final String key, final String value) {

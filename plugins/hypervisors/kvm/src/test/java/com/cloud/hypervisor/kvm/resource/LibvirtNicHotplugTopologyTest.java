@@ -28,9 +28,15 @@ public class LibvirtNicHotplugTopologyTest {
             String emulator,
             LibvirtVMDef.GuestDef.GuestType type,
             boolean reverse) {
+        return domain(machine, emulator, type, reverse, "nic-test", null);
+    }
+
+    private String domain(String machine, String emulator, LibvirtVMDef.GuestDef.GuestType type,
+            boolean reverse, String name, String uuid) {
         LibvirtVMDef vm = new LibvirtVMDef();
         vm.setHvsType("kvm");
-        vm.setDomainName("nic-test");
+        vm.setDomainName(name);
+        vm.setDomUUID(uuid);
         LibvirtVMDef.GuestDef guest = new LibvirtVMDef.GuestDef();
         guest.setGuestType(type);
         guest.setMachineType(machine);
@@ -137,5 +143,50 @@ public class LibvirtNicHotplugTopologyTest {
                                 "/usr/bin/qemu-system-s390x",
                                 LibvirtVMDef.GuestDef.GuestType.KVM,
                                 false)));
+    }
+
+    @Test
+    public void diagnosticRbdVmUsesLegacyQ35AutoAllocation() {
+        assertEquals(0, ports(domain("pc-q35-rhel9.6.0", "/usr/libexec/qemu-kvm",
+                LibvirtVMDef.GuestDef.GuestType.KVM, false,
+                "i-2-218-VM", "d69a6dc5-1f35-442d-8941-e0b3e02e4f63")));
+    }
+
+    @Test
+    public void diagnosticNasVmUsesLegacyQ35AutoAllocation() {
+        assertEquals(0, ports(domain("pc-q35-rhel9.6.0", "/usr/libexec/qemu-kvm",
+                LibvirtVMDef.GuestDef.GuestType.KVM, true,
+                "i-2-285-VM", "9ec8f15a-c7dc-4600-8612-ceee9c870236")));
+    }
+
+    @Test
+    public void diagnosticNameWithoutMatchingUuidKeepsNormalPorts() {
+        assertEquals(32, ports(domain("q35", "/usr/libexec/qemu-kvm",
+                LibvirtVMDef.GuestDef.GuestType.KVM, false, "i-2-218-VM", "another-vm-uuid")));
+    }
+
+    @Test
+    public void diagnosticUuidWithoutMatchingNameKeepsNormalPorts() {
+        assertEquals(32, ports(domain("q35", "/usr/libexec/qemu-kvm",
+                LibvirtVMDef.GuestDef.GuestType.KVM, false,
+                "i-2-999-VM", "9ec8f15a-c7dc-4600-8612-ceee9c870236")));
+    }
+
+    @Test
+    public void reusingDeviceDefinitionDoesNotRetainDiagnosticOverride() {
+        LibvirtVMDef vm = new LibvirtVMDef();
+        vm.setHvsType("kvm");
+        vm.setDomainName("i-2-218-VM");
+        vm.setDomUUID("d69a6dc5-1f35-442d-8941-e0b3e02e4f63");
+        LibvirtVMDef.GuestDef guest = new LibvirtVMDef.GuestDef();
+        guest.setGuestType(LibvirtVMDef.GuestDef.GuestType.KVM);
+        guest.setMachineType("q35");
+        LibvirtVMDef.DevicesDef devices = new LibvirtVMDef.DevicesDef();
+        devices.setGuestType(LibvirtVMDef.GuestDef.GuestType.KVM);
+        vm.addComp(guest);
+        vm.addComp(devices);
+        assertEquals(0, ports(vm.toString()));
+        vm.setDomainName("normal-vm");
+        assertEquals(32, ports(vm.toString()));
     }
 }

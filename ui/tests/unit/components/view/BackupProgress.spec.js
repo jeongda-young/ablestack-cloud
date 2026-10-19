@@ -259,6 +259,108 @@ test('keeps unknown restore phases available in the tooltip', () => {
   wrapper.unmount()
 })
 
+test.each(['Restoring', 'BackedUp'])('shows current restore details without backup catalog or cleanup history for %s', status => {
+  const wrapper = shallowMount(BackupProgress, {
+    props: {
+      record: {
+        id: 'backup-restore',
+        status,
+        backupengine: 'RBD_DIFF',
+        restorejobid: 'current-restore',
+        restorejobstate: 'RUNNING',
+        restorejobstep: 'COMMVAULT_RESTORE',
+        restorejobdetails: 'Restoring backup metadata',
+        catalogstate: 'AVAILABLE',
+        catalogchecked: '2026-10-19T14:20:40',
+        catalogdetails: 'Old catalog details',
+        cleanupstate: 'COMPLETED',
+        cleanupdetails: 'Old backup cleanup',
+        sourcecleanupstate: 'COMPLETED',
+        sourcecleanupdetails: 'Old source snapshot cleanup',
+        restorecleanupstate: 'WAITING',
+        restorecleanupdetails: 'Restore job has not finished'
+      }
+    },
+    global: {
+      stubs: { Status: statusWithTooltip },
+      mocks: { $t: key => korean[key] || key, $store: { getters: { apis: {} } } }
+    }
+  })
+
+  const text = wrapper.find('.status-tooltip').text()
+  expect(text).toContain('COMMVAULT_RESTORE')
+  expect(text).toContain('Restoring backup metadata')
+  expect(text).toContain('복원 정리 상태')
+  expect(text).toContain('Scheduled after restoration finishes')
+  for (const hidden of ['카탈로그 상태', '카탈로그 확인 시간', '이전 RBD 스냅샷', 'AVAILABLE', 'COMPLETED', 'Old catalog', 'Old backup', 'Old source', 'Restore job has not finished']) {
+    expect(text).not.toContain(hidden)
+  }
+  wrapper.unmount()
+})
+
+test('preserves actual restore cleanup problems while restoration is running', () => {
+  const wrapper = shallowMount(BackupProgress, {
+    props: {
+      record: {
+        id: 'backup-restore',
+        status: 'Restoring',
+        restorejobstate: 'RUNNING',
+        restorecleanupstate: 'WAITING',
+        restorecleanupdetails: 'Worker host is unavailable'
+      }
+    },
+    global: {
+      stubs: { Status: statusWithTooltip },
+      mocks: { $t: key => key, $store: { getters: { apis: {} } } }
+    }
+  })
+  expect(wrapper.find('.status-tooltip').text()).toContain('WAITING')
+  expect(wrapper.find('.status-tooltip').text()).toContain('Worker host is unavailable')
+  wrapper.unmount()
+})
+
+test.each(['poll', 'reload'])('shows the completed restore result without stale volume progress after %s', async mode => {
+  const vmrestore = { stagingjobid: 'restore-current', outcome: 'COMMITTED', phase: 'COMPLETED', primarycleanupstate: 'COMPLETED' }
+  const wrapper = shallowMount(BackupProgress, {
+    props: {
+      record: {
+        id: 'backup-restore',
+        status: mode === 'poll' ? 'Restoring' : 'BackedUp',
+        restorejobstate: mode === 'poll' ? 'RUNNING' : 'COMPLETED',
+        restorejobid: 'restore-current',
+        restorecleanupstate: 'COMPLETED',
+        catalogstate: 'AVAILABLE',
+        catalogchecked: '2026-10-19T14:37:33',
+        cleanupstate: 'COMPLETED',
+        sourcecleanupstate: 'COMPLETED',
+        backupengine: 'RBD_DIFF',
+        vmrestore
+      }
+    },
+    global: {
+      stubs: { Status: statusWithTooltip },
+      mocks: { $t: key => korean[key] || key, $store: { getters: { apis: {} } } }
+    }
+  })
+  if (mode === 'poll') {
+    wrapper.vm.applyStatus({ status: 'BackedUp', state: 'COMPLETED', step: 'COMPLETED', progress: 100, volumeindex: 2, volumecount: 2, vmrestore })
+    await wrapper.vm.$nextTick()
+  }
+  const text = wrapper.find('.status-tooltip').text()
+  expect(wrapper.find('.status-text').text()).toBe('BackedUp')
+  expect(text).toContain('최근 복원 결과')
+  expect(text).toContain('COMMITTED / COMPLETED')
+  expect(text).toContain('복원 정리 상태')
+  expect(text).toContain('기본 스토리지 볼륨 정리 상태')
+  for (const hidden of ['2/2', '카탈로그 상태', '카탈로그 확인 시간', '이전 RBD 스냅샷', 'AVAILABLE']) {
+    expect(text).not.toContain(hidden)
+  }
+  expect(wrapper.vm.volumeIndex).toBeNull()
+  expect(wrapper.vm.volumeCount).toBeNull()
+  expect(wrapper.vm.progress).toBeNull()
+  wrapper.unmount()
+})
+
 test('shows Commvault restore before host data restore begins', async () => {
   getAPI
     .mockResolvedValueOnce({ getbackuprestorejobstatusresponse: { status: 'BackedUp', state: 'RUNNING', step: 'COMMVAULT_RESTORE' } })
