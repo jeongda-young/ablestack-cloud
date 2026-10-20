@@ -43,12 +43,14 @@ import org.apache.cloudstack.api.command.user.backup.ListBackupOfferingsCmd;
 import org.apache.cloudstack.api.command.user.backup.ListBackupScheduleCmd;
 import org.apache.cloudstack.api.command.user.backup.ListBackupsCmd;
 import org.apache.cloudstack.api.command.user.backup.ListNetBackupBackupCandidatesCmd;
+import org.apache.cloudstack.api.command.user.backup.ListExternalBackupCandidatesCmd;
 import org.apache.cloudstack.api.command.user.backup.PrepareNetBackupRestoreCmd;
 import org.apache.cloudstack.api.command.user.backup.RestoreNetBackupCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateBackupOfferingCmd;
 import org.apache.cloudstack.api.response.BackupJobStatusResponse;
 import org.apache.cloudstack.api.response.BackupResponse;
 import org.apache.cloudstack.api.response.NetBackupBackupCandidateResponse;
+import org.apache.cloudstack.api.response.ExternalBackupCandidatesResponse;
 import org.apache.cloudstack.api.response.BackupStagingInfoResponse;
 import org.apache.cloudstack.framework.config.ConfigKey;
 import org.apache.cloudstack.framework.config.Configurable;
@@ -390,6 +392,8 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
     boolean createNetBackup(CreateNetBackupCmd cmd) throws ResourceAllocationException;
 
     List<NetBackupBackupCandidateResponse> listNetBackupBackupCandidates(ListNetBackupBackupCandidatesCmd cmd);
+
+    ExternalBackupCandidatesResponse listExternalBackupCandidates(ListExternalBackupCandidatesCmd cmd);
 
     boolean cancelBackup(Long backupId);
 

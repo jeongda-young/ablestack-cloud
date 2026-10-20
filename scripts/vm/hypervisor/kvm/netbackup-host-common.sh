@@ -561,6 +561,7 @@ load_policy_schedule_config() {
 
   VM_INCLUDE="*"
   VM_EXCLUDE=""
+  VM_SCHEDULE_BACKUP=""
   MOLD_URL=""
   ADMIN_APIKEY=""
 
@@ -574,6 +575,10 @@ load_policy_schedule_config() {
 
   VM_INCLUDE="${VM_INCLUDE:-*}"
   VM_EXCLUDE="${VM_EXCLUDE:-}"
+  if [[ -n "${VM_SCHEDULE_BACKUP}" ]]; then
+    VM_SCHEDULE_BACKUP="$(printf '%s' "$VM_SCHEDULE_BACKUP" | tr '[:upper:]' '[:lower:]')"
+    [[ "$VM_SCHEDULE_BACKUP" == true || "$VM_SCHEDULE_BACKUP" == false ]] || fail "Invalid VM_SCHEDULE_BACKUP; expected true or false"
+  fi
   MOLD_CREATE_BACKUP_API_URL="${MOLD_CREATE_BACKUP_API_URL:-${MOLD_URL}}"
   MOLD_LIST_VMS_API_URL="${MOLD_LIST_VMS_API_URL:-${MOLD_URL}}"
   MOLD_LIST_NETBACKUP_CANDIDATES_API_URL="${MOLD_LIST_NETBACKUP_CANDIDATES_API_URL:-${MOLD_LIST_VMS_API_URL}}"
@@ -671,10 +676,11 @@ vm_exists_in_mold_cache() {
 }
 
 list_target_vms() {
-  local vm_name
+  local vm_name selection_mode
+  selection_mode="$(lookup_mold_candidate_field "" selectionmode)" || return 1
   while IFS= read -r vm_name; do
     [[ -z "${vm_name}" ]] && continue
-    if ! vm_is_selected "${vm_name}"; then
+    if [[ "${selection_mode}" == "CONFIG" ]] && ! vm_is_selected "${vm_name}"; then
       log -ne "Skipping VM ${vm_name}: not selected by VM_INCLUDE/VM_EXCLUDE"
       continue
     fi
@@ -682,7 +688,7 @@ list_target_vms() {
     if vm_exists_in_mold_cache "${vm_name}"; then
       builtin echo "${vm_name}"
     else
-      log -ne "Skipping VM ${vm_name}: not found in Mold listVirtualMachines response"
+      log -ne "Skipping VM ${vm_name}: not eligible in Mold backup candidate response"
     fi
   done < <(list_running_vms)
 }
@@ -929,20 +935,60 @@ wait_for_mold_async_job() {
 
 cache_mold_virtual_machines() {
   [[ -n "${MOLD_VM_CACHE_FILE}" ]] || fail "MOLD_VM_CACHE_FILE is not initialized."
-  if [[ -f "${MOLD_VM_CACHE_FILE}" ]]; then
-    return 0
-  fi
-
-  log -ne "Calling Mold listNetBackupBackupCandidates API url=${MOLD_LIST_NETBACKUP_CANDIDATES_API_URL} host=${CLIENT_NAME} policy=${POLICY_NAME} claim=true"
-  invoke_mold_api \
+  local response
+  log -ne "Calling Mold listExternalBackupCandidates host=${CLIENT_NAME} policy=${POLICY_NAME}"
+  local -a selection_args=("provider" "ablestack-netbackup" "hostname" "$CLIENT_NAME" "policyid" "$POLICY_NAME")
+  [[ -z "${VM_SCHEDULE_BACKUP:-}" ]] || selection_args+=("vmschedulebackup" "$VM_SCHEDULE_BACKUP")
+  response="$(invoke_mold_api \
     "${MOLD_LIST_NETBACKUP_CANDIDATES_API_METHOD}" \
     "${MOLD_LIST_NETBACKUP_CANDIDATES_API_URL}" \
-    "listNetBackupBackupCandidates" \
-    "hostname" "${CLIENT_NAME}" \
-    "policyid" "${POLICY_NAME}" \
-    "claim" "true" \
-    "pagesize" "500" \
-    "page" "1" > "${MOLD_VM_CACHE_FILE}"
+    "listExternalBackupCandidates" \
+    "${selection_args[@]}")" || fail "Mold schedule lookup failed; configuration fallback is forbidden"
+  printf '%s' "${response}" | python3 -c '
+import json, sys
+try:
+    response = json.load(sys.stdin)["listexternalbackupcandidatesresponse"]["externalbackupcandidates"]
+    mode = response["selectionmode"]
+    candidates = response["candidate"]
+    def require(condition):
+        if not condition:
+            raise ValueError("Invalid target selection response")
+    require(mode in ("SCHEDULE", "CONFIG") and isinstance(candidates, list))
+    expected_mode = {"true": "SCHEDULE", "false": "CONFIG"}.get(sys.argv[1])
+    require(expected_mode is None or mode == expected_mode)
+    seen = set()
+    for candidate in candidates:
+        require(isinstance(candidate, dict))
+        for key in ("virtualmachineid", "instancename", "hostid"):
+            require(isinstance(candidate.get(key), str) and candidate[key].strip())
+        require(candidate["virtualmachineid"] not in seen)
+        seen.add(candidate["virtualmachineid"])
+        if mode == "SCHEDULE":
+            require(all(isinstance(candidate.get(key), str) and candidate[key].strip()
+                        for key in ("scheduleid", "backupofferingid")))
+        else:
+            require(not candidate.get("scheduleid"))
+    print(json.dumps(response))
+except (ValueError, KeyError, TypeError, AssertionError):
+    sys.exit("Invalid Mold schedule response; configuration fallback is forbidden")
+' "${VM_SCHEDULE_BACKUP:-}" > "${MOLD_VM_CACHE_FILE}" || fail "Mold schedule response validation failed; no backups were dispatched"
+  log -ne "Mold target selection mode=$(lookup_mold_candidate_field "" selectionmode)"
+}
+
+lookup_mold_candidate_field() {
+  python3 - "${MOLD_VM_CACHE_FILE}" "$1" "$2" <<'PY'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    response = json.load(stream)
+if not sys.argv[2]:
+    print(response[sys.argv[3]], end="")
+else:
+    candidate = next(c for c in response["candidate"] if c["instancename"] == sys.argv[2])
+    value = candidate.get(sys.argv[3])
+    if value is None:
+        value = ""
+    print(str(value).lower() if isinstance(value, bool) else value, end="")
+PY
 }
 
 lookup_mold_vm_id() {
@@ -981,36 +1027,7 @@ PY
 }
 
 lookup_mold_vm_schedule_id() {
-  local vm_name="$1"
-  [[ -f "${MOLD_VM_CACHE_FILE}" ]] || fail "Mold VM cache file not found: ${MOLD_VM_CACHE_FILE}"
-
-  python3 - "$MOLD_VM_CACHE_FILE" "$vm_name" <<'PY'
-import json
-import sys
-
-cache_path = sys.argv[1]
-vm_name = sys.argv[2]
-
-with open(cache_path, "r", encoding="utf-8") as fh:
-    data = json.load(fh)
-
-matches = []
-
-def walk(node):
-    if isinstance(node, dict):
-        if str(node.get("instancename", "")) == vm_name and "scheduleid" in node:
-            matches.append(str(node["scheduleid"]))
-        for value in node.values():
-            walk(value)
-    elif isinstance(node, list):
-        for item in node:
-            walk(item)
-
-walk(data)
-
-if matches:
-    print(matches[0], end="")
-PY
+  lookup_mold_candidate_field "$1" scheduleid
 }
 
 run_stage_vm_backup() {
@@ -1036,7 +1053,13 @@ run_stage_vm_backup() {
   api_args=(
     "virtualmachineid" "${vm_id}"
     "policyid" "${POLICY_NAME}"
+    "selectionmode" "$(lookup_mold_candidate_field "" selectionmode)"
+    "hostid" "$(lookup_mold_candidate_field "${vm_name}" hostid)"
   )
+  local offering_id
+  offering_id="$(lookup_mold_candidate_field "${vm_name}" backupofferingid)" || return 1
+  [[ -z "${offering_id}" ]] || api_args+=("backupofferingid" "${offering_id}")
+  [[ -z "${VM_SCHEDULE_BACKUP:-}" ]] || api_args+=("vmschedulebackup" "$VM_SCHEDULE_BACKUP")
   if [[ -n "${schedule_id}" ]]; then
     api_args+=("scheduleid" "${schedule_id}")
   fi

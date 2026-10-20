@@ -368,7 +368,8 @@ def ensure_netbackup_offering(zone_id: str, args: argparse.Namespace) -> None:
     for offering in offerings:
         provider = str(offering.get("provider", "")).lower()
         offering_zone = str(offering.get("zoneid", "") or offering.get("zoneId", ""))
-        if provider == NETBACKUP_PROVIDER_NAME and offering_zone == zone_id:
+        if (provider == NETBACKUP_PROVIDER_NAME and offering_zone == zone_id
+                and offering.get("externalid") == NETBACKUP_OFFERING_EXTERNAL_ID):
             print(f"NetBackup backup offering already exists for zoneid={zone_id}")
             return
 
@@ -515,6 +516,7 @@ def render_policy_template(template_path: Path, replacements: dict[str, str]) ->
 def write_config_file(path: Path, args: argparse.Namespace) -> None:
     backup_existing_file(path)
     content = render_policy_template(POLICY_TEMPLATE_PATH, {
+        "VM_SCHEDULE_BACKUP": str(args.vm_schedule_backup).lower(),
         "VM_INCLUDE": args.vm_include,
         "VM_EXCLUDE": args.vm_exclude,
         "MOLD_URL": args.mold_url,
@@ -819,8 +821,10 @@ def parse_boolean(value: str) -> bool:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="NetBackup configuration helper")
     parser.add_argument("--policy-name")
+    parser.add_argument("--vm-schedule-backup", type=parse_boolean, metavar="true|false",
+                        help="Use only Mold per-VM schedules. Otherwise ask for include/exclude (default: false).")
     parser.add_argument("--vm-include")
-    parser.add_argument("--vm-exclude", default="")
+    parser.add_argument("--vm-exclude")
     parser.add_argument("--incremental-backup", type=parse_boolean, default=True, metavar="true|false",
                         help="Set global and this Cluster's kvm.incremental.backup (default: true). Use false for Full backups only.")
     parser.add_argument("--backup-chain-size", type=int,
@@ -835,12 +839,35 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def configure_vm_selection(args: argparse.Namespace) -> None:
+    interactive = sys.stdin.isatty()
+    if args.vm_schedule_backup is None:
+        args.vm_schedule_backup = False
+        if interactive:
+            while True:
+                value = input("Use Mold per-VM backup schedules? [true/false, default: false]: ").strip() or "false"
+                try:
+                    args.vm_schedule_backup = parse_boolean(value)
+                    break
+                except argparse.ArgumentTypeError:
+                    print("Enter true or false.")
+    if args.vm_schedule_backup:
+        if args.vm_include is not None or args.vm_exclude is not None:
+            fail("--vm-include/--vm-exclude require --vm-schedule-backup false")
+        args.vm_include = "*"
+        args.vm_exclude = "*"
+    else:
+        if args.vm_include is None:
+            args.vm_include = (input("VM_INCLUDE [default: *]: ").strip() or "*") if interactive else "*"
+        if args.vm_exclude is None:
+            args.vm_exclude = input("VM_EXCLUDE [default: none]: ").strip() if interactive else ""
+        args.vm_include = args.vm_include or "*"
+
+
 def validate_args(args: argparse.Namespace) -> None:
     global BACKUP_STAGING_ROOT
     if not args.policy_name:
         fail("--policy-name is required")
-    if not args.vm_include:
-        args.vm_include = "*"
     if args.backup_chain_size is not None and args.backup_chain_size <= 0:
         fail("--backup-chain-size must be a positive integer")
     if not args.incremental_backup and args.backup_chain_size is not None:
@@ -855,6 +882,7 @@ def validate_args(args: argparse.Namespace) -> None:
         fail("--netbackup-url is required")
     if not args.netbackup_apikey:
         fail("--netbackup-apikey is required")
+    configure_vm_selection(args)
     try:
         ensure_key(SECRET_KEY_FILE, secret_files=(SECRET_OUTPUT_DIR / "secret.enc",),
                    secret_directories=(SECRET_OUTPUT_DIR,), upgrade_unused_legacy=True)
@@ -868,6 +896,7 @@ def main() -> None:
 
     log_step("NetBackup Configuration")
     log_info("Starting NetBackup host configuration")
+    log_info(f"VM_SCHEDULE_BACKUP={str(args.vm_schedule_backup).lower()}, VM_INCLUDE={args.vm_include}, VM_EXCLUDE={args.vm_exclude}")
 
     zone_id, cluster_id = resolve_host_context(args.policy_name, args.mold_url, args.admin_apikey, args.admin_secretkey)
     restart_required = ensure_backup_framework_configuration(zone_id, cluster_id, args)

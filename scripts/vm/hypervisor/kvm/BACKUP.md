@@ -26,6 +26,7 @@ under the License.
 
 - [운영자용 백업 구성 요약](#운영자용-백업-구성-요약)
 - [백업 솔루션별 준비와 실행 순서](#백업-솔루션별-준비와-실행-순서)
+- [NetBackup·Veeam 사전 구성 파라미터 비교](#netbackupveeam-사전-구성-파라미터-비교)
 - [Full 및 증분 백업 운영](#full-및-증분-백업-운영)
 - [작업 상태와 제어](#작업-상태와-제어)
 - [복원 절차](#복원-절차)
@@ -115,6 +116,107 @@ GFS2·LOCAL은 Host의 `/etc/fstab`에 마운트 정보가 있어야 자동으�
 
 ## 백업 솔루션별 준비와 실행 순서
 
+### NetBackup·Veeam 호스트 정책의 VM 대상 선택
+
+두 솔루션의 ABLESTACK 호스트 백업은 구성 파일의 `VM_SCHEDULE_BACKUP` 값으로 실행 방식을 결정한다.
+Mold의 별도 글로벌 설정이 아니라 **호스트의 정책/작업별 구성**이며, 대상 조회와 백업 실행 요청에 이 값을 전달한다.
+NetBackup은 `/etc/ablestack/netbackup/netbackup-host-<policy>.conf`,
+Veeam은 `/etc/ablestack/veeam/<job>.conf`에 저장한다.
+Veeam bootstrap의 `/etc/ablestack/veeam/mold-backup.env`에도 같은 값을 저장한다.
+
+사전 구성의 입력 순서는 다음과 같다.
+
+1. `VM_SCHEDULE_BACKUP` 사용 여부를 먼저 선택한다. 최초 기본값은 `false`다.
+2. `true`이면 include/exclude 입력을 생략하고 `VM_INCLUDE="*"`, `VM_EXCLUDE="*"`를 자동 저장한다.
+   호스트 사전 구성과 외부 호스트 정책/작업 등록을 마친 후,
+   **Mold에서 대상 VM에 백업 오퍼링을 연결하고 VM별 백업 스케줄을 추가**한다.
+3. `false`이면 `VM_INCLUDE`와 `VM_EXCLUDE`를 차례로 입력받는다.
+   기본값은 `*`와 빈 값이며, 기존 방식대로 호스트의 실행 중인 대상 VM을 백업한다.
+
+터미널에서 생략한 항목은 위 순서로 질문한다.
+자동화 실행에서는 `--vm-schedule-backup true|false`를 명시할 수 있으며,
+`false`일 때만 `--vm-include`·`--vm-exclude`를 지정한다.
+터미널 입력을 사용할 수 없는 실행에서 선택 항목을 모두 생략하면 `false`, `*`, 빈 값을 사용한다.
+Veeam의 재구성은 해당 작업에 저장된 값을 기본값으로 표시하며, 명시한 CLI 값이 우선한다.
+VM 스케줄 사용 여부와 `--incremental-backup`의 Full/증분 선택은 서로 독립적인 설정이다.
+
+운영 중 각 설정의 기준은 다음과 같다.
+
+| 판단 항목 | 운영 중 기준 | 사전 구성의 역할 |
+| --- | --- | --- |
+| VM별 스케줄 사용 여부 | 호스트 정책/작업 구성 파일의 `VM_SCHEDULE_BACKUP` | 선택한 값을 구성 파일에 저장 |
+| Full/증분 선택 | Mold의 `kvm.incremental.backup` 유효값 | `--incremental-backup`으로 Mold 전역값과 대상 Cluster 값을 설정 |
+| 증분 체인 길이 상한 | Mold의 `kvm.backup.chain.size` | 증분 사용 시 명시한 값으로 Mold 설정 갱신 |
+
+백업 실행 시 호스트 구성 파일의 증분 모드·체인 값으로 Mold 설정을 다시 덮어쓰지 않는다.
+운영 중 Full/증분을 변경하려면 Mold 설정을 변경하고, VM별 스케줄 방식은 호스트 구성 파일에서 변경한다.
+
+VM별 스케줄 방식의 구성 예시:
+
+```bash
+VM_SCHEDULE_BACKUP="true"
+VM_INCLUDE="*"
+VM_EXCLUDE="*"
+```
+
+이 경우 include/exclude 필터를 실행하지 않고 Mold 스케줄에서 선택한 VM만 백업한다.
+`exclude="*"`는 설정 파일 방식의 대상을 모두 제외하는 보조 값이며, 스케줄 대상 VM을 제외하지 않는다.
+Mold 스케줄이 아직 없거나 지금 실행할 VM이 없으면 **백업하지 않는다**. 전체 VM 백업으로 전환하지 않는다.
+
+기존 호스트 필터 방식의 구성 예시:
+
+```bash
+VM_SCHEDULE_BACKUP="false"
+VM_INCLUDE="i-2-218-VM,i-2-285-VM"
+VM_EXCLUDE="i-2-285-VM"
+```
+
+이 경우 Mold VM 스케줄을 사용하지 않고 위 필터에 따라 `i-2-218-VM`만 백업한다.
+두 솔루션 모두 exclude를 include보다 우선 적용하므로, `include="*"`, `exclude="*"`이면 호스트 필터 대상은 0개다.
+스케줄 방식에서 `false`로 재구성할 때 자동 저장했던 `exclude="*"`를 그대로 물려받지 않으며,
+호스트 필터를 다시 입력하거나 CLI로 지정한다.
+
+VM별 스케줄 방식에서 외부 호스트 정책은 실행 계기이며, 실제 VM별 일정은 Mold가 판단한다.
+예를 들어 VM 일정이 01:30이고 호스트 정책이 02:00에 실행되면 백업은 02:00에 시작하므로,
+호스트 정책 주기는 필요한 VM 일정 정밀도에 맞춰 설정한다.
+
+| 구성 및 조회 결과 | 백업 대상 | 오퍼링 처리 |
+| --- | --- | --- |
+| `VM_SCHEDULE_BACKUP=true`, 실행할 Mold 스케줄 있음 | 실행 시점이 된 스케줄의 실행 중인 VM만 | 기존 연결 유지, 자동 할당하지 않음 |
+| `VM_SCHEDULE_BACKUP=true`, 스케줄 없음 또는 실행 대상 없음 | 백업하지 않음 | 설정 파일 방식으로 전환하지 않음 |
+| `VM_SCHEDULE_BACKUP=false` | 구성 파일의 포함·제외 조건과 일치하는 실행 중인 VM | 미할당이면 기본 오퍼링 자동 할당 후 백업 |
+| 조회 실패·잘못된 응답 | 작업 중단 | 설정 파일 방식으로 전환하지 않음 |
+
+스케줄 방식은 설정 파일의 `VM_INCLUDE`·`VM_EXCLUDE`를 적용하지 않는다.
+정지한 스케줄 대상 VM이 있다는 이유로 다른 설정 파일 대상 VM을 대신 백업하지 않는다.
+다른 백업 솔루션의 오퍼링이 연결된 VM은 제외하며, 같은 솔루션의 기존 오퍼링도 덮어쓰지 않는다.
+사전 구성으로 생성한 `externalid=netbackup` 또는 `veeam` 오퍼링은 공용 기본 오퍼링이다.
+별도 오퍼링을 특정 정책/작업에 연결하려면 오퍼링의 외부 ID 또는 이름을 해당 정책/작업 이름과 일치시킨다.
+
+호스트는 `listExternalBackupCandidates`로 선택 방식과 대상을 한 번에 조회한다.
+조회 자체는 스케줄을 소비하지 않으며, Mold는 백업 시작 직전에 호스트·상태·오퍼링·스케줄을 다시 확인한다.
+대상이 이동했거나 오퍼링이 변경/제거되었거나 스케줄이 삭제/소비되었으면 실행하지 않는다.
+`false` 방식은 Mold VM 스케줄을 조회하거나 소비하지 않는다.
+백업 시작이 수락된 뒤에만 다음 스케줄 시각을 갱신하고 VM별 중복 요청은 백업 잠금으로 직렬화한다.
+설정 파일 방식에서 백업을 중단하려면 VM 목록에서도 제외해야 한다. 오퍼링만 해제하면 다음 실행에 다시 자동 할당된다.
+Mold 관리 서버와 호스트 스크립트를 함께 갱신해야 하며, 새 API가 없는 서버에서는 조회 실패로 중단한다.
+
+기존 구성 파일에 `VM_SCHEDULE_BACKUP` 항목이 없으면 호환을 위해 이전 자동 판별을 유지한다.
+해당 호스트·공급자·정책에 Mold 스케줄이 있으면 스케줄 방식, 없으면 기존 파일 필터 방식이다.
+새 사전 구성 또는 재구성부터는 true/false를 저장하며, 운영자는 이 값을 기준으로 방식을 확인한다.
+
+NetBackup의 무인 구성 예시는 기존 명령에 다음 중 하나를 추가한다.
+
+```bash
+# VM별 Mold 스케줄만 사용
+--vm-schedule-backup true
+
+# 기존 호스트 필터 사용
+--vm-schedule-backup false --vm-include 'i-2-218-VM,i-2-285-VM' --vm-exclude 'i-2-285-VM'
+```
+
+Veeam의 `bootstrap-host-veeam-env.sh`와 `veeam_config.sh`도 같은 옵션을 받는다.
+
 ### NAS: `ablestack-nas`
 
 **사전 준비**
@@ -182,6 +284,7 @@ QCOW2는 이전 백업 체인의 스테이징 호스트와 달라지면 새 Full
    ```bash
    python3 /usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/netbackup-host-config.py \
      --policy-name "<Mold Host 이름과 맞춘 NetBackup 정책 이름>" \
+     --vm-schedule-backup false \
      --vm-include "<대상 VM의 i-계열 인스턴스 이름>" \
      --mold-url "<Mold API 주소>" \
      --admin-apikey "<Mold 관리자 API key>" \
@@ -207,7 +310,8 @@ QCOW2는 이전 백업 체인의 스테이징 호스트와 달라지면 새 Full
    관리 서버 재기동 안내와 함께 중단되면 Mold를 재기동하고 같은 명령을 다시 실행한다.
 7. 사전·사후 백업 스크립트, 암호화된 Mold 인증정보와 복원 감시 서비스를 Host에 구성한다.
    신규 Host 키는 자동 준비하지만 Mold API key 자체를 발급하는 기능은 아니므로 3번의 키는 필요하다.
-8. NetBackup 연결 설정과 서비스 상태를 확인하고, 등록된 오퍼링을 대상 VM에 연결한다.
+8. NetBackup 연결 설정과 서비스 상태를 확인한다. VM별 일정을 사용할 때는 등록된 오퍼링을 VM에 연결하고 Mold 백업 스케줄을 추가한다.
+   `VM_SCHEDULE_BACKUP=false` 방식은 설정 파일 대상의 미할당 VM에 기본 오퍼링을 자동 연결한다.
    이 구성은 각 백업 Host에서 수행한다. VM이 이동할 수 있다면 이동 대상 Host도 준비한다.
 
 구성 스크립트는 `/usr/openv/netbackup/bp.conf`가 있으면 기존 파일을 백업하고
@@ -255,6 +359,98 @@ QCOW2는 이전 백업 체인의 스테이징 호스트와 달라지면 새 Full
 외부 UI 복원에서 선택해야 하는 마지막 메타데이터 Job과 실제 VM 복원 절차는
 아래의 [외부 UI 복원 안내](#netbackupveeam-외부-ui의-rbdqcow2-복원)를 따른다.
 
+## NetBackup·Veeam 사전 구성 파라미터 비교
+
+입력 파라미터 전체가 같지는 않다. VM 대상 선택과 Full/증분 관련 핵심 옵션은 공통으로 맞췄으며,
+기존 정책 이름·인증 옵션과 솔루션 서버 접속 옵션은 도구별 이름을 유지한다.
+비교 대상은 다음 세 도구다.
+
+- NetBackup: `python3 netbackup-host-config.py`
+- Veeam 기본 구성: `bash veeam/veeam_config.sh`
+- Veeam 최초 호스트 구성: `bash veeam/bootstrap-host-veeam-env.sh` — env 생성 후 `veeam_config.sh`를 실행한다.
+
+**세 도구에 공통인 옵션**
+
+| 옵션 | 의미와 기본 동작 |
+| --- | --- |
+| `--vm-schedule-backup true\|false` | VM별 Mold 스케줄 사용 여부. 최초 기본값 `false`, 구성 파일에 `VM_SCHEDULE_BACKUP`으로 저장 |
+| `--vm-include LIST` | `false`일 때 사용할 대상 VM 내부 이름 목록 또는 `*`. 기본 `*`, 터미널에서는 생략 시 입력받음 |
+| `--vm-exclude LIST` | `false`일 때 제외할 VM 내부 이름/패턴. 기본 빈 값, exclude 우선 적용 |
+| `--incremental-backup true\|false` | Full/증분 선택. 기본 `true`, Mold 전역값과 대상 Cluster의 `kvm.incremental.backup` 설정 |
+| `--backup-chain-size N` | 증분일 때만 지정. 생략 시 기존 `kvm.backup.chain.size` 유지, 제품 기본값 `8` |
+| `--mold-url URL` | Mold API 주소. NetBackup은 필수, Veeam은 기존 설정/Agent 정보로 자동 채울 수 있음 |
+
+`true` 모드에서 include/exclude CLI를 함께 지정하면 오류로 중단한다.
+필터 입력을 건너뛰는 것과 Full/증분 모드는 별개이므로,
+예를 들어 `--vm-schedule-backup true --incremental-backup false`는 VM별 일정으로 매번 Full 백업한다.
+
+**서로 다른 옵션**
+
+| 항목 | NetBackup `netbackup-host-config.py` | Veeam `veeam_config.sh` | Veeam `bootstrap-host-veeam-env.sh` |
+| --- | --- | --- | --- |
+| 외부 정책/작업 이름 | `--policy-name` 필수 | `--job-name`; 기존 설정/env로 자동 채움 가능 | `--job-name`; 기본 `Agent Backup Job 1` |
+| Mold API key | `--admin-apikey` 필수 | `--api-key` 또는 기존 env/conf | `--api-key` 또는 환경 변수 |
+| Mold API secret | `--admin-secretkey` 필수 | `--api-secret` 또는 기존 암호화 설정 | `--api-secret` 또는 환경 변수 |
+| NetBackup 서버 인증 | `--netbackup-url`, `--netbackup-apikey` 필수 | 해당 없음 | 해당 없음 |
+| Veeam 서버 인증 | 해당 없음 | `--veeam-url`, `--veeam-user`, `--veeam-password` | `--veeam-host`, `--veeam-user`, `--veeam-password` |
+| Veeam SSH | 해당 없음 | `--veeam-ssh-host`, `--veeam-ssh-user`, `--veeam-ssh-key` | `--veeam-ssh-user`; 서버 주소는 `--veeam-host`에서 구성 |
+| KVM 호스트 지정 | `--policy-name`으로 Mold Host 조회 | `--kvm-host`, `--kvm-ssh-user`, `--kvm-ssh-key` | `--kvm-ip`, `--kvm-hostname` |
+| include 패턴 | 쉼표로 나눈 이름 또는 glob 패턴 | 정확한 VM 이름 목록 또는 전체 `*` | 생성한 Veeam 구성의 같은 필터 사용 |
+| exclude 패턴 | 쉼표로 나눈 이름 또는 glob 패턴 | 이름 또는 glob 패턴 | 생성한 Veeam 구성의 같은 필터 사용 |
+| 추가 자동 제외 | 공통 대상 조회에서 User VM으로 제한 | `VM_AUTO_EXCLUDE=true`: `scvm*`, System VM/Router 형태, 템플릿 이름 추가 제외 | `--no-auto-exclude`로 이 추가 필터 해제 가능 |
+| Zone 지정 | 조회한 Host의 Zone 사용, 별도 옵션 없음 | `--zone-id`, 생략 시 자동 조회 | `--zone-id`, 생략 시 자동 조회 |
+| 오퍼링 이름 | 기본 `NetBackup`, 변경 CLI 없음 | `--offering-name`, 기본 `VeeamBackup` | `--offering-name`, 기본 `VeeamBackup` |
+| 증분 체인 별칭 | `--backup-chain-size` | `--max-chain`도 지원 | `--max-chain`도 지원 |
+| 스테이징 호환 옵션 | `--backup-staging-root` | `--host-backup-path` / `--stage-root-path` | `--host-backup-path` / `--stage-root-path` |
+| Veeam Agent payload | 해당 없음 | 기존 env의 `VEEAM_AGENT_PAYLOAD_PATH` | `--agent-payload-path` |
+| 기존 env 읽기 | 해당 없음 | `--env-file` | env 생성 위치 `--env-out` |
+| 개별 VM 보조 식별자 | 대상 필터만 사용 | `--vm-name`, `--vm-uuid` | 호스트 구성에서는 빈 값 저장 |
+| 백업 실행 모드 | 호스트 정책 방식 | `--backup-mode` (`host` 기본), `--backup-target host` | `host` 고정 |
+| 저장소 호환 옵션 | 공통 Mold 스테이징 사용 | `--nas-repo`, `--repo-name`, `--repo-type`, `--repo-mount-opts`, `--nas-repo-mount` | 호스트 datadisk 프로필 생성 |
+| 보존 기간 | 구성 CLI 없음 | `--retention`, 기본 `P7D` | 별도 CLI 없음 |
+| 추가 설치/배포 | 구성 과정에서 NetBackup hook·감시 서비스 설치 및 `bp.conf` 반영 | `--install`, `--no-configure-mold`, `--secret-key-file` | env 생성 후 `veeam_config.sh --install` 호출 |
+
+NetBackup은 현재 `--policy-name` 값을 Mold `listHosts`의 검색어로도 사용한다.
+따라서 정책 이름을 Mold Host 이름과 맞춰 구성한다. Veeam은 작업 이름과 KVM 호스트 주소를 별도로 지정한다.
+Veeam `veeam_config.sh`는 작업 이름이 없으면 호스트 이름을 이용한 기본값도 만들지만,
+외부 UI의 실제 작업과 일치시키기 위해 두 솔루션 모두 정책/작업 이름을 명시하는 편이 명확하다.
+공통 스테이징이 활성화된 실행에서는 위 호환 경로 옵션보다 Mold의
+`backup.thirdparty.staging.mount.path`·`backup.thirdparty.staging.root.path`가 실제 볼륨 스테이징 기준이다.
+Veeam Agent payload 경로는 이 대용량 볼륨 스테이징과 구분한다.
+Veeam의 저장소 호환 옵션은 기존 설치와의 호환을 위해 남아 있으며,
+현재 `ablestack-veeam` 볼륨 스테이징을 위해 별도 NAS 저장소를 만들 필요는 없다.
+백업 대상 필터의 추가 자동 제외는 호스트 필터 방식에 적용되며, VM별 스케줄 방식은 Mold가 선택한 User VM을 사용한다.
+
+**같은 실행 방식을 선택하는 명령 예시**
+
+```bash
+# NetBackup: VM별 스케줄 방식
+python3 netbackup-host-config.py \
+  --policy-name '<Mold Host 이름과 맞춘 정책 이름>' \
+  --mold-url 'http://<Mold>:8080/client/api' \
+  --admin-apikey '<Mold API key>' --admin-secretkey '<Mold API secret>' \
+  --netbackup-url 'https://<NetBackup>/netbackup' --netbackup-apikey '<NetBackup API key>' \
+  --vm-schedule-backup true --incremental-backup true --backup-chain-size 8
+
+# Veeam: 최초 호스트 구성에서 VM별 스케줄 방식
+bash veeam/bootstrap-host-veeam-env.sh \
+  --job-name '<Veeam 기준 작업 이름>' \
+  --mold-url 'http://<Mold>:8080/client/api' \
+  --api-key '<Mold API key>' --api-secret '<Mold API secret>' \
+  --veeam-host '<Veeam 서버>' --veeam-password '<Veeam 암호>' \
+  --vm-schedule-backup true --incremental-backup true --backup-chain-size 8
+
+# Veeam: env가 준비된 호스트의 작업 재구성
+bash veeam/veeam_config.sh --env-file /etc/ablestack/veeam/mold-backup.env \
+  --job-name '<Veeam 기준 작업 이름>' --vm-schedule-backup true
+```
+
+세 명령 모두 VM별 스케줄을 끄고 수동 필터를 사용하려면 다음 선택 옵션으로 바꾼다.
+
+```bash
+--vm-schedule-backup false --vm-include 'i-2-218-VM,i-2-285-VM' --vm-exclude 'i-2-285-VM'
+```
+
 ## Full 및 증분 백업 운영
 
 ### 설정과 백업 선택
@@ -263,6 +459,16 @@ QCOW2는 이전 백업 체인의 스테이징 호스트와 달라지면 새 Full
 - **증분**: 이전 정상 백업 이후 변경된 데이터만 보관한다. 복원 시 기준 Full과 필요한 이전 증분 백업도 사용한다.
 - `kvm.incremental.backup`: VM이 속한 Cluster의 증분 백업 사용 여부이다.
 - `kvm.backup.chain.size`: Full과 후속 증분이 연결된 백업 체인의 길이 상한이다. 기본값은 `8`이다.
+
+NetBackup·Veeam은 실행 시 VM의 ROOT 볼륨에서 확인한 Cluster의 `kvm.incremental.backup` 유효값을 따른다.
+Cluster별 값이 있으면 전역값보다 우선하며, Cluster별 값이 없으면 전역값을 사용한다.
+따라서 전역값만 `false`로 바꾸더라도 Cluster에 `true`가 지정되어 있으면 증분이 계속 활성화된다.
+운영 중 증분을 끄려면 대상 Cluster의 유효값도 `false`인지 확인한다.
+현재 이 설정은 비동적으로 선언되어 있으므로, 특히 전역값 변경은 Mold 관리 서버 재기동 절차를 따른다.
+변경값이 반영된 이후 새 백업은 독립 Full로 생성하며, 기존 Full·증분 백업은 기존 보관 정책에 따라 유지한다.
+이미 시작된 백업의 처리 방식을 중간에 바꾸는 용도로 사용하지 않는다.
+사전 구성 도구를 다시 실행하면 지정한 `--incremental-backup` 값으로 Mold 설정을 다시 갱신하므로,
+운영 중 변경한 값을 유지하려면 같은 값을 명시한다. 이 옵션의 기본값은 `true`다.
 
 Mold가 이전 성공 백업과 설정을 확인하여 Full 또는 증분을 선택한다.
 증분 기능을 켰다고 모든 요청이 증분이 되는 것은 아니며,

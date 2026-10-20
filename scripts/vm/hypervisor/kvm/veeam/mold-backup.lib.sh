@@ -98,6 +98,55 @@ mold_backup_resolve_nas_backup_script() {
 }
 VEEAM_PROVIDER_NAME="${VEEAM_PROVIDER_NAME:-ablestack-veeam}"
 
+# Provisioning input shared by veeam_config.sh and bootstrap-host-veeam-env.sh.
+mold_backup_configure_vm_selection() {
+  local value default_mode previous_mode
+  default_mode="$(printf '%s' "${VM_SCHEDULE_BACKUP:-false}" | tr '[:upper:]' '[:lower:]')"
+  previous_mode="$(printf '%s' "${VM_SCHEDULE_BACKUP_PREVIOUS:-$default_mode}" | tr '[:upper:]' '[:lower:]')"
+  [[ "$default_mode" == true || "$default_mode" == false ]] || {
+    echo "--vm-schedule-backup must be true or false" >&2
+    return 1
+  }
+  VM_SCHEDULE_BACKUP="$default_mode"
+  if [[ "${VM_SCHEDULE_BACKUP_CLI_SET:-false}" != true && -t 0 ]]; then
+    while true; do
+      read -r -p "Use Mold per-VM backup schedules? [true/false, default: ${default_mode}]: " value || return 1
+      value="$(printf '%s' "${value:-$default_mode}" | tr '[:upper:]' '[:lower:]')"
+      if [[ "$value" == true || "$value" == false ]]; then
+        VM_SCHEDULE_BACKUP="$value"
+        break
+      fi
+      echo "Enter true or false." >&2
+    done
+  fi
+  if [[ "$VM_SCHEDULE_BACKUP" == true ]]; then
+    if [[ "${VM_INCLUDE_CLI_SET:-false}" == true || "${VM_EXCLUDE_CLI_SET:-false}" == true ]]; then
+      echo "--vm-include/--vm-exclude require --vm-schedule-backup false" >&2
+      return 1
+    fi
+    VM_INCLUDE="*"
+    VM_EXCLUDE="*"
+  else
+    # A schedule-only sentinel must not survive an explicit switch back to host filters.
+    if [[ "$previous_mode" == true ]]; then
+      [[ "${VM_INCLUDE_CLI_SET:-false}" == true ]] || VM_INCLUDE="*"
+      [[ "${VM_EXCLUDE_CLI_SET:-false}" == true ]] || VM_EXCLUDE=""
+    fi
+    VM_INCLUDE="${VM_INCLUDE:-*}"
+    VM_EXCLUDE="${VM_EXCLUDE:-}"
+    if [[ -t 0 ]]; then
+      if [[ "${VM_INCLUDE_CLI_SET:-false}" != true ]]; then
+        read -r -p "VM_INCLUDE [default: ${VM_INCLUDE}]: " value || return 1
+        VM_INCLUDE="${value:-$VM_INCLUDE}"
+      fi
+      if [[ "${VM_EXCLUDE_CLI_SET:-false}" != true ]]; then
+        read -r -p "VM_EXCLUDE [default: ${VM_EXCLUDE:-none}]: " value || return 1
+        VM_EXCLUDE="${value:-$VM_EXCLUDE}"
+      fi
+    fi
+  fi
+}
+
 # Resolve config: per-job .conf (when VEEAM_JOB_NAME set) → MOLD_BACKUP_CONF → defaults.
 # Job conf must win over a previously cached MOLD_BACKUP_CONF (pre/post used to load
 # mold-backup.conf first and then stick on that path for the real job load).
@@ -161,6 +210,7 @@ mold_backup_load_config() {
     return 1
   }
   MOLD_BACKUP_CONF="$resolved"
+  VM_SCHEDULE_BACKUP=""
   # shellcheck source=/dev/null
   source "$MOLD_BACKUP_CONF"
   # Caller-provided restore selectors must survive sourcing the job conf.
@@ -192,6 +242,11 @@ mold_backup_load_config() {
   BACKUP_MODE="${BACKUP_MODE:-host}"
   VM_INCLUDE="${VM_INCLUDE:-*}"
   VM_EXCLUDE="${VM_EXCLUDE:-}"
+  VM_SCHEDULE_BACKUP="$(printf '%s' "${VM_SCHEDULE_BACKUP:-}" | tr '[:upper:]' '[:lower:]')"
+  case "$VM_SCHEDULE_BACKUP" in
+    ''|true|false) ;;
+    *) echo "Invalid VM_SCHEDULE_BACKUP; expected true or false" >&2; return 1 ;;
+  esac
   VM_AUTO_EXCLUDE="${VM_AUTO_EXCLUDE:-true}"
   ZONE_ID="${ZONE_ID:-}"
   RETENTION_PERIOD="${RETENTION_PERIOD:-}"
@@ -1330,6 +1385,14 @@ mold_backup_vm_restorable_on_local_host() {
 
 # Pre-notify/list-backups targets: running VMs, plus explicit VM_INCLUDE names (even if shut off).
 mold_backup_list_target_domains() {
+  if [[ -n "${MOLD_EXTERNAL_BACKUP_CANDIDATES:-}" ]]; then
+    printf '%s' "$MOLD_EXTERNAL_BACKUP_CANDIDATES" | python3 -c '
+import json, sys
+for candidate in json.load(sys.stdin)["candidate"]:
+    print(candidate["instancename"])
+'
+    return
+  fi
   local -a targets=() seen="" vm_name token
   while IFS= read -r vm_name; do
     [[ -z "$vm_name" ]] && continue
@@ -2369,8 +2432,100 @@ mold_backup_api_assign_offering_if_needed() {
   if [[ -n "$current" ]]; then
     return 1
   fi
-  mold_backup_cmk_run assignVirtualMachineToBackupOffering "virtualmachineid=${vm_id}" "backupofferingid=${offering_id}" >/dev/null \
-    || mold_backup_notify_log warn "assignVirtualMachineToBackupOffering failed for vm=${vm_id}"
+  json=$(mold_backup_cmk_run assignVirtualMachineToBackupOffering "virtualmachineid=${vm_id}" "backupofferingid=${offering_id}") || {
+    mold_backup_notify_log warn "assignVirtualMachineToBackupOffering failed for vm=${vm_id}"
+    return 1
+  }
+  local job_id
+  job_id="$(mold_backup_api_json_field "$json" "assignvirtualmachinetobackupofferingresponse.jobid")"
+  if [[ -n "$job_id" ]]; then
+    mold_backup_api_wait_async_job "$job_id" >/dev/null || return 1
+  fi
+  json=$(mold_backup_cmk_run listVirtualMachines "id=${vm_id}") || return 1
+  [[ "$(mold_backup_api_json_field "$json" "listvirtualmachinesresponse.virtualmachine.backupofferingid")" == "$offering_id" ]]
+}
+
+mold_backup_api_external_candidates() {
+  local response
+  local -a selection_args=("provider=ablestack-veeam" "hostname=$(mold_backup_local_kvm_name)" "policyid=${VEEAM_JOB_NAME}")
+  [[ -z "${VM_SCHEDULE_BACKUP:-}" ]] || selection_args+=("vmschedulebackup=${VM_SCHEDULE_BACKUP}")
+  response=$(mold_backup_cmk_run listExternalBackupCandidates "${selection_args[@]}") || {
+    mold_backup_notify_log err "Mold schedule lookup failed; configuration fallback is forbidden"
+    return 1
+  }
+  printf '%s' "$response" | python3 -c '
+import json, sys
+try:
+    response = json.load(sys.stdin)["listexternalbackupcandidatesresponse"]["externalbackupcandidates"]
+    mode = response["selectionmode"]
+    candidates = response["candidate"]
+    def require(condition):
+        if not condition:
+            raise ValueError("Invalid target selection response")
+    require(mode in ("SCHEDULE", "CONFIG") and isinstance(candidates, list))
+    expected_mode = {"true": "SCHEDULE", "false": "CONFIG"}.get(sys.argv[1])
+    require(expected_mode is None or mode == expected_mode)
+    seen = set()
+    for candidate in candidates:
+        require(isinstance(candidate, dict))
+        for key in ("virtualmachineid", "instancename", "hostid"):
+            require(isinstance(candidate.get(key), str) and candidate[key].strip())
+        require(candidate["virtualmachineid"] not in seen)
+        seen.add(candidate["virtualmachineid"])
+        if mode == "SCHEDULE":
+            require(all(isinstance(candidate.get(key), str) and candidate[key].strip()
+                        for key in ("scheduleid", "backupofferingid")))
+        else:
+            require(not candidate.get("scheduleid"))
+    print(json.dumps(response))
+except (ValueError, KeyError, TypeError, AssertionError):
+    sys.exit("Invalid Mold schedule response; configuration fallback is forbidden")
+' "${VM_SCHEDULE_BACKUP:-}"
+}
+
+mold_backup_external_candidate_field() {
+  printf '%s' "$MOLD_EXTERNAL_BACKUP_CANDIDATES" | python3 -c '
+import json, sys
+response = json.load(sys.stdin)
+if not sys.argv[1]:
+    value = response[sys.argv[2]]
+else:
+    candidate = next(c for c in response["candidate"] if c["instancename"] == sys.argv[1])
+    value = candidate.get(sys.argv[2])
+    if value is None:
+        value = ""
+print(str(value).lower() if isinstance(value, bool) else value, end="")
+' "$1" "$2"
+}
+
+mold_backup_process_external_candidate_vm() {
+  local vm_name="$1" state_file="$2"
+  local vm_id backup_result backup_id host_path wait_seconds=0
+  vm_id="$(mold_backup_external_candidate_field "$vm_name" virtualmachineid)" || return 1
+  if mold_backup_trigger_active "mold-active" "$vm_name"; then
+    mold_backup_trigger_clear "mold-active" "$vm_name"
+    mold_backup_notify_log info "Mold already requested backup for ${vm_name}; skipping recursive host dispatch"
+    return 0
+  fi
+  # Preserve the watcher/loop guard while new staging files are being written.
+  mold_backup_trigger_mark "veeam-active" "$vm_name"
+  backup_result="$(mold_backup_api_create_veeam_and_wait "$vm_id" "$vm_name")" || {
+    mold_backup_state_write_line "$state_file" "vm=${vm_name} id=${vm_id} status=fail reason=external-dispatch-failed"
+    return 1
+  }
+  backup_id="${backup_result%%|*}"
+  host_path="$(mold_backup_api_backup_external_id "$vm_id" "$backup_id")" || return 1
+  until [[ -n "$host_path" && -f "${host_path}/.volume-bootstrap" ]]; do
+    [[ "$wait_seconds" -lt 60 ]] || return 1
+    sleep 1
+    wait_seconds=$((wait_seconds + 1))
+    host_path="$(mold_backup_api_backup_external_id "$vm_id" "$backup_id")" || return 1
+  done
+  mkdir -p "${VEEAM_AGENT_PAYLOAD_PATH}/${vm_name}"
+  cp -- "${host_path}/.volume-bootstrap" "${VEEAM_AGENT_PAYLOAD_PATH}/${vm_name}/backup-bootstrap.txt" || return 1
+  mold_backup_state_write_line "$state_file" \
+    "vm=${vm_name} id=${vm_id} backup_id=${backup_id} type=${backup_result#*|} path=${host_path} status=pipeline"
+  return 0
 }
 
 mold_backup_api_wait_async_job() {
@@ -2474,7 +2629,18 @@ mold_backup_api_create_veeam_and_wait() {
   interval_type="$(mold_backup_resolve_veeam_interval_type "${VEEAM_SCHEDULE_NAME:-${SCHEDULE:-default}}")"
   veeam_job="$(mold_backup_normalize_job_name "${VEEAM_JOB_NAME:-${JOB_NAME:-}}")"
   mold_backup_notify_log info "createAblestackVeeamBackup vm=${vm_id} name=${backup_name} interval=${interval_type} job=${veeam_job:-n/a} (MS→agent NAS backup)"
-  if [[ -n "$veeam_job" ]]; then
+  if [[ -n "${MOLD_EXTERNAL_BACKUP_CANDIDATES:-}" ]]; then
+    local field value
+    local -a execution_args=("virtualmachineid=${vm_id}" "name=${backup_name}" "jobname=${veeam_job}"
+      "selectionmode=$(mold_backup_external_candidate_field "" selectionmode)")
+    [[ -z "${VM_SCHEDULE_BACKUP:-}" ]] || execution_args+=("vmschedulebackup=${VM_SCHEDULE_BACKUP}")
+    for field in hostid backupofferingid scheduleid quiescevm; do
+      value="$(mold_backup_external_candidate_field "$vm_label" "$field")" || return 1
+      [[ -z "$value" ]] || execution_args+=("${field}=${value}")
+    done
+    # Never retry without the selected schedule/offering context after an API error.
+    json=$(mold_backup_cmk_run createAblestackVeeamBackup "${execution_args[@]}") || return 1
+  elif [[ -n "$veeam_job" ]]; then
     json=$(mold_backup_cmk_run createAblestackVeeamBackup "virtualmachineid=${vm_id}" "name=${backup_name}" "intervaltype=${interval_type}" "jobname=${veeam_job}" 2>/dev/null) \
       || json=$(mold_backup_cmk_run createAblestackVeeamBackup "virtualmachineid=${vm_id}" "name=${backup_name}" "intervaltype=${interval_type}" 2>/dev/null) \
       || json=$(mold_backup_cmk_run createBackup "virtualmachineid=${vm_id}" "name=${backup_name}" 2>/dev/null) \
@@ -6335,6 +6501,17 @@ mold_backup_pre_notify() {
   VEEAM_JOB_NAME="$(mold_backup_normalize_job_name "${VEEAM_JOB_NAME:-$job}")"
   job="$VEEAM_JOB_NAME"
 
+  # Artifact jobs must not recursively ask Mold to create another VM backup.
+  if [[ "$job" =~ ^ABLESTACK-[[:xdigit:]-]{36}-(metadata|[[:xdigit:]-]{36})$ ]]; then
+    return 0
+  fi
+  local MOLD_EXTERNAL_BACKUP_CANDIDATES="" external_selection_mode=""
+  if [[ "${VEEAM_PROVIDER_NAME:-ablestack-veeam}" == "ablestack-veeam" && "${BACKUP_MODE}" != "guest" && "${BACKUP_MODE}" != "veeam-guest" ]]; then
+    MOLD_EXTERNAL_BACKUP_CANDIDATES="$(mold_backup_api_external_candidates)" || return 1
+    external_selection_mode="$(mold_backup_external_candidate_field "" selectionmode)" || return 1
+    mold_backup_notify_log info "Mold target selection mode=${external_selection_mode} job=${job}"
+  fi
+
   if [[ -n "$single_vm" ]]; then
     saved_include="${VM_INCLUDE:-*}"
     VM_INCLUDE="$single_vm"
@@ -6359,7 +6536,7 @@ mold_backup_pre_notify() {
   : > "$state_file"
   echo "run_id=${run_id}" >> "$state_file"
 
-  if mold_backup_cmk_bin >/dev/null 2>&1 || command -v curl >/dev/null 2>&1; then
+  if [[ -z "$MOLD_EXTERNAL_BACKUP_CANDIDATES" ]] && { mold_backup_cmk_bin >/dev/null 2>&1 || command -v curl >/dev/null 2>&1; }; then
     mold_backup_api_ensure_global_settings || true
     # Always try to register VeeamBackup (ablestack-veeam, externalid=veeam) — including datadisk/host.
     offering_id="$(mold_backup_api_find_offering_id "${VEEAM_PROVIDER_NAME}" "$(mold_backup_offering_name)" 2>/dev/null || true)"
@@ -6374,8 +6551,19 @@ mold_backup_pre_notify() {
 
   while IFS= read -r vm_name; do
     [[ -z "$vm_name" ]] && continue
-    mold_backup_vm_in_filter "$vm_name" || continue
+    if [[ "$external_selection_mode" != "SCHEDULE" ]]; then
+      mold_backup_vm_in_filter "$vm_name" || continue
+    fi
     mold_backup_notify_log info "Target VM ${vm_name}"
+
+    if [[ -n "$MOLD_EXTERNAL_BACKUP_CANDIDATES" ]]; then
+      if mold_backup_process_external_candidate_vm "$vm_name" "$state_file"; then
+        success=$((success + 1))
+      else
+        fail=$((fail + 1))
+      fi
+      continue
+    fi
 
     case "${BACKUP_MODE}" in
       guest|veeam-guest)
@@ -6418,6 +6606,11 @@ mold_backup_pre_notify() {
   done < <(mold_backup_list_target_domains || true)
 
   if [[ "$success" -eq 0 && "$fail" -eq 0 && "$skip" -eq 0 ]]; then
+    if [[ -n "$MOLD_EXTERNAL_BACKUP_CANDIDATES" ]]; then
+      mold_backup_notify_log info "No eligible backup targets mode=${external_selection_mode} job=${job}; no backup dispatched"
+      [[ -n "$saved_include" ]] && VM_INCLUDE="$saved_include"
+      return 0
+    fi
     mold_backup_notify_log warn "No target VMs for job=${job} (vm_include=${VM_INCLUDE:-*}). Start VM or set VM_INCLUDE to libvirt name(s)."
     if [[ "${VM_INCLUDE:-*}" != "*" ]]; then
       local _t
@@ -6437,6 +6630,10 @@ mold_backup_pre_notify() {
 
   mold_backup_notify_log info "pre-notify done success=${success} skip=${skip} fail=${fail} state=${state_file}"
   [[ -n "$saved_include" ]] && VM_INCLUDE="$saved_include"
+  if [[ -n "$MOLD_EXTERNAL_BACKUP_CANDIDATES" ]]; then
+    [[ "$fail" -eq 0 ]]
+    return
+  fi
   [[ "$success" -gt 0 ]] && return 0
   # All skipped (existing offerings) is not a hard failure for the Veeam job.
   [[ "$fail" -eq 0 && "$skip" -gt 0 ]] && return 0

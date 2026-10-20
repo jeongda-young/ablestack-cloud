@@ -50,7 +50,13 @@ VEEAM_PASSWORD="${VEEAM_PASSWORD:-}"
 VEEAM_SSH_USER="${VEEAM_SSH_USER:-administrator}"
 # Extra excludes (comma-separated). Auto-exclude always skips scvm*, r/s/v-*-VM, *ablestack-template*
 # unless VM_AUTO_EXCLUDE=false. --vm-exclude adds to that list (exact or glob, e.g. scvm*).
+VM_INCLUDE="${VM_INCLUDE:-}"
 VM_EXCLUDE="${VM_EXCLUDE:-}"
+VM_SCHEDULE_BACKUP="${VM_SCHEDULE_BACKUP:-}"
+VM_SCHEDULE_BACKUP_PREVIOUS="$VM_SCHEDULE_BACKUP"
+VM_SCHEDULE_BACKUP_CLI_SET=false
+VM_INCLUDE_CLI_SET=false
+VM_EXCLUDE_CLI_SET=false
 VM_AUTO_EXCLUDE="${VM_AUTO_EXCLUDE:-true}"
 # Mold Global kvm.backup.chain.size (+ host hook VEEAM_MAX_CHAIN). Mold default is 8.
 BACKUP_CHAIN_SIZE="${BACKUP_CHAIN_SIZE:-8}"
@@ -68,6 +74,8 @@ Usage: bootstrap-host-veeam-env.sh [options]
   --job-name NAME                    Veeam template Job name
   --veeam-host HOST                  Veeam server
   --veeam-password PASSWORD          Veeam credentials
+  --vm-schedule-backup true|false     Default: false; true uses only Mold per-VM schedules
+  --vm-include LIST --vm-exclude LIST Host targets when VM schedules are false; otherwise prompted on a terminal
   --incremental-backup true|false    Default: true; false creates Full backups only
   --backup-chain-size N              Incremental only; omitted keeps Mold value (product default: 8)
   --zone-id UUID --mold-url URL       Override discovered Mold settings
@@ -90,7 +98,9 @@ while [[ $# -gt 0 ]]; do
     --veeam-user) VEEAM_USER="$2"; shift 2 ;;
     --veeam-password) VEEAM_PASSWORD="$2"; shift 2 ;;
     --veeam-ssh-user) VEEAM_SSH_USER="$2"; shift 2 ;;
-    --vm-exclude) VM_EXCLUDE="$2"; shift 2 ;;
+    --vm-schedule-backup) VM_SCHEDULE_BACKUP="$2"; VM_SCHEDULE_BACKUP_CLI_SET=true; shift 2 ;;
+    --vm-include) VM_INCLUDE="$2"; VM_INCLUDE_CLI_SET=true; shift 2 ;;
+    --vm-exclude) VM_EXCLUDE="$2"; VM_EXCLUDE_CLI_SET=true; shift 2 ;;
     --no-auto-exclude) VM_AUTO_EXCLUDE=false; shift ;;
     --backup-chain-size|--max-chain)
       BACKUP_CHAIN_SIZE="$2"
@@ -113,6 +123,10 @@ KVM_INCREMENTAL_BACKUP="$(printf '%s' "$KVM_INCREMENTAL_BACKUP" | tr '[:upper:]'
   || die "--backup-chain-size must be a positive integer (got: ${BACKUP_CHAIN_SIZE})"
 [[ "$KVM_INCREMENTAL_BACKUP" == true || -z "$REQUESTED_CHAIN_SIZE" ]] \
   || die "--backup-chain-size requires --incremental-backup true"
+
+# shellcheck source=mold-backup.lib.sh
+source "${SCRIPT_DIR}/mold-backup.lib.sh"
+mold_backup_configure_vm_selection || die "Failed to configure VM backup selection"
 
 [[ -n "$MOLD_API_KEY" && -n "$MOLD_API_SECRET" ]] \
   || die "Need --api-key and --api-secret (Mold UI → Accounts → API keys for THIS MS)"
@@ -175,8 +189,9 @@ VEEAM_HOST_BACKUP_PATH='$(_q "${VEEAM_HOST_BACKUP_PATH}")'
 VEEAM_AGENT_PAYLOAD_PATH='$(_q "${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}")'
 BACKUP_MODE='host'
 
-# Host-wide: every running domain on this hypervisor (no guest name list)
-VM_INCLUDE='*'
+# true selects Mold schedules; false applies the configured host filters.
+VM_SCHEDULE_BACKUP='$(_q "${VM_SCHEDULE_BACKUP}")'
+VM_INCLUDE='$(_q "${VM_INCLUDE}")'
 VM_EXCLUDE='$(_q "${VM_EXCLUDE}")'
 VM_AUTO_EXCLUDE='$(_q "${VM_AUTO_EXCLUDE:-true}")'
 VM_NAME=''
@@ -240,7 +255,8 @@ echo "  MOLD_API_URL=${MOLD_API_URL}"
 echo "  ZONE_ID=${ZONE_ID}"
 echo "  KVM_HOSTNAME=${KVM_HOSTNAME} KVM_IP=${KVM_IP}"
 echo "  JOB_NAME=${JOB_NAME}"
-echo "  VM_INCLUDE=* (host-wide running domains)"
+echo "  VM_SCHEDULE_BACKUP=${VM_SCHEDULE_BACKUP}"
+echo "  VM_INCLUDE=${VM_INCLUDE}"
 echo "  VM_EXCLUDE=${VM_EXCLUDE:-"(none extra)"} (auto-exclude scvm*/systemVM/router/ablestack-template: ${VM_AUTO_EXCLUDE:-true})"
 echo "  BACKUP_CHAIN_SIZE=${BACKUP_CHAIN_SIZE} (Mold kvm.backup.chain.size + VEEAM_MAX_CHAIN)"
 echo "  KVM_INCREMENTAL_BACKUP=${KVM_INCREMENTAL_BACKUP}"
@@ -251,7 +267,12 @@ echo "  env → ${ENV_OUT}"
 safe_job="$(echo "$JOB_NAME" | tr ' /' '__')"
 for f in "${ETC_DIR}/${safe_job}.conf" "${ETC_DIR}/mold-backup.conf"; do
   [[ -f "$f" ]] || continue
-  sed -i 's/^VM_INCLUDE=.*/VM_INCLUDE="*"/' "$f" || true
+  sed -i "s|^VM_INCLUDE=.*|VM_INCLUDE=\"${VM_INCLUDE}\"|" "$f" || true
+  if grep -q '^VM_SCHEDULE_BACKUP=' "$f" 2>/dev/null; then
+    sed -i "s|^VM_SCHEDULE_BACKUP=.*|VM_SCHEDULE_BACKUP=\"${VM_SCHEDULE_BACKUP}\"|" "$f" || true
+  else
+    echo "VM_SCHEDULE_BACKUP=\"${VM_SCHEDULE_BACKUP}\"" >> "$f"
+  fi
   if grep -q '^VM_EXCLUDE=' "$f" 2>/dev/null; then
     sed -i "s|^VM_EXCLUDE=.*|VM_EXCLUDE=\"${VM_EXCLUDE}\"|" "$f" || true
   else
@@ -274,13 +295,15 @@ cfg_args=(
   --api-key "$MOLD_API_KEY"
   --api-secret "$MOLD_API_SECRET"
   --zone-id "$ZONE_ID"
-  --vm-include '*'
-  --vm-exclude "$VM_EXCLUDE"
+  --vm-schedule-backup "$VM_SCHEDULE_BACKUP"
   --incremental-backup "$KVM_INCREMENTAL_BACKUP"
   --kvm-host "$KVM_IP"
   --backup-mode host
   --install
 )
+if [[ "$VM_SCHEDULE_BACKUP" == false ]]; then
+  cfg_args+=(--vm-include "$VM_INCLUDE" --vm-exclude "$VM_EXCLUDE")
+fi
 [[ -n "$REQUESTED_CHAIN_SIZE" ]] && cfg_args+=(--backup-chain-size "$REQUESTED_CHAIN_SIZE")
 [[ -n "${VEEAM_URL:-}" ]] && cfg_args+=(--veeam-url "$VEEAM_URL")
 [[ -n "${VEEAM_USER:-}" ]] && cfg_args+=(--veeam-user "$VEEAM_USER")
@@ -289,8 +312,11 @@ cfg_args=(
 bash "${SCRIPT_DIR}/veeam_config.sh" "${cfg_args[@]}"
 
 echo ""
+if [[ "$VM_SCHEDULE_BACKUP" == true ]]; then
+  echo "Next in Mold: assign the offering to target VMs and add their backup schedules."
+else
 echo "=== Running domains (pre-notify targets; auto-exclude=${VM_AUTO_EXCLUDE:-true} extra-exclude=${VM_EXCLUDE}) ==="
-export VM_INCLUDE='*' VM_EXCLUDE VM_AUTO_EXCLUDE
+export VM_INCLUDE VM_EXCLUDE VM_AUTO_EXCLUDE
 # shellcheck source=mold-backup.lib.sh
 source "${SCRIPT_DIR}/mold-backup.lib.sh"
 virsh -c qemu:///system list --name --state-running 2>/dev/null | sed '/^$/d' \
@@ -301,6 +327,7 @@ virsh -c qemu:///system list --name --state-running 2>/dev/null | sed '/^$/d' \
         echo "  skip  $d"
       fi
     done || true
+fi
 echo ""
 echo "Done. Test:"
 echo "  bash ${ETC_DIR}/ablestack_veeam_pre_notify.sh ${KVM_HOSTNAME} '${JOB_NAME}' default"

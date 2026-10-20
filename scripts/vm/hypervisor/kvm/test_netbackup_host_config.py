@@ -23,6 +23,7 @@ import importlib.util
 import io
 from pathlib import Path
 import sys
+import tempfile
 import unittest
 from unittest.mock import patch
 
@@ -64,6 +65,57 @@ class NetBackupConfigurationTest(unittest.TestCase):
         self.assertFalse(restart)
         update.assert_not_called()
         self.assertNotIn("kvm.backup.chain.size", [call.args[0] for call in read.call_args_list])
+
+    def test_interactive_selection_asks_mode_before_host_filters(self):
+        args = self.arguments()
+        with patch.object(sys.stdin, "isatty", return_value=True), patch("builtins.input", side_effect=["false", "i-2-1-VM", "i-2-2-VM"]) as read:
+            config.configure_vm_selection(args)
+        self.assertFalse(args.vm_schedule_backup)
+        self.assertEqual("i-2-1-VM", args.vm_include)
+        self.assertEqual("i-2-2-VM", args.vm_exclude)
+        self.assertIn("per-VM", read.call_args_list[0].args[0])
+        self.assertIn("VM_INCLUDE", read.call_args_list[1].args[0])
+        self.assertIn("VM_EXCLUDE", read.call_args_list[2].args[0])
+
+    def test_schedule_mode_skips_both_filter_prompts(self):
+        args = self.arguments()
+        with patch.object(sys.stdin, "isatty", return_value=True), patch("builtins.input", return_value="true") as read:
+            config.configure_vm_selection(args)
+        self.assertTrue(args.vm_schedule_backup)
+        self.assertEqual(("*", "*"), (args.vm_include, args.vm_exclude))
+        self.assertEqual(1, read.call_count)
+
+    def test_noninteractive_selection_defaults_to_all_host_vms(self):
+        args = self.arguments()
+        with patch.object(sys.stdin, "isatty", return_value=False), patch("builtins.input") as read:
+            config.configure_vm_selection(args)
+        self.assertFalse(args.vm_schedule_backup)
+        self.assertEqual(("*", ""), (args.vm_include, args.vm_exclude))
+        read.assert_not_called()
+
+    def test_explicit_selection_and_filters_support_unattended_configuration(self):
+        args = self.arguments("--vm-schedule-backup", "false", "--vm-include", "i-2-1-VM", "--vm-exclude", "i-2-2-VM")
+        with patch.object(sys.stdin, "isatty", return_value=True), patch("builtins.input") as read:
+            config.configure_vm_selection(args)
+        self.assertEqual(("i-2-1-VM", "i-2-2-VM"), (args.vm_include, args.vm_exclude))
+        read.assert_not_called()
+
+    def test_schedule_flag_and_sentinels_are_saved_together(self):
+        args = self.arguments("--vm-schedule-backup", "true")
+        with patch.object(sys.stdin, "isatty", return_value=False):
+            config.configure_vm_selection(args)
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "policy.conf"
+            config.write_config_file(path, args)
+            text = path.read_text()
+        self.assertIn("VM_SCHEDULE_BACKUP=true", text)
+        self.assertIn('VM_INCLUDE="*"', text)
+        self.assertIn('VM_EXCLUDE="*"', text)
+
+    def test_schedule_mode_rejects_manual_filters(self):
+        args = self.arguments("--vm-schedule-backup", "true", "--vm-include", "*")
+        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            config.configure_vm_selection(args)
 
     def test_full_mode_updates_global_and_cluster_flags_and_requires_restart(self):
         args = self.arguments("--incremental-backup", "false")

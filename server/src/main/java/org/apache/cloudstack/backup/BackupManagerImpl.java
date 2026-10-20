@@ -90,6 +90,7 @@ import org.apache.cloudstack.api.command.user.backup.ListBackupOfferingsCmd;
 import org.apache.cloudstack.api.command.user.backup.ListBackupScheduleCmd;
 import org.apache.cloudstack.api.command.user.backup.ListBackupsCmd;
 import org.apache.cloudstack.api.command.user.backup.ListNetBackupBackupCandidatesCmd;
+import org.apache.cloudstack.api.command.user.backup.ListExternalBackupCandidatesCmd;
 import org.apache.cloudstack.api.command.user.backup.PrepareNetBackupRestoreCmd;
 import org.apache.cloudstack.api.command.user.backup.RemoveVirtualMachineFromBackupOfferingCmd;
 import org.apache.cloudstack.api.command.user.backup.RestoreBackupCmd;
@@ -107,6 +108,7 @@ import org.apache.cloudstack.api.command.user.vm.CreateVMFromBxBackupCmd;
 import org.apache.cloudstack.api.response.BackupJobStatusResponse;
 import org.apache.cloudstack.api.response.BackupResponse;
 import org.apache.cloudstack.api.response.NetBackupBackupCandidateResponse;
+import org.apache.cloudstack.api.response.ExternalBackupCandidatesResponse;
 import org.apache.cloudstack.api.response.BackupStagingInfoResponse;
 import org.apache.cloudstack.backup.NetBackupRestoreCoordinator.RestorePhase;
 import org.apache.cloudstack.backup.NetBackupRestoreCoordinator.RestoreResolution;
@@ -971,7 +973,24 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     @Override
     @ActionEvent(eventType = EventTypes.EVENT_VM_BACKUP_OFFERING_REMOVE, eventDescription = "remove Instance from Backup Offering", async = true)
     public boolean removeVMFromBackupOffering(final Long vmId, final boolean forced) {
-        final VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(vmId);
+        final VMInstanceVO currentVm = vmInstanceDao.findByIdIncludingRemoved(vmId);
+        final BackupOfferingVO currentOffering = currentVm != null ? backupOfferingDao.findById(currentVm.getBackupOfferingId()) : null;
+        if (currentOffering != null && isExternalPolicyScheduledProvider(currentOffering.getProvider())) {
+            try (BackupVolumeGuard.Lease volumeGuard = backupVolumeGuard.acquire(vmId);
+                    BackupSnapshotGuard.Lease guard = backupSnapshotGuard.acquire(vmId)) {
+                final VMInstanceVO vm = findVmById(vmId);
+                accountManager.checkAccess(CallContext.current().getCallingAccount(), null, true, vm);
+                if (hasActiveBackingUpBackup(vm)) {
+                    throw new CloudRuntimeException("Cannot remove the backup offering while an external backup is active");
+                }
+                return removeVMFromBackupOfferingInternal(vmId, forced, vm, backupOfferingDao.findById(vm.getBackupOfferingId()));
+            }
+        }
+        return removeVMFromBackupOfferingInternal(vmId, forced, currentVm, currentOffering);
+    }
+
+    private boolean removeVMFromBackupOfferingInternal(final Long vmId, final boolean forced,
+            final VMInstanceVO vm, final BackupOfferingVO offering) {
         if (vm == null) {
             throw new CloudRuntimeException(String.format("Can't find any Instance with ID: [%s].", vmId));
         }
@@ -979,7 +998,6 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         validateBackupForZone(vm.getDataCenterId());
         accountManager.checkAccess(CallContext.current().getCallingAccount(), null, true, vm);
 
-        final BackupOfferingVO offering = backupOfferingDao.findById(vm.getBackupOfferingId());
         if (offering == null) {
             throw new CloudRuntimeException("No previously configured backup offering found for the VM");
         }
@@ -1296,11 +1314,17 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 throw new InvalidParameterValueException("Could not find the requested backup schedule.");
             }
             checkCallerAccessToBackupScheduleVm(schedule.getVmId());
-            return backupScheduleDao.remove(schedule.getId());
+            try (BackupVolumeGuard.Lease volumeGuard = backupVolumeGuard.acquire(schedule.getVmId());
+                    BackupSnapshotGuard.Lease guard = backupSnapshotGuard.acquire(schedule.getVmId())) {
+                return backupScheduleDao.remove(schedule.getId());
+            }
         }
 
         checkCallerAccessToBackupScheduleVm(vmId);
-        return deleteAllVmBackupSchedules(vmId);
+        try (BackupVolumeGuard.Lease volumeGuard = backupVolumeGuard.acquire(vmId);
+                BackupSnapshotGuard.Lease guard = backupSnapshotGuard.acquire(vmId)) {
+            return deleteAllVmBackupSchedules(vmId);
+        }
     }
 
     /**
@@ -1500,27 +1524,41 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     @ActionEvent(eventType = EventTypes.EVENT_VM_BACKUP_CREATE, eventDescription = "creating Ablestack Veeam backup", async = true)
     public boolean createAblestackVeeamBackup(final CreateAblestackVeeamBackupCmd cmd, final Object job)
             throws ResourceAllocationException {
-        final Long vmId = cmd.getVmId();
-        final Account caller = CallContext.current().getCallingAccount();
-        final VMInstanceVO vm = findVmById(vmId);
-        validateBackupForZone(vm.getDataCenterId());
-        accountManager.checkAccess(caller, null, true, vm);
-        final BackupOffering offering = validateVmAblestackVeeamOffering(vm);
-        final BackupProvider backupProvider = getBackupProvider(offering.getProvider());
-        final Account owner = accountManager.getAccount(vm.getAccountId());
-        Long backupSize = 0L;
-        for (final Volume volume : volumeDao.findByInstance(vmId)) {
-            if (Volume.State.Ready.equals(volume.getState())) {
-                Long volumeSize = volumeApiService.getVolumePhysicalSize(volume.getFormat(), volume.getPath(), volume.getChainInfo());
-                if (volumeSize == null) {
-                    volumeSize = volume.getSize();
-                }
-                backupSize += volumeSize;
+        try (BackupVolumeGuard.Lease volumeGuard = backupVolumeGuard.acquire(cmd.getVmId());
+                BackupSnapshotGuard.Lease guard = backupSnapshotGuard.acquire(cmd.getVmId())) {
+            final Long vmId = cmd.getVmId();
+            final Account caller = CallContext.current().getCallingAccount();
+            final VMInstanceVO vm = findVmById(vmId);
+            validateBackupForZone(vm.getDataCenterId());
+            accountManager.checkAccess(caller, null, true, vm);
+            final Long scheduleId = cmd.getScheduleId() != null ? cmd.getScheduleId() : getBackupScheduleId(job);
+            backupSnapshotGuard.checkBackup(vmId);
+            checkNoActiveFastCloneFlattenForBackup(vmId);
+            final BackupScheduleVO schedule = validateExternalBackupExecution(vm, BackupProviderNameUtils.ABLESTACK_VEEAM,
+                    cmd.getVeeamJobName(), cmd.getSelectionMode(), cmd.getHostId(), cmd.getBackupOfferingId(), scheduleId, cmd.getVmScheduleBackup());
+            final BackupOffering offering = resolveExternalBackupOffering(vm, BackupProviderNameUtils.ABLESTACK_VEEAM,
+                    "CONFIG".equals(cmd.getSelectionMode()));
+            validateNetBackupScheduleForVm(scheduleId, vmId);
+            final BackupProvider backupProvider = getBackupProvider(offering.getProvider());
+            if (backupProvider == null) {
+                throw new CloudRuntimeException("VM backup provider is unavailable");
             }
+            final Account owner = accountManager.getAccount(vm.getAccountId());
+            Long backupSize = 0L;
+            for (final Volume volume : volumeDao.findByInstance(vmId)) {
+                if (Volume.State.Ready.equals(volume.getState())) {
+                    Long volumeSize = volumeApiService.getVolumePhysicalSize(volume.getFormat(), volume.getPath(), volume.getChainInfo());
+                    if (volumeSize == null) {
+                        volumeSize = volume.getSize();
+                    }
+                    backupSize += volumeSize;
+                }
+            }
+            createCheckedBackupVeeam(vm, vmId, backupProvider, schedule != null ? schedule.getQuiesceVM() : cmd.getQuiesceVM(), backupSize, owner, scheduleId,
+                    cmd.getName(), cmd.getIntervalType(), cmd.getVeeamJobName());
+            finishExternalBackupSchedule(schedule);
+            return true;
         }
-        createCheckedBackupVeeam(vm, vmId, backupProvider, cmd.getQuiesceVM(), backupSize, owner, getBackupScheduleId(job),
-                cmd.getName(), cmd.getIntervalType(), cmd.getVeeamJobName());
-        return true;
     }
 
     @Override
@@ -1855,53 +1893,35 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     @Override
     @ActionEvent(eventType = EventTypes.EVENT_VM_BACKUP_CREATE, eventDescription = "creating VM backup for NetBackup", async = true)
     public boolean createNetBackup(final CreateNetBackupCmd cmd) throws ResourceAllocationException {
-        final Long vmId = cmd.getVmId();
-        final Long backupScheduleId = cmd.getScheduleId();
-        final Account caller = CallContext.current().getCallingAccount();
-        final String defaultExternalId = "netbackup";
+        try (BackupVolumeGuard.Lease volumeGuard = backupVolumeGuard.acquire(cmd.getVmId());
+                BackupSnapshotGuard.Lease guard = backupSnapshotGuard.acquire(cmd.getVmId())) {
+            final Long vmId = cmd.getVmId();
+            final Long backupScheduleId = cmd.getScheduleId();
+            final Account caller = CallContext.current().getCallingAccount();
 
-        final VMInstanceVO vm = findVmById(vmId);
-        validateBackupForZone(vm.getDataCenterId());
-        accountManager.checkAccess(caller, null, true, vm);
+            final VMInstanceVO vm = findVmById(vmId);
+            validateBackupForZone(vm.getDataCenterId());
+            accountManager.checkAccess(caller, null, true, vm);
 
-        if (vm.getBackupOfferingId() != null) {
-            final BackupOffering existingOffering = backupOfferingDao.findById(vm.getBackupOfferingId());
-            if (existingOffering == null) {
-                throw new CloudRuntimeException("VM backup offering not found");
+            backupSnapshotGuard.checkBackup(vmId);
+            checkNoActiveFastCloneFlattenForBackup(vm.getId());
+            final BackupScheduleVO schedule = validateExternalBackupExecution(vm, BackupProviderNameUtils.ABLESTACK_NETBACKUP,
+                    cmd.getPolicyId(), cmd.getSelectionMode(), cmd.getHostId(), cmd.getBackupOfferingId(), backupScheduleId, cmd.getVmScheduleBackup());
+            final BackupOffering offering = resolveExternalBackupOffering(vm, BackupProviderNameUtils.ABLESTACK_NETBACKUP,
+                    backupScheduleId == null && (cmd.getSelectionMode() == null || "CONFIG".equals(cmd.getSelectionMode())));
+            final BackupProvider backupProvider = getBackupProvider(offering.getProvider());
+            if (backupProvider == null) {
+                throw new CloudRuntimeException("Failed to get NetBackup provider for existing offering assignment");
             }
-            if (!BackupProviderNameUtils.isNetBackupFamily(existingOffering.getProvider())) {
-                throw new CloudRuntimeException(String.format("VM [%s] is already assigned to backup offering [%s] using provider [%s]. NetBackup backup cannot proceed.",
-                        vm.getInstanceName(), existingOffering.getName(), existingOffering.getProvider()));
-            }
-        }
 
-        final BackupOffering netBackupOfferingRef = backupOfferingDao.findByExternalId(defaultExternalId, vm.getDataCenterId());
-        if (netBackupOfferingRef == null) {
-            throw new CloudRuntimeException(String.format("No NetBackup backup offering is configured for zone [%s]. Please import a NetBackup backup offering before running NetBackup backups.",
-                    vm.getDataCenterId()));
-        }
-        final BackupOfferingVO netBackupOffering = backupOfferingDao.findById(netBackupOfferingRef.getId());
-        if (netBackupOffering == null) {
-            throw new CloudRuntimeException("NetBackup backup offering record not found");
-        }
-        final BackupProvider backupProvider = getBackupProvider(netBackupOffering.getProvider());
-        if (backupProvider == null) {
-            throw new CloudRuntimeException("Failed to get NetBackup provider for existing offering assignment");
-        }
+            final Account owner = accountManager.getAccount(vm.getAccountId());
+            final Long backupSize = calculateBackupSize(vm.getId());
 
-        checkNoActiveFastCloneFlattenForBackup(vm.getId());
-        final VMInstanceVO assignedVm = transactionAssignVMToBackupOffering(vm, netBackupOffering, backupProvider);
-        if (assignedVm == null) {
-            throw new CloudRuntimeException(String.format("Failed to assign existing NetBackup offering [%s] to VM [%s].",
-                    netBackupOffering.getName(), vm.getInstanceName()));
+            validateNetBackupScheduleForVm(backupScheduleId, vm.getId());
+            createCheckedBackup(cmd, owner, backupScheduleId != null, backupSize, vm, vm.getId(), backupProvider, backupScheduleId);
+            finishExternalBackupSchedule(schedule);
+            return true;
         }
-
-        final Account owner = accountManager.getAccount(vm.getAccountId());
-        final Long backupSize = calculateBackupSize(vm.getId());
-
-        validateNetBackupScheduleForVm(backupScheduleId, vm.getId());
-        createCheckedBackup(cmd, owner, backupScheduleId != null, backupSize, vm, vm.getId(), backupProvider, backupScheduleId);
-        return true;
     }
 
     @Override
@@ -2278,6 +2298,177 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             }
         }
         return getBackupProvider(offering.getProvider()).reconcileStagingJob(backup, operation, jobId, action, artifactIndex, externalJobId);
+    }
+
+    @Override
+    public ExternalBackupCandidatesResponse listExternalBackupCandidates(final ListExternalBackupCandidatesCmd cmd) {
+        if (!isExternalPolicyScheduledProvider(cmd.getProvider()) || StringUtils.isBlank(cmd.getPolicyId())) {
+            throw new InvalidParameterValueException("An ABLESTACK NetBackup/Veeam provider and parent policy/job are required");
+        }
+        final HostVO host = cmd.getHostId() != null ? hostDao.findById(cmd.getHostId()) : hostDao.findByName(cmd.getHostName());
+        if (host == null) {
+            throw new InvalidParameterValueException("External backup host was not found");
+        }
+        validateBackupForZone(host.getDataCenterId());
+        final List<BackupScheduleVO> schedules = Boolean.FALSE.equals(cmd.getVmScheduleBackup()) ? Collections.emptyList()
+                : externalBackupSchedules(host.getId(), cmd.getProvider(), cmd.getPolicyId());
+        final boolean scheduleMode = Boolean.TRUE.equals(cmd.getVmScheduleBackup()) || !schedules.isEmpty();
+        final List<NetBackupBackupCandidateResponse> candidates = new ArrayList<>();
+        final Date now = new Date();
+        final Set<Long> selected = new HashSet<>();
+        if (scheduleMode) {
+            schedules.sort(Comparator.comparing(BackupScheduleVO::getScheduledTimestamp, Comparator.nullsLast(Comparator.naturalOrder())));
+            for (final BackupScheduleVO schedule : schedules) {
+                final VMInstanceVO vm = vmInstanceDao.findById(schedule.getVmId());
+                if (schedule.getScheduledTimestamp() == null || schedule.getScheduledTimestamp().after(now)
+                        || !isExternalBackupRunningCandidate(vm, host.getId(), cmd.getProvider(), cmd.getPolicyId())
+                        || !selected.add(vm.getId())) {
+                    continue;
+                }
+                candidates.add(createExternalBackupCandidate(vm, schedule, host, cmd.getPolicyId()));
+            }
+        } else {
+            for (final VMInstanceVO vm : vmInstanceDao.listByHostId(host.getId())) {
+                if (isExternalBackupRunningCandidate(vm, host.getId(), cmd.getProvider(), cmd.getPolicyId())) {
+                    candidates.add(createExternalBackupCandidate(vm, null, host, cmd.getPolicyId()));
+                }
+            }
+        }
+        // An empty due list must never turn a scheduled policy into a configuration-driven backup.
+        return new ExternalBackupCandidatesResponse(scheduleMode, candidates);
+    }
+
+    private boolean externalBackupOfferingMatches(final BackupOffering offering, final String provider, final String policyId) {
+        if (offering == null || !StringUtils.equalsIgnoreCase(provider, offering.getProvider())) {
+            return false;
+        }
+        final String defaultExternalId = BackupProviderNameUtils.isNetBackupFamily(provider) ? "netbackup" : "veeam";
+        // Provisioning creates a shared default offering. Custom offerings can bind an individual parent policy/job.
+        return StringUtils.equalsIgnoreCase(defaultExternalId, offering.getExternalId())
+                || StringUtils.equalsIgnoreCase(policyId, offering.getExternalId())
+                || StringUtils.equalsIgnoreCase(policyId, offering.getName());
+    }
+
+    private List<BackupScheduleVO> externalBackupSchedules(final Long hostId, final String provider, final String policyId) {
+        final List<BackupScheduleVO> schedules = new ArrayList<>();
+        for (final BackupScheduleVO schedule : backupScheduleDao.listAll()) {
+            final VMInstanceVO vm = vmInstanceDao.findById(schedule.getVmId());
+            // Stopped or temporarily unavailable scheduled VMs still select SCHEDULE mode for this host.
+            if (vm == null || vm.getRemoved() != null || !VirtualMachine.Type.User.equals(vm.getType())
+                    || !Objects.equals(hostId, vm.getHostId() != null ? vm.getHostId() : vm.getLastHostId())
+                    || !externalBackupOfferingMatches(backupOfferingDao.findById(vm.getBackupOfferingId()), provider, policyId)) {
+                continue;
+            }
+            schedules.add(schedule);
+        }
+        return schedules;
+    }
+
+    private boolean isExternalBackupRunningCandidate(final VMInstanceVO vm, final Long hostId,
+            final String provider, final String policyId) {
+        return vm != null && vm.getRemoved() == null && VirtualMachine.Type.User.equals(vm.getType())
+                && VirtualMachine.State.Running.equals(vm.getState()) && Objects.equals(hostId, vm.getHostId())
+                && (vm.getBackupOfferingId() == null
+                        || externalBackupOfferingMatches(backupOfferingDao.findById(vm.getBackupOfferingId()), provider, policyId))
+                && !hasActiveBackingUpBackup(vm);
+    }
+
+    private NetBackupBackupCandidateResponse createExternalBackupCandidate(final VMInstanceVO vm,
+            final BackupScheduleVO schedule, final HostVO host, final String policyId) {
+        final NetBackupBackupCandidateResponse response = new NetBackupBackupCandidateResponse();
+        response.setVmId(vm.getUuid());
+        response.setVmName(vm.getName());
+        response.setInstanceName(vm.getInstanceName());
+        response.setHostId(host.getUuid());
+        response.setHostName(host.getName());
+        response.setPolicyId(policyId);
+        if (vm.getBackupOfferingId() != null) {
+            response.setBackupOfferingId(backupOfferingDao.findById(vm.getBackupOfferingId()).getUuid());
+        }
+        if (schedule != null) {
+            response.setScheduleId(schedule.getUuid());
+            response.setSchedule(schedule.getSchedule());
+            response.setIntervalType(schedule.getScheduleType());
+            response.setScheduledTimestamp(schedule.getScheduledTimestamp());
+            response.setQuiesceVM(schedule.getQuiesceVM());
+        }
+        response.setObjectName("candidate");
+        return response;
+    }
+
+    private BackupScheduleVO validateExternalBackupExecution(final VMInstanceVO vm, final String provider,
+            final String policyId, final String mode, final Long hostId, final Long expectedOfferingId, final Long scheduleId,
+            final Boolean vmScheduleBackup) {
+        if (mode == null) {
+            if (vmScheduleBackup != null) {
+                throw new InvalidParameterValueException("External backup selection context is required with VM_SCHEDULE_BACKUP");
+            }
+            // Preserve API compatibility for older host scripts; their schedule claim happens in the old candidate API.
+            return null;
+        }
+        if (!("SCHEDULE".equals(mode) || "CONFIG".equals(mode)) || hostId == null || StringUtils.isBlank(policyId)) {
+            throw new InvalidParameterValueException("External backup selection mode, host and parent policy/job are required");
+        }
+        if ((Boolean.TRUE.equals(vmScheduleBackup) && !"SCHEDULE".equals(mode))
+                || (Boolean.FALSE.equals(vmScheduleBackup) && !"CONFIG".equals(mode))) {
+            throw new CloudRuntimeException("Backup selection does not match the host VM_SCHEDULE_BACKUP configuration");
+        }
+        if (!Objects.equals(vm.getBackupOfferingId(), expectedOfferingId)
+                || !isExternalBackupRunningCandidate(vm, hostId, provider, policyId)) {
+            throw new CloudRuntimeException("VM host, state or backup offering changed since target selection; select targets again");
+        }
+        final List<BackupScheduleVO> schedules = Boolean.FALSE.equals(vmScheduleBackup) ? Collections.emptyList()
+                : externalBackupSchedules(hostId, provider, policyId);
+        if ("CONFIG".equals(mode)) {
+            if (!schedules.isEmpty() || scheduleId != null) {
+                throw new CloudRuntimeException("Mold backup schedules now exist; configuration-based execution was stopped");
+            }
+            return null;
+        }
+        if (vm.getBackupOfferingId() == null || scheduleId == null) {
+            throw new CloudRuntimeException("Scheduled backup requires an assigned offering and a Mold schedule");
+        }
+        final BackupScheduleVO schedule = schedules.stream().filter(s -> Objects.equals(s.getId(), scheduleId)
+                && Objects.equals(s.getVmId(), vm.getId())).findFirst().orElse(null);
+        if (schedule == null || schedule.getScheduledTimestamp() == null || schedule.getScheduledTimestamp().after(new Date())) {
+            throw new CloudRuntimeException("Mold backup schedule was removed, changed or is no longer due");
+        }
+        return schedule;
+    }
+
+    private BackupOffering resolveExternalBackupOffering(final VMInstanceVO vm, final String provider, final boolean autoAssign) {
+        if (vm.getBackupOfferingId() != null) {
+            final BackupOffering offering = backupOfferingDao.findById(vm.getBackupOfferingId());
+            if (offering == null || !StringUtils.equalsIgnoreCase(provider, offering.getProvider())) {
+                throw new CloudRuntimeException("VM backup offering belongs to another solution or no longer exists");
+            }
+            return offering;
+        }
+        if (!autoAssign) {
+            throw new CloudRuntimeException("VM must have a backup offering assigned before a scheduled backup");
+        }
+        final String externalId = BackupProviderNameUtils.isNetBackupFamily(provider) ? "netbackup" : "veeam";
+        final BackupOffering offering = backupOfferingDao.findByExternalId(externalId, vm.getDataCenterId());
+        if (offering == null || !StringUtils.equalsIgnoreCase(provider, offering.getProvider())) {
+            throw new CloudRuntimeException("Default backup offering is unavailable; run host provisioning before configuration-based backup");
+        }
+        final BackupProvider backupProvider = getBackupProvider(provider);
+        if (backupProvider == null || transactionAssignVMToBackupOffering(vm, backupOfferingDao.findById(offering.getId()), backupProvider) == null) {
+            throw new CloudRuntimeException("Failed to automatically assign the default backup offering");
+        }
+        return offering;
+    }
+
+    private void finishExternalBackupSchedule(final BackupScheduleVO schedule) {
+        if (schedule != null) {
+            // Advance only after the provider accepted the backup, under the VM backup guards.
+            scheduleNextBackupJob(schedule, new Date());
+            try {
+                deleteOldestBackupFromScheduleIfRequired(schedule.getVmId(), schedule.getId());
+            } catch (Exception e) {
+                logger.warn("Failed to apply external backup schedule retention for VM [{}]", schedule.getVmId(), e);
+            }
+        }
     }
 
     private List<NetBackupBackupCandidateResponse> listNetBackupBackupCandidatesInternal(final ListNetBackupBackupCandidatesCmd cmd) {
@@ -4417,6 +4608,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         cmdList.add(GetBackupRestoreJobStatusCmd.class);
         cmdList.add(UpdateBackupJobBandwidthCmd.class);
         cmdList.add(ListNetBackupBackupCandidatesCmd.class);
+        cmdList.add(ListExternalBackupCandidatesCmd.class);
         cmdList.add(ImportAblestackVeeamBackupSeedCmd.class);
         cmdList.add(ListVeeamRestorePointsCmd.class);
         cmdList.add(CreateAblestackVeeamBackupCmd.class);

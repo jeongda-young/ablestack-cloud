@@ -31,6 +31,10 @@ JOB_NAME=""
 BACKUP_OFFERING_NAME="VeeamBackup"
 VM_INCLUDE=""
 VM_EXCLUDE=""
+VM_SCHEDULE_BACKUP=""
+VM_SCHEDULE_BACKUP_CLI_SET=false
+VM_INCLUDE_CLI_SET=false
+VM_EXCLUDE_CLI_SET=false
 MAX_CHAIN="8"
 REQUESTED_CHAIN_SIZE=""
 KVM_INCREMENTAL_BACKUP=""
@@ -100,6 +104,7 @@ Common optional overrides:
   --env-file PATH         Env file (default: /etc/ablestack/veeam/mold-backup.env)
 
 Other optional:
+  --vm-schedule-backup B  true|false (default: false); true skips include/exclude and uses only Mold VM schedules
   --vm-include LIST       Comma-separated libvirt names (* = all running, default)
   --vm-exclude LIST       Extra libvirt names/globs to skip (auto-exclude still applies)
   --vm-name NAME          libvirt name (mold-backup.sh status 등)
@@ -197,8 +202,12 @@ veeam_config_import_env_file() {
       ZONE_ID) [[ -n "$val" ]] && ZONE_ID="$val" ;;
       JOB_NAME) veeam_set_if_empty JOB_NAME "$val" ;;
       BACKUP_OFFERING_NAME) veeam_set_if_empty BACKUP_OFFERING_NAME "$val" ;;
-      VM_INCLUDE) veeam_set_if_empty VM_INCLUDE "$val" ;;
-      VM_EXCLUDE) veeam_set_if_empty VM_EXCLUDE "$val" ;;
+      VM_SCHEDULE_BACKUP)
+        veeam_set_if_empty VM_SCHEDULE_BACKUP "$val"
+        [[ -z "${VM_SCHEDULE_BACKUP_PREVIOUS:-}" ]] && VM_SCHEDULE_BACKUP_PREVIOUS="$val"
+        ;;
+      VM_INCLUDE) [[ "$VM_INCLUDE_CLI_SET" == true ]] || veeam_set_if_empty VM_INCLUDE "$val" ;;
+      VM_EXCLUDE) [[ "$VM_EXCLUDE_CLI_SET" == true ]] || veeam_set_if_empty VM_EXCLUDE "$val" ;;
       VM_AUTO_EXCLUDE) [[ -n "$val" ]] && VM_AUTO_EXCLUDE="$val" ;;
       VM_NAME) veeam_set_if_empty VM_NAME_CFG "$val" ;;
       VM_UUID) veeam_set_if_empty VM_UUID_CFG "$val" ;;
@@ -244,8 +253,13 @@ veeam_config_load_from_conf() {
   veeam_set_if_empty SECRET_KEY_FILE "$(veeam_config_read_conf_var "$file" MOLD_SECRET_KEY_FILE || true)"
   veeam_set_if_empty ZONE_ID "$(veeam_config_read_conf_var "$file" ZONE_ID || true)"
   veeam_set_if_empty BACKUP_OFFERING_NAME "$(veeam_config_read_conf_var "$file" BACKUP_OFFERING_NAME || true)"
-  veeam_set_if_empty VM_INCLUDE "$(veeam_config_read_conf_var "$file" VM_INCLUDE || true)"
-  veeam_set_if_empty VM_EXCLUDE "$(veeam_config_read_conf_var "$file" VM_EXCLUDE || true)"
+  if [[ "${2:-true}" == true ]]; then
+    v="$(veeam_config_read_conf_var "$file" VM_SCHEDULE_BACKUP || true)"
+    veeam_set_if_empty VM_SCHEDULE_BACKUP "$v"
+    [[ -n "$v" && -z "${VM_SCHEDULE_BACKUP_PREVIOUS:-}" ]] && VM_SCHEDULE_BACKUP_PREVIOUS="$v"
+    [[ "$VM_INCLUDE_CLI_SET" == true ]] || veeam_set_if_empty VM_INCLUDE "$(veeam_config_read_conf_var "$file" VM_INCLUDE || true)"
+    [[ "$VM_EXCLUDE_CLI_SET" == true ]] || veeam_set_if_empty VM_EXCLUDE "$(veeam_config_read_conf_var "$file" VM_EXCLUDE || true)"
+  fi
   veeam_set_if_empty VM_NAME_CFG "$(veeam_config_read_conf_var "$file" VM_NAME || true)"
   veeam_set_if_empty VM_UUID_CFG "$(veeam_config_read_conf_var "$file" VM_UUID || true)"
   veeam_set_if_empty MAX_CHAIN "$(veeam_config_read_conf_var "$file" VEEAM_MAX_CHAIN || true)"
@@ -324,11 +338,14 @@ veeam_config_autofill_defaults() {
     for conf_path in "${ETC_DIR}"/*.conf; do
       [[ -f "$conf_path" ]] || continue
       [[ "$conf_path" == *mold-backup.windows.conf ]] && continue
-      veeam_config_load_from_conf "$conf_path"
+      veeam_config_load_from_conf "$conf_path" false
     done
   fi
 
   veeam_config_validate_backup_mode
+  # shellcheck source=mold-backup.lib.sh
+  source "${SCRIPT_DIR}/mold-backup.lib.sh"
+  mold_backup_configure_vm_selection || die "Failed to configure VM backup selection"
   veeam_config_resolve_api_secret
   veeam_config_auto_mold_url
   [[ -n "$KVM_HOST" ]] || KVM_HOST="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -359,14 +376,17 @@ veeam_config_print_autofill_summary() {
   echo "  Zone: ${ZONE_ID:-<missing>}"
   echo "  NAS repo: ${BACKUP_REPO_ADDRESS:-<missing>}"
   echo "  KVM host: ${KVM_HOST:-<missing>}"
+  echo "  VM_SCHEDULE_BACKUP: ${VM_SCHEDULE_BACKUP}"
+  echo "  VM_INCLUDE: ${VM_INCLUDE} / VM_EXCLUDE: ${VM_EXCLUDE:-<none>}"
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --job-name) JOB_NAME="$2"; shift 2 ;;
     --offering-name) BACKUP_OFFERING_NAME="$2"; shift 2 ;;
-    --vm-include) VM_INCLUDE="$2"; shift 2 ;;
-    --vm-exclude) VM_EXCLUDE="$2"; shift 2 ;;
+    --vm-schedule-backup) VM_SCHEDULE_BACKUP="$2"; VM_SCHEDULE_BACKUP_CLI_SET=true; shift 2 ;;
+    --vm-include) VM_INCLUDE="$2"; VM_INCLUDE_CLI_SET=true; shift 2 ;;
+    --vm-exclude) VM_EXCLUDE="$2"; VM_EXCLUDE_CLI_SET=true; shift 2 ;;
     --vm-name) VM_NAME_CFG="$2"; shift 2 ;;
     --vm-uuid) VM_UUID_CFG="$2"; shift 2 ;;
     --incremental-backup) KVM_INCREMENTAL_BACKUP="$2"; shift 2 ;;
@@ -481,6 +501,7 @@ KVM_INCREMENTAL_BACKUP="${KVM_INCREMENTAL_BACKUP}"
 ZONE_ID="${ZONE_ID}"
 RETENTION_PERIOD="${RETENTION_PERIOD}"
 
+VM_SCHEDULE_BACKUP="${VM_SCHEDULE_BACKUP}"
 VM_INCLUDE="${VM_INCLUDE:-*}"
 VM_EXCLUDE="${VM_EXCLUDE}"
 VM_AUTO_EXCLUDE="${VM_AUTO_EXCLUDE:-true}"
@@ -584,6 +605,7 @@ MANIFEST="${ETC_DIR}/${safe_job}.manifest"
 cat > "$MANIFEST" <<EOF
 # Ablestack Veeam manifest — $(date -Iseconds)
 job_name=${JOB_NAME}
+vm_schedule_backup=${VM_SCHEDULE_BACKUP}
 vm_include=${VM_INCLUDE}
 vm_exclude=${VM_EXCLUDE}
 host_backup_path=${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}
@@ -629,6 +651,10 @@ echo "  ${MANIFEST}"
 echo "  ${HOOKS_DIR}/pre-notify.${safe_job}"
 echo "  ${ETC_DIR}/${safe_job}-pre-notify.sh   (copy → Veeam C:\\ablestack\\veeam\\)"
 echo "  ${ETC_DIR}/${safe_job}-post-notify.sh  (copy → Veeam C:\\ablestack\\veeam\\)"
+if [[ "$VM_SCHEDULE_BACKUP" == true ]]; then
+  echo "Next in Mold: assign this backup offering to each target VM and configure its backup schedule."
+  echo "No VM backups run until a Mold VM schedule is due."
+fi
 echo ""
 if [[ "${VEEAM_BACKUP_TARGET:-host}" == "guest" ]]; then
   die "Guest-mode Veeam jobs were removed. Use --backup-target host (datadisk) instead."

@@ -64,8 +64,16 @@ public class NetBackupBackupCandidateResponse extends BaseResponse {
     private Boolean quiesceVM;
 
     @SerializedName(ApiConstants.POLICY_ID)
-    @Param(description = "NetBackup policy ID/name")
+    @Param(description = "External backup policy/job ID or name")
     private String policyId;
+
+    @SerializedName(ApiConstants.BACKUP_OFFERING_ID)
+    @Param(description = "Currently assigned backup offering, rechecked before execution")
+    private String backupOfferingId;
+
+    public void setBackupOfferingId(final String backupOfferingId) {
+        this.backupOfferingId = backupOfferingId;
+    }
 
     @SerializedName(ApiConstants.HOST_ID)
     @Param(description = "Host ID where the Instance is running")
