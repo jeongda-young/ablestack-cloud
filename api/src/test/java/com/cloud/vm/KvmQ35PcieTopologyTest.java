@@ -29,11 +29,23 @@ public class KvmQ35PcieTopologyTest {
         assertEquals(KvmQ35PcieTopology.LEGACY, KvmQ35PcieTopology.resolve(null));
         assertEquals(KvmQ35PcieTopology.LEGACY, KvmQ35PcieTopology.resolve(Map.of()));
     }
-    @Test public void freshVmsReservePortsAndPersistAnExplicitPolicy() {
-        assertEquals(KvmQ35PcieTopology.RESERVED_32, KvmQ35PcieTopology.forCreation(Map.of(), Map.of(), false));
+    @Test public void unrecordedImageTemplatesKeepLegacyForNewVms() {
+        assertEquals(KvmQ35PcieTopology.LEGACY, KvmQ35PcieTopology.forCreation(Map.of(), Map.of(), false));
+        assertEquals(KvmQ35PcieTopology.LEGACY, KvmQ35PcieTopology.forCreation(null, null, false, false));
+    }
+    @Test public void isoInstallationsReservePortsWhenNoPolicyIsRecorded() {
+        assertEquals(KvmQ35PcieTopology.RESERVED_32, KvmQ35PcieTopology.forCreation(Map.of(), Map.of(), false, true));
+        assertEquals(KvmQ35PcieTopology.RESERVED_32, KvmQ35PcieTopology.forCreation(null, null, false, true));
+    }
+    @Test public void imageTemplatesPreserveTheirRecordedReservedPorts() {
+        assertEquals(KvmQ35PcieTopology.RESERVED_32, KvmQ35PcieTopology.forCreation(policy("reserved32"), Map.of(), false, false));
+    }
+    @Test public void unrecordedImageTemplatesCanExplicitlyRequestReservedPorts() {
+        assertEquals(KvmQ35PcieTopology.RESERVED_32, KvmQ35PcieTopology.forCreation(Map.of(), policy("reserved32"), false, false));
     }
     @Test public void existingOsDisksDoNotInheritUnrelatedTemplateHardware() {
         assertEquals(KvmQ35PcieTopology.LEGACY, KvmQ35PcieTopology.forCreation(policy("reserved32"), Map.of(), true));
+        assertEquals(KvmQ35PcieTopology.LEGACY, KvmQ35PcieTopology.forCreation(policy("reserved32"), Map.of(), true, true));
     }
     @Test public void capturedSourcePolicySurvivesNewVmCreation() {
         assertEquals(KvmQ35PcieTopology.RESERVED_32, KvmQ35PcieTopology.forCreation(Map.of(), policy("reserved32"), true));
@@ -43,6 +55,10 @@ public class KvmQ35PcieTopologyTest {
     }
     @Test public void templatesCanSelectLegacyForNewVms() {
         assertEquals(KvmQ35PcieTopology.LEGACY, KvmQ35PcieTopology.forCreation(policy("legacy"), Map.of(), false));
+        assertEquals(KvmQ35PcieTopology.LEGACY, KvmQ35PcieTopology.forCreation(policy("legacy"), Map.of(), false, true));
+    }
+    @Test public void explicitLegacyOverridesIsoDefaults() {
+        assertEquals(KvmQ35PcieTopology.LEGACY, KvmQ35PcieTopology.forCreation(policy("reserved32"), policy("legacy"), false, true));
     }
     @Test public void invalidPoliciesFailInsteadOfChangingHardware() {
         assertThrows(InvalidParameterValueException.class, () -> KvmQ35PcieTopology.resolve(policy("automatic")));

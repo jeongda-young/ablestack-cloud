@@ -5615,7 +5615,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
                 ? KvmTpmConfig.forCreation(creationFromSource ? Collections.emptyMap() : template.getDetails(), customParameters) : null;
         KvmQ35PcieTopology pcieTopology = HypervisorType.KVM.equals(hypervisorType)
                 ? KvmQ35PcieTopology.forCreation(template.getDetails(), customParameters,
-                        isImport || creationFromSource || volume != null || snapshot != null || customParameters.containsKey("volumeId")) : null;
+                        isImport || creationFromSource || volume != null || snapshot != null || customParameters.containsKey("volumeId"), isIso) : null;
 
         vm.setUserVmType(vmType);
         _vmDao.persist(vm);

@@ -39,11 +39,17 @@ public enum KvmQ35PcieTopology {
         throw new InvalidParameterValueException("Invalid Q35 PCIe topology. Use legacy or reserved32.");
     }
 
-    /** Only a newly allocated VM opts in automatically; existing OS disks retain their recorded policy. */
+    /** Image templates without a recorded policy retain the original automatic topology. */
     public static KvmQ35PcieTopology forCreation(Map<String, String> template, Map<String, String> requested, boolean existingDisks) {
+        return forCreation(template, requested, existingDisks, false);
+    }
+
+    /** An ISO installation can opt into new hardware; cloning an existing OS image cannot imply compatibility. */
+    public static KvmQ35PcieTopology forCreation(Map<String, String> template, Map<String, String> requested,
+            boolean existingDisks, boolean installingFromIso) {
         if (requested != null && requested.containsKey(VmDetailConstants.KVM_Q35_PCIE_TOPOLOGY)) { return resolve(requested); }
         if (existingDisks) { return LEGACY; }
         if (template != null && template.containsKey(VmDetailConstants.KVM_Q35_PCIE_TOPOLOGY)) { return resolve(template); }
-        return RESERVED_32;
+        return installingFromIso ? RESERVED_32 : LEGACY;
     }
 }
