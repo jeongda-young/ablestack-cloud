@@ -25,7 +25,8 @@
 #     --job-name 'Agent Backup Job 1' \
 #     --veeam-host 192.168.1.240 \
 #     --veeam-password 'Ablecloud1!' \
-#     --backup-chain-size 10
+#     --incremental-backup true --backup-chain-size 8
+# Use --incremental-backup false without --backup-chain-size for Full backups only.
 #
 set -euo pipefail
 # Passwords often contain '!'; disable history expansion for this script.
@@ -51,15 +52,28 @@ VEEAM_SSH_USER="${VEEAM_SSH_USER:-administrator}"
 # unless VM_AUTO_EXCLUDE=false. --vm-exclude adds to that list (exact or glob, e.g. scvm*).
 VM_EXCLUDE="${VM_EXCLUDE:-}"
 VM_AUTO_EXCLUDE="${VM_AUTO_EXCLUDE:-true}"
-# Mold Global kvm.backup.chain.size (+ host hook VEEAM_MAX_CHAIN). Mold default is 10.
-BACKUP_CHAIN_SIZE="${BACKUP_CHAIN_SIZE:-10}"
+# Mold Global kvm.backup.chain.size (+ host hook VEEAM_MAX_CHAIN). Mold default is 8.
+BACKUP_CHAIN_SIZE="${BACKUP_CHAIN_SIZE:-8}"
+REQUESTED_CHAIN_SIZE=""
+KVM_INCREMENTAL_BACKUP="${KVM_INCREMENTAL_BACKUP:-true}"
 VEEAM_HOST_BACKUP_PATH="${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}"
 VEEAM_AGENT_PAYLOAD_PATH="${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}"
 
 die() { echo "ERROR: $*" >&2; exit 1; }
 
 usage() {
-  sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+  cat <<'EOF'
+Usage: bootstrap-host-veeam-env.sh [options]
+  --api-key KEY --api-secret SECRET   Mold administrator credentials
+  --job-name NAME                    Veeam template Job name
+  --veeam-host HOST                  Veeam server
+  --veeam-password PASSWORD          Veeam credentials
+  --incremental-backup true|false    Default: true; false creates Full backups only
+  --backup-chain-size N              Incremental only; omitted keeps Mold value (product default: 8)
+  --zone-id UUID --mold-url URL       Override discovered Mold settings
+  --kvm-ip IP --kvm-hostname NAME     Override discovered Host settings
+  -h, --help
+EOF
 }
 
 while [[ $# -gt 0 ]]; do
@@ -80,8 +94,10 @@ while [[ $# -gt 0 ]]; do
     --no-auto-exclude) VM_AUTO_EXCLUDE=false; shift ;;
     --backup-chain-size|--max-chain)
       BACKUP_CHAIN_SIZE="$2"
+      REQUESTED_CHAIN_SIZE="$2"
       shift 2
       ;;
+    --incremental-backup) KVM_INCREMENTAL_BACKUP="$2"; shift 2 ;;
     --host-backup-path|--stage-root-path) VEEAM_HOST_BACKUP_PATH="$2"; shift 2 ;;
     --agent-payload-path) VEEAM_AGENT_PAYLOAD_PATH="$2"; shift 2 ;;
     --env-out) ENV_OUT="$2"; shift 2 ;;
@@ -90,8 +106,13 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-[[ "$BACKUP_CHAIN_SIZE" =~ ^[0-9]+$ && "$BACKUP_CHAIN_SIZE" -gt 0 ]] \
+KVM_INCREMENTAL_BACKUP="$(printf '%s' "$KVM_INCREMENTAL_BACKUP" | tr '[:upper:]' '[:lower:]')"
+[[ "$KVM_INCREMENTAL_BACKUP" == true || "$KVM_INCREMENTAL_BACKUP" == false ]] \
+  || die "--incremental-backup must be true or false"
+[[ "$BACKUP_CHAIN_SIZE" =~ ^[1-9][0-9]*$ ]] \
   || die "--backup-chain-size must be a positive integer (got: ${BACKUP_CHAIN_SIZE})"
+[[ "$KVM_INCREMENTAL_BACKUP" == true || -z "$REQUESTED_CHAIN_SIZE" ]] \
+  || die "--backup-chain-size requires --incremental-backup true"
 
 [[ -n "$MOLD_API_KEY" && -n "$MOLD_API_SECRET" ]] \
   || die "Need --api-key and --api-secret (Mold UI → Accounts → API keys for THIS MS)"
@@ -162,6 +183,7 @@ VM_NAME=''
 VM_UUID=''
 
 # Mold Global kvm.backup.chain.size + Job conf VEEAM_MAX_CHAIN (same value)
+KVM_INCREMENTAL_BACKUP='$(_q "${KVM_INCREMENTAL_BACKUP}")'
 BACKUP_CHAIN_SIZE='$(_q "${BACKUP_CHAIN_SIZE}")'
 VEEAM_MAX_CHAIN='$(_q "${BACKUP_CHAIN_SIZE}")'
 MAX_CHAIN='$(_q "${BACKUP_CHAIN_SIZE}")'
@@ -221,6 +243,7 @@ echo "  JOB_NAME=${JOB_NAME}"
 echo "  VM_INCLUDE=* (host-wide running domains)"
 echo "  VM_EXCLUDE=${VM_EXCLUDE:-"(none extra)"} (auto-exclude scvm*/systemVM/router/ablestack-template: ${VM_AUTO_EXCLUDE:-true})"
 echo "  BACKUP_CHAIN_SIZE=${BACKUP_CHAIN_SIZE} (Mold kvm.backup.chain.size + VEEAM_MAX_CHAIN)"
+echo "  KVM_INCREMENTAL_BACKUP=${KVM_INCREMENTAL_BACKUP}"
 echo "  VEEAM=${VEEAM_HOST}"
 echo "  env → ${ENV_OUT}"
 
@@ -253,11 +276,12 @@ cfg_args=(
   --zone-id "$ZONE_ID"
   --vm-include '*'
   --vm-exclude "$VM_EXCLUDE"
-  --backup-chain-size "$BACKUP_CHAIN_SIZE"
+  --incremental-backup "$KVM_INCREMENTAL_BACKUP"
   --kvm-host "$KVM_IP"
   --backup-mode host
   --install
 )
+[[ -n "$REQUESTED_CHAIN_SIZE" ]] && cfg_args+=(--backup-chain-size "$REQUESTED_CHAIN_SIZE")
 [[ -n "${VEEAM_URL:-}" ]] && cfg_args+=(--veeam-url "$VEEAM_URL")
 [[ -n "${VEEAM_USER:-}" ]] && cfg_args+=(--veeam-user "$VEEAM_USER")
 [[ -n "${VEEAM_PASSWORD:-}" ]] && cfg_args+=(--veeam-password "$VEEAM_PASSWORD")

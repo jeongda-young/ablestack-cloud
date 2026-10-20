@@ -23,9 +23,11 @@ import re
 import shlex
 import socket
 import ssl
+import stat
 import subprocess
 import sys
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -99,6 +101,10 @@ def prune_state(state: dict[str, Any]) -> None:
             continue
         if int(processed[job_id].get("timestamp", 0)) < cutoff:
             processed.pop(job_id, None)
+    validation = state.setdefault("restoreValidation", {})
+    for job_id_value in list(validation):
+        if int(validation[job_id_value].get("timestamp", 0)) < cutoff:
+            validation.pop(job_id_value, None)
 
 
 def netbackup_get(path: str, params: Optional[dict[str, str]] = None) -> Any:
@@ -183,25 +189,38 @@ def job_id(job: dict[str, Any]) -> str:
 
 
 def job_state(job: dict[str, Any]) -> str:
-    return get_nested(job, "state", "status", "attributes.state", "attributes.status", "attributes.jobState").lower()
+    return get_nested(job, "attributes.state", "attributes.jobState", "attributes.jobStatus", "state", "jobState", "jobStatus",
+                      "data.attributes.state", "data.attributes.jobState", "data.attributes.jobStatus").strip().lower()
 
 
 def job_status_code(job: dict[str, Any]) -> str:
-    return get_nested(job, "statusCode", "statuscode", "status", "attributes.statusCode", "attributes.statuscode", "attributes.status")
+    # Both 10.5 and 11.1 expose the final exit code separately from the Job state.
+    # Do not infer exit status from words such as SUCCESS, or from a missing value.
+    values = set()
+    for path in ("attributes.status", "attributes.statusCode", "attributes.statuscode", "statusCode", "statuscode", "status",
+                 "data.attributes.status", "data.attributes.statusCode"):
+        value = get_nested(job, path).strip()
+        if re.fullmatch(r"[0-9]+", value):
+            values.add(str(int(value)))
+    return next(iter(values)) if len(values) == 1 else ""
 
 
 def parse_timestamp(value: str) -> Optional[float]:
     value = value.strip()
     if not value:
         return None
-    if value.isdigit():
+    if re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", value):
         timestamp = float(value)
         if timestamp > 9999999999:
             timestamp = timestamp / 1000
         return timestamp
     try:
         normalized = value.replace("Z", "+00:00")
-        return datetime.fromisoformat(normalized).timestamp()
+        normalized = re.sub(r"(\.[0-9]{6})[0-9]+(?=[+-]|$)", r"\1", normalized)
+        parsed = datetime.fromisoformat(normalized)
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
     except ValueError:
         pass
     for pattern in ("%Y-%m-%d %H:%M:%S", "%m/%d/%Y %H:%M:%S", "%Y/%m/%d %H:%M:%S"):
@@ -329,11 +348,136 @@ def is_job_for_local_client(job: dict[str, Any]) -> bool:
 
 
 def is_successful_restore_job(job: dict[str, Any]) -> bool:
+    return restore_job_outcome(job) == "SUCCESS"
+
+
+def restore_job_outcome(job: dict[str, Any]) -> str:
+    """Normalize the Jobs API contract shared by NetBackup 10.5 and 11.1."""
     state = job_state(job)
     status_code = job_status_code(job)
-    if state in {"done", "successful", "success", "completed"}:
-        return status_code in {"", "0", "1"} or "success" in state
-    return status_code == "0" and state not in {"active", "running", "queued", "incomplete", "failed"}
+    if state in {"failed", "failure", "error", "canceled", "cancelled", "aborted"}:
+        return "FAILED"
+    if state in {"active", "running", "queued", "requeued", "suspended", "incomplete"}:
+        return "PENDING"
+    if state not in {"done", "completed", "succeeded", "successful", "success"} or not status_code:
+        return "UNKNOWN"
+    return {"0": "SUCCESS", "1": "PARTIAL"}.get(status_code, "FAILED")
+
+
+def job_api_path(job_id_value: str, suffix: str = "") -> str:
+    if not re.fullmatch(r"[0-9]+", job_id_value):
+        raise ValueError("Invalid NetBackup Job ID")
+    return f"{CONFIG.get('NETBACKUP_JOBS_PATH', '/admin/jobs').rstrip('/')}/{job_id_value}{suffix}"
+
+
+def fetch_restore_job(job_id_value: str) -> dict[str, Any]:
+    jobs = extract_jobs(netbackup_get(job_api_path(job_id_value)))
+    if len(jobs) != 1 or job_id(jobs[0]) != job_id_value:
+        raise ValueError("NetBackup job details do not match the requested restore Job ID")
+    return jobs[0]
+
+
+def job_log_lines(payload: Any) -> list[str]:
+    lines = []
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            # The Jobs try-logs resource returns data.attributes.log. Also handle
+            # a list of attempts without treating IDs or links as error details.
+            if key in {"log", "logs", "message", "errorMessage", "statusMessage", "detailedStatus"}:
+                lines.extend(find_strings(value))
+            elif isinstance(value, (dict, list)):
+                lines.extend(job_log_lines(value))
+    elif isinstance(payload, list):
+        for value in payload:
+            lines.extend(job_log_lines(value))
+    return [line.strip() for line in lines if line.strip()]
+
+
+def fetch_restore_job_details(job_id_value: str) -> list[str]:
+    lines = job_log_lines(netbackup_get(job_api_path(job_id_value, "/try-logs")))
+    if not lines:
+        raise ValueError("NetBackup detailed restore log is unavailable or empty")
+    return lines
+
+
+def review_partial_restore_errors(lines: list[str]) -> None:
+    if any(re.search(r"\bpartially restored\s+[1-9][0-9]*\s+files?\b", line, re.I) for line in lines):
+        raise ValueError("NetBackup reports partially restored file contents")
+    problems = [line for line in lines if re.search(r"\b(err|error|ftl|fatal|wrn|warn|warning)\b|permission denied", line, re.I)]
+    if not problems:
+        raise ValueError("Partial restore has no detailed error explaining status 1")
+    optional = {"dominfo.xml", "domiflist.xml", "domblklist.xml", ".volume-bootstrap"}
+    for line in problems:
+        names = {name.rstrip(".,);]") for name in re.findall(
+            r"(?:^|[/\\\s])([^/\\\s:'\"]+\.[^/\\\s:'\"]+)(?=[\s:'\"]|$)", line)}
+        if names and names.issubset(optional):
+            continue
+        # Attribute-only warnings may be accepted after the actual required files
+        # are checked. Read/write errors or an unexplained warning remain blocked.
+        attribute_warning = re.search(r"(?:set|change|restore|preserve)\s+(?:(?:file|directory|access)\s+)?(?:permissions?|ownership|owner|times?|timestamps?|attributes?|ACL)\b|\b(?:chmod|chown|utime)\b", line, re.I)
+        content_error = re.search(r"checksum|corrupt|truncat|I/O error|no space|cannot (?:open|read|write|create)|failed to (?:open|read|write|create)|partially restored|kept existing|\.(?:qcow2|raw|rbdiff)\b", line, re.I)
+        if not attribute_warning or content_error:
+            raise ValueError("Partial restore contains an unverified content error: " + line)
+
+
+def read_restored_metadata(path: Path, started_at: float) -> str:
+    before = path.lstat()
+    if not stat.S_ISREG(before.st_mode) or before.st_size <= 0 or before.st_size > 16 * 1024 * 1024:
+        raise ValueError("Required restore metadata is missing, empty or not a regular file: " + str(path))
+    # NetBackup preserves backup mtimes; ctime proves that this job touched the file.
+    if before.st_ctime < started_at - 5:
+        raise ValueError("Required metadata predates this restore Job: " + str(path))
+    content = path.read_text(encoding="utf-8")
+    after = path.stat()
+    if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (
+            after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+        raise ValueError("Required metadata is still changing: " + str(path))
+    return content
+
+
+def verify_partial_restore_metadata(job: dict[str, Any], selections: list[str]) -> dict[str, Any]:
+    started_at = parse_timestamp(get_nested(job, "attributes.startTime", "startTime", "attributes.timestamps.startTime"))
+    if started_at is None:
+        raise ValueError("Partial restore Job has no start time to distinguish restored files from stale files")
+    roots = extract_staging_paths_from_strings(selections)
+    if len(roots) != 1:
+        raise ValueError("Partial restore must identify exactly one metadata directory")
+    root = Path(roots[0])
+    stage = Path(CONFIG.get("NETBACKUP_STAGING_ROOT", "/tmp/mold/netbackup")).resolve()
+    if root.resolve() != root or stage not in root.parents or not root.is_dir():
+        raise ValueError("Partial restore metadata directory is unavailable or redirects outside staging")
+    required = [root / name for name in ("backup-manifest.json", "domain-config.xml", ".staging.complete")]
+    normalized = {str(Path(value)) for value in selections if value.startswith("/")}
+    if str(root) not in normalized and not all(str(path) in normalized for path in required):
+        raise ValueError("NetBackup file selection does not include all required restore metadata")
+    texts = [read_restored_metadata(path, started_at) for path in required]
+    manifest = json.loads(texts[0])
+    if (manifest.get("version") != 1 or manifest.get("provider") != "ablestack-netbackup"
+            or manifest.get("complete") is not True or not manifest.get("backupUuid")
+            or manifest.get("vmName") != root.parent.name or manifest.get("timestamp") != root.name):
+        raise ValueError("Restored manifest is incomplete or belongs to a different backup")
+    volumes = manifest.get("volumes")
+    if not isinstance(volumes, list) or not volumes:
+        raise ValueError("Restored manifest has no volume restore plan")
+    ids = set()
+    for volume in volumes:
+        if (not isinstance(volume, dict) or not volume.get("uuid") or volume["uuid"] in ids
+                or volume.get("engine") not in {"QCOW2", "RBD_DIFF"} or not volume.get("chain")):
+            raise ValueError("Restored manifest contains an invalid volume restore plan")
+        ids.add(volume["uuid"])
+        artifact = volume["chain"][-1]
+        if (artifact.get("backupUuid") != manifest["backupUuid"] or Path(artifact.get("path", "")).parent != root
+                or artifact.get("completed") is not True or not artifact.get("externalId") or not artifact.get("jobId")):
+            raise ValueError("Restored manifest has an unconfirmed or mismatched volume artifact")
+    domain = ET.fromstring(texts[1])
+    if domain.tag != "domain" or domain.findtext("name") != manifest["vmName"] or not domain.findtext("uuid"):
+        raise ValueError("Restored domain XML is invalid or belongs to another VM")
+    marker = dict(line.split("=", 1) for line in texts[2].splitlines() if "=" in line)
+    if marker.get("volume_pipeline") != "true" or marker.get("backup_uuid") != manifest["backupUuid"]:
+        raise ValueError("Restored completion marker does not match the manifest")
+    # This UI Job restores metadata only. Mold downloads and verifies every volume
+    # itself; requiring image payloads here would reject valid per-volume backups.
+    return {"root": str(root), "backupUuid": manifest["backupUuid"], "requiredFiles": [str(path) for path in required]}
 
 
 def extract_staging_paths_from_strings(values: list[str]) -> list[str]:
@@ -467,11 +611,10 @@ def mark_existing_jobs_processed(state: dict[str, Any]) -> None:
         current_job_id = job_id(job)
         if not current_job_id or current_job_id in processed:
             continue
-        if not is_successful_restore_job(job):
+        if restore_job_outcome(job) not in {"SUCCESS", "PARTIAL", "FAILED"} and job_state(job) not in {
+                "done", "completed", "succeeded", "successful", "success"}:
             continue
         identifiers = candidate_restore_identifiers(job, current_job_id)
-        if not identifiers:
-            continue
         processed[current_job_id] = {
             "skipped": "initialJobBaseline",
             "externalIds": identifiers,
@@ -486,11 +629,30 @@ def mark_existing_jobs_processed(state: dict[str, Any]) -> None:
 def poll_once(state: dict[str, Any]) -> None:
     jobs = fetch_restore_jobs()
     processed = state.setdefault("processed", {})
+    validations = state.setdefault("restoreValidation", {})
     for job in jobs:
         current_job_id = job_id(job)
         if not current_job_id or current_job_id in processed:
             continue
-        if not is_successful_restore_job(job):
+        job_type = get_nested(job, "attributes.jobType", "jobType").upper()
+        if job_type and job_type != "RESTORE":
+            continue
+        outcome = restore_job_outcome(job)
+        if outcome in {"UNKNOWN", "PARTIAL"}:
+            try:
+                job = fetch_restore_job(current_job_id)
+                outcome = restore_job_outcome(job)
+            except Exception as exc:
+                validations[current_job_id] = {"status": "WAITING_JOB_DETAILS", "reason": str(exc), "timestamp": int(time.time())}
+                log(f"WAITING restore Job details jobId=[{current_job_id}] error=[{exc}]")
+                continue
+        job_type = get_nested(job, "attributes.jobType", "jobType").upper()
+        if job_type and job_type != "RESTORE":
+            continue
+        if outcome in {"PENDING", "UNKNOWN"}:
+            if outcome == "UNKNOWN":
+                validations[current_job_id] = {"status": "UNKNOWN_JOB_STATUS", "reason": "No confirmed terminal state and exit code",
+                                               "timestamp": int(time.time())}
             continue
         if not is_recent_restore_job(job, current_job_id):
             processed[current_job_id] = {
@@ -504,6 +666,33 @@ def poll_once(state: dict[str, Any]) -> None:
                 "timestamp": int(time.time()),
             }
             continue
+        status_code = job_status_code(job)
+        log(f"NetBackup restore completed jobId=[{current_job_id}] state=[{job_state(job)}] statusCode=[{status_code}] outcome=[{outcome}]")
+        if outcome == "FAILED":
+            try:
+                details = fetch_restore_job_details(current_job_id)
+            except Exception as exc:
+                details = [str(exc)]
+            processed[current_job_id] = {"status": "failed", "netbackupState": job_state(job), "netbackupStatusCode": status_code,
+                                         "details": details[-50:], "timestamp": int(time.time())}
+            log(f"FAILED NetBackup restore jobId=[{current_job_id}] statusCode=[{status_code}] details={json.dumps(details[-50:])}")
+            continue
+        validation = None
+        if outcome == "PARTIAL":
+            details = []
+            try:
+                details = fetch_restore_job_details(current_job_id)
+                review_partial_restore_errors(details)
+                selections = fetch_restore_job_file_list(current_job_id)
+                validation = verify_partial_restore_metadata(job, selections)
+                validation.update(status="VERIFIED", netbackupStatusCode="1", details=details[-50:], timestamp=int(time.time()))
+                validations[current_job_id] = validation
+                log(f"VERIFIED partial NetBackup restore jobId=[{current_job_id}] validation={json.dumps(validation, sort_keys=True)}")
+            except Exception as exc:
+                validations[current_job_id] = {"status": "PARTIAL_RESTORE_BLOCKED", "netbackupStatusCode": "1", "reason": str(exc),
+                                               "details": details[-50:], "timestamp": int(time.time())}
+                log(f"BLOCKED partial NetBackup restore jobId=[{current_job_id}] reason=[{exc}] details={json.dumps(details[-50:])}")
+                continue
         identifiers = candidate_restore_identifiers(job, current_job_id)
         if not identifiers:
             continue
@@ -517,14 +706,19 @@ def poll_once(state: dict[str, Any]) -> None:
         local_identifiers = local_existing_restore_identifiers(identifiers)
         if not local_identifiers:
             continue
-        restore_identifier = local_identifiers[0]
+        # A partial Job may submit only the exact metadata directory verified above,
+        # never an unverified catalog ID or a stale directory discovered by proximity.
+        restore_identifier = validation["root"] if validation else local_identifiers[0]
         notification_status = invoke_restore_notify(restore_identifier, current_job_id)
         if notification_status:
             processed[current_job_id] = {
                 "externalId": restore_identifier,
                 "status": notification_status,
+                "netbackupStatusCode": status_code,
+                "validation": validation,
                 "timestamp": int(time.time()),
             }
+            validations.pop(current_job_id, None)
 
 
 def acquire_process_lock() -> Optional[Any]:

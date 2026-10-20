@@ -33,7 +33,9 @@ VEEAM_JOB_NAME=""
 VEEAM_SCHEDULE_NAME="default"
 # Mold UI interval type for Veeam Job triggers (not a Mold schedule).
 VEEAM_BACKUP_INTERVAL_TYPE="EXTERNAL"
-VEEAM_MAX_CHAIN="7"
+VEEAM_MAX_CHAIN="8"
+# Initial provisioning choice; runtime backups follow Mold configuration.
+KVM_INCREMENTAL_BACKUP="true"
 ZONE_ID=""
 RETENTION_PERIOD="P7D"
 

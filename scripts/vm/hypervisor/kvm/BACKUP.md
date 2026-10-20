@@ -188,14 +188,22 @@ QCOW2는 이전 백업 체인의 스테이징 호스트와 달라지면 새 Full
      --admin-secretkey "<Mold 관리자 secret key>" \
      --netbackup-url "<NetBackup REST API 주소>" \
      --netbackup-apikey "<NetBackup API key>" \
-     --backup-chain-size 10
+     --incremental-backup true \
+     --backup-chain-size 8
    ```
 
    `--vm-include`는 여러 VM을 쉼표로 지정할 수 있으며, 미지정 시 `*`를 사용한다.
+   `--incremental-backup`은 `true` 또는 `false`를 받으며 기본값은 `true`다.
+   `true`이면 최초 Full 이후 정상 부모와 체인 길이 조건을 충족할 때 증분으로 이어간다.
+   `--backup-chain-size`는 이때만 지정할 수 있으며, 생략하면 기존 전역값을 유지한다. 제품 기본값은 `8`이다.
+   매번 독립 Full 백업을 생성하려면 `--incremental-backup false`를 사용하고 `--backup-chain-size`는 제외한다.
+   Full 모드는 이전 백업 체인·부모 체크포인트를 사용하지 않으며, 기존 백업의 복원 체인은 유지한다.
    VM의 표시 이름과 Host에서 사용하는 `i-...-VM` 인스턴스 이름을 구분하여 입력한다.
    실제 키를 명령행에 입력할 때는 Shell history와 명령행 접근 권한을 관리한다.
 6. 스크립트는 Mold의 Zone·Cluster 설정을 확인하고 NetBackup 오퍼링을 등록한다.
-   현재 스크립트는 해당 Cluster의 `kvm.incremental.backup`을 `true`로 설정한다.
+   `kvm.incremental.backup`의 전역 기본값과 해당 Cluster 값을 선택한 값으로 설정한다.
+   다른 Cluster의 개별 설정은 유지되며, 개별 설정이 없는 Cluster는 전역 기본값을 따른다.
+   `kvm.backup.chain.size`는 여러 백업 공급자가 공유하는 전역값이다.
    관리 서버 재기동 안내와 함께 중단되면 Mold를 재기동하고 같은 명령을 다시 실행한다.
 7. 사전·사후 백업 스크립트, 암호화된 Mold 인증정보와 복원 감시 서비스를 Host에 구성한다.
    신규 Host 키는 자동 준비하지만 Mold API key 자체를 발급하는 기능은 아니므로 3번의 키는 필요하다.
@@ -254,7 +262,7 @@ QCOW2는 이전 백업 체인의 스테이징 호스트와 달라지면 새 Full
 - **Full**: 해당 백업 시점의 볼륨 전체 데이터를 보관한다. 최초 백업은 Full로 시작한다.
 - **증분**: 이전 정상 백업 이후 변경된 데이터만 보관한다. 복원 시 기준 Full과 필요한 이전 증분 백업도 사용한다.
 - `kvm.incremental.backup`: VM이 속한 Cluster의 증분 백업 사용 여부이다.
-- `kvm.backup.chain.size`: Full과 후속 증분이 연결된 백업 체인의 길이 상한이다. 기본값은 `10`이다.
+- `kvm.backup.chain.size`: Full과 후속 증분이 연결된 백업 체인의 길이 상한이다. 기본값은 `8`이다.
 
 Mold가 이전 성공 백업과 설정을 확인하여 Full 또는 증분을 선택한다.
 증분 기능을 켰다고 모든 요청이 증분이 되는 것은 아니며,
@@ -1110,6 +1118,18 @@ RBD·QCOW2 모두 같은 서비스를 통해 메타데이터 복원 완료를 Mo
 - 감시 설정은 `/etc/ablestack/netbackup/restore-watcher.conf`,
   Mold 복원 요청 설정은 `/etc/ablestack/netbackup/restore.conf`이다.
 - 감시 주기는 `restore-watcher.conf`의 `POLL_INTERVAL_SECONDS`로 조정한다. 기본값은 `60`이다.
+- NetBackup 10.5·11.1에서 사용하는 Jobs API의 실행 상태와 종료 코드를 분리해서 판단한다.
+  종료된 Job의 코드 `0`만 정상 성공이며, `1`은 부분 성공, 그 외 종료 오류는 실패로 기록한다.
+  실행·대기·중단 상태와 종료 코드가 확인되지 않은 응답으로는 Mold 복원을 시작하지 않는다.
+- 부분 성공은 해당 Job의 상세 정보·`try-logs`·파일 선택 목록을 확인한다.
+  데이터 읽기·쓰기 오류, 이미지 파일 오류, 설명할 수 없는 오류 또는 로그 조회 실패가 있으면 자동 복원을 보류한다.
+  파일 권한·소유권·시각 속성 경고와 필수 항목이 아닌 진단 파일 오류만 조건부로 허용한다.
+  볼륨별 백업의 필수 메타데이터인 `backup-manifest.json`, `domain-config.xml`, `.staging.complete`가
+  이번 Job에서 복원된 정상 파일인지 확인하고 백업 UUID·VM·시점·볼륨 계획·완료 마커를 대조한 뒤 연결한다.
+  실제 볼륨 파일은 이후 Mold가 외부 저장소에서 순서대로 복원하므로 이 단계에서 로컬에 있을 필요는 없다.
+  기존 디렉터리 백업 등 필수 메타데이터를 입증할 수 없는 부분 성공은 자동 연결하지 않는다.
+- 부분 성공의 상세 오류와 보류 사유는 감시 로그와 `restore-watcher-state.json`의 `restoreValidation`에 기록한다.
+  조회·파일 검증이 보류된 Job은 다음 감시 주기에 다시 확인한다. 이미 처리한 Job은 중복 요청하지 않는다.
 - NetBackup Client의 `netbackup` 서비스는 별도이다. 구성 스크립트는 Client를 설치하지 않으며,
   기존 `bp.conf`를 갱신한 경우 Client 서비스를 재시작한다.
 
@@ -1217,5 +1237,12 @@ Host의 `/root/.ssh/ablestack.key`는 API secret을 보호하는 암호화 키�
 Host 설치 경로는 기본 `/etc/ablestack/veeam`이다.
 Mold API key와 secret을 준비한 뒤 구성 도구의 `--help`와 운영 환경의 conf/env 설정을 확인하여 적용한다.
 신규 구성은 API secret을 암호화 파일에 저장하고 설정 파일에는 해당 파일의 경로를 기록한다.
+`bootstrap-host-veeam-env.sh`와 `veeam_config.sh`는 `--incremental-backup true|false`를 받으며 기본값은 `true`다.
+NetBackup과 같이 `kvm.incremental.backup`의 전역 기본값과 대상 Host의 Cluster 설정을 선택한 값으로 변경한다.
+`false`는 매번 독립 Full을 생성하며, `true`는 최초 Full 이후 정상 체인을 증분으로 이어간다.
+`--backup-chain-size 8` 또는 별칭 `--max-chain 8`은 `true`일 때만 지정할 수 있다.
+생략하면 기존 `kvm.backup.chain.size`를 유지하며, 제품 기본값은 `8`이다.
+증분 활성화 설정이 변경되어 재기동 안내와 함께 중단되면 Mold 관리 서버를 재기동하고 같은 명령을 다시 실행한다.
+구성 파일의 모드 값은 사전 구성에 사용한다. 매 백업의 Pre 스크립트는 모드·체인 설정을 덮어쓰지 않고 Mold Provider의 판단을 따른다.
 Veeam 기준 Job의 Pre/Post에는 설치한 사전·사후 스크립트 경로를 지정한다.
 스테이징 경로는 Mold의 공통 글로벌 설정을 사용한다.

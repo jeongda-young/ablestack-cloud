@@ -31,7 +31,9 @@ JOB_NAME=""
 BACKUP_OFFERING_NAME="VeeamBackup"
 VM_INCLUDE=""
 VM_EXCLUDE=""
-MAX_CHAIN="10"
+MAX_CHAIN="8"
+REQUESTED_CHAIN_SIZE=""
+KVM_INCREMENTAL_BACKUP=""
 MOLD_API_URL=""
 MOLD_API_KEY=""
 MOLD_API_SECRET=""
@@ -102,7 +104,8 @@ Other optional:
   --vm-exclude LIST       Extra libvirt names/globs to skip (auto-exclude still applies)
   --vm-name NAME          libvirt name (mold-backup.sh status 등)
   --vm-uuid UUID          Mold VM UUID
-  --max-chain N           Max incremental chain (default: 10; also sets Mold kvm.backup.chain.size)
+  --incremental-backup B   true|false (default: true); false creates Full backups only
+  --max-chain N           Incremental chain limit (product default: 8; omitted keeps Mold value)
   --backup-chain-size N   Alias of --max-chain (Mold Global kvm.backup.chain.size)
   --retention PERIOD      Backup offering retention (default: P7D)
   --backup-mode MODE      host|api|local|auto (default: host = Mold-managed common staging)
@@ -137,7 +140,8 @@ Example (explicit):
     --api-key KEY --api-secret 'SECRET' \
     --zone-id <zone-uuid> \
     --vm-include "i-2-3-VM,i-2-7-VM" \
-    --max-chain 10 \
+    --incremental-backup true \
+    --max-chain 8 \
     --veeam-url https://veeam:9398/api/ \
     --kvm-host 10.10.31.30 \
     --install
@@ -201,6 +205,7 @@ veeam_config_import_env_file() {
       MAX_CHAIN) [[ -n "$val" ]] && MAX_CHAIN="$val" ;;
       VEEAM_MAX_CHAIN) [[ -n "$val" ]] && MAX_CHAIN="$val" ;;
       BACKUP_CHAIN_SIZE) [[ -n "$val" ]] && MAX_CHAIN="$val" ;;
+      KVM_INCREMENTAL_BACKUP) veeam_set_if_empty KVM_INCREMENTAL_BACKUP "$val" ;;
       RETENTION_PERIOD) [[ -n "$val" ]] && RETENTION_PERIOD="$val" ;;
       BACKUP_MODE) veeam_set_if_empty BACKUP_MODE "$val" ;;
       IMPORT_MODE) [[ -n "$val" ]] && IMPORT_MODE="$val" ;;
@@ -244,6 +249,7 @@ veeam_config_load_from_conf() {
   veeam_set_if_empty VM_NAME_CFG "$(veeam_config_read_conf_var "$file" VM_NAME || true)"
   veeam_set_if_empty VM_UUID_CFG "$(veeam_config_read_conf_var "$file" VM_UUID || true)"
   veeam_set_if_empty MAX_CHAIN "$(veeam_config_read_conf_var "$file" VEEAM_MAX_CHAIN || true)"
+  veeam_set_if_empty KVM_INCREMENTAL_BACKUP "$(veeam_config_read_conf_var "$file" KVM_INCREMENTAL_BACKUP || true)"
   veeam_set_if_empty RETENTION_PERIOD "$(veeam_config_read_conf_var "$file" RETENTION_PERIOD || true)"
   veeam_set_if_empty VEEAM_URL "$(veeam_config_read_conf_var "$file" VEEAM_URL || true)"
   veeam_set_if_empty VEEAM_USERNAME "$(veeam_config_read_conf_var "$file" VEEAM_USERNAME || true)"
@@ -283,6 +289,17 @@ veeam_config_resolve_api_secret() {
   MOLD_API_SECRET="$("$SECRET_SCRIPT" decrypt --enc-file "$enc" --key-file "$key" 2>/dev/null || true)"
 }
 
+veeam_config_validate_backup_mode() {
+  KVM_INCREMENTAL_BACKUP="$(printf '%s' "${KVM_INCREMENTAL_BACKUP:-true}" | tr '[:upper:]' '[:lower:]')"
+  [[ "$KVM_INCREMENTAL_BACKUP" == true || "$KVM_INCREMENTAL_BACKUP" == false ]] \
+    || die "--incremental-backup must be true or false"
+  if [[ -n "$REQUESTED_CHAIN_SIZE" ]]; then
+    [[ "$REQUESTED_CHAIN_SIZE" =~ ^[1-9][0-9]*$ ]] || die "--backup-chain-size must be a positive integer"
+    [[ "$KVM_INCREMENTAL_BACKUP" == true ]] || die "--backup-chain-size requires --incremental-backup true"
+    MAX_CHAIN="$REQUESTED_CHAIN_SIZE"
+  fi
+}
+
 veeam_config_autofill_defaults() {
   local env_path conf_path safe_job f
 
@@ -311,6 +328,7 @@ veeam_config_autofill_defaults() {
     done
   fi
 
+  veeam_config_validate_backup_mode
   veeam_config_resolve_api_secret
   veeam_config_auto_mold_url
   [[ -n "$KVM_HOST" ]] || KVM_HOST="$(hostname -I 2>/dev/null | awk '{print $1}')"
@@ -351,7 +369,8 @@ while [[ $# -gt 0 ]]; do
     --vm-exclude) VM_EXCLUDE="$2"; shift 2 ;;
     --vm-name) VM_NAME_CFG="$2"; shift 2 ;;
     --vm-uuid) VM_UUID_CFG="$2"; shift 2 ;;
-    --max-chain|--backup-chain-size) MAX_CHAIN="$2"; shift 2 ;;
+    --incremental-backup) KVM_INCREMENTAL_BACKUP="$2"; shift 2 ;;
+    --max-chain|--backup-chain-size) REQUESTED_CHAIN_SIZE="$2"; MAX_CHAIN="$2"; shift 2 ;;
     --mold-url) MOLD_API_URL="$2"; shift 2 ;;
     --api-key) MOLD_API_KEY="$2"; shift 2 ;;
     --api-secret) MOLD_API_SECRET="$2"; shift 2 ;;
@@ -458,6 +477,7 @@ BACKUP_OFFERING_NAME="${BACKUP_OFFERING_NAME}"
 VEEAM_SCHEDULE_NAME="default"
 VEEAM_BACKUP_INTERVAL_TYPE="EXTERNAL"
 VEEAM_MAX_CHAIN="${MAX_CHAIN}"
+KVM_INCREMENTAL_BACKUP="${KVM_INCREMENTAL_BACKUP}"
 ZONE_ID="${ZONE_ID}"
 RETENTION_PERIOD="${RETENTION_PERIOD}"
 
@@ -473,6 +493,7 @@ VEEAM_SSH_USER="${VEEAM_SSH_USER}"
 VEEAM_SSH_KEY="${VEEAM_SSH_KEY}"
 RESTORE_SOURCE="auto"
 KVM_HOSTNAME="${KVM_HOSTNAME:-}"
+KVM_HOST="${KVM_HOST}"
 RESTORE_WATCH_TRIGGER_MOLD="${RESTORE_WATCH_TRIGGER_MOLD:-true}"
 VEEAM_UI_RESTORE_SOURCE="${VEEAM_UI_RESTORE_SOURCE:-mold-only}"
 RESTORE_LOCK_DIR="${RESTORE_LOCK_DIR:-}"
@@ -583,12 +604,16 @@ if [[ "$CONFIGURE_MOLD" == "true" ]]; then
   export MOLD_BACKUP_CONF="$CONF"
   export VEEAM_JOB_NAME="$JOB_NAME"
   export VEEAM_MAX_CHAIN="$MAX_CHAIN"
-  export BACKUP_CHAIN_SIZE="$MAX_CHAIN"
   export VEEAM_HOST_BACKUP_PATH="${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}"
   export STAGING_PATH="${VEEAM_HOST_BACKUP_PATH}"
   mold_backup_load_config || true
   if mold_backup_cmk_bin >/dev/null 2>&1 || command -v curl >/dev/null 2>&1; then
     mold_backup_api_ensure_global_settings || true
+    mold_backup_api_configure_backup_mode "$KVM_INCREMENTAL_BACKUP" "$REQUESTED_CHAIN_SIZE" \
+      || die "Failed to configure Mold backup mode; check Host registration and administrator API permissions"
+    if [[ "${MOLD_BACKUP_MODE_RESTART_REQUIRED:-false}" == true ]]; then
+      die "Updated non-dynamic kvm.incremental.backup. Restart the Mold management server, then run this script again."
+    fi
     # Host/datadisk: importBackupOffering(provider=ablestack-veeam, externalid=veeam). No NAS repo.
     if mold_backup_api_ensure_backup_resources >/dev/null; then
       mold_backup_notify_log info "Mold backup offering registered (or already present)"

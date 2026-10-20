@@ -231,7 +231,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
                 && ThirdPartyBackupManifest.canContinue(latestBackup, getName(), vm.getInstanceName(),
                         areAllVolumesOnRbdPool(volumePoolsAndPaths.first()) ? BACKUP_ENGINE_RBD_DIFF : BACKUP_ENGINE_QCOW2, vmVolumes);
         final String policyName = getBackupDetail(latestBackup, DETAIL_POLICY_NAME);
-        BackupExecutionResult result = executeBackup(vm, quiesceVM, host, vmVolumes, volumePoolsAndPaths, latestBackup,
+        BackupExecutionResult result = executeBackup(vm, quiesceVM, host, vmVolumes, volumePoolsAndPaths, incrementalBackup ? latestBackup : null,
                 incrementalBackup, policyName);
         Backup failedIncrementalBackup = null;
         if (!result.success && incrementalBackup) {
@@ -275,11 +275,12 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         final Pair<List<PrimaryDataStoreTO>, List<String>> volumePoolsAndPaths = getVolumePoolsAndPaths(vmVolumes);
         validateVolumePoolTypes(volumePoolsAndPaths.first());
 
-        final BackupVO latestBackup = getLatestBackedUpBackup(vm, backupScheduleId);
+        // Full-only mode must not depend on any previous chain, checkpoint or catalog artifact.
+        final BackupVO latestBackup = isIncrementalBackupEnabled(vm) ? getLatestBackedUpBackup(vm, backupScheduleId) : null;
         final boolean incrementalBackup = shouldUseIncrementalBackupForNetBackup(vm, latestBackup)
                 && ThirdPartyBackupManifest.canContinue(latestBackup, getName(), vm.getInstanceName(),
                         areAllVolumesOnRbdPool(volumePoolsAndPaths.first()) ? BACKUP_ENGINE_RBD_DIFF : BACKUP_ENGINE_QCOW2, vmVolumes);
-        BackupExecutionResult result = executeBackup(vm, null, host, vmVolumes, volumePoolsAndPaths, latestBackup,
+        BackupExecutionResult result = executeBackup(vm, null, host, vmVolumes, volumePoolsAndPaths, incrementalBackup ? latestBackup : null,
                 incrementalBackup, policyName);
         Backup failedIncrementalBackup = null;
         if (!result.success && incrementalBackup) {
@@ -387,7 +388,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
     }
 
     private boolean shouldUseIncrementalBackup(final VirtualMachine vm, final Backup latestBackup, final Long backupScheduleId) {
-        if (latestBackup == null) {
+        if (latestBackup == null || !isIncrementalBackupEnabled(vm)) {
             return false;
         }
         loadBackupDetailsIfNeeded(latestBackup);
@@ -396,11 +397,6 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         }
 
         if (backupScheduleId != null && !hasBackedUpBackupForSchedule(backupScheduleId)) {
-            return false;
-        }
-
-        final Long clusterId = getClusterIdFromRootVolume(vm);
-        if (clusterId == null || !KvmIncrementalBackup.valueIn(clusterId)) {
             return false;
         }
 
@@ -417,7 +413,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
     }
 
     private boolean shouldUseIncrementalBackupForNetBackup(final VirtualMachine vm, final Backup latestBackup) {
-        if (latestBackup == null) {
+        if (latestBackup == null || !isIncrementalBackupEnabled(vm)) {
             return false;
         }
         loadBackupDetailsIfNeeded(latestBackup);
@@ -429,16 +425,21 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
             return false;
         }
 
-        final Long clusterId = getClusterIdFromRootVolume(vm);
-        if (clusterId == null || !KvmIncrementalBackup.valueIn(clusterId)) {
-            return false;
-        }
-
         if (!hasHealthyIncrementalSource(latestBackup)) {
             return false;
         }
 
         return getBackupChainSize(vm, latestBackup) < KvmBackupChainSize.value();
+    }
+
+    private boolean isIncrementalBackupEnabled(final VirtualMachine vm) {
+        final Long clusterId = getClusterIdFromRootVolume(vm);
+        final boolean enabled = clusterId != null && KvmIncrementalBackup.valueIn(clusterId);
+        if (!enabled) {
+            LOG.info("NetBackup backup for VM [{}] will be FULL: kvm.incremental.backup is disabled or Cluster is unavailable [{}]",
+                    vm.getInstanceName(), clusterId);
+        }
+        return enabled;
     }
 
     private boolean hasHealthyIncrementalSource(final Backup latestBackup) {

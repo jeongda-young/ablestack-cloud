@@ -283,12 +283,13 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
         final Pair<List<PrimaryDataStoreTO>, List<String>> volumePoolsAndPaths = getVolumePoolsAndPaths(vmVolumes);
         validateVolumePoolTypes(volumePoolsAndPaths.first());
 
-        final BackupVO latestBackup = getLatestBackedUpBackup(vm);
+        final BackupVO latestBackup = isIncrementalBackupEnabled(vm) || StringUtils.isBlank(veeamJobName)
+                ? getLatestBackedUpBackup(vm) : null;
         final boolean incrementalBackup = shouldUseIncrementalBackup(vm, latestBackup, backupScheduleId)
                 && ThirdPartyBackupManifest.canContinue(latestBackup, getName(), vm.getInstanceName(),
                         areAllVolumesOnRbdPool(volumePoolsAndPaths.first()) ? BACKUP_ENGINE_RBD_DIFF : BACKUP_ENGINE_QCOW2, vmVolumes);
         final String resolvedJobName = resolveVeeamJobName(veeamJobName, latestBackup);
-        BackupExecutionResult result = executeBackup(vm, quiesceVM, host, vmVolumes, volumePoolsAndPaths, latestBackup,
+        BackupExecutionResult result = executeBackup(vm, quiesceVM, host, vmVolumes, volumePoolsAndPaths, incrementalBackup ? latestBackup : null,
                 incrementalBackup, resolvedJobName);
         Backup failedIncrementalBackup = null;
         if (!result.success && incrementalBackup) {
@@ -405,6 +406,9 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     }
 
     private boolean shouldUseIncrementalBackup(final VirtualMachine vm, final Backup latestBackup, final Long backupScheduleId) {
+        if (!isIncrementalBackupEnabled(vm)) {
+            return false;
+        }
         if (latestBackup == null) {
             LOG.info("Veeam backup for VM [{}] will be FULL: no previous BackedUp backup", vm.getInstanceName());
             return false;
@@ -422,17 +426,6 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
 
         if (backupScheduleId != null && !hasBackedUpBackupForSchedule(backupScheduleId)) {
             LOG.info("Veeam backup for VM [{}] will be FULL: first backup for schedule [{}]", vm.getInstanceName(), backupScheduleId);
-            return false;
-        }
-
-        final Long clusterId = getClusterIdFromRootVolume(vm);
-        if (clusterId == null) {
-            LOG.info("Veeam backup for VM [{}] will be FULL: cluster id unresolved from root volume", vm.getInstanceName());
-            return false;
-        }
-        if (!Boolean.TRUE.equals(KvmIncrementalBackup.valueIn(clusterId))) {
-            LOG.info("Veeam backup for VM [{}] will be FULL: kvm.incremental.backup is not enabled on cluster [{}]",
-                    vm.getInstanceName(), clusterId);
             return false;
         }
 
@@ -457,7 +450,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     }
 
     private boolean shouldUseIncrementalBackupForVeeam(final VirtualMachine vm, final Backup latestBackup) {
-        if (latestBackup == null) {
+        if (!isIncrementalBackupEnabled(vm) || latestBackup == null) {
             return false;
         }
         loadBackupDetailsIfNeeded(latestBackup);
@@ -469,14 +462,6 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             return false;
         }
 
-        final Long clusterId = getClusterIdFromRootVolume(vm);
-        if (clusterId == null) {
-            return false;
-        }
-        if (!Boolean.TRUE.equals(KvmIncrementalBackup.valueIn(clusterId))) {
-            return false;
-        }
-
         if (!hasHealthyIncrementalSource(latestBackup)) {
             return false;
         }
@@ -485,6 +470,16 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             return false;
         }
         return true;
+    }
+
+    private boolean isIncrementalBackupEnabled(final VirtualMachine vm) {
+        final Long clusterId = getClusterIdFromRootVolume(vm);
+        final boolean enabled = clusterId != null && Boolean.TRUE.equals(KvmIncrementalBackup.valueIn(clusterId));
+        if (!enabled) {
+            LOG.info("Veeam backup for VM [{}] will be FULL: kvm.incremental.backup is disabled or Cluster is unavailable [{}]",
+                    vm.getInstanceName(), clusterId);
+        }
+        return enabled;
     }
 
     private boolean hasHealthyIncrementalSource(final Backup latestBackup) {

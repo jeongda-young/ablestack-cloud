@@ -1551,42 +1551,7 @@ except Exception:
   echo "$val"
 }
 
-mold_backup_api_update_cluster_config_if_needed() {
-  local name="$1" value="$2" cluster_id="$3"
-  local current
-  [[ -n "$cluster_id" ]] || return 0
-  current="$(mold_backup_api_list_cluster_config_value "$name" "$cluster_id" 2>/dev/null || true)"
-  [[ "$current" == "$value" ]] && return 0
-  mold_backup_cmk_run updateConfiguration "name=${name}" "value=${value}" "clusterid=${cluster_id}" >/dev/null \
-    && mold_backup_notify_log info "Enabled ${name}=${value} for cluster ${cluster_id}" \
-    || mold_backup_notify_log warn "updateConfiguration ${name} clusterid=${cluster_id} failed (admin API key required)"
-}
-
-# kvm.incremental.backup defaults to false at cluster scope — MS always chooses FULL without this.
-mold_backup_api_ensure_cluster_incremental_backup() {
-  local json cluster_id
-  [[ -n "${ZONE_ID:-}" ]] || return 0
-  json=$(mold_backup_cmk_run listClusters "zoneid=${ZONE_ID}" 2>/dev/null) || return 0
-  while IFS= read -r cluster_id; do
-    [[ -z "$cluster_id" ]] && continue
-    mold_backup_api_update_cluster_config_if_needed "kvm.incremental.backup" "true" "$cluster_id"
-  done < <(printf '%s\n' "$json" | python3 -c "
-import json, sys
-try:
-    d = json.load(sys.stdin)
-    cs = d.get('listclustersresponse', {}).get('cluster', [])
-    if isinstance(cs, dict): cs = [cs]
-    for c in cs:
-        cid = c.get('id')
-        if cid:
-            print(cid)
-except Exception:
-    pass
-" 2>/dev/null)
-}
-
 mold_backup_api_ensure_global_settings() {
-  local chain_size
   mold_backup_api_update_config_if_needed "backup.framework.enabled" "true"
   mold_backup_api_update_config_if_needed "backup.enable.attach.detach.of.volumes" "true"
   # Append ablestack-veeam; do not wipe existing providers (dummy,nas,netbackup,...).
@@ -1594,12 +1559,60 @@ mold_backup_api_ensure_global_settings() {
   [[ -n "${VEEAM_URL:-}" ]] && mold_backup_api_update_config_if_needed "backup.plugin.ablestack-veeam.url" "${VEEAM_URL}"
   [[ -n "${VEEAM_USERNAME:-}" ]] && mold_backup_api_update_config_if_needed "backup.plugin.ablestack-veeam.username" "${VEEAM_USERNAME}"
   [[ -n "${VEEAM_PASSWORD:-}" ]] && mold_backup_api_update_config_if_needed "backup.plugin.ablestack-veeam.password" "${VEEAM_PASSWORD}"
-  # Align Mold FULL↔incremental switch with host hook VEEAM_MAX_CHAIN when set.
-  chain_size="${BACKUP_CHAIN_SIZE:-${VEEAM_MAX_CHAIN:-}}"
-  if [[ -n "$chain_size" && "$chain_size" =~ ^[0-9]+$ && "$chain_size" -gt 0 ]]; then
-    mold_backup_api_update_config_if_needed "kvm.backup.chain.size" "$chain_size"
+  # This also runs from pre-notify. Backup mode and chain limits are configured only
+  # by veeam_config.sh; runtime must retain the current Mold administrator settings.
+  return 0
+}
+
+mold_backup_api_backup_host_cluster() {
+  local json selector
+  selector="${KVM_HOST:-${KVM_HOSTNAME:-$(hostname -s)}}"
+  selector="${selector#*@}"
+  json=$(mold_backup_cmk_run listHosts "type=Routing" "zoneid=${ZONE_ID}" "pagesize=500" "page=1") || return 1
+  printf '%s\n' "$json" | python3 -c '
+import json, sys
+hosts = json.load(sys.stdin).get("listhostsresponse", {}).get("host", [])
+if isinstance(hosts, dict):
+    hosts = [hosts]
+selector = sys.argv[1].lower()
+matches = [host for host in hosts if selector in (str(host.get("name", "")).lower(), str(host.get("ipaddress", "")).lower())]
+if len(matches) != 1 or not matches[0].get("clusterid"):
+    sys.exit("Cannot resolve a unique Mold Host and Cluster for " + selector)
+print(matches[0]["clusterid"])
+' "$selector"
+}
+
+# Provisioning only. Never reset these settings from a backup pre-notify hook.
+mold_backup_api_configure_backup_mode() {
+  local incremental="$1" chain_size="${2:-}" cluster_id scope current
+  local -a params
+  [[ "$incremental" == true || "$incremental" == false ]] || return 1
+  if [[ -n "$chain_size" ]]; then
+    [[ "$incremental" == true && "$chain_size" =~ ^[1-9][0-9]*$ ]] || return 1
   fi
-  mold_backup_api_ensure_cluster_incremental_backup
+  cluster_id="$(mold_backup_api_backup_host_cluster)" || return 1
+  MOLD_BACKUP_MODE_RESTART_REQUIRED=false
+  for scope in global cluster; do
+    params=("name=kvm.incremental.backup" "value=${incremental}")
+    if [[ "$scope" == cluster ]]; then
+      params+=("clusterid=${cluster_id}")
+      current="$(mold_backup_api_list_cluster_config_value kvm.incremental.backup "$cluster_id")" || return 1
+    else
+      current="$(mold_backup_api_list_config_value kvm.incremental.backup)" || return 1
+    fi
+    if [[ "$current" != "$incremental" ]]; then
+      mold_backup_cmk_run updateConfiguration "${params[@]}" >/dev/null || return 1
+      MOLD_BACKUP_MODE_RESTART_REQUIRED=true
+      mold_backup_notify_log info "Updated ${scope} kvm.incremental.backup=${incremental}"
+    fi
+  done
+  if [[ -n "$chain_size" ]]; then
+    current="$(mold_backup_api_list_config_value kvm.backup.chain.size)" || return 1
+    if [[ "$current" != "$chain_size" ]]; then
+      mold_backup_cmk_run updateConfiguration "name=kvm.backup.chain.size" "value=${chain_size}" >/dev/null || return 1
+    fi
+  fi
+  return 0
 }
 
 mold_backup_api_extract_error() {
@@ -2635,7 +2648,7 @@ except Exception:
 mold_backup_api_check_vm_environment() {
   local vm_id="$1" vm_name="$2"
   local json chain_size max_chain offering_id
-  max_chain="${VEEAM_MAX_CHAIN:-${BACKUP_CHAIN_SIZE:-10}}"
+  max_chain="${VEEAM_MAX_CHAIN:-${BACKUP_CHAIN_SIZE:-8}}"
   json=$(mold_backup_cmk_run listAblestackVeeamBackups "virtualmachineid=${vm_id}" 2>/dev/null) || {
     mold_backup_notify_log info "env vm=${vm_name} id=${vm_id} chain=0 max=${max_chain} (no BackedUp backups)"
     return 0

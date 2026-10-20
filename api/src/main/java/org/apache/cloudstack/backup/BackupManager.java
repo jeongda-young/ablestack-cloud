@@ -245,7 +245,7 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
     ConfigKey<Integer> KvmBackupChainSize = new ConfigKey<>(Integer.class,
             "kvm.backup.chain.size",
             "Advanced",
-            "10",
+            "8",
             "Max incremental backup chain size before switching back to a full backup for KVM backup providers.",
             true,
             ConfigKey.Scope.Global,

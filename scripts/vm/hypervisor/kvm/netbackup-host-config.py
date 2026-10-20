@@ -286,15 +286,25 @@ def ensure_backup_framework_configuration(zone_id: str, cluster_id: str, args: a
         print(f"Updated zone configuration: backup.framework.enabled=true (zoneid={zone_id})")
         restart_required = True
 
-    log_info("Checking cluster configuration: kvm.incremental.backup")
-    current = get_configuration_value("kvm.incremental.backup", args.mold_url, args.admin_apikey, args.admin_secretkey, cluster_id=cluster_id)
-    if current.lower() != "true":
-        log_info("Updating cluster configuration: kvm.incremental.backup=true")
-        update_configuration_value("kvm.incremental.backup", "true", args.mold_url, args.admin_apikey, args.admin_secretkey, cluster_id=cluster_id)
-        print(f"Updated cluster configuration: kvm.incremental.backup=true (clusterid={cluster_id})")
+    desired_incremental = str(args.incremental_backup).lower()
+    log_info("Checking global configuration: kvm.incremental.backup")
+    current = get_configuration_value("kvm.incremental.backup", args.mold_url, args.admin_apikey, args.admin_secretkey)
+    if current.lower() != desired_incremental:
+        log_info(f"Updating global configuration: kvm.incremental.backup={desired_incremental}")
+        update_configuration_value("kvm.incremental.backup", desired_incremental, args.mold_url, args.admin_apikey, args.admin_secretkey)
+        print(f"Updated global configuration: kvm.incremental.backup={desired_incremental}")
         restart_required = True
 
-    if args.backup_chain_size is not None:
+    log_info("Checking cluster configuration: kvm.incremental.backup")
+    current = get_configuration_value("kvm.incremental.backup", args.mold_url, args.admin_apikey, args.admin_secretkey, cluster_id=cluster_id)
+    if current.lower() != desired_incremental:
+        log_info(f"Updating cluster configuration: kvm.incremental.backup={desired_incremental}")
+        update_configuration_value("kvm.incremental.backup", desired_incremental, args.mold_url, args.admin_apikey, args.admin_secretkey, cluster_id=cluster_id)
+        print(f"Updated cluster configuration: kvm.incremental.backup={desired_incremental} (clusterid={cluster_id})")
+        restart_required = True
+
+    log_info("Backup mode: incremental chains" if args.incremental_backup else "Backup mode: Full only")
+    if args.incremental_backup and args.backup_chain_size is not None:
         desired_chain_size = str(args.backup_chain_size)
         log_info("Checking global configuration: kvm.backup.chain.size")
         current = get_configuration_value("kvm.backup.chain.size", args.mold_url, args.admin_apikey, args.admin_secretkey)
@@ -800,13 +810,21 @@ def generate_host_outputs(zone_id: str, args: argparse.Namespace) -> None:
     print(f"  Zone ID    : {zone_id}")
 
 
+def parse_boolean(value: str) -> bool:
+    if value.lower() not in ("true", "false"):
+        raise argparse.ArgumentTypeError("Expected true or false")
+    return value.lower() == "true"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="NetBackup configuration helper")
     parser.add_argument("--policy-name")
     parser.add_argument("--vm-include")
     parser.add_argument("--vm-exclude", default="")
+    parser.add_argument("--incremental-backup", type=parse_boolean, default=True, metavar="true|false",
+                        help="Set global and this Cluster's kvm.incremental.backup (default: true). Use false for Full backups only.")
     parser.add_argument("--backup-chain-size", type=int,
-                        help="Update global kvm.backup.chain.size.")
+                        help="Update global kvm.backup.chain.size in incremental mode only. If omitted, retain the existing value (default: 8).")
     parser.add_argument("--backup-staging-root", default=str(BACKUP_STAGING_ROOT),
                         help="Legacy bootstrap option. Jobs use Mold backup.thirdparty.staging.root.path/ablestack-netbackup.")
     parser.add_argument("--mold-url", required=True)
@@ -825,6 +843,8 @@ def validate_args(args: argparse.Namespace) -> None:
         args.vm_include = "*"
     if args.backup_chain_size is not None and args.backup_chain_size <= 0:
         fail("--backup-chain-size must be a positive integer")
+    if not args.incremental_backup and args.backup_chain_size is not None:
+        fail("--backup-chain-size requires --incremental-backup true")
     if not args.backup_staging_root:
         fail("--backup-staging-root is required")
     BACKUP_STAGING_ROOT = Path(args.backup_staging_root).expanduser()
