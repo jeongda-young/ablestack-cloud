@@ -258,6 +258,7 @@ public class LibvirtAblestackNasRestoreBackupCommandWrapper extends CommandWrapp
         if (resolvedPaths == null || resolvedPaths.isEmpty()) {
             throw new CloudRuntimeException(String.format("No resolved backup chain paths found for volume [%s]", volumePath));
         }
+        LibvirtAblestackFileRestoreHelper.validateBackupChainFiles(resolvedPaths);
     }
 
     private void cleanupMountedBackupDirectory(String mountDirectory, BackupRestorePlan restorePlan) {

@@ -229,6 +229,26 @@ public class LibvirtAblestackNasRestoreTransactionTest {
         transactionFilesAreGone();
     }
 
+    private void assertMissingDataBackupStopsBeforePreparingVolumes(String point) throws Exception {
+        Path missing = nas.resolve("vm/" + point + "/datadisk.qcow2");
+        Files.delete(missing);
+        CloudRuntimeException failure = assertThrows(CloudRuntimeException.class, () -> restore(true));
+        assertTrue(failure.getMessage().contains(missing.toString()));
+        assertTrue(commands.isEmpty());
+        originalsRemain();
+        assertFalse(Files.exists(journals));
+    }
+
+    @Test
+    public void missingSelectedDataBackupFailsBeforePreparingRoot() throws Exception {
+        assertMissingDataBackupStopsBeforePreparingVolumes("inc");
+    }
+
+    @Test
+    public void missingFullDataBackupFailsBeforePreparingRoot() throws Exception {
+        assertMissingDataBackupStopsBeforePreparingVolumes("full");
+    }
+
     @Test
     public void insufficientSpaceForAllPreparedVolumesFailsBeforeAnyConversion() throws Exception {
         Mockito.when(filesystem.getUsableSpace()).thenReturn(1274 * GIB);
@@ -274,7 +294,9 @@ public class LibvirtAblestackNasRestoreTransactionTest {
     }
 
     @Test
-    public void nativeRbdVolumesArePreparedBeforeAnyOriginalImageIsRenamed() {
+    public void nativeRbdVolumesArePreparedBeforeAnyOriginalImageIsRenamed() throws Exception {
+        Files.writeString(nas.resolve("vm/full/root.raw"), "root-full");
+        Files.writeString(nas.resolve("vm/full/datadisk.raw"), "datadisk-full");
         KVMStoragePoolManager manager = Mockito.mock(KVMStoragePoolManager.class);
         KVMStoragePool ceph = Mockito.mock(KVMStoragePool.class);
         Mockito.when(ceph.getSourceDir()).thenReturn("ceph-pool");

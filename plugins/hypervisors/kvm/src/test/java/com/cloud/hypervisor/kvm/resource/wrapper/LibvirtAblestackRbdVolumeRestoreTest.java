@@ -207,6 +207,7 @@ public class LibvirtAblestackRbdVolumeRestoreTest {
     }
 
     private void assertQcow2Conversion(String target) throws Exception {
+        Path backup = Files.writeString(folder.getRoot().toPath().resolve("root.qcow2"), "backup");
         KVMStoragePool pool = pool();
         try (MockedStatic<KVMPhysicalDisk> disks = Mockito.mockStatic(KVMPhysicalDisk.class);
                 MockedConstruction<QemuImg> qemu = Mockito.mockConstruction(QemuImg.class)) {
@@ -214,7 +215,7 @@ public class LibvirtAblestackRbdVolumeRestoreTest {
                     .thenAnswer(call -> "rbd:" + call.getArgument(1));
 
             assertTrue(LibvirtAblestackRbdRestoreHelper.restoreRbdBackupToImage("test", pool, target,
-                    List.of("/backup/root.qcow2"), 60, true));
+                    List.of(backup.toString()), 60, true));
 
             ArgumentCaptor<QemuImgFile> converted = ArgumentCaptor.forClass(QemuImgFile.class);
             Mockito.verify(qemu.constructed().get(0)).convert(any(QemuImgFile.class), converted.capture());

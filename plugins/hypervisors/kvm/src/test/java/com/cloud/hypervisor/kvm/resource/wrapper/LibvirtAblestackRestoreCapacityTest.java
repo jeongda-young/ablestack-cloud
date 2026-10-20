@@ -180,7 +180,7 @@ public class LibvirtAblestackRestoreCapacityTest {
     public void planAndIndividualVolumeChecksBothUseTheCapturedPercentage() throws Exception {
         Path directory = folder.newFolder().toPath();
         Path target = Files.writeString(directory.resolve("volume"), "original");
-        String source = directory.resolve("backup.qcow2").toString();
+        String source = Files.writeString(directory.resolve("backup.qcow2"), "backup").toString();
         Logger logger = Mockito.mock(Logger.class);
         FileStore filesystem = Mockito.mock(FileStore.class);
         Mockito.when(filesystem.getUsableSpace()).thenReturn(1175 * GIB);

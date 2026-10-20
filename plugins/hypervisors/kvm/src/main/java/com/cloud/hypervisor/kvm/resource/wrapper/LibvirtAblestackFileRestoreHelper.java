@@ -53,6 +53,7 @@ final class LibvirtAblestackFileRestoreHelper {
             if (chain == null || chain.isEmpty() || Files.exists(Path.of(preparedTarget))) {
                 throw new CloudRuntimeException("Invalid or occupied prepared volume destination: " + preparedTarget);
             }
+            validateBackupChainFiles(chain);
             final QemuImg.PhysicalDiskFormat targetFormat = getFileVolumeFormat(logger, originalTarget);
             final String base = chain.get(0);
             try (var provisioning = LibvirtAblestackRestoreProvisioning.temporary(originalTarget, preparedTarget)) {
@@ -171,13 +172,23 @@ final class LibvirtAblestackFileRestoreHelper {
     }
 
     static String getRestorableFileBackupPath(final List<String> backupPaths) {
-        for (int index = backupPaths.size() - 1; index >= 0; index--) {
-            final String backupPath = backupPaths.get(index);
-            if (StringUtils.isNotBlank(backupPath) && Files.exists(Paths.get(backupPath))) {
-                return backupPath;
+        validateBackupChainFiles(backupPaths);
+        // The last artifact is the requested restore point. Never substitute an older backup.
+        return backupPaths.get(backupPaths.size() - 1);
+    }
+
+    static void validateBackupChainFiles(final List<String> backupPaths) {
+        if (backupPaths == null || backupPaths.isEmpty()) {
+            throw new CloudRuntimeException("No backup chain files were provided for restore");
+        }
+        for (final String backupPath : backupPaths) {
+            if (StringUtils.isBlank(backupPath)) {
+                throw new CloudRuntimeException("Backup chain contains an empty file path");
+            }
+            if (!Files.isRegularFile(Paths.get(backupPath))) {
+                throw new CloudRuntimeException("Required backup chain file is missing or not a regular file: " + backupPath);
             }
         }
-        return backupPaths.get(backupPaths.size() - 1);
     }
 
     static long estimateRequiredBytesForFileRestore(final String backupPath) throws QemuImgException, LibvirtException {
@@ -266,6 +277,7 @@ final class LibvirtAblestackFileRestoreHelper {
         if (resolvedPaths == null || resolvedPaths.isEmpty()) {
             throw new CloudRuntimeException(String.format("No resolved backup chain paths found for volume [%s]", volumePath));
         }
+        validateBackupChainFiles(resolvedPaths);
     }
 
     private static long estimateFileSize(final String backupPath) throws QemuImgException {
