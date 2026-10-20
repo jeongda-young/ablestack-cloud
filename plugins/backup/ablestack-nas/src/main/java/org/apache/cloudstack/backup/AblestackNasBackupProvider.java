@@ -71,6 +71,7 @@ import org.apache.logging.log4j.Logger;
 import org.apache.logging.log4j.LogManager;
 
 import javax.inject.Inject;
+import java.math.BigInteger;
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -92,6 +93,7 @@ import static org.apache.cloudstack.backup.BackupManager.BackupDataOperationTime
 import static org.apache.cloudstack.backup.BackupManager.BackupFrameworkEnabled;
 import static org.apache.cloudstack.backup.BackupManager.BackupQosBandwidthLimitMbps;
 import static org.apache.cloudstack.backup.BackupManager.KvmIncrementalBackup;
+import static org.apache.cloudstack.backup.BackupManager.NasBackupRepositoryCapacityBufferPercent;
 
 public class AblestackNasBackupProvider extends AdapterBase implements BackupProvider, Configurable {
     private static final Logger LOG = LogManager.getLogger(AblestackNasBackupProvider.class);
@@ -1471,18 +1473,24 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
 
     private void validateBackupRepositoryCapacity(final Host host, final BackupRepository repository, final List<VolumeVO> vmVolumes,
             final String vmName, final String backupType, final String backupEngine) {
+        final int bufferPercent = NasBackupRepositoryCapacityBufferPercent.value();
+        if (bufferPercent < 0 || bufferPercent > 100) {
+            throw new CloudRuntimeException(NasBackupRepositoryCapacityBufferPercent.key() + " must be between 0 and 100");
+        }
         final long requiredBytes = estimateRequiredRepositoryBytesForBackup(vmVolumes, backupType);
-        final long bufferBytes = Math.max(BACKUP_REPOSITORY_SPACE_BUFFER_BYTES, requiredBytes / 5L);
-        final long minimumAvailableBytes = requiredBytes + bufferBytes;
+        final long percentageBytes = BigInteger.valueOf(requiredBytes).multiply(BigInteger.valueOf(bufferPercent))
+                .divide(BigInteger.valueOf(100)).longValueExact();
+        final long bufferBytes = Math.max(BACKUP_REPOSITORY_SPACE_BUFFER_BYTES, percentageBytes);
+        final long minimumAvailableBytes = Math.addExact(requiredBytes, bufferBytes);
         final BackupStorageStatsAnswer stats = getBackupRepositoryStats(host, repository);
         final long totalBytes = stats.getTotalSize() != null ? stats.getTotalSize() : 0L;
         final long usedBytes = stats.getUsedSize() != null ? stats.getUsedSize() : 0L;
         final long availableBytes = Math.max(totalBytes - usedBytes, 0L);
-        LOG.info("{} phase=[REPOSITORY_SPACE_CHECK], vm=[{}], host=[{}], backupType=[{}], backupEngine=[{}], repositoryId=[{}], repositoryName=[{}], repositoryType=[{}], repositoryAddress=[{}], requiredBytes=[{}], bufferBytes=[{}], minimumAvailableBytes=[{}], totalBytes=[{}], usedBytes=[{}], availableBytes=[{}]",
+        LOG.info("{} phase=[REPOSITORY_SPACE_CHECK], vm=[{}], host=[{}], backupType=[{}], backupEngine=[{}], repositoryId=[{}], repositoryName=[{}], repositoryType=[{}], repositoryAddress=[{}], requiredBytes=[{}], bufferPercent=[{}], bufferBytes=[{}], minimumAvailableBytes=[{}], totalBytes=[{}], usedBytes=[{}], availableBytes=[{}]",
                 BACKUP_TRACE, vmName, host != null ? host.getName() : null, backupType, backupEngine,
                 repository != null ? repository.getId() : null, repository != null ? repository.getName() : null,
                 repository != null ? repository.getType() : null, repository != null ? repository.getAddress() : null,
-                requiredBytes, bufferBytes, minimumAvailableBytes, totalBytes, usedBytes, availableBytes);
+                requiredBytes, bufferPercent, bufferBytes, minimumAvailableBytes, totalBytes, usedBytes, availableBytes);
         if (availableBytes < minimumAvailableBytes) {
             throw new CloudRuntimeException(String.format(
                     "Insufficient NAS backup repository space for VM [%s]. Required at least [%d] bytes including buffer, but only [%d] bytes are available on repository [%s].",

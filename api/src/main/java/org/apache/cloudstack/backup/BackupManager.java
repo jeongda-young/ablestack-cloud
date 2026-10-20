@@ -130,6 +130,16 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
             true,
             BackupFrameworkEnabled.key());
 
+    ConfigKey<Integer> NasBackupRepositoryCapacityBufferPercent = new ConfigKey<>("Advanced", Integer.class,
+            "backup.nas.repository.capacity.buffer.percent",
+            "20",
+            "Percentage of additional NAS repository capacity required before ABLESTACK NAS backups. " +
+                    "Valid values: 0-100. Each capacity check keeps a minimum 10 GiB buffer. " +
+                    "Applies to new backup capacity checks; independent of restore primary storage capacity settings.",
+            true,
+            ConfigKey.Scope.Global,
+            BackupFrameworkEnabled.key());
+
     ConfigKey<Integer> RestorePrimaryStorageCapacityBufferPercent = new ConfigKey<>("Advanced", Integer.class,
             "backup.restore.primary.storage.capacity.buffer.percent",
             "20",

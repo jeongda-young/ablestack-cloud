@@ -225,6 +225,30 @@ Veeam의 `bootstrap-host-veeam-env.sh`와 `veeam_config.sh`도 같은 옵션을 
 2. Zone의 백업 프레임워크와 `ablestack-nas`를 설정한다.
 3. NAS 백업 오퍼링을 등록하여 VM에 연결한다. 주기 백업을 사용할 때는 Mold에 백업 스케줄을 설정한다.
 
+백업 저장소의 추가 여유율은 글로벌 설정 `backup.nas.repository.capacity.buffer.percent`로 지정한다.
+기본값은 `20`이며 정수 `0`~`100`을 받는다. 예상 필요량에 설정한 비율과 최소 `10 GiB` 중 큰 값을 더해 가용 공간을 검사한다.
+예를 들어 Full 백업 대상이 `300 GiB`라면 기본 20%에서는 `360 GiB`, 15%에서는 `345 GiB` 이상의 가용 공간이 필요하다.
+`0`으로 설정해도 최소 `10 GiB`의 추가 여유 공간은 유지한다.
+Full의 예상 필요량은 Ready 상태인 대상 볼륨의 논리 용량 합계이며, 증분은 현재 그 합계의 10%로 추정한다.
+따라서 실제 게스트 사용량이나 실제 증분 파일 크기를 사전에 측정한 값은 아니다.
+설정값 변경은 이후 백업 공간 검사부터 적용하며 재기동이 필요 없다. 신규 설정 등록을 위한 업그레이드 시 관리 서버 재기동은 필요하다.
+이 설정은 NAS 백업 저장소용이며, RBD를 포함한 복원 대상 기본스토리지의
+`backup.restore.primary.storage.capacity.buffer.percent`와는 독립적이다.
+
+Europa 업데이트 후 Mold 관리 서버를 시작하면 버전 번호가 같은 `4.23.0.0` 설치에서도 다음 구형 글로벌 설정을 마이그레이션으로 한 번 정리한다.
+이름이 현재 코드에 없다는 이유만으로 모든 설정을 삭제하지 않으며, 확인된 항목만 정리한다.
+
+| 정리하는 구형 설정 | 현재 기준 |
+| --- | --- |
+| `backup.command.timeout`, `backup.restore.timeout`, `nas.backup.restore.timeout` | `backup.data.operation.timeout`으로 통합 |
+| `backup.plugin.commvault.stage.root.path`, `backup.plugin.netbackup.stage.root.path`, `backup.plugin.ablestack-veeam.stage.root.path` | 공통 `backup.thirdparty.staging.*` 설정 사용. 기존 스테이징 마이그레이션에서 정리 |
+| `backup.plugin.ablestack-veeam.sync.delete.missing.catalog`, `backup.plugin.ablestack-veeam.sync.delete.rbd.diff` | 현재 카탈로그 검증·만료 동기화 흐름 사용 |
+
+이미 `backup.data.operation.timeout`이 있으면 값을 유지한다.
+새 설정이 없는 설치에서는 구형 timeout 값 중 기존 기본값과 다른 유효한 양의 정수 설정을 이관하며, 여러 값이면 가장 큰 값을 사용한다.
+이관할 값이 없으면 새 기본값 `43200`초를 사용한다. 구형 설정은 새 값 보존이 성공한 뒤 삭제하며, 실패한 마이그레이션은 다음 시작 시 재시도한다.
+`backup.chain.size`는 KBOSS에서 사용하므로 유지한다. `kvm.backup.chain.size`와 자동으로 합치거나 삭제하지 않는다.
+
 **백업 순서**
 
 1. Mold에서 백업을 실행하거나 설정한 스케줄을 기다린다.

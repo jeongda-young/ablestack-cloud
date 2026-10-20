@@ -105,6 +105,7 @@ import com.cloud.upgrade.dao.EuropaNetworkSchemaUpgrade;
 import com.cloud.upgrade.dao.EuropaGuiThemeSchemaUpgrade;
 import com.cloud.upgrade.dao.EuropaSystemVmSchemaUpgrade;
 import com.cloud.upgrade.dao.EuropaThirdPartyStagingConfigUpgrade;
+import com.cloud.upgrade.dao.EuropaBackupConfigUpgrade;
 import com.cloud.upgrade.dao.EuropaDrRecoverySchemaUpgrade;
 import com.cloud.upgrade.dao.Upgrade420to421;
 import com.cloud.upgrade.dao.Upgrade421to430;
@@ -574,6 +575,7 @@ public class DatabaseUpgradeChecker implements SystemIntegrityChecker {
                 runEuropaPhase(conn, EuropaSchemaUpgrade.S11, () -> com.cloud.upgrade.dao.EuropaVmProcessConfigUpgrade.migrate(conn));
                 runEuropaPhase(conn, "europa-4.23-s12-process-profile-v1", () -> com.cloud.upgrade.dao.EuropaVmProcessProfileUpgrade.migrate(conn));
                 runEuropaPhase(conn, EuropaThirdPartyStagingConfigUpgrade.PHASE, () -> EuropaThirdPartyStagingConfigUpgrade.migrate(conn));
+                runEuropaPhase(conn, EuropaBackupConfigUpgrade.PHASE, () -> EuropaBackupConfigUpgrade.migrate(conn));
                 runEuropaPhase(conn, "europa-4.23-autoscale-creation-v1", () -> com.cloud.upgrade.dao.EuropaAutoScaleCreationUpgrade.migrate(conn));
                 runEuropaPhase(conn, "europa-4.23-autoscale-operation-v1", () -> com.cloud.upgrade.dao.EuropaAutoScaleOperationUpgrade.migrate(conn));
                 runEuropaPhase(conn, "europa-4.23-autoscale-evaluation-v1", () -> com.cloud.upgrade.dao.EuropaAutoScaleEvaluationUpgrade.migrate(conn));

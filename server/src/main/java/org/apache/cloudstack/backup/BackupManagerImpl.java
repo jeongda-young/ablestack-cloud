@@ -4650,6 +4650,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 BackupActiveJobSyncPollingInterval,
                 BackupDataOperationTimeout,
                 BackupQosBandwidthLimitMbps,
+                NasBackupRepositoryCapacityBufferPercent,
                 RestorePrimaryStorageCapacityBufferPercent,
                 ThirdPartyStagingEnable,
                 ThirdPartyStagingStorageType,

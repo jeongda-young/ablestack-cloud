@@ -1581,7 +1581,8 @@ public class ConfigurationManagerImpl extends ManagerBase implements Configurati
 
         if (type.equals(Integer.class)) {
             int val = Integer.parseInt(value);
-            if (org.apache.cloudstack.backup.BackupManager.RestorePrimaryStorageCapacityBufferPercent.key().equalsIgnoreCase(name)
+            if ((org.apache.cloudstack.backup.BackupManager.RestorePrimaryStorageCapacityBufferPercent.key().equalsIgnoreCase(name)
+                    || org.apache.cloudstack.backup.BackupManager.NasBackupRepositoryCapacityBufferPercent.key().equalsIgnoreCase(name))
                     && (val < 0 || val > 100)) {
                 return String.format("Please enter a value between 0 and 100 for the configuration parameter: [%s].", name);
             }
