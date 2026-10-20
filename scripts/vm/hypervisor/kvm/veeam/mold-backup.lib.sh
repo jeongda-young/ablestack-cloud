@@ -4138,8 +4138,8 @@ mold_backup_initialize_restore_watch_baseline() {
 # Emits one line per session: sessionId|targetIp|endTimeUTC|result|name|backupName|restorePointId
 # The target IP/computer is parsed out of the session Options XML (FLR/restore specs put
 # IpOrDnsName/MachineName/BackupName there even when the session Name is hostname-based).
-# Result is NOT filtered (e.g. an FLR session can end as 'Failed' even though files were
-# restored), only completion + recency. Uses the existing KVM->Veeam SSH channel.
+# Only terminal results with a valid end time are emitted. Warning sessions require
+# an exact session requery and restored metadata validation before triggering Mold.
 mold_backup_query_veeam_restores() {
   local since_min="${1:-${VEEAM_RESTORE_WATCH_WINDOW_MIN:-60}}"
   [[ -n "${VEEAM_SSH_HOST:-}" ]] || {
@@ -4332,7 +4332,7 @@ foreach (\$r in \$sessions) {
   \$rs = [string]\$r.Result
   # In-progress FLR browse sessions report Result=None with EndTime=DateTime.MinValue.
   # Emitting those made Mold stop the VM mid-session and disconnect Veeam UI/agent.
-  if (\$rs -notmatch '^(?i)(Success|Warning)\$') { continue }
+  if (\$rs -notmatch '^(?i)(Success|Warning|Failed|Canceled|Cancelled)\$') { continue }
   \$hasEnd = (Valid-RestoreEnd \$r.EndTime) -or (Valid-RestoreEnd \$r.EndTimeUTC)
   \$done = \$false
   try { \$done = [bool]\$r.IsCompleted } catch { \$done = \$hasEnd }
@@ -4359,9 +4359,6 @@ foreach (\$r in \$sessions) {
   if (Valid-RestoreEnd \$r.EndTime) { \$etObj = \$r.EndTime }
   elseif (Valid-RestoreEnd \$r.EndTimeUTC) { \$etObj = \$r.EndTimeUTC }
   try { if (\$null -ne \$etObj) { \$epoch = [int64]([DateTimeOffset]\$etObj).ToUnixTimeSeconds() } } catch { \$epoch = 0 }
-  if (\$epoch -le 0) {
-    try { if (Valid-RestoreEnd \$r.CreationTimeUTC) { \$epoch = [int64]([DateTimeOffset]\$r.CreationTimeUTC).ToUnixTimeSeconds() } } catch {}
-  }
   if (\$epoch -le 0) { continue }
   \$sid = [string]\$r.Id
   if (\$r.Id -is [guid]) { \$sid = \$r.Id.Guid }
@@ -4376,7 +4373,7 @@ try {
       Import-Csv \$tmp | Where-Object {
         \$op = [string]\$_.Operation
         \$res = [string]\$_.Result
-        \$res -match '^(?i)(Success|Warning)\$' -and (
+        \$res -match '^(?i)(Success|Warning|Failed|Canceled|Cancelled)\$' -and (
           \$op -match '(?i)FileLevel|GuestFile|FileRestore|VmRestore|Restore'
         )
       } | ForEach-Object {
@@ -5151,6 +5148,8 @@ mold_backup_query_veeam_selected_flr_rp() {
   [[ -n "$job" ]] || return 1
   while IFS='|' read -r sid sip et result nm bn rp_id epoch_rp; do
     [[ -n "$sid" ]] || continue
+    result="$(printf '%s' "$result" | tr '[:upper:]' '[:lower:]')"
+    [[ "$result" == success || "$result" == warning ]] || continue
     # Prefer sessions that look like FLR and match job / host / vm name when possible.
     if [[ -n "$vm_name" && "$nm" != *"$vm_name"* && "$bn" != *"$job"* && "$nm" != FLR_* && "$nm" != *"$job"* ]]; then
       # still accept if RP present and job matches backup name loosely
@@ -5322,15 +5321,145 @@ except Exception:
 }
 
 # Returns 0 when handled, 1 for a legacy session, 2 when exact resolution needs retry.
+# The warning result alone cannot prove that the selected metadata was restored.
+# Query only the exact real session; audit text and file mtimes cannot invent success.
+mold_backup_query_veeam_restore_proof() {
+  local sid="$1" ps_script
+  [[ "$sid" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || return 1
+  ps_script="$(cat <<PS
+\$ErrorActionPreference='Stop'
+Import-Module Veeam.Backup.PowerShell -WarningAction SilentlyContinue
+Connect-VBRServer -Server localhost -ErrorAction Stop
+\$sessions=@(Get-VBRRestoreSession -Id ([guid]'${sid}'))
+if (\$sessions.Count -ne 1) { throw 'Exact restore session is unavailable' }
+\$s=\$sessions[0]
+function Epoch(\$value) {
+  if (\$null -eq \$value -or ([datetime]\$value).Year -lt 2000) { return 0 }
+  \$dt=[datetime]\$value
+  if (\$dt.Kind -eq [DateTimeKind]::Unspecified) { \$dt=[datetime]::SpecifyKind(\$dt,[DateTimeKind]::Utc) }
+  return ([DateTimeOffset]\$dt).ToUnixTimeSeconds()
+}
+\$start=Epoch \$s.CreationTimeUTC
+if (-not \$start) { \$start=Epoch \$s.CreationTime }
+\$end=Epoch \$s.EndTimeUTC
+if (-not \$end) { \$end=Epoch \$s.EndTime }
+\$details=@(); \$available=\$false
+try {
+  \$log=\$s.Logger.GetLog()
+  \$records=@(\$log.UpdatedRecords)
+  if (\$records.Count -gt 0) {
+    \$available=\$true
+    \$details=@(\$records | Where-Object { [string]\$_.Status -match '(?i)warning|failed|error' } | ForEach-Object {
+      @{status=[string]\$_.Status; message=(([string]\$_.Title)+' '+([string]\$_.Description)).Trim()}
+    })
+  }
+} catch {}
+\$value=@{jobId=[string]\$s.Id;result=[string]\$s.Result;startedAt=\$start;endedAt=\$end;detailsAvailable=\$available;details=\$details}
+Write-Output ('ABLESTACK_JSON:'+ (\$value | ConvertTo-Json -Compress -Depth 5))
+PS
+)"
+  mold_backup_veeam_ssh_ps_capture "$ps_script" | sed -n 's/^ABLESTACK_JSON://p' | tail -n 1
+}
+
+mold_backup_verify_veeam_warning() {
+  local sid="$1" resolution="$2" proof output rc=0
+  proof="$(VEEAM_SSH_CMD_TIMEOUT="${RESTORE_VEEAM_SSH_TIMEOUT:-25}" mold_backup_query_veeam_restore_proof "$sid")" || proof=""
+  output="$(python3 - "$sid" "$resolution" "$proof" <<'PYTHON'
+import json
+from pathlib import Path
+import re
+import stat
+import sys
+import time
+import xml.etree.ElementTree as ET
+
+job = {}
+try:
+    sid, resolution, proof = sys.argv[1:]
+    expected = json.loads(resolution)['resolvebackupartifactresponse']['backupartifact']
+    job = json.loads(proof)
+    if str(job.get('jobId', '')).strip('{}').lower() != sid.lower() or str(job.get('result', '')).lower() != 'warning':
+        raise ValueError('Exact restore session has no confirmed Warning result')
+    start, end = float(job.get('startedAt', 0)), float(job.get('endedAt', 0))
+    if not 1000000000 <= start <= end <= time.time() + 300:
+        raise ValueError('Restore session has no valid start and end time')
+    details = job.get('details')
+    if job.get('detailsAvailable') is not True or not isinstance(details, list) or not details or len(details) > 1000:
+        raise ValueError('Detailed warning log is unavailable, empty or too large')
+    for record in details:
+        if not isinstance(record, dict) or str(record.get('status', '')).lower() not in {'warning', 'ewarning'}:
+            raise ValueError('Restore contains a failed/error log record or unrecognized severity')
+        message = record.get('message')
+        if not isinstance(message, str) or len(message) > 16384:
+            raise ValueError('Invalid detailed restore warning')
+        # A content error must never be hidden by an attribute warning in the same record.
+        if re.search(r'checksum|corrupt|truncat|I/O error|no space|cannot (?:open|read|write|create)|failed to (?:open|read|write|create)|failed to restore (?!(?:(?:file|directory|access) )?(?:permissions?|ownership|owner|times?|timestamps?|attributes?|ACL)\b)|partially restored|kept existing|\.(?:qcow2|raw|rbdiff)\b', message, re.I):
+            raise ValueError('Restore contains a file content error: ' + message)
+        if not re.search(r'(?:set|change|restore|preserve)\s+(?:(?:file|directory|access)\s+)?(?:permissions?|ownership|owner|times?|timestamps?|attributes?|ACL)\b|\b(?:chmod|chown|utime)\b', message, re.I):
+            raise ValueError('Unverified restore warning: ' + message)
+    if expected.get('artifacttype') != 'METADATA' or expected.get('provider') != 'ablestack-veeam':
+        raise ValueError('Warning restore does not identify a metadata Job')
+    root = Path(expected.get('metadatapath', ''))
+    if not root.is_absolute() or root.resolve() != root or not root.is_dir():
+        raise ValueError('Original metadata directory is unavailable or redirects elsewhere')
+    def read(name):
+        path = root / name
+        before = path.lstat()
+        if not stat.S_ISREG(before.st_mode) or not 0 < before.st_size <= 16 * 1024 * 1024 or before.st_ctime < start - 5:
+            raise ValueError('Required metadata is missing, stale or invalid: ' + str(path))
+        value = path.read_text(encoding='utf-8')
+        after = path.lstat()
+        if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns):
+            raise ValueError('Required metadata is still changing: ' + str(path))
+        return value
+    manifest = json.loads(read('backup-manifest.json'))
+    if (manifest.get('version') != 1 or manifest.get('complete') is not True or manifest.get('provider') != expected['provider']
+            or manifest.get('backupUuid') != expected.get('id') or manifest.get('vmName') != expected.get('vmname')
+            or manifest.get('timestamp') != expected.get('timestamp') or root.name != expected.get('timestamp')
+            or root.parent.name != expected.get('vmname')):
+        raise ValueError('Restored manifest differs from the selected Mold backup')
+    volumes = manifest.get('volumes')
+    if not isinstance(volumes, list) or not volumes:
+        raise ValueError('Restored manifest has no volumes')
+    seen = set()
+    for volume in volumes:
+        if (not isinstance(volume, dict) or not volume.get('uuid') or volume['uuid'] in seen
+                or volume.get('engine') not in {'QCOW2', 'RBD_DIFF'} or not volume.get('chain')):
+            raise ValueError('Invalid volume restore chain')
+        seen.add(volume['uuid'])
+        artifact = volume['chain'][-1]
+        if (artifact.get('backupUuid') != manifest['backupUuid'] or artifact.get('completed') is not True
+                or not artifact.get('externalId') or not artifact.get('jobId') or Path(artifact.get('path', '')).parent != root):
+            raise ValueError('Unconfirmed or mismatched volume artifact')
+    domain = ET.fromstring(read('domain-config.xml'))
+    if (domain.tag != 'domain' or domain.findtext('name') != expected.get('vmname')
+            or not expected.get('virtualmachineid') or domain.findtext('uuid') != expected['virtualmachineid']):
+        raise ValueError('Restored domain XML differs from the original VM')
+    marker = dict(line.split('=', 1) for line in read('.staging.complete').splitlines() if '=' in line)
+    if marker.get('volume_pipeline') != 'true' or marker.get('backup_uuid') != expected['id']:
+        raise ValueError('Restored completion marker differs from the selected backup')
+    print('VERIFIED: attribute warning; metadata matches backup ' + expected['id'] + '; details=' + json.dumps(details, ensure_ascii=True))
+except (ValueError, KeyError, TypeError, AttributeError, OSError, ET.ParseError) as exc:
+    details = job.get('details') if isinstance(job, dict) else None
+    print('BLOCKED: ' + str(exc) + '; details=' + json.dumps(details, ensure_ascii=True)[:2048])
+    sys.exit(1)
+PYTHON
+)" || rc=$?
+  mold_backup_notify_log warn "restore-watch: session=${sid} ${output:0:4096}"
+  return "$rc"
+}
+
 mold_backup_handle_volume_restore_session() {
-  local job="$1" sid="$2" rp_id="${3:-}" trigger_mold="${4:-false}"
+  local job="$1" sid="$2" rp_id="${3:-}" trigger_mold="${4:-false}" result="${5:-}"
   local json matched tracked allowed reason vm async_id
+  result="$(printf '%s' "$result" | tr '[:upper:]' '[:lower:]')"
+  [[ "$result" == success || "$result" == warning ]] || return 2
   local -a params=("provider=ablestack-veeam" "jobid=${sid%%#*}")
   [[ -z "$rp_id" || "$rp_id" == "n/a" ]] || params+=("externalid=${rp_id}")
   json="$(mold_backup_cmk_run resolveBackupArtifact "${params[@]}" 2>/dev/null)" || return 2
   matched="$(mold_backup_api_json_field "$json" "resolvebackupartifactresponse.backupartifact.matched")"
   [[ -n "$matched" ]] || return 2
-  if [[ "${matched,,}" != "true" ]]; then
+  if [[ "$matched" != [Tt][Rr][Uu][Ee] ]]; then
     if [[ "$job" == ABLESTACK-* || "$job" == *ABLESTACK-* ]]; then
       mold_backup_notify_log warn "restore-watch: child session=${sid} rp=${rp_id:-unknown} has no exact Mold artifact; waiting, no timestamp fallback"
       return 2
@@ -5341,7 +5470,7 @@ mold_backup_handle_volume_restore_session() {
   tracked="$(mold_backup_api_json_field "$json" "resolvebackupartifactresponse.backupartifact.tracked")"
   allowed="$(mold_backup_api_json_field "$json" "resolvebackupartifactresponse.backupartifact.restoreallowed")"
   reason="$(mold_backup_api_json_field "$json" "resolvebackupartifactresponse.backupartifact.reason")"
-  if [[ "${tracked,,}" == "true" || "${allowed,,}" != "true" ]]; then
+  if [[ "$tracked" == [Tt][Rr][Uu][Ee] || "$allowed" != [Tt][Rr][Uu][Ee] ]]; then
     mold_backup_emit_restore_event "mold.restore.skipped.volume-pipeline" "$vm" "session=${sid};rp=${rp_id};reason=${reason}"
     mold_backup_restore_session_mark_seen "$sid"
     return 0
@@ -5351,6 +5480,9 @@ mold_backup_handle_volume_restore_session() {
     return 0
   fi
   [[ -n "$rp_id" && "$rp_id" != "n/a" ]] || return 2
+  if [[ "$result" == warning ]]; then
+    mold_backup_verify_veeam_warning "$sid" "$json" || return 2
+  fi
   json="$(mold_backup_cmk_run restoreBackupArtifact "provider=ablestack-veeam" "externalid=${rp_id}" "jobid=${sid%%#*}" 2>/dev/null)" || return 2
   async_id="$(mold_backup_api_json_field "$json" "restorebackupartifactresponse.jobid")"
   [[ -n "$async_id" ]] || return 2
@@ -5362,7 +5494,23 @@ mold_backup_handle_volume_restore_session() {
 # Handle one legacy Veeam restore session: dedup, host check, flock, optional Mold restore API.
 mold_backup_handle_veeam_restore_session() {
   local job="$1" vm="$2" sid="$3" detail="$4" trigger_mold="${5:-false}" rp_id="${6:-}"
-  local ckpt=""
+  local ckpt="" session row_sid sip et result nm bn row_rp rp_epoch_value
+  [[ "$sid" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]] || {
+    mold_backup_notify_log warn "restore-event: no real Veeam session ID; file changes cannot confirm restore success"
+    return 1
+  }
+  session="$(mold_backup_query_veeam_restores "${VEEAM_RESTORE_WATCH_WINDOW_MIN:-60}" | awk -F'|' -v sid="$sid" 'tolower($1)==tolower(sid) && !found {print; found=1}')"
+  IFS='|' read -r row_sid sip et result nm bn row_rp rp_epoch_value <<< "$session"
+  result="$(printf '%s' "$result" | tr '[:upper:]' '[:lower:]')"
+  if [[ ! "$et" =~ ^[0-9]+$ || "$result" != success && "$result" != warning ]] || (( et < 1000000000 )); then
+    mold_backup_notify_log warn "restore-event: session=${sid} has no confirmed successful terminal result"
+    return 1
+  fi
+  if [[ -n "$rp_id" && "$rp_id" != "$row_rp" ]]; then
+    mold_backup_notify_log warn "restore-event: session=${sid} restore point differs from callback"
+    return 1
+  fi
+  rp_id="$row_rp"
   # Prefer explicit ckpt=/checkpoint= — never treat backup=<job name> as checkpoint.
   ckpt="$(sed -n 's/.*ckpt=\([^;]*\).*/\1/p' <<<"$detail" | tail -1)"
   [[ -z "$ckpt" ]] && ckpt="$(sed -n 's/.*checkpoint=\([^;]*\).*/\1/p' <<<"$detail" | tail -1)"
@@ -5374,9 +5522,13 @@ mold_backup_handle_veeam_restore_session() {
     [[ "$rp_id" == "n/a" ]] && rp_id=""
   fi
   local pipeline_rc=0
-  mold_backup_handle_volume_restore_session "$job" "$sid" "$rp_id" "$trigger_mold" || pipeline_rc=$?
+  mold_backup_handle_volume_restore_session "$job" "$sid" "$rp_id" "$trigger_mold" "$result" || pipeline_rc=$?
   [[ "$pipeline_rc" == 0 ]] && return 0
   [[ "$pipeline_rc" == 2 ]] && return 1
+  [[ "$result" == success ]] || {
+    mold_backup_notify_log warn "restore-event: legacy Warning session has no verifiable volume-pipeline metadata"
+    return 1
+  }
   local rp_epoch=""
   if [[ "$detail" == *"rp_epoch="* ]]; then
     rp_epoch="$(sed -n 's/.*rp_epoch=\([^;]*\).*/\1/p' <<<"$detail" | tail -1)"
@@ -5495,6 +5647,7 @@ mold_backup_watch_veeam_restores() {
   local sid sip et result nm bn rp_id rp_epoch matched_ip vm
   local processed=0 handled=0
   while IFS='|' read -r sid sip et result nm bn rp_id rp_epoch; do
+    result="$(printf '%s' "$result" | tr '[:upper:]' '[:lower:]')"
     [[ -n "$sid" ]] || continue
     rp_epoch="${rp_epoch// /}"
     [[ "$rp_epoch" == "n/a" ]] && rp_epoch=""
@@ -5504,33 +5657,38 @@ mold_backup_watch_veeam_restores() {
       mold_backup_notify_log info "restore-watch: ignore non-session noise sid='${sid:0:80}'"
       continue
     fi
-    # Accept GUID / local-flr-* only (real Veeam or local FLR markers).
-    if [[ ! "$sid" =~ ^[0-9a-fA-F-]{8,} && "$sid" != local-flr-* ]]; then
+    # Require a real Veeam session GUID; local file changes do not prove completion.
+    if [[ ! "$sid" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
       mold_backup_notify_log info "restore-watch: ignore invalid session id='${sid:0:80}'"
       continue
     fi
     # Never Mold-restore on in-progress FLR (Result=None) — stops VM and drops Veeam session.
-    if [[ -n "$result" && ! "$result" =~ ^(Success|Warning)$ ]]; then
-      mold_backup_notify_log info "restore-watch: skip session ${sid} result='${result}' (need Success/Warning)"
+    if [[ "$result" != success && "$result" != warning ]]; then
+      mold_backup_notify_log warn "restore-watch: skip session ${sid} result='${result}' (need confirmed Success or verified Warning)"
       continue
     fi
     # Invalid/MinValue end time (e.g. -2208960000) must not trigger restore.
-    if [[ -n "$et" ]] && { [[ "$et" =~ ^- ]] || [[ ! "$et" =~ ^[0-9]+$ ]] || (( et < 1000000000 )); }; then
+    if [[ ! "$et" =~ ^[0-9]+$ ]] || (( et < 1000000000 )); then
       mold_backup_notify_log info "restore-watch: skip session ${sid} bad end='${et}'"
       continue
     fi
     if mold_backup_restore_session_seen "$sid"; then
       continue
     fi
+    processed=$((processed+1))
     # Child jobs identify one logical point by restore point UUID. They belong to
     # a Host agent, so template-job/VM IP ownership filters cannot identify them.
     local pipeline_rc=0
-    mold_backup_handle_volume_restore_session "${bn:-$nm}" "$sid" "$rp_id" "$trigger_mold" || pipeline_rc=$?
+    mold_backup_handle_volume_restore_session "${bn:-$nm}" "$sid" "$rp_id" "$trigger_mold" "$result" || pipeline_rc=$?
     if [[ "$pipeline_rc" == 0 ]]; then
       handled=$((handled+1))
       continue
     elif [[ "$pipeline_rc" == 2 ]]; then
       mold_backup_notify_log warn "restore-watch: exact artifact resolution pending for session=${sid}"
+      continue
+    fi
+    if [[ "$result" != success ]]; then
+      mold_backup_notify_log warn "restore-watch: legacy Warning session=${sid} has no verifiable metadata; automatic restore blocked"
       continue
     fi
     [[ -n "${VM_TARGETS:-}" ]] || continue
@@ -5565,7 +5723,6 @@ mold_backup_watch_veeam_restores() {
         fi
       fi
     fi
-    processed=$((processed+1))
     if mold_backup_restore_session_seen "$sid"; then
       mold_backup_notify_log info "restore-watch: session ${sid} already processed (skip duplicate)"
       continue

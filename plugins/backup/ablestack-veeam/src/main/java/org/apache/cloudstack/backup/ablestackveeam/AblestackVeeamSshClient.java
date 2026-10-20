@@ -438,6 +438,11 @@ public class AblestackVeeamSshClient {
                 "$root=Join-Path $env:ProgramData 'ABLESTACK/Mold/volume-restore'",
                 "[System.IO.Directory]::CreateDirectory($root) | Out-Null",
                 "$receipt=Join-Path $root " + ps(key + ".json"),
+                "function Restore-Failure($session,$result) { $messages=@('Veeam artifact restore ended with '+$result); "
+                        + "try { if ($session.Info.Reason) { $messages += [string]$session.Info.Reason }; "
+                        + "$messages += @($session.Logger.GetLog().UpdatedRecords | Where-Object { [string]$_.Status -match '(?i)warning|failed|error' } "
+                        + "| Select-Object -First 10 | ForEach-Object { (([string]$_.Title)+' '+([string]$_.Description)).Trim() }) } catch {}; "
+                        + "$text=($messages | Select-Object -Unique) -join '; '; if ($text.Length -gt 2048) { $text=$text.Substring(0,2048) }; return $text }",
                 "$restoreJob=" + ps(request.jobId),
                 "$binding=" + ps(new com.google.gson.Gson().toJson(request) + "|" + destinationHost + "|" + destinationIp),
                 "function Save-Receipt($value) { $value.requestId=$restoreJob; $tmp=$receipt+'.tmp'; $bytes=[Text.Encoding]::UTF8.GetBytes(($value | ConvertTo-Json -Compress)); "
@@ -450,16 +455,16 @@ public class AblestackVeeamSshClient {
                         + "$sessions=@(Get-VBRRestoreSession -Id ([guid]$old.jobId)); "
                         + "if ($sessions.Count -ne 1) { throw 'Exact Veeam restore task status is unavailable; termination remains unconfirmed' }; "
                         + "$result=[string]$sessions[0].Result; if ([string]::IsNullOrEmpty($result)) { $result=[string]$sessions[0].Info.Result }; "
-                        + "if ($result -in @('Success','Failed','Warning','Canceled')) { "
-                        + "$old.terminal=$true; $old.completed=($result -eq 'Success'); "
-                        + "if (!$old.completed) { $old.failure='Veeam restore failed: '+$result }; Save-Receipt $old } }; "
+                        + "if ($result -in @('Success','Failed','Warning','Canceled','Cancelled')) { "
+                        + "$old.terminal=$true; $old.completed=($result -eq 'Success'); $old | Add-Member -NotePropertyName result -NotePropertyValue $result -Force; "
+                        + "if (!$old.completed) { $old.failure=Restore-Failure $sessions[0] $result }; Save-Receipt $old } }; "
                         + "Write-Output ('ABLESTACK_JSON:' + ($old | ConvertTo-Json -Compress)); return }",
                 "if (" + (recoverOnly ? "$true" : "$false") + ") { Write-Output 'ABLESTACK_JSON:{\"jobId\":null}'; return }",
                 // CreateNew prevents a second PowerShell session from submitting the same restore.
                 "$intent=[IO.File]::Open($receipt,[IO.FileMode]::CreateNew,[IO.FileAccess]::Write,[IO.FileShare]::None)",
                 "try { $bytes=[Text.Encoding]::UTF8.GetBytes((@{binding=$binding;requestId=$restoreJob;jobId=$null;completed=$false;terminal=$false;failure=$null} | ConvertTo-Json -Compress)); "
                         + "$intent.Write($bytes,0,$bytes.Length); $intent.Flush($true) } finally { $intent.Dispose() }",
-                "$flr=$null; $submitted=$false; $terminal=$false; $task=$null; $failure=$null; $success=$false; $callbackIds=@()",
+                "$flr=$null; $submitted=$false; $terminal=$false; $task=$null; $failure=$null; $success=$false; $result=$null; $callbackIds=@()",
                 "try {",
                 "  Get-Command Start-VBRLinuxGuestItemRestore -ErrorAction Stop | Out-Null",
                 "  $points=@(Get-VBRBackup | Get-VBRRestorePoint | Where-Object { ([string]$_.Id).Trim('{}') -eq " + ps(request.artifact.externalId) + " })",
@@ -482,25 +487,38 @@ public class AblestackVeeamSshClient {
                 "    if ($null -eq $task) { throw 'Veeam file restore returned no task session' }",
                 "    Save-Receipt @{binding=$binding;jobId=[string]$task.Id;callbackJobIds=@($callbackIds);completed=$false;terminal=$false;failure=$null}",
                 "    $result=[string]$task.Result; if ([string]::IsNullOrEmpty($result)) { $result=[string]$task.Info.Result }",
-                "    $terminal=$result -in @('Success','Failed','Warning','Canceled')",
+                "    $terminal=$result -in @('Success','Failed','Warning','Canceled','Cancelled')",
                 "    if (!$terminal) { throw ('Veeam artifact restore did not confirm a terminal result: '+$result) }",
-                "    $success=$result -eq 'Success'; if (!$success) { $failure='Veeam artifact restore ended with '+$result }",
+                "    $success=$result -eq 'Success'; if (!$success) { $failure=Restore-Failure $task $result }",
                 "  } finally { if ($null -ne $flr) { Stop-VBRLinuxFileRestore -LinuxFlrObject $flr | Out-Null } }",
                 "} catch { $failure=$_.Exception.Message; if (!$submitted) { $terminal=$true } }",
                 "$jobId=if ($null -ne $task) { [string]$task.Id } elseif ($terminal) { " + ps("flr:" + key) + " } else { $null }",
-                "$out=@{binding=$binding;jobId=$jobId;callbackJobIds=@($callbackIds);completed=($success -and $terminal);terminal=$terminal;failure=$failure}",
+                "$out=@{binding=$binding;jobId=$jobId;result=$result;callbackJobIds=@($callbackIds);completed=($success -and $terminal);terminal=$terminal;failure=$failure}",
                 "Save-Receipt $out",
                 "Write-Output ('ABLESTACK_JSON:' + ($out | ConvertTo-Json -Compress))"));
+        return parseVolumeRestoreResult(result);
+    }
+
+    static org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result parseVolumeRestoreResult(JSONObject result) {
         if (result.isNull("jobId")) { return null; }
         org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result restored = new org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result(
-                result.getString("jobId"), result.getBoolean("completed"));
+                result.getString("jobId"), result.getBoolean("completed") && result.getBoolean("terminal"));
         restored.externalTerminal = result.getBoolean("terminal");
+        String state = result.optString("result", "").trim().toLowerCase(Locale.ROOT);
+        if (StringUtils.isNotBlank(state)) {
+            restored.externalTerminal = restored.externalTerminal && java.util.Set.of("success", "warning", "failed", "canceled", "cancelled").contains(state);
+            restored.completed = restored.completed && restored.externalTerminal && "success".equals(state);
+        }
         if (result.optJSONArray("callbackJobIds") != null) {
             for (Object value : result.getJSONArray("callbackJobIds")) {
                 restored.callbackJobIds.add(java.util.UUID.fromString(String.valueOf(value)).toString());
             }
         }
         restored.failure = restored.externalTerminal && !result.isNull("failure") ? result.getString("failure") : null;
+        if (StringUtils.isNotBlank(restored.failure)) { restored.completed = false; }
+        if (restored.externalTerminal && !restored.completed && StringUtils.isBlank(restored.failure)) {
+            restored.failure = "Veeam artifact restore did not succeed: " + (StringUtils.isBlank(state) ? "unconfirmed result" : state);
+        }
         return restored;
     }
 

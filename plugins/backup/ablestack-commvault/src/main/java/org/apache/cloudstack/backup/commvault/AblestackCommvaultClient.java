@@ -67,6 +67,7 @@ import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Base64;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 public class AblestackCommvaultClient {
@@ -1400,24 +1401,9 @@ public class AblestackCommvaultClient {
     public JobStatusResult getJobStatusResult(String jobId, long timeoutMillis) {
         String jobStatus = "Running";
         String failureReason = null;
-        final Set<String> terminalStates = Set.of(
-                "Completed",
-                "Completed w/ one or more errors",
-                "Completed w/ one or more warnings",
-                "Committed",
-                "Failed",
-                "Failed to Start",
-                "Killed"
-        );
-        final Set<String> failureStates = Set.of(
-                "Failed",
-                "Failed to Start",
-                "Killed",
-                "Completed w/ one or more errors"
-        );
         final long deadline = timeoutMillis > 0 ? System.currentTimeMillis() + timeoutMillis : Long.MAX_VALUE;
 
-        while (!terminalStates.contains(jobStatus)) {
+        while (true) {
             if (System.currentTimeMillis() >= deadline) {
                 LOG.warn("Timed out waiting for Commvault job [{}] to complete. lastStatus=[{}], timeoutMillis=[{}]",
                         jobId, jobStatus, timeoutMillis);
@@ -1434,23 +1420,16 @@ public class AblestackCommvaultClient {
                     return new JobStatusResult(null, null);
                 }
 
-                final JsonNode progressInfo = OBJECT_MAPPER.readTree(response.body)
-                        .path("job").path("jobDetail").path("progressInfo");
-                jobStatus = progressInfo.path("state").asText(null);
-                if (StringUtils.isBlank(jobStatus)) {
-                    LOG.warn("Commvault JobDetails response did not contain job.jobDetail.progressInfo.state. jobId=[{}]", jobId);
-                    return new JobStatusResult(null, null);
+                final JobStatusResult result = readJobStatus(OBJECT_MAPPER.readTree(response.body).path("job").path("jobDetail"));
+                jobStatus = result.getStatus();
+                failureReason = result.getFailureReason();
+                if (!result.isTerminal() && !isActiveJobState(jobStatus)) {
+                    return new JobStatusResult("Unconfirmed", "Unrecognized Commvault job state: " + jobStatus);
                 }
-
-                if (failureStates.contains(jobStatus)) {
-                    failureReason = progressInfo.path("reasonForJobDelay").asText("");
-                    if (StringUtils.isBlank(failureReason)) {
-                        failureReason = progressInfo.path("pendingReason").asText("");
+                if (result.isTerminal()) {
+                    if (!"Completed".equals(jobStatus)) {
+                        LOG.error("Commvault job [{}] did not succeed. status=[{}], reason=[{}]", jobId, jobStatus, failureReason);
                     }
-                    LOG.error("Commvault job [{}] failed. status=[{}], reason=[{}]", jobId, jobStatus, failureReason);
-                }
-
-                if (terminalStates.contains(jobStatus)) {
                     break;
                 }
 
@@ -1471,13 +1450,112 @@ public class AblestackCommvaultClient {
         return new JobStatusResult(jobStatus, failureReason);
     }
 
+    private static String canonicalJobState(String state) {
+        String key = StringUtils.defaultString(state).toLowerCase(Locale.ROOT).replace("w/", "with").replaceAll("[^a-z]", "");
+        if ("completed".equals(key)) { return "Completed"; }
+        if (key.startsWith("completed") && key.contains("error")) { return "Completed w/ one or more errors"; }
+        if (key.startsWith("completed") && key.contains("warning")) { return "Completed w/ one or more warnings"; }
+        if ("failed".equals(key)) { return "Failed"; }
+        if ("failedtostart".equals(key)) { return "Failed to Start"; }
+        if (Set.of("killed", "canceled", "cancelled").contains(key)) { return "Killed"; }
+        if ("committed".equals(key)) { return "Committed"; }
+        return StringUtils.defaultString(state).trim();
+    }
+
+    private static boolean isTerminalJobState(String state) {
+        return state != null && Set.of("Completed", "Completed w/ one or more errors", "Completed w/ one or more warnings",
+                "Committed", "Failed", "Failed to Start", "Killed").contains(state);
+    }
+
+    private static boolean isActiveJobState(String state) {
+        String key = StringUtils.defaultString(state).toLowerCase(Locale.ROOT).replaceAll("[^a-z]", "");
+        return Set.of("running", "pending", "queued", "waiting", "suspended", "suspendpending", "interruptpending",
+                "killpending", "inactive", "idle", "starting", "waitingforclient", "danglingcleanup", "waitingforresources").contains(key);
+    }
+
+    private static JobStatusResult readJobStatus(JsonNode detail) {
+        String original = detail.path("progressInfo").path("state").asText();
+        String state = canonicalJobState(original);
+        List<String> reasons = new ArrayList<>();
+        collectJobFailureDetails(detail, reasons);
+        if ("Completed".equals(state) && hasFailedJobItems(detail)) {
+            state = "Completed w/ one or more errors";
+        }
+        boolean terminal = isTerminalJobState(state);
+        if (!terminal && !isActiveJobState(state)
+                && (detail.path("detailInfo").path("endTime").asLong(0) > 0 || state.toLowerCase(Locale.ROOT).startsWith("completed"))) {
+            reasons.add("Unrecognized terminal state: " + original);
+            state = "Unconfirmed";
+            terminal = true;
+        }
+        String reason = "Completed".equals(state) ? null : StringUtils.abbreviate(String.join("; ", reasons), 2048);
+        if (terminal && !"Completed".equals(state) && StringUtils.isBlank(reason)) {
+            reason = "External job ended as " + original + "; detailed failure information is unavailable";
+        }
+        return new JobStatusResult(state, reason, terminal);
+    }
+
+    private static boolean hasFailedJobItems(JsonNode node) {
+        if (node.isObject()) {
+            java.util.Iterator<java.util.Map.Entry<String, JsonNode>> fields = node.fields();
+            while (fields.hasNext()) {
+                java.util.Map.Entry<String, JsonNode> field = fields.next();
+                String key = field.getKey();
+                if (Set.of("totalFailedFiles", "totalFailedFolders", "backupFileFailures", "backupFolderFailures",
+                        "restoreFileFailures", "restoreFolderFailures", "scanFileFailures", "scanFolderFailures", "skippedItems").contains(key) && !field.getValue().isNull()) {
+                    // Negative values are Commvault's unavailable-counter sentinel.
+                    String value = field.getValue().asText();
+                    if (!value.matches("-?[0-9]+") || field.getValue().asLong(Long.MAX_VALUE) > 0) { return true; }
+                }
+                if ("failures".equals(key) && field.getValue().isTextual()
+                        && field.getValue().asText().matches("(?i).*\\b[1-9][0-9]*\\s+(?:Files?|Folders?).*")) { return true; }
+                if (hasFailedJobItems(field.getValue())) { return true; }
+            }
+        } else if (node.isArray()) {
+            for (JsonNode child : node) { if (hasFailedJobItems(child)) { return true; } }
+        }
+        return false;
+    }
+
+    private static void collectJobFailureDetails(JsonNode node, List<String> reasons) {
+        if (reasons.size() >= 20) { return; }
+        if (node.isObject()) {
+            java.util.Iterator<java.util.Map.Entry<String, JsonNode>> fields = node.fields();
+            while (fields.hasNext() && reasons.size() < 20) {
+                java.util.Map.Entry<String, JsonNode> field = fields.next();
+                if (Set.of("reasonForJobDelay", "pendingReason", "errorMessage", "failureReason", "errorDescription", "errorCode",
+                        "totalFailedFiles", "totalFailedFolders", "backupFileFailures", "backupFolderFailures", "restoreFileFailures",
+                        "restoreFolderFailures", "scanFileFailures", "scanFolderFailures", "skippedItems", "failures").contains(field.getKey())
+                        && field.getValue().isValueNode() && !field.getValue().isNull()) {
+                    String value = field.getValue().asText().replaceAll("\\s+", " ").trim();
+                    if (StringUtils.isNotBlank(value) && !"0".equals(value)) {
+                        reasons.add(field.getKey() + "=" + StringUtils.abbreviate(value, 512));
+                    }
+                }
+                collectJobFailureDetails(field.getValue(), reasons);
+            }
+        } else if (node.isArray()) {
+            for (JsonNode child : node) { collectJobFailureDetails(child, reasons); }
+        }
+    }
+
     public static final class JobStatusResult {
         private final String status;
         private final String failureReason;
+        private final boolean terminal;
 
         public JobStatusResult(final String status, final String failureReason) {
+            this(status, failureReason, isTerminalJobState(status));
+        }
+
+        private JobStatusResult(final String status, final String failureReason, final boolean terminal) {
             this.status = status;
             this.failureReason = failureReason;
+            this.terminal = terminal;
+        }
+
+        public boolean isTerminal() {
+            return terminal;
         }
 
         public String getStatus() {
@@ -1506,16 +1584,17 @@ public class AblestackCommvaultClient {
             }
             try {
                 final JsonNode job = OBJECT_MAPPER.readTree(response).path("job").path("jobDetail");
-                final String state = job.path("progressInfo").path("state").asText();
-                if ("Completed".equalsIgnoreCase(state)) {
+                final JobStatusResult status = readJobStatus(job);
+                final String state = status.getStatus();
+                if ("Completed".equals(state)) {
                     artifact.externalId = artifact.jobId;
                     artifact.completed = true;
                     artifact.externalTerminal = true;
                     artifact.backupTime = job.path("detailInfo").path("endTime").asText(null);
-                } else if (Set.of("Failed", "Failed to Start", "Killed", "Completed w/ one or more errors",
-                        "Completed w/ one or more warnings", "Committed").contains(state)) {
+                } else if (status.isTerminal()) {
                     artifact.externalTerminal = true;
-                    artifact.externalFailure = "Commvault artifact job did not complete successfully: " + artifact.jobId + " (" + state + ")";
+                    artifact.externalFailure = "Commvault artifact job did not complete successfully: " + artifact.jobId + " (" + state + "): "
+                            + status.getFailureReason();
                 }
                 return artifact;
             } catch (IOException e) {
@@ -1906,9 +1985,8 @@ public class AblestackCommvaultClient {
             String details = getJobDetails(artifact.jobId);
             if (StringUtils.isBlank(details)) { throw new CloudRuntimeException("External artifact job outcome cannot be confirmed"); }
             try {
-                String state = OBJECT_MAPPER.readTree(details).path("job").path("jobDetail").path("progressInfo").path("state").asText();
-                if (!Set.of("Completed", "Failed", "Failed to Start", "Killed", "Completed w/ one or more errors",
-                        "Completed w/ one or more warnings", "Committed").contains(state)) {
+                JobStatusResult status = readJobStatus(OBJECT_MAPPER.readTree(details).path("job").path("jobDetail"));
+                if (!status.isTerminal()) {
                     throw new CloudRuntimeException("Cannot erase an artifact while its external job is active or unconfirmed");
                 }
             } catch (IOException e) { throw new CloudRuntimeException("Unable to read artifact job status", e); }
@@ -2156,13 +2234,12 @@ public class AblestackCommvaultClient {
             if (StringUtils.isNotBlank(saved.jobId)) {
                 String response = getJobDetails(saved.jobId);
                 if (StringUtils.isBlank(response)) { return saved; }
-                String state = OBJECT_MAPPER.readTree(response).path("job").path("jobDetail").path("progressInfo").path("state").asText();
-                if (Set.of("Failed", "Failed to Start", "Killed", "Completed w/ one or more errors",
-                        "Completed w/ one or more warnings", "Committed").contains(state)) {
+                JobStatusResult status = readJobStatus(OBJECT_MAPPER.readTree(response).path("job").path("jobDetail"));
+                if (status.isTerminal() && !"Completed".equals(status.getStatus())) {
                     return org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result.failed(saved.jobId,
-                            "Commvault volume restore failed: " + saved.jobId + " (" + state + ")");
+                            "Commvault volume restore failed: " + saved.jobId + " (" + status.getStatus() + "): " + status.getFailureReason());
                 }
-                return new org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result(saved.jobId, "Completed".equalsIgnoreCase(state));
+                return new org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result(saved.jobId, "Completed".equals(status.getStatus()));
             }
             JsonNode detail = OBJECT_MAPPER.readTree(getJobDetails(request.artifact.jobId)).path("job").path("jobDetail");
             JsonNode general = detail.path("generalInfo");

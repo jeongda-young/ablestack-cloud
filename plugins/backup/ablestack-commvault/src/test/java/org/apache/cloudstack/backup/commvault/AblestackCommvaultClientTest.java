@@ -876,4 +876,143 @@ public class AblestackCommvaultClientTest {
         assertTrue(newClient().deleteVmBackupSet(new AblestackCommvaultClient.VmBackupSet("ablecube4", "i-2-220-VM", "9", "7")));
         wireMockRule.verify(0, deleteRequestedFor(urlEqualTo("/api/Backupset/9")));
     }
+
+    @Test
+    public void volumeRestoreAcceptsOnlyNormalCompletionAcrossStateSpellings() throws Exception {
+        stubTokenRenewal();
+        AblestackCommvaultClient client = newClient();
+        for (String state : List.of("Completed", "completed", " COMPLETED ")) {
+            stubRestoreJobState(state, "", "");
+            org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result result = client.restoreVolumeArtifact(
+                    null, "ablecube4", new org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result("1200", false));
+            assertTrue(state, result.completed);
+            assertTrue(result.externalTerminal);
+            assertNull(result.failure);
+        }
+    }
+
+    @Test
+    public void volumeRestoreBlocksWarningAndPartialSuccessAliasesWithDetailedReasons() throws Exception {
+        stubTokenRenewal();
+        AblestackCommvaultClient client = newClient();
+        for (String state : List.of("Completed w/ one or more warnings", "Completed With Warning", "completed with warnings",
+                "Completed w/ one or more errors", "Completed With One or More Errors")) {
+            stubRestoreJobState(state, "\"errorMessage\":\"Cannot restore root.qcow2\",\"errorCode\":19", "");
+            org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result result = client.restoreVolumeArtifact(
+                    null, "ablecube4", new org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result("1200", false));
+            assertFalse(state, result.completed);
+            assertTrue(state, result.externalTerminal);
+            assertTrue(result.failure, result.failure.contains("Cannot restore root.qcow2"));
+            assertTrue(result.failure, result.failure.contains("errorCode=19"));
+        }
+    }
+
+    @Test
+    public void completedRestoreWithFailedOrSkippedFilesCannotApplyVolumes() throws Exception {
+        stubTokenRenewal();
+        AblestackCommvaultClient client = newClient();
+        for (String counter : List.of("totalFailedFiles", "totalFailedFolders", "restoreFileFailures", "restoreFolderFailures",
+                "backupFileFailures", "backupFolderFailures", "scanFileFailures", "scanFolderFailures", "skippedItems")) {
+            stubRestoreJobState("Completed", "", "\"" + counter + "\":1");
+            org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result result = client.restoreVolumeArtifact(
+                    null, "ablecube4", new org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result("1200", false));
+            assertFalse(counter, result.completed);
+            assertTrue(counter, result.externalTerminal);
+            assertTrue(result.failure, result.failure.contains(counter + "=1"));
+        }
+    }
+
+    @Test
+    public void completedRestoreRejectsTextFailureCountsAndMalformedCounters() throws Exception {
+        stubTokenRenewal();
+        AblestackCommvaultClient client = newClient();
+        for (String counters : List.of("\"failures\":\"1 Folders, 0 Files\"", "\"totalFailedFiles\":\"unknown\"")) {
+            stubRestoreJobState("Completed", "", counters);
+            org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result result = client.restoreVolumeArtifact(
+                    null, "ablecube4", new org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result("1200", false));
+            assertFalse(result.completed);
+            assertTrue(result.externalTerminal);
+        }
+    }
+
+    @Test
+    public void unavailableCounterSentinelAndZeroCountsDoNotRejectSuccessfulRestore() throws Exception {
+        stubTokenRenewal();
+        stubRestoreJobState("Completed", "", "\"totalFailedFiles\":0,\"backupFileFailures\":-999,\"failures\":\"0 Folders, 0 Files\"");
+        assertTrue(newClient().restoreVolumeArtifact(null, "ablecube4",
+                new org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result("1200", false)).completed);
+    }
+
+    @Test
+    public void activeRestoreWithFailureCountersRemainsNonTerminal() throws Exception {
+        stubTokenRenewal();
+        stubRestoreJobState("Running", "", "\"totalFailedFiles\":1,\"endTime\":1792458000");
+        org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result result = newClient().restoreVolumeArtifact(
+                null, "ablecube4", new org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result("1200", false));
+        assertFalse(result.completed);
+        assertFalse(result.externalTerminal);
+        assertNull(result.failure);
+    }
+
+    @Test
+    public void unknownRestoreResultRequiresTerminalEvidenceBeforeCleanup() throws Exception {
+        stubTokenRenewal();
+        AblestackCommvaultClient client = newClient();
+        stubRestoreJobState("Unrecognized state", "", "");
+        org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result pending = client.restoreVolumeArtifact(
+                null, "ablecube4", new org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result("1200", false));
+        assertFalse(pending.completed);
+        assertFalse(pending.externalTerminal);
+        stubRestoreJobState("Unconfirmed", "", "");
+        assertFalse(client.restoreVolumeArtifact(null, "ablecube4",
+                new org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result("1200", false)).externalTerminal);
+        stubRestoreJobState("Unrecognized state", "", "\"endTime\":1792458000");
+        org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result ended = client.restoreVolumeArtifact(
+                null, "ablecube4", new org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result("1200", false));
+        assertFalse(ended.completed);
+        assertTrue(ended.externalTerminal);
+        assertTrue(ended.failure.contains("Unrecognized terminal state"));
+    }
+
+    @Test
+    public void canceledAndCommittedRestoresNeverCountAsSuccessful() throws Exception {
+        stubTokenRenewal();
+        AblestackCommvaultClient client = newClient();
+        for (String state : List.of("Failed", "Failed to Start", "Killed", "Canceled", "Cancelled", "Committed")) {
+            stubRestoreJobState(state, "\"reasonForJobDelay\":\"Restore could not finish\"", "");
+            org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result result = client.restoreVolumeArtifact(
+                    null, "ablecube4", new org.apache.cloudstack.backup.ThirdPartyBackupRestore.Result("1200", false));
+            assertFalse(state, result.completed);
+            assertTrue(state, result.externalTerminal);
+            assertTrue(result.failure.contains("Restore could not finish"));
+        }
+    }
+
+    @Test
+    public void legacyPollingNormalizesWarningAndDoesNotWaitForAnUnknownState() throws Exception {
+        stubTokenRenewal();
+        AblestackCommvaultClient client = newClient();
+        stubRestoreJobState("Completed With Warning", "\"pendingReason\":\"Permission warning\"", "");
+        AblestackCommvaultClient.JobStatusResult warning = client.getJobStatusResult("1200", 1000);
+        assertEquals("Completed w/ one or more warnings", warning.getStatus());
+        assertTrue(warning.getFailureReason().contains("Permission warning"));
+        stubRestoreJobState("Unknown state", "", "");
+        assertEquals("Unconfirmed", client.getJobStatusResult("1200", 1000).getStatus());
+    }
+
+    @Test
+    public void failedJobStatusQueryDoesNotClaimCompletionOrTermination() throws Exception {
+        stubTokenRenewal();
+        wireMockRule.stubFor(post(urlEqualTo("/api/JobDetails")).willReturn(aResponse().withStatus(503)));
+        AblestackCommvaultClient.JobStatusResult result = newClient().getJobStatusResult("1200", 1000);
+        assertNull(result.getStatus());
+        assertFalse(result.isTerminal());
+    }
+
+    private void stubRestoreJobState(String state, String progress, String detail) {
+        wireMockRule.stubFor(post(urlEqualTo("/api/JobDetails"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"job\":{\"jobDetail\":{\"progressInfo\":{\"state\":\""
+                        + state + "\"" + (progress.isEmpty() ? "" : "," + progress) + "},\"detailInfo\":{" + detail + "}}}}")));
+    }
+
 }
