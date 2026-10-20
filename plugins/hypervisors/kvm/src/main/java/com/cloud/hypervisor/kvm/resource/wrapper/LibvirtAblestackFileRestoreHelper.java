@@ -55,7 +55,9 @@ final class LibvirtAblestackFileRestoreHelper {
             }
             final QemuImg.PhysicalDiskFormat targetFormat = getFileVolumeFormat(logger, originalTarget);
             final String base = chain.get(0);
-            convertFileVolumeWithQemuImg(trace, logger, base, preparedTarget, getBackupFileFormat(base), targetFormat, timeout);
+            try (var provisioning = LibvirtAblestackRestoreProvisioning.temporary(originalTarget, preparedTarget)) {
+                convertFileVolumeWithQemuImg(trace, logger, base, preparedTarget, getBackupFileFormat(base), targetFormat, timeout);
+            }
             for (int index = 1; index < chain.size(); index++) {
                 final String diff = chain.get(index);
                 if (!diff.endsWith(".qcow2") || !Files.isRegularFile(Path.of(diff))) {
@@ -139,6 +141,7 @@ final class LibvirtAblestackFileRestoreHelper {
         try {
             srcBackupFile = new QemuImgFile(backupPath, getBackupFileFormat(backupPath));
             final QemuImg.PhysicalDiskFormat targetFormat = getFileVolumeFormat(logger, volumePath);
+            LibvirtAblestackRestoreProvisioning.type(volumePath);
             LibvirtAblestackRestoreProgress.phase("RESTORE_PREPARE_TARGET", targetFormat.toString());
             validatePrimaryStorageSpaceForFileRestore(trace, logger, backupPath, volumePath);
             movedAsideTarget = moveExistingFileVolumeAside(trace, logger, volumePath);
@@ -147,7 +150,9 @@ final class LibvirtAblestackFileRestoreHelper {
             final QemuImgFile temporaryVolumeFile = new QemuImgFile(temporaryVolumePath.toString(), targetFormat);
             logger.info("{} phase=[TEMP_TARGET_CREATED], source=[{}], target=[{}], temporaryTarget=[{}], sourceFormat=[{}], targetFormat=[{}]",
                     trace, srcBackupFile.getFileName(), volumePath, temporaryVolumeFile.getFileName(), srcBackupFile.getFormat(), targetFormat);
-            convertFileVolumeWithQemuImg(trace, logger, backupPath, temporaryVolumeFile.getFileName(), srcBackupFile.getFormat(), targetFormat, timeout);
+            try (var provisioning = LibvirtAblestackRestoreProvisioning.temporary(volumePath, temporaryVolumePath.toString())) {
+                convertFileVolumeWithQemuImg(trace, logger, backupPath, temporaryVolumeFile.getFileName(), srcBackupFile.getFormat(), targetFormat, timeout);
+            }
             LibvirtAblestackRestoreProgress.phase("RESTORE_PROMOTE", "");
             Files.move(temporaryVolumePath, Paths.get(volumePath), StandardCopyOption.REPLACE_EXISTING);
             logger.info("{} phase=[TEMP_TARGET_PROMOTED], target=[{}], temporaryTarget=[{}]",
@@ -275,10 +280,14 @@ final class LibvirtAblestackFileRestoreHelper {
     static void convertFileVolumeWithQemuImg(final String trace, final Logger logger, final String backupPath,
             final String volumePath, final QemuImg.PhysicalDiskFormat backupFormat, final QemuImg.PhysicalDiskFormat volumeFormat,
             final int timeout) throws QemuImgException {
-        LibvirtAblestackRestoreProgress.phase("RESTORE_CONVERT", backupFormat + " → " + volumeFormat + " · -S 4k");
-        final String convertCommand = String.format("qemu-img convert -p -S 4k -f %s -O %s %s %s",
+        final Storage.ProvisioningType provisioningType = LibvirtAblestackRestoreProvisioning.type(volumePath);
+        final String sparseSize = provisioningType == Storage.ProvisioningType.FAT ? "0" : "4k";
+        final String preallocation = preallocation(volumeFormat, provisioningType);
+        final String options = preallocation == null ? "" : "-o preallocation=" + preallocation + " ";
+        LibvirtAblestackRestoreProgress.phase("RESTORE_CONVERT", "Restoring volume data");
+        final String convertCommand = String.format("qemu-img convert -p -S %s -f %s -O %s %s%s %s", sparseSize,
                 backupFormat.toString().toLowerCase(Locale.ROOT), volumeFormat.toString().toLowerCase(Locale.ROOT),
-                quote(backupPath), quote(volumePath));
+                options, quote(backupPath), quote(volumePath));
         final Pair<Integer, String> result;
         try {
             result = runCommandWithOutput(convertCommand, timeout * 1000);
@@ -287,13 +296,20 @@ final class LibvirtAblestackFileRestoreHelper {
         }
         final String output = formatTraceOutput(result.second());
         if (result.first() == 0) {
-            logger.info("{} phase=[CONVERT], source=[{}], target=[{}], command=[qemu-img-convert-sparse], sparseSize=[4k]",
-                    trace, backupPath, volumePath);
+            logger.info("{} phase=[CONVERT], source=[{}], target=[{}], sourceFormat=[{}], targetFormat=[{}], command=[qemu-img-convert-sparse], sparseSize=[{}], provisioningType=[{}], preallocation=[{}]",
+                    trace, backupPath, volumePath, backupFormat, volumeFormat, sparseSize, provisioningType, preallocation);
             return;
         }
-        logger.warn("{} phase=[CONVERT], source=[{}], target=[{}], command=[qemu-img-convert-sparse], sparseSize=[4k], exitCode=[{}], output=[{}]",
-                trace, backupPath, volumePath, result.first(), output);
+        logger.warn("{} phase=[CONVERT], source=[{}], target=[{}], sourceFormat=[{}], targetFormat=[{}], command=[qemu-img-convert-sparse], sparseSize=[{}], provisioningType=[{}], preallocation=[{}], exitCode=[{}], output=[{}]",
+                trace, backupPath, volumePath, backupFormat, volumeFormat, sparseSize, provisioningType, preallocation, result.first(), output);
         throw new QemuImgException(String.format("qemu-img convert failed with exitCode [%s], output [%s]", result.first(), output));
+    }
+
+    static String preallocation(QemuImg.PhysicalDiskFormat format, Storage.ProvisioningType type) {
+        if (type == null) { return null; }
+        // RAW has no separate metadata allocation; sparse RAW files use holes with preallocation=off.
+        if (format == QemuImg.PhysicalDiskFormat.RAW && type == Storage.ProvisioningType.SPARSE) { return "off"; }
+        return QemuImg.PreallocationType.getPreallocationType(type).toString();
     }
 
     private static void validatePrimaryStorageSpaceForFileRestore(final String trace, final Logger logger,

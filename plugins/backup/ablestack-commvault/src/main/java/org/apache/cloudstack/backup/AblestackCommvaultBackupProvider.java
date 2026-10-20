@@ -1288,6 +1288,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         command.setVmName(vm.getInstanceName());
         command.setRestoreVolumePools(destinations.first());
         command.setRestoreVolumePaths(destinations.second());
+        command.setRestoreVolumeProvisioningTypes(targets, destinations.second());
         command.setBackupVolumesUUIDs(sourceUuids);
         command.setVmExists(singleVolume ? null : vm.getRemoved() == null);
         command.setVmState(vm.getState());
@@ -1650,6 +1651,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                 Pair<List<PrimaryDataStoreTO>, List<String>> volumePoolsAndPaths = getVolumePoolsAndPaths(restoreVolumes);
                 restoreCommand.setRestoreVolumePools(volumePoolsAndPaths.first());
                 restoreCommand.setRestoreVolumePaths(volumePoolsAndPaths.second());
+                restoreCommand.setRestoreVolumeProvisioningTypes(restoreVolumes, volumePoolsAndPaths.second());
                 restoreCommand.setVmExists(vm.getRemoved() == null);
                 restoreCommand.setVmState(vm.getState());
                 restoreCommand.setRestorePlan(createRestorePlan(false));
@@ -1871,6 +1873,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                     }
                     restoreCommand.setVolumeChainStates(getVolumeChainStates(Collections.singletonList(matchingVolume), backup));
                     restoreCommand.setRestoreVolumePaths(Collections.singletonList(String.format("%s/%s", getVolumePathPrefix(pool), volumeUUID)));
+                    restoreCommand.setRestoreVolumeProvisioningTypes(Collections.singletonList(restoredVolume), restoreCommand.getRestoreVolumePaths());
                     DataStore dataStore = dataStoreMgr.getDataStore(pool.getId(), DataStoreRole.Primary);
                     if (dataStore == null) {
                         throw new CloudRuntimeException(String.format("Unable to get primary datastore TO for pool [%s] while restoring volume [%s]",

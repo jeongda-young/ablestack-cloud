@@ -1295,6 +1295,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
             final Pair<List<PrimaryDataStoreTO>, List<String>> volumePoolsAndPaths = getVolumePoolsAndPaths(restoreVolumes);
             restoreCommand.setRestoreVolumePools(volumePoolsAndPaths.first());
             restoreCommand.setRestoreVolumePaths(volumePoolsAndPaths.second());
+            restoreCommand.setRestoreVolumeProvisioningTypes(restoreVolumes, volumePoolsAndPaths.second());
             restoreCommand.setVmExists(vm.getRemoved() == null);
             restoreCommand.setVmState(vm.getState());
             restoreCommand.setRestorePlan(createRestorePlan(false));
@@ -1453,6 +1454,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
             restoreCommand.setVolumeChainStates(getVolumeChainStates(Collections.singletonList(matchingVolume), backup));
             final String restoreVolumePath = String.format("%s/%s", getVolumePathPrefix(pool), volumeUuid);
             restoreCommand.setRestoreVolumePaths(Collections.singletonList(restoreVolumePath));
+            restoreCommand.setRestoreVolumeProvisioningTypes(Collections.singletonList(restoredVolume), restoreCommand.getRestoreVolumePaths());
             final DataStore dataStore = dataStoreMgr.getDataStore(pool.getId(), DataStoreRole.Primary);
             if (dataStore == null) {
                 throw new CloudRuntimeException(String.format(
@@ -2134,6 +2136,7 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         command.setVmName(vm.getInstanceName());
         command.setRestoreVolumePools(destinations.first());
         command.setRestoreVolumePaths(destinations.second());
+        command.setRestoreVolumeProvisioningTypes(targets, destinations.second());
         command.setBackupVolumesUUIDs(sourceUuids);
         command.setVmExists(singleVolume ? null : vm.getRemoved() == null);
         command.setVmState(vm.getState());

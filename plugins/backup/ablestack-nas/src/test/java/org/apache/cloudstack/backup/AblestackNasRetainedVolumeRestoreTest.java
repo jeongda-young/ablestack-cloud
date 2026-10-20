@@ -83,6 +83,7 @@ public class AblestackNasRetainedVolumeRestoreTest {
         // Both original VM and original volume are absent from active records.
         when(volumeDao.findByUuidIncludingRemoved(saved.getUuid())).thenReturn(null);
         DiskOfferingVO offering = Mockito.mock(DiskOfferingVO.class);
+        when(offering.getProvisioningType()).thenReturn(Storage.ProvisioningType.SPARSE);
         when(diskOfferingDao.findByUuid("disk-offering")).thenReturn(offering);
         VMInstanceVO target = Mockito.mock(VMInstanceVO.class);
         when(target.getId()).thenReturn(9L);
@@ -111,6 +112,8 @@ public class AblestackNasRetainedVolumeRestoreTest {
         verify(agentManager).send(eq(7L), command.capture());
         assertEquals("target-vm", command.getValue().getVmName());
         assertEquals("datadisk", command.getValue().getDiskType());
+        assertEquals(Storage.ProvisioningType.SPARSE, command.getValue().getRestoreVolumeProvisioningTypes()
+                .get(command.getValue().getRestoreVolumePaths().get(0)));
         assertEquals(List.of("/source-vm/full/datadisk.source-volume.qcow2", "/source-vm/inc/datadisk.source-volume.qcow2"),
                 command.getValue().getVolumeChainStates().get(0).getChainFiles());
         ArgumentCaptor<VolumeVO> restored = ArgumentCaptor.forClass(VolumeVO.class);

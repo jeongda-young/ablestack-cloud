@@ -613,7 +613,10 @@ final class LibvirtAblestackVolumeRestoreHelper {
             }
             long targetBytes = targetBytes(index, volume);
             if (targetBytes > volume.provisionedBytes) {
+                String preallocation = pool == null ? LibvirtAblestackFileRestoreHelper.preallocation(targetFormat,
+                        LibvirtAblestackRestoreProvisioning.type(original)) : null;
                 run("qemu-img resize -f " + targetFormat.toString().toLowerCase(java.util.Locale.ROOT) + " "
+                        + (preallocation == null ? "" : "--preallocation=" + preallocation + " ")
                         + quote(preparedUri) + " " + targetBytes);
                 Map<String, String> resizedInfo = new QemuImg(TimeUnit.SECONDS.toMillis(plan.timeout))
                         .info(new QemuImgFile(preparedUri, targetFormat));

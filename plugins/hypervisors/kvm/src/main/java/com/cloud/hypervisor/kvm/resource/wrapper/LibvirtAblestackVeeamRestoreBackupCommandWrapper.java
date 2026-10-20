@@ -68,6 +68,12 @@ public class LibvirtAblestackVeeamRestoreBackupCommandWrapper extends CommandWra
 
     @Override
     public Answer execute(final AblestackVeeamRestoreBackupCommand command, final LibvirtComputingResource serverResource) {
+        try (var provisioning = LibvirtAblestackRestoreProvisioning.begin(command.getRestoreVolumeProvisioningTypes())) {
+            return executeRestore(command, serverResource);
+        }
+    }
+
+    private Answer executeRestore(final AblestackVeeamRestoreBackupCommand command, final LibvirtComputingResource serverResource) {
         if (!command.isWaitForCompletion()) {
             return LibvirtAblestackAsyncBackupRunner.startDetachedRestore(command, logger, RESTORE_TRACE, "veeam",
                     command.getRestoreJobId(), command.getVmName(), command.getBackupPath());

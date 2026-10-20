@@ -58,11 +58,6 @@ import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE_TIME;
 public class LibvirtVMDef {
     protected static Logger LOGGER = LogManager.getLogger(LibvirtVMDef.class);
 
-    // TEMPORARY ACPI diagnosis: remove after comparing boot with the pre-#1261 Q35 topology.
-    private static final Map<String, String> TEMP_ACPI_LEGACY_PCIE_VMS = Map.of(
-            "i-2-218-VM", "d69a6dc5-1f35-442d-8941-e0b3e02e4f63",
-            "i-2-285-VM", "9ec8f15a-c7dc-4600-8612-ceee9c870236");
-
     // CD-ROM slot allocation: getDevLabel() maps deviceSeq=3,4 to hdc and hdd on the IDE bus.
     // Bumping this requires extending getDevLabel() (e.g. to spill onto SATA or a second IDE controller).
     public static final int MAX_CDROMS_PER_VM = 2;
@@ -758,14 +753,18 @@ public class LibvirtVMDef {
         private static final int PCIE_ROOT_PORT_COUNT = 32;
         private String _machineType;
         private String _emulator;
-        private boolean _useLegacyPcieTopology;
+        private boolean _reserveQ35PciePorts;
 
         public void setMachineType(String machineType) {
             _machineType = machineType;
         }
 
-        private void setUseLegacyPcieTopology(boolean useLegacyPcieTopology) {
-            _useLegacyPcieTopology = useLegacyPcieTopology;
+        public boolean isQ35() {
+            return _guestType == GuestDef.GuestType.KVM && LibvirtQ35PcieTopology.isQ35(_machineType);
+        }
+
+        public void setReserveQ35PciePorts(boolean reserveQ35PciePorts) {
+            _reserveQ35PciePorts = reserveQ35PciePorts;
         }
         private GuestDef.GuestType _guestType;
         private final Map<String, List<?>> devices = new HashMap<String, List<?>>();
@@ -816,7 +815,7 @@ public class LibvirtVMDef {
                 }
             }
 
-            boolean q35 = !_useLegacyPcieTopology && _guestType == GuestDef.GuestType.KVM && _machineType != null
+            boolean q35 = _reserveQ35PciePorts && _guestType == GuestDef.GuestType.KVM && _machineType != null
                     && ("q35".equals(_machineType) || _machineType.startsWith("pc-q35-"));
             boolean existingPcieArchitecture = _emulator != null && (_emulator.endsWith("aarch64") || _emulator.endsWith("s390x"));
             // libvirt otherwise creates only enough root ports for boot devices, leaving none for NIC hotplug.
@@ -2876,12 +2875,6 @@ public class LibvirtVMDef {
             if (o instanceof DevicesDef && guest != null) {
                 DevicesDef devices = (DevicesDef) o;
                 devices.setMachineType(guest.getMachineType());
-                boolean legacyPcie = _domName != null && _domUUID != null
-                        && _domUUID.equals(TEMP_ACPI_LEGACY_PCIE_VMS.get(_domName));
-                devices.setUseLegacyPcieTopology(legacyPcie);
-                if (legacyPcie) {
-                    LOGGER.warn("TEMP_ACPI_LEGACY_PCIE: vm=[{}], uuid=[{}], using the pre-#1261 Q35 PCIe topology", _domName, _domUUID);
-                }
             }
             vmBuilder.append(o.toString());
         }

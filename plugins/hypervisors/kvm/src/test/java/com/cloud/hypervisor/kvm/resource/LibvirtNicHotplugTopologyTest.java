@@ -33,6 +33,11 @@ public class LibvirtNicHotplugTopologyTest {
 
     private String domain(String machine, String emulator, LibvirtVMDef.GuestDef.GuestType type,
             boolean reverse, String name, String uuid) {
+        return domain(machine, emulator, type, reverse, name, uuid, true);
+    }
+
+    private String domain(String machine, String emulator, LibvirtVMDef.GuestDef.GuestType type,
+            boolean reverse, String name, String uuid, boolean reservePorts) {
         LibvirtVMDef vm = new LibvirtVMDef();
         vm.setHvsType("kvm");
         vm.setDomainName(name);
@@ -41,6 +46,7 @@ public class LibvirtNicHotplugTopologyTest {
         guest.setGuestType(type);
         guest.setMachineType(machine);
         LibvirtVMDef.DevicesDef devices = new LibvirtVMDef.DevicesDef();
+        devices.setReserveQ35PciePorts(reservePorts);
         devices.setGuestType(type);
         devices.setEmulatorPath(emulator);
         if (reverse) {
@@ -146,34 +152,34 @@ public class LibvirtNicHotplugTopologyTest {
     }
 
     @Test
-    public void diagnosticRbdVmUsesLegacyQ35AutoAllocation() {
+    public void allExistingVmsCanKeepLegacyQ35AutoAllocation() {
         assertEquals(0, ports(domain("pc-q35-rhel9.6.0", "/usr/libexec/qemu-kvm",
                 LibvirtVMDef.GuestDef.GuestType.KVM, false,
-                "i-2-218-VM", "d69a6dc5-1f35-442d-8941-e0b3e02e4f63")));
+                "any-existing-vm", "any-existing-uuid", false)));
     }
 
     @Test
-    public void diagnosticNasVmUsesLegacyQ35AutoAllocation() {
+    public void legacyPolicyAlsoWorksWithReversedComponentOrder() {
         assertEquals(0, ports(domain("pc-q35-rhel9.6.0", "/usr/libexec/qemu-kvm",
                 LibvirtVMDef.GuestDef.GuestType.KVM, true,
-                "i-2-285-VM", "9ec8f15a-c7dc-4600-8612-ceee9c870236")));
+                "another-existing-vm", "another-existing-uuid", false)));
     }
 
     @Test
-    public void diagnosticNameWithoutMatchingUuidKeepsNormalPorts() {
+    public void explicitReservationDoesNotDependOnVmIdentity() {
         assertEquals(32, ports(domain("q35", "/usr/libexec/qemu-kvm",
                 LibvirtVMDef.GuestDef.GuestType.KVM, false, "i-2-218-VM", "another-vm-uuid")));
     }
 
     @Test
-    public void diagnosticUuidWithoutMatchingNameKeepsNormalPorts() {
+    public void allNewVmIdentitiesCanUseReservedPorts() {
         assertEquals(32, ports(domain("q35", "/usr/libexec/qemu-kvm",
                 LibvirtVMDef.GuestDef.GuestType.KVM, false,
                 "i-2-999-VM", "9ec8f15a-c7dc-4600-8612-ceee9c870236")));
     }
 
     @Test
-    public void reusingDeviceDefinitionDoesNotRetainDiagnosticOverride() {
+    public void reusingDeviceDefinitionChangesTopologyOnlyWhenPolicyChanges() {
         LibvirtVMDef vm = new LibvirtVMDef();
         vm.setHvsType("kvm");
         vm.setDomainName("i-2-218-VM");
@@ -187,6 +193,8 @@ public class LibvirtNicHotplugTopologyTest {
         vm.addComp(devices);
         assertEquals(0, ports(vm.toString()));
         vm.setDomainName("normal-vm");
+        assertEquals(0, ports(vm.toString()));
+        devices.setReserveQ35PciePorts(true);
         assertEquals(32, ports(vm.toString()));
     }
 }

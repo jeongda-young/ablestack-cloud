@@ -4300,6 +4300,23 @@ public class UserVmManagerImplTest {
     }
 
     @Test
+    public void testBackupCapturedPciePolicyWinsOverCurrentSourceSettings() {
+        UserVmVO source = mock(UserVmVO.class);
+        String saved = "{\"kvm.q35.pcie.topology\":\"reserved32\"}";
+        assertEquals(KvmQ35PcieTopology.RESERVED_32, userVmManagerImpl.backupPcieTopology(source, saved));
+        verify(virtualMachineManager, never()).preserveKvmPcieTopology(source);
+    }
+
+    @Test
+    public void testOlderBackupUsesTheOriginalVmVerifiedPciePolicy() {
+        UserVmVO source = mock(UserVmVO.class);
+        when(source.getId()).thenReturn(218L);
+        when(vmInstanceDetailsDao.listDetailsKeyPairs(218L)).thenReturn(Collections.singletonMap(VmDetailConstants.KVM_Q35_PCIE_TOPOLOGY, "reserved32"));
+        assertEquals(KvmQ35PcieTopology.RESERVED_32, userVmManagerImpl.backupPcieTopology(source, null));
+        verify(virtualMachineManager).preserveKvmPcieTopology(source);
+    }
+
+    @Test
     public void testAllocateVMFromBackupWithVmSettingsRestoration() throws InsufficientCapacityException, ResourceAllocationException, ResourceUnavailableException {
         Long backupId = 10L;
         Long vmId = 1L;

@@ -70,6 +70,12 @@ public class LibvirtAblestackCommvaultRestoreBackupCommandWrapper extends Comman
 
     @Override
     public Answer execute(AblestackCommvaultRestoreBackupCommand command, LibvirtComputingResource serverResource) {
+        try (var provisioning = LibvirtAblestackRestoreProvisioning.begin(command.getRestoreVolumeProvisioningTypes())) {
+            return executeRestore(command, serverResource);
+        }
+    }
+
+    private Answer executeRestore(AblestackCommvaultRestoreBackupCommand command, LibvirtComputingResource serverResource) {
         if (!command.isWaitForCompletion()) {
             return LibvirtAblestackAsyncBackupRunner.startDetachedRestore(command, logger, RESTORE_TRACE, "commvault",
                     command.getRestoreJobId(), command.getVmName(), command.getBackupPath());

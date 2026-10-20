@@ -22,6 +22,7 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 import com.cloud.hypervisor.kvm.storage.KVMPhysicalDisk;
 import com.cloud.hypervisor.kvm.storage.KVMStoragePool;
@@ -67,6 +68,13 @@ public class LibvirtAblestackRbdVolumeRestoreTest {
     }
 
     @Test
+    public void nativeRbdDoesNotRequireOrApplyFileProvisioningOptions() throws Exception {
+        try (var provisioning = LibvirtAblestackRestoreProvisioning.begin(Map.of())) {
+            assertStreamingFull("ablestack-commvault", true);
+        }
+    }
+
+    @Test
     public void netbackupRawFullUsesTheNasImportRoutineInTheSelectedPool() throws Exception {
         assertStreamingFull("ablestack-netbackup", true);
     }
@@ -81,7 +89,16 @@ public class LibvirtAblestackRbdVolumeRestoreTest {
         assertStreamingFull("ablestack-commvault", false);
     }
 
+    @Test
+    public void largerFileDestinationKeepsSparsePolicyDuringConversionAndResize() throws Exception {
+        assertStreamingFull("ablestack-commvault", false, Storage.ProvisioningType.SPARSE, true);
+    }
+
     private void assertStreamingFull(String provider, boolean rbd) throws Exception {
+        assertStreamingFull(provider, rbd, null, false);
+    }
+
+    private void assertStreamingFull(String provider, boolean rbd, Storage.ProvisioningType policy, boolean grow) throws Exception {
         Path job = folder.newFolder("job").toPath();
         Path destination = folder.newFolder("staging").toPath();
         Path payload = Files.createDirectories(destination.resolve("payload")).resolve("root.raw");
@@ -99,6 +116,7 @@ public class LibvirtAblestackRbdVolumeRestoreTest {
         plan.timeout = 60;
         plan.destination = destination.toString();
         plan.volumeUuids = List.of(volume.uuid);
+        if (grow) { plan.targetVolumeBytes = List.of(2 * VOLUME_BYTES); }
         plan.manifest = Mockito.mock(ThirdPartyBackupManifest.class);
         Mockito.when(plan.manifest.getProvider()).thenReturn(provider);
         ThirdPartyBackupRestore.Request request = new ThirdPartyBackupRestore.Request();
@@ -121,11 +139,12 @@ public class LibvirtAblestackRbdVolumeRestoreTest {
         String prepared = rbd ? PREPARED : folder.getRoot().toPath().resolve("prepared.qcow2").toString();
         String original = rbd ? POOL + "/target" : folder.getRoot().toPath().resolve("target.qcow2").toString();
         List<String> commands = new ArrayList<>();
+        AtomicLong imageBytes = new AtomicLong(VOLUME_BYTES);
         try (MockedStatic<KVMPhysicalDisk> disks = Mockito.mockStatic(KVMPhysicalDisk.class);
                 MockedStatic<Script> scripts = Mockito.mockStatic(Script.class);
                 MockedStatic<LibvirtAblestackAsyncBackupRunner> runner = Mockito.mockStatic(LibvirtAblestackAsyncBackupRunner.class);
                 MockedConstruction<QemuImg> qemu = Mockito.mockConstruction(QemuImg.class, (mock, context) -> {
-                    Mockito.when(mock.info(any(QemuImgFile.class))).thenReturn(Map.of(QemuImg.VIRTUAL_SIZE, String.valueOf(VOLUME_BYTES)));
+                    Mockito.when(mock.info(any(QemuImgFile.class))).thenAnswer(call -> Map.of(QemuImg.VIRTUAL_SIZE, String.valueOf(imageBytes.get())));
                 })) {
             disks.when(() -> KVMPhysicalDisk.RBDStringBuilder(eq(pool), anyString()))
                     .thenAnswer(call -> "rbd:" + call.getArgument(1));
@@ -138,8 +157,20 @@ public class LibvirtAblestackRbdVolumeRestoreTest {
                 }
                 return "__CS_COMMAND_EXIT__=0";
             });
+            scripts.when(() -> Script.runSimpleBashScriptForExitValue(anyString(), anyInt(), eq(false))).thenAnswer(call -> {
+                String command = call.getArgument(0);
+                commands.add(command);
+                if (command.contains("qemu-img resize")) { imageBytes.set(2 * VOLUME_BYTES); }
+                return 0;
+            });
 
-            ReflectionTestUtils.invokeMethod(helper, "prepareVolume", manager, volume, target, original, prepared, 0);
+            if (policy == null) {
+                ReflectionTestUtils.invokeMethod(helper, "prepareVolume", manager, volume, target, original, prepared, 0);
+            } else {
+                try (var scope = LibvirtAblestackRestoreProvisioning.begin(Map.of(original, policy, prepared, policy))) {
+                    ReflectionTestUtils.invokeMethod(helper, "prepareVolume", manager, volume, target, original, prepared, 0);
+                }
+            }
 
             assertFalse(Files.exists(payload));
             ArgumentCaptor<QemuImgFile> information = ArgumentCaptor.forClass(QemuImgFile.class);
@@ -153,10 +184,14 @@ public class LibvirtAblestackRbdVolumeRestoreTest {
                     Mockito.verify(command, never()).convert(any(QemuImgFile.class), any(QemuImgFile.class));
                 }
             } else {
-                assertEquals(1, commands.size());
+                assertEquals(grow ? 2 : 1, commands.size());
                 assertTrue(commands.get(0).contains("qemu-img convert -p -S 4k -f raw -O qcow2"));
                 assertTrue(commands.get(0), commands.get(0).contains("'" + payload + "' '" + prepared + "'"));
                 assertEquals("prepared", Files.readString(Path.of(prepared)));
+                if (grow) {
+                    assertTrue(commands.get(0), commands.get(0).contains("-o preallocation=metadata"));
+                    assertTrue(commands.get(1), commands.get(1).contains("qemu-img resize -f qcow2 --preallocation=metadata"));
+                }
             }
         }
     }

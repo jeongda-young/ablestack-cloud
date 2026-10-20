@@ -29,11 +29,11 @@ public class LibvirtAblestackRestoreProgressTest {
         List<LibvirtAblestackRestoreProgress.Update> updates = new ArrayList<>();
         try (LibvirtAblestackRestoreProgress scope = LibvirtAblestackRestoreProgress.begin(updates::add)) {
             LibvirtAblestackRestoreProgress.volume(1, 2, "/nas/root.root-id.qcow2");
-            LibvirtAblestackRestoreProgress.phase("RESTORE_CONVERT", "QCOW2 → QCOW2 · -S 4k");
+            LibvirtAblestackRestoreProgress.phase("RESTORE_CONVERT", "Restoring volume data");
             LibvirtAblestackRestoreProgress.volume(2, 2, "/nas/datadisk.data-id.qcow2");
             LibvirtAblestackRestoreProgress.phase("RESTORE_COMPARE", "QCOW2 ↔ QCOW2");
         }
-        assertEquals("ROOT · QCOW2 → QCOW2 · -S 4k", updates.get(1).details);
+        assertEquals("ROOT · Restoring volume data", updates.get(1).details);
         LibvirtAblestackRestoreProgress.Update comparison = updates.get(3);
         assertEquals("RESTORE_COMPARE", comparison.step);
         assertEquals(Integer.valueOf(2), comparison.volumeIndex);

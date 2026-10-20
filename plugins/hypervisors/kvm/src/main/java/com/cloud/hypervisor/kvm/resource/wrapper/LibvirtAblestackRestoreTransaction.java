@@ -177,8 +177,12 @@ final class LibvirtAblestackRestoreTransaction {
                         state.setProperty("audit.activeIndex", String.valueOf(i));
                         stamp(state, i + ".prepareStartedAt");
                         save(journal, state);
-                        if (!restorer.prepare(i, state.getProperty(i + ".prepared"))) {
-                            throw new CloudRuntimeException("Unable to prepare restored volume " + targets.get(i));
+                        try (var provisioning = backends.get(i).pool == null
+                                ? LibvirtAblestackRestoreProvisioning.temporary(targets.get(i), state.getProperty(i + ".prepared"))
+                                : LibvirtAblestackRestoreProvisioning.begin(null)) {
+                            if (!restorer.prepare(i, state.getProperty(i + ".prepared"))) {
+                                throw new CloudRuntimeException("Unable to prepare restored volume " + targets.get(i));
+                            }
                         }
                         if (!backends.get(i).exists(state.getProperty(i + ".prepared"))) {
                             throw new CloudRuntimeException("Prepared restore volume is missing: " + targets.get(i));
@@ -197,6 +201,7 @@ final class LibvirtAblestackRestoreTransaction {
                     state.setProperty("phase", "COMMITTING");
                     stamp(state, "audit.switchStartedAt");
                     save(journal, state);
+                    LibvirtAblestackRestoreProgress.phase("RESTORE_PROMOTE", "Switching prepared VM volumes");
                     for (int i = 0; i < targets.size(); i++) {
                         final Backend backend = backends.get(i);
                         final String target = state.getProperty(i + ".target");
@@ -337,7 +342,7 @@ final class LibvirtAblestackRestoreTransaction {
         }
     }
 
-    private static Path vmDirectory(final String vmName) {
+    static Path vmDirectory(final String vmName) {
         if (vmName == null || !vmName.matches("[A-Za-z0-9_.-]+") || ".".equals(vmName) || "..".equals(vmName)) {
             throw new CloudRuntimeException("Invalid VM name for restore transaction");
         }
