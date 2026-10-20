@@ -23,7 +23,7 @@
       :locale="emptyText ? { emptyText } : undefined"
       :columns="isOrderUpdatable() ? columns : columns.filter(x => x.dataIndex !== 'order')"
       :dataSource="items"
-      :scroll="$route.name === 'autoscalevmgroup' ? { x: 980 } : undefined"
+      :scroll="['autoscalevmgroup', 'affinitygroup'].includes($route.name) ? { x: 980 } : undefined"
       :rowKey="listRowKey"
       :pagination="false"
       :rowSelection="explicitlyAllowRowSelection || enableGroupAction() || $route.name === 'event' ? {selectedRowKeys: selectedRowKeys, onChange: onSelectChange, getCheckboxProps: record => ({ disabled: selectionDisabled(record) }), columnWidth: 30} : null"
@@ -54,7 +54,9 @@
       </div>
     </template>
     <template #bodyCell="{ column, text, record }">
-      <template v-if="$route.name === 'autoscalevmgroup' && ['availablevirtualmachinecount', 'associatednetworkname', 'lastcheckedat', 'account', 'zonename'].includes(column.key)">
+      <AffinityGroupPolicy v-if="$route.meta?.name === 'affinitygroup' && column.key === 'type'" :type="record.type" compact />
+      <span v-else-if="$route.meta?.name === 'affinitygroup' && column.key === 'description'">{{ text || '—' }}</span>
+      <template v-else-if="$route.name === 'autoscalevmgroup' && ['availablevirtualmachinecount', 'associatednetworkname', 'lastcheckedat', 'account', 'zonename'].includes(column.key)">
         <auto-scale-list-cell :resource="record" :column="column.key" />
       </template>
       <template v-else-if="$route.meta?.name === 'vmgroup' && ['virtualmachinecount', 'virtualmachinestates'].includes(column.key)">
@@ -250,7 +252,7 @@
       <template v-if="column.key === 'templateid'">
         <router-link :to="{ path: '/template/' + record.templateid }">{{ text }}</router-link>
       </template>
-      <template v-if="column.key === 'type'">
+      <template v-if="column.key === 'type' && $route.meta?.name !== 'affinitygroup'">
         <span
           v-if="$route.name === 'vmsnapshot'"
         >{{ $t(text === 'DiskAndMemory' ? 'label.vmsnapshot.disk.memory' : text === 'Disk' ? 'label.vmsnapshot.disk' : text) }}</span>
@@ -1213,6 +1215,7 @@ import ResourceContextMenu from '@/components/view/ResourceContextMenu'
 import ResourceIcon from '@/components/view/ResourceIcon'
 import CopyLabel from '@/components/widgets/CopyLabel'
 import { cniDetailLink } from '@/utils/cniDeletion'
+import AffinityGroupPolicy from '@/views/compute/AffinityGroupPolicy'
 import GuestNetworkSummary from '@/components/view/GuestNetworkSummary'
 import ResourceLabel from '@/components/widgets/ResourceLabel'
 import TooltipButton from '@/components/widgets/TooltipButton'
@@ -1227,6 +1230,7 @@ export default {
   name: 'ListView',
   components: {
     BackupProgress,
+    AffinityGroupPolicy,
     AutoScaleListCell,
     InstanceGroupSummary,
     OsLogo,

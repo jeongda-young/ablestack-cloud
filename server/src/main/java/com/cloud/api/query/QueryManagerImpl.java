@@ -23,6 +23,7 @@ import java.text.DecimalFormat;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -5785,55 +5786,59 @@ public class QueryManagerImpl extends MutualExclusiveIdsManagerBase implements Q
 
         Filter searchFilter = new Filter(AffinityGroupJoinVO.class, ID_FIELD, true, startIndex, pageSize);
 
-        SearchCriteria<AffinityGroupJoinVO> sc = buildAffinityGroupSearchCriteria(domainId, isRecursive, permittedAccounts, listProjectResourcesCriteria, affinityGroupId, affinityGroupName,
-                affinityGroupType, keyword);
-
-        Pair<List<AffinityGroupJoinVO>, Integer> uniqueGroupsPair = _affinityGroupJoinDao.searchAndCount(sc, searchFilter);
-
-        // search group details by ids
-        List<AffinityGroupJoinVO> affinityGroups = new ArrayList<AffinityGroupJoinVO>();
-
-        Integer count = uniqueGroupsPair.second();
-        if (count != 0) {
-            List<AffinityGroupJoinVO> uniqueGroups = uniqueGroupsPair.first();
-            Long[] vrIds = new Long[uniqueGroups.size()];
-            int i = 0;
-            for (AffinityGroupJoinVO v : uniqueGroups) {
-                vrIds[i++] = v.getId();
-            }
-            affinityGroups = _affinityGroupJoinDao.searchByIds(vrIds);
-        }
-
+        Set<Long> sharedDomains = new HashSet<>();
         if (!permittedAccounts.isEmpty()) {
-            // add domain level affinity groups
             if (domainId != null) {
-                SearchCriteria<AffinityGroupJoinVO> scDomain = buildAffinityGroupSearchCriteria(null, isRecursive, new ArrayList<Long>(), listProjectResourcesCriteria, affinityGroupId,
-                        affinityGroupName, affinityGroupType, keyword);
-                Pair<List<AffinityGroupJoinVO>, Integer> groupsPair = listDomainLevelAffinityGroups(scDomain, searchFilter, domainId);
-                affinityGroups.addAll(groupsPair.first());
-                count += groupsPair.second();
+                sharedDomains.add(domainId);
             } else {
-
                 for (Long permAcctId : permittedAccounts) {
                     Account permittedAcct = _accountDao.findById(permAcctId);
-                    SearchCriteria<AffinityGroupJoinVO> scDomain = buildAffinityGroupSearchCriteria(null, isRecursive, new ArrayList<Long>(), listProjectResourcesCriteria, affinityGroupId,
-                            affinityGroupName, affinityGroupType, keyword);
-                    Pair<List<AffinityGroupJoinVO>, Integer> groupsPair = listDomainLevelAffinityGroups(scDomain, searchFilter, permittedAcct.getDomainId());
-                    affinityGroups.addAll(groupsPair.first());
-                    count += groupsPair.second();
+                    if (permittedAcct != null) {
+                        sharedDomains.add(permittedAcct.getDomainId());
+                    }
                 }
             }
-        } else if (((permittedAccounts.isEmpty()) && (domainId != null) && isRecursive)) {
-            // list all domain level affinity groups for the domain admin case
-            SearchCriteria<AffinityGroupJoinVO> scDomain = buildAffinityGroupSearchCriteria(null, isRecursive, new ArrayList<Long>(), listProjectResourcesCriteria, affinityGroupId, affinityGroupName,
-                    affinityGroupType, keyword);
-            Pair<List<AffinityGroupJoinVO>, Integer> groupsPair = listDomainLevelAffinityGroups(scDomain, searchFilter, domainId);
-            affinityGroups.addAll(groupsPair.first());
-            count += groupsPair.second();
+        } else if (domainId != null && isRecursive) {
+            sharedDomains.add(domainId);
         }
 
-        return new Pair<List<AffinityGroupJoinVO>, Integer>(affinityGroups, count);
+        Set<Long> sharedGroupIds = new HashSet<>();
+        for (Long sharedDomain : sharedDomains) {
+            sharedGroupIds.addAll(listDomainLevelAffinityGroupIds(sharedDomain));
+        }
 
+        SearchCriteria<AffinityGroupJoinVO> sc;
+        if (sharedGroupIds.isEmpty()) {
+            sc = buildAffinityGroupSearchCriteria(domainId, isRecursive, permittedAccounts, listProjectResourcesCriteria,
+                    affinityGroupId, affinityGroupName, affinityGroupType, keyword);
+        } else {
+            SearchCriteria<AffinityGroupJoinVO> scope = buildAffinityGroupSearchCriteria(domainId, isRecursive, permittedAccounts,
+                    listProjectResourcesCriteria, null, null, null, null);
+            SearchCriteria<AffinityGroupJoinVO> sharedScope = buildAffinityGroupSearchCriteria(null, isRecursive, Collections.emptyList(),
+                    listProjectResourcesCriteria, null, null, null, null);
+            sharedScope.addAnd("id", SearchCriteria.Op.IN, sharedGroupIds.toArray());
+            sharedScope.addAnd("aclType", SearchCriteria.Op.EQ, ACLType.Domain.toString());
+            scope.addOr("id", SearchCriteria.Op.SC, sharedScope);
+
+            // Apply filters to both visibility branches, then count/page the same distinct ID set once.
+            sc = buildAffinityGroupSearchCriteria(null, false, Collections.emptyList(), null,
+                    affinityGroupId, affinityGroupName, affinityGroupType, keyword);
+            sc.addAnd("id", SearchCriteria.Op.SC, scope);
+        }
+        Pair<List<AffinityGroupJoinVO>, Integer> uniqueGroupsPair = _affinityGroupJoinDao.searchAndCount(sc, searchFilter);
+        List<AffinityGroupJoinVO> uniqueGroups = uniqueGroupsPair.first();
+        if (uniqueGroups.isEmpty()) {
+            return new Pair<>(Collections.emptyList(), uniqueGroupsPair.second());
+        }
+
+        Long[] ids = new Long[uniqueGroups.size()];
+        for (int i = 0; i < uniqueGroups.size(); i++) {
+            ids[i] = uniqueGroups.get(i).getId();
+        }
+        List<AffinityGroupJoinVO> affinityGroups = _affinityGroupJoinDao.searchByIds(ids);
+        // The detail lookup may return several VM rows per ID, in a different order from the page.
+        affinityGroups.sort(Comparator.comparingLong(AffinityGroupJoinVO::getId));
+        return new Pair<>(affinityGroups, uniqueGroupsPair.second());
     }
 
     private void buildAffinityGroupViewSearchBuilder(SearchBuilder<AffinityGroupJoinVO> sb, Long domainId, boolean isRecursive, List<Long> permittedAccounts,
@@ -5930,8 +5935,8 @@ public class QueryManagerImpl extends MutualExclusiveIdsManagerBase implements Q
         return new Pair<List<AffinityGroupJoinVO>, Integer>(ags, count);
     }
 
-    private Pair<List<AffinityGroupJoinVO>, Integer> listDomainLevelAffinityGroups(SearchCriteria<AffinityGroupJoinVO> sc, Filter searchFilter, long domainId) {
-        List<Long> affinityGroupIds = new ArrayList<Long>();
+    private Set<Long> listDomainLevelAffinityGroupIds(long domainId) {
+        Set<Long> affinityGroupIds = new HashSet<>();
         Set<Long> allowedDomains = _domainMgr.getDomainParentIds(domainId);
         List<AffinityGroupDomainMapVO> maps = _affinityGroupDomainMapDao.listByDomain(allowedDomains.toArray());
 
@@ -5942,31 +5947,7 @@ public class QueryManagerImpl extends MutualExclusiveIdsManagerBase implements Q
             }
         }
 
-        if (!affinityGroupIds.isEmpty()) {
-            SearchCriteria<AffinityGroupJoinVO> domainSC = _affinityGroupJoinDao.createSearchCriteria();
-            domainSC.addAnd("id", SearchCriteria.Op.IN, affinityGroupIds.toArray());
-            domainSC.addAnd("aclType", SearchCriteria.Op.EQ, ACLType.Domain.toString());
-
-            sc.addAnd("id", SearchCriteria.Op.SC, domainSC);
-
-            Pair<List<AffinityGroupJoinVO>, Integer> uniqueGroupsPair = _affinityGroupJoinDao.searchAndCount(sc, searchFilter);
-            // search group by ids
-            Integer count = uniqueGroupsPair.second();
-            if (count == 0) {
-                // empty result
-                return new Pair<>(new ArrayList<AffinityGroupJoinVO>(), 0);
-            }
-            List<AffinityGroupJoinVO> uniqueGroups = uniqueGroupsPair.first();
-            Long[] vrIds = new Long[uniqueGroups.size()];
-            int i = 0;
-            for (AffinityGroupJoinVO v : uniqueGroups) {
-                vrIds[i++] = v.getId();
-            }
-            List<AffinityGroupJoinVO> vrs = _affinityGroupJoinDao.searchByIds(vrIds);
-            return new Pair<>(vrs, count);
-        } else {
-            return new Pair<>(new ArrayList<AffinityGroupJoinVO>(), 0);
-        }
+        return affinityGroupIds;
     }
 
     @Override

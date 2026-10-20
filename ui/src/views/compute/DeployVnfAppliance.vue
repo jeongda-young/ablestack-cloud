@@ -696,6 +696,8 @@
                         :zoneId="zoneId"
                         :value="affinityGroupIds"
                         :loading="loading.affinityGroups"
+                        :error="affinityGroupsError"
+                        :owner="params.affinityGroups.options"
                         :preFillContent="dataPreFill"
                         @select-affinity-group-item="($event) => updateAffinityGroups($event)"
                         @handle-search-filter="($event) => handleSearchFilter('affinityGroups', $event)"/>
@@ -838,6 +840,7 @@
 
 <script>
 import { ref, reactive, toRaw, nextTick } from 'vue'
+import { affinitySelectionIds, affinitySelectionGroups, fetchAffinityGroupOptions } from '@/utils/affinityGroupSelection'
 import { getAPI, postAPI } from '@/api'
 import _ from 'lodash'
 import { mixin, mixinDevice } from '@/utils/mixin.js'
@@ -990,6 +993,7 @@ export default {
       hypervisor: '',
       serviceOffering: {},
       diskOffering: {},
+      affinityGroupsError: '',
       affinityGroups: [],
       networks: [],
       networksAdd: [],
@@ -1073,7 +1077,7 @@ export default {
       return size.join(' | ')
     },
     affinityGroupIds () {
-      return _.map(this.affinityGroups, 'id')
+      return affinitySelectionIds(this.form.affinitygroupids)
     },
     params () {
       return {
@@ -1424,7 +1428,7 @@ export default {
           this.overrideDiskOffering = null
         }
         this.zone = _.find(this.options.zones, (option) => option.id === vnfAppConfig.zoneid)
-        this.affinityGroups = _.filter(this.options.affinityGroups, (option) => _.includes(vnfAppConfig.affinitygroupids, option.id))
+        this.affinityGroups = affinitySelectionGroups(vnfAppConfig.affinitygroupids, [...this.affinityGroups, ...this.options.affinityGroups])
         this.networks = this.getSelectedNetworksWithExistingConfig(_.filter(this.options.networks, (option) => _.includes(vnfAppConfig.networkids, option.id)))
 
         this.diskOffering = _.find(this.options.diskOfferings, (option) => option.id === vnfAppConfig.diskofferingid)
@@ -1916,7 +1920,8 @@ export default {
       this.form.multidiskoffering = value
     },
     updateAffinityGroups (ids) {
-      this.form.affinitygroupids = ids
+      this.form.affinitygroupids = affinitySelectionIds(ids)
+      this.affinityGroups = affinitySelectionGroups(ids, [...this.affinityGroups, ...this.options.affinityGroups])
     },
     updateNetworks (ids) {
       this.form.networkids = ids
@@ -2452,6 +2457,7 @@ export default {
       })
     },
     fetchOptions (param, name, exclude) {
+      if (name === 'affinityGroups' && !exclude?.includes(name)) return fetchAffinityGroupOptions(this, param)
       return new Promise((resolve, reject) => {
         if (exclude && exclude.length > 0 && exclude.includes(name)) {
           return resolve(null)

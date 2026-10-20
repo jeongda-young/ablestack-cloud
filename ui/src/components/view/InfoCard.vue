@@ -71,7 +71,8 @@
                   <a-tag :color="$config.theme['@link-color']" v-if="$route.path.startsWith('/extension') && !resource.isuserdefined">
                     {{ $t('label.inbuilt') }}
                   </a-tag>
-                  <a-tag v-if="resource.type">
+                  <AffinityGroupPolicy v-if="resource.type && $route.meta.name === 'affinitygroup'" :type="resource.type" compact />
+                  <a-tag v-else-if="resource.type">
                     <span v-if="['USER.LOGIN', 'USER.LOGOUT', 'ROUTER.HEALTH.CHECKS', 'FIREWALL.CLOSE', 'ALERT.SERVICE.DOMAINROUTER'].includes(resource.type)">{{ $t(resource.type.toLowerCase()) }}</span>
                     <span v-else>
                       {{ resource.type }}
@@ -1173,6 +1174,7 @@
 
 <script>
 import { creationVmOsName } from '@/utils/creationVmPresentation'
+import AffinityGroupPolicy from '@/views/compute/AffinityGroupPolicy'
 import { sshKeyPairNameLink, sshKeyPairVmQuery } from '@/utils/sshKeyPairIdentity'
 import { attachedIsos } from '@/utils/vmIsoActions'
 import { getAPI, postAPI } from '@/api'
@@ -1199,6 +1201,7 @@ import ResourceContextMenu from '@/components/view/ResourceContextMenu'
 export default {
   name: 'InfoCard',
   components: {
+    AffinityGroupPolicy,
     Console,
     OsLogo,
     Status,
@@ -1696,6 +1699,7 @@ export default {
           query[item.param] = this.resource.id
         }
       }
+      if (item.param === 'affinitygroupid' && this.resource.projectid) query.projectid = this.resource.projectid
       return query
     },
     handleContextMenu (event) {

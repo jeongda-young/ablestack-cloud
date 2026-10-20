@@ -19,6 +19,7 @@ import fs from 'fs'
 import path from 'path'
 import { mount, flushPromises } from '@vue/test-utils'
 import { defineAsyncComponent, h, markRaw, reactive } from 'vue'
+import { createRouter, createMemoryHistory } from 'vue-router'
 import { mixinDevice } from '@/utils/mixin'
 import ResourceView from '@/components/view/ResourceView'
 import InfoCard from '@/components/view/InfoCard'
@@ -50,6 +51,26 @@ test.each([{ capabilities: '' }, { backupcancellationpending: true }, { restoreo
 })
 
 describe('ResourceView resource navigation', () => {
+  it('returns from VM detail to the affinity member tab through real router history', async () => {
+    const component = { render: () => null }
+    const router = createRouter({ history: createMemoryHistory(), routes: [{ path: '/affinitygroup/:id', component, meta: { name: 'affinitygroup' } }, { path: '/vm/:id', component }] })
+    await router.push('/affinitygroup/group?keyword=kept')
+    const vm = { $route: router.currentRoute.value, $router: router, $emit: jest.fn() }
+    ResourceView.methods.onTabChange.call(vm, 'instances'); await flushPromises()
+    expect(router.currentRoute.value.query).toEqual({ keyword: 'kept', tab: 'instances' })
+    await router.push('/vm/vm'); router.back(); await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/affinitygroup/group')
+    expect(router.currentRoute.value.query).toEqual({ keyword: 'kept', tab: 'instances' })
+  })
+  it('affinity tab-only navigation preserves loaded data and selection but owner changes requery', () => {
+    const vm = { resetSelection: jest.fn(), clearAutoRefresh: jest.fn(), fetchData: jest.fn(), scheduleAutoRefresh: jest.fn() }
+    const from = { path: '/affinitygroup/group', fullPath: '/affinitygroup/group', params: { id: 'group' }, meta: { name: 'affinitygroup' }, query: {} }
+    const to = { ...from, fullPath: from.path + '?tab=instances', query: { tab: 'instances' } }
+    AutogenView.watch.$route.call(vm, to, from)
+    expect(vm.fetchData).not.toHaveBeenCalled(); expect(vm.resetSelection).not.toHaveBeenCalled()
+    AutogenView.watch.$route.call(vm, { ...to, fullPath: to.fullPath + '&domainid=other', query: { ...to.query, domainid: 'other' } }, to)
+    expect(vm.fetchData).toHaveBeenCalledTimes(1)
+  })
   it.each([
     ['/customaction/2', {}, true],
     ['/customaction/3', { tab: 'events' }, true],

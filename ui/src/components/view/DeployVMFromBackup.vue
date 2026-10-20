@@ -681,6 +681,8 @@
                         :zoneId="zoneId"
                         :value="affinityGroupIds"
                         :loading="loading.affinityGroups"
+                        :error="affinityGroupsError"
+                        :owner="params.affinityGroups.options"
                         :preFillContent="dataPreFill"
                         @select-affinity-group-item="($event) => updateAffinityGroups($event)"
                         @handle-search-filter="($event) => handleSearchFilter('affinityGroups', $event)"/>
@@ -810,6 +812,7 @@
 <script>
 import { ref, reactive, toRaw, nextTick, h } from 'vue'
 import { Button } from 'ant-design-vue'
+import { affinitySelectionIds, affinitySelectionGroups, fetchAffinityGroupOptions } from '@/utils/affinityGroupSelection'
 import { getAPI, postAPI } from '@/api'
 import _ from 'lodash'
 import { mixin, mixinDevice } from '@/utils/mixin.js'
@@ -963,6 +966,7 @@ export default {
       hypervisor: '',
       serviceOffering: {},
       diskOffering: {},
+      affinityGroupsError: '',
       affinityGroups: [],
       networks: [],
       networksAdd: [],
@@ -1125,7 +1129,7 @@ export default {
       }
     },
     affinityGroupIds () {
-      return _.map(this.affinityGroups, 'id')
+      return affinitySelectionIds(this.form.affinitygroupids)
     },
     params () {
       return {
@@ -1407,7 +1411,7 @@ export default {
         }
 
         this.zone = _.find(this.options.zones, (option) => option.id === this.instanceConfig.zoneid)
-        this.affinityGroups = _.filter(this.options.affinityGroups, (option) => _.includes(instanceConfig.affinitygroupids, option.id))
+        this.affinityGroups = affinitySelectionGroups(instanceConfig.affinitygroupids, [...this.affinityGroups, ...this.options.affinityGroups])
         this.networks = this.getSelectedNetworksWithExistingConfig(_.filter(this.options.networks, (option) => _.includes(instanceConfig.networkids, option.id)))
 
         this.diskOffering = _.find(this.options.diskOfferings, (option) => option.id === instanceConfig.diskofferingid)
@@ -1818,7 +1822,8 @@ export default {
       this.form.volumesdiskoffering = value
     },
     updateAffinityGroups (ids) {
-      this.form.affinitygroupids = ids
+      this.form.affinitygroupids = affinitySelectionIds(ids)
+      this.affinityGroups = affinitySelectionGroups(ids, [...this.affinityGroups, ...this.options.affinityGroups])
     },
     updateNetworks (ids) {
       this.form.networkids = ids
@@ -2258,6 +2263,7 @@ export default {
       })
     },
     fetchOptions (param, name, exclude) {
+      if (name === 'affinityGroups' && !exclude?.includes(name)) return fetchAffinityGroupOptions(this, param)
       if (exclude && exclude.length > 0) {
         if (exclude.includes(name)) {
           return

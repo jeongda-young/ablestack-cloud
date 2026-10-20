@@ -16,7 +16,7 @@
 // under the License.
 
 <template>
-  <div :class="{ 'autoscale-screen': $route.meta?.name === 'autoscalevmgroup', 'userdata-library': $route.meta?.name === 'userdata' }">
+  <div :class="{ 'autoscale-screen': $route.meta?.name === 'autoscalevmgroup', 'userdata-library': $route.meta?.name === 'userdata', 'affinity-library': $route.meta?.name === 'affinitygroup' }">
     <a-affix
       :key="'affix-' + showSearchFilters + ($route.meta?.name === 'userdata' ? '-' + device + '-' + selectedRowKeys.length : '')"
       :offsetTop="this.$store.getters.maintenanceInitiated || this.$store.getters.shutdownTriggered ? 103 : 78"
@@ -920,6 +920,7 @@ import { documentationUrl } from '@/utils/cniFileImport'
 import ListView from '@/components/view/ListView'
 import ResourceView from '@/components/view/ResourceView'
 import ActionButton from '@/components/view/ActionButton'
+import { affinityGroupQuery } from '@/utils/affinityGroupCreation'
 import SearchView from '@/components/view/SearchView'
 import SearchFilter from '@/components/view/SearchFilter'
 import OsLogo from '@/components/widgets/OsLogo'
@@ -1157,7 +1158,7 @@ export default {
 
     this.currentPath = this.$route.fullPath
     this.fetchData()
-    if ('projectid' in this.$route.query && !isSshKeyPairDetailRoute(this.$route)) {
+    if ('projectid' in this.$route.query && this.$route.meta?.name !== 'affinitygroup' && !isSshKeyPairDetailRoute(this.$route)) {
       this.switchProject(this.$route.query.projectid)
     }
     this.setModalWidthByScreen()
@@ -1187,6 +1188,8 @@ export default {
     },
     '$route' (to, from) {
       if (to.fullPath !== from.fullPath && !to.path.startsWith('/action/') && to?.query?.tab !== 'browser') {
+        if (to.meta?.name === 'affinitygroup' && from.meta?.name === 'affinitygroup' && to.params?.id && to.path === from.path &&
+          JSON.stringify({ ...to.query, tab: undefined }) === JSON.stringify({ ...from.query, tab: undefined })) return
         if (to.meta?.name === 'cniconfiguration' && from.meta?.name === 'cniconfiguration' && to.params?.id &&
           cniHistoryRouteKey(to) === cniHistoryRouteKey(from)) return
         if (to.meta?.name === 'vmgroup' && from.meta?.name === 'vmgroup' &&
@@ -1202,7 +1205,7 @@ export default {
         this.clearAutoRefresh()
         this.fetchData()
         this.scheduleAutoRefresh()
-        if ('projectid' in to.query && !isSshKeyPairDetailRoute(to)) {
+        if ('projectid' in to.query && to.meta?.name !== 'affinitygroup' && !isSshKeyPairDetailRoute(to)) {
           this.switchProject(to.query.projectid)
         }
       }
@@ -1538,6 +1541,12 @@ export default {
       })
     },
     fetchData (params = {}) {
+      if (this.$route.meta?.name === 'affinitygroup') {
+        const clean = affinityGroupQuery(this.$route.query)
+        if (JSON.stringify(clean) !== JSON.stringify(this.$route.query)) {
+          return this.$router.replace({ query: clean })
+        }
+      }
       if (isSshKeyPairDetailRoute(this.$route)) {
         const context = this.listScope()
         if (this.sshKeyPairDetailContext !== context) {
@@ -1875,7 +1884,7 @@ export default {
       }
 
       if (this.$store.getters.listAllProjects && !this.projectView) {
-        params.projectid = '-1'
+        params.projectid = this.$route.meta?.name === 'affinitygroup' ? (this.$route.query.projectid || '-1') : '-1'
       }
 
       params.page = Number.isFinite(Number(this.page)) && Number(this.page) > 0 ? Number(this.page) : 1
@@ -1923,7 +1932,7 @@ export default {
       if (['listVirtualMachines', 'listVirtualMachinesMetrics'].includes(requestApi)) {
         params = sshKeyPairVmParams(params, this.$route.query)
       }
-      const cniQuery = this.$route.meta?.name === 'cniconfiguration'
+      const cniQuery = ['cniconfiguration', 'affinitygroup'].includes(this.$route.meta?.name)
       const response = vmGroups || sshDetail || cniQuery ? getAPI(requestApi, params, { preserveOnFailure: true, timeout: 20000 }) : callAPI(requestApi, params)
       const request = response.then(async json => {
         if (version !== this.listRequestVersion || scope !== this.listScope()) return
@@ -2209,6 +2218,13 @@ export default {
     execAction (action, isGroupAction) {
       if (isSshKeyPairDetailRoute(this.$route) && !this.canExecuteSshKeyPairAction(action)) return
       this.actionTrigger = document.activeElement
+      if (action.api === 'deleteAffinityGroup') {
+        if (!['listAffinityGroups', 'deleteAffinityGroup'].every(api => api in this.$store.getters.apis)) return
+        this.currentAction = { ...action, invokedAsGroupAction: !!isGroupAction, affinityTargets: Object.freeze((isGroupAction ? this.selectedItems : [action.resource]).filter(Boolean).map(row => Object.freeze({ ...row }))) }
+        this.resource = action.resource || {}
+        this.showAction = true
+        return
+      }
       if (action.api === 'deleteCniConfiguration') {
         if (!['listCniConfiguration', 'deleteCniConfiguration'].every(api => api in this.$store.getters.apis)) return
         const request = { ...action, invokedAsGroupAction: !!isGroupAction }

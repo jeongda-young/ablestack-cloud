@@ -775,6 +775,8 @@
                         :zoneId="zoneId"
                         :value="affinityGroupIds"
                         :loading="loading.affinityGroups"
+                        :error="affinityGroupsError"
+                        :owner="params.affinityGroups.options"
                         :preFillContent="dataPreFill"
                         @select-affinity-group-item="($event) => updateAffinityGroups($event)"
                         @handle-search-filter="($event) => handleSearchFilter('affinityGroups', $event)"/>
@@ -1010,6 +1012,7 @@
 import '@/style/components/view/autoscale.less'
 import AutoScaleCreationSummary from '@/views/compute/AutoScaleCreationSummary'
 import { ref, reactive, toRaw, markRaw } from 'vue'
+import { affinitySelectionIds, affinitySelectionGroups, fetchAffinityGroupOptions } from '@/utils/affinityGroupSelection'
 import { getAPI, postAPI } from '@/api'
 import { createAutoScaleCreation, autoScaleCreationScope } from '@/utils/autoScaleCreation'
 import AutoScaleCreationProgress from './AutoScaleCreationProgress.vue'
@@ -1171,6 +1174,7 @@ export default {
       selectedTemplateConfiguration: {},
       serviceOffering: {},
       diskOffering: {},
+      affinityGroupsError: '',
       affinityGroups: [],
       networks: [],
       networksAdd: [],
@@ -1323,7 +1327,7 @@ export default {
       return size.join(' | ')
     },
     affinityGroupIds () {
-      return _.map(this.affinityGroups, 'id')
+      return affinitySelectionIds(this.form.affinitygroupids)
     },
     params () {
       return {
@@ -1539,7 +1543,7 @@ export default {
 
         this.zone = _.find(this.options.zones, (option) => option.id === vmgroupConfig.zoneid)
         this.networks = _.filter(this.options.networks, (option) => _.includes(vmgroupConfig.networkids, option.id))
-        this.affinityGroups = _.filter(this.options.affinityGroups, (option) => _.includes(vmgroupConfig.affinitygroupids, option.id))
+        this.affinityGroups = affinitySelectionGroups(vmgroupConfig.affinitygroupids, [...this.affinityGroups, ...this.options.affinityGroups])
         this.sshKeyPair = _.find(this.options.sshKeyPairs, (option) => option.name === vmgroupConfig.keypair)
 
         if (this.zone) {
@@ -2403,7 +2407,8 @@ export default {
       }
     },
     updateAffinityGroups (ids) {
-      this.form.affinitygroupids = ids
+      this.form.affinitygroupids = affinitySelectionIds(ids)
+      this.affinityGroups = affinitySelectionGroups(ids, [...this.affinityGroups, ...this.options.affinityGroups])
     },
     buildVmProfileParams (createVmGroupData, createVmGroupUserDataDetails) {
       const params = {
@@ -2871,6 +2876,7 @@ export default {
       })
     },
     fetchOptions (param, name, exclude) {
+      if (name === 'affinityGroups' && !exclude?.includes(name)) return fetchAffinityGroupOptions(this, param)
       return new Promise((resolve, reject) => {
         if (exclude && exclude.length > 0 && exclude.includes(name)) {
           return resolve(null)
