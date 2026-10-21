@@ -171,6 +171,10 @@ public final class AblestackBackupFrameworkUtils {
         return new ArrayList<>(sanitized);
     }
 
+    public static String buildRestoredVolumeName(final String sourceVolumeName, final String sourceVolumeUuid) {
+        return "RestoredVol-" + (StringUtils.isNotBlank(sourceVolumeName) ? sourceVolumeName : StringUtils.left(sourceVolumeUuid, 8));
+    }
+
     public static List<String> buildRestoreBackupFiles(final List<Backup.VolumeInfo> backedVolumes,
             final boolean legacyBackup, final Function<Backup.VolumeInfo, String> legacyFileNameResolver) {
         final List<String> backupFiles = new ArrayList<>();

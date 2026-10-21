@@ -2076,10 +2076,12 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
                 && !java.util.Objects.equals(targetVm.getHostId(), host.getId())) {
             throw new CloudRuntimeException("A restored volume must be attached on the running VM's Host");
         }
+        final VolumeVO sourceVolume = volumeDao.findByUuid(source.getUuid());
         VolumeVO restored = new VolumeVO(Volume.Type.DATADISK, null, backup.getZoneId(), backup.getDomainId(),
                 backup.getAccountId(), 0, null, source.getSize(), null, null, null);
         restored.setUuid(UUID.randomUUID().toString());
-        restored.setName("RestoredVol-" + source.getUuid());
+        restored.setName(AblestackBackupFrameworkUtils.buildRestoredVolumeName(
+                sourceVolume != null ? sourceVolume.getName() : null, source.getUuid()));
         restored.setProvisioningType(offering.getProvisioningType());
         restored.setUpdated(new Date());
         restored.setRemoved(null);
