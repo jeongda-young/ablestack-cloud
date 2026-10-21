@@ -23,9 +23,8 @@ ABLESTACK_VEEAM_ETC_DIR="${ABLESTACK_VEEAM_ETC_DIR:-/etc/ablestack/veeam}"
 MOLD_BACKUP_ETC_DIR="${MOLD_BACKUP_ETC_DIR:-${ABLESTACK_VEEAM_ETC_DIR}}"
 MOLD_BACKUP_CONF="${MOLD_BACKUP_CONF:-}"
 VEEAM_HOST_BACKUP_PATH="${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}"
-# Veeam Agent SelectedFiles root. Mold stage (VEEAM_HOST_BACKUP_PATH) may hold large RBD
-# .raw/.rbdiff for restore; Agent SyncDirs must only see this payload tree (markers / qcow2).
-VEEAM_AGENT_PAYLOAD_PATH="${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}"
+# The provisioner records a dedicated parent marker directory; no implicit local fallback.
+VEEAM_AGENT_PAYLOAD_PATH="${VEEAM_AGENT_PAYLOAD_PATH:-}"
 # Actual volume staging and disk export are owned by the Mold provider.
 
 mold_backup_strip_wrapping_quotes() {
@@ -175,7 +174,7 @@ mold_backup_load_config() {
   VEEAM_SSH_PASSWORD="${VEEAM_SSH_PASSWORD:-${VEEAM_PASSWORD:-}}"
   VEEAM_HOST_BACKUP_PATH="${VEEAM_HOST_BACKUP_PATH:-/tmp/mold/veeam}"
   STAGING_PATH="${STAGING_PATH:-${VEEAM_HOST_BACKUP_PATH}}"
-  VEEAM_AGENT_PAYLOAD_PATH="${VEEAM_AGENT_PAYLOAD_PATH:-/tmp/mold/veeam-agent}"
+  VEEAM_AGENT_PAYLOAD_PATH="${VEEAM_AGENT_PAYLOAD_PATH:-}"
   QUIESCE_VM="${QUIESCE_VM:-false}"
   BACKUP_OFFERING_NAME="${BACKUP_OFFERING_NAME:-VeeamBackup}"
   # Mold→Veeam trigger (bidirectional mode C): start the matching Veeam Agent job
@@ -1122,8 +1121,8 @@ mold_backup_process_external_candidate_vm() {
     wait_seconds=$((wait_seconds + 1))
     host_path="$(mold_backup_api_backup_external_id "$vm_id" "$backup_id")" || return 1
   done
-  mkdir -p "${VEEAM_AGENT_PAYLOAD_PATH}/${vm_name}"
-  cp -- "${host_path}/.volume-bootstrap" "${VEEAM_AGENT_PAYLOAD_PATH}/${vm_name}/backup-bootstrap.txt" || return 1
+  python3 "$(mold_backup_bootstrap_helper)" publish --payload-root "$VEEAM_AGENT_PAYLOAD_PATH" \
+    --source-marker "${host_path}/.volume-bootstrap" --backup-uuid "$backup_id" >/dev/null || return 1
   mold_backup_state_write_line "$state_file" \
     "vm=${vm_name} id=${vm_id} backup_id=${backup_id} type=${backup_result#*|} path=${host_path} status=pipeline"
   return 0
@@ -2449,9 +2448,15 @@ try:
             raise ValueError('Unverified restore warning: ' + message)
     if expected.get('artifacttype') != 'METADATA' or expected.get('provider') != 'ablestack-veeam':
         raise ValueError('Warning restore does not identify a metadata Job')
-    root = Path(expected.get('metadatapath', ''))
+    source_root = Path(expected.get('metadatapath', ''))
+    destinations = {Path(p) for p in (expected.get('metadatarestorepath'), expected.get('metadatapath')) if p}
+    available = [p for p in destinations if (p / 'backup-manifest.json').is_file()
+                 and (p / 'backup-manifest.json').lstat().st_ctime >= start - 5]
+    if len(available) != 1:
+        raise ValueError('Restored metadata destination is missing or ambiguous')
+    root = available[0]
     if not root.is_absolute() or root.resolve() != root or not root.is_dir():
-        raise ValueError('Original metadata directory is unavailable or redirects elsewhere')
+        raise ValueError('Metadata directory is unavailable or redirects elsewhere')
     def read(name):
         path = root / name
         before = path.lstat()
@@ -2479,7 +2484,7 @@ try:
         seen.add(volume['uuid'])
         artifact = volume['chain'][-1]
         if (artifact.get('backupUuid') != manifest['backupUuid'] or artifact.get('completed') is not True
-                or not artifact.get('externalId') or not artifact.get('jobId') or Path(artifact.get('path', '')).parent != root):
+                or not artifact.get('externalId') or not artifact.get('jobId') or Path(artifact.get('path', '')).parent != source_root):
             raise ValueError('Unconfirmed or mismatched volume artifact')
     domain = ET.fromstring(read('domain-config.xml'))
     if (domain.tag != 'domain' or domain.findtext('name') != expected.get('vmname')
@@ -2845,6 +2850,15 @@ mold_backup_watch_veeam_backups() {
   return 0
 }
 
+mold_backup_bootstrap_helper() {
+  local directory="${BASH_SOURCE[0]%/*}"
+  if [[ -f "$directory/thirdparty_bootstrap.py" ]]; then
+    printf '%s' "$directory/thirdparty_bootstrap.py"
+  else
+    printf '%s' "$directory/../thirdparty_bootstrap.py"
+  fi
+}
+
 mold_backup_pre_notify() {
   local client="${1:-$(hostname -s)}" job schedule="${3:-${VEEAM_SCHEDULE_NAME:-default}}"
   local single_vm="${4:-}" saved_include=""
@@ -2860,6 +2874,20 @@ mold_backup_pre_notify() {
     mold_backup_notify_log err "Veeam hooks require the ablestack-veeam host volume staging configuration"
     return 1
   }
+  if [[ -z "$VEEAM_AGENT_PAYLOAD_PATH" ]]; then
+    mold_backup_notify_log err "Rerun veeam-host-config.py and configure the parent Job's marker SelectedFiles before backing up."
+    return 1
+  fi
+  if [[ "${VEEAM_AGENT_PAYLOAD_MODE:-EXPLICIT}" == COMMON ]]; then
+    local parent_host parent_job expected_payload
+    parent_host="$(mold_backup_safe_job_name "${KVM_HOSTNAME:-$client}")"
+    parent_job="$(mold_backup_safe_job_name "$job")"
+    expected_payload="$VEEAM_HOST_BACKUP_PATH/bootstrap/$parent_host/$parent_job"
+    if [[ "$VEEAM_AGENT_PAYLOAD_PATH" != "$expected_payload" ]]; then
+      mold_backup_notify_log err "Staging changed. Rerun veeam-host-config.py and update parent Job SelectedFiles to $expected_payload before backing up."
+      return 1
+    fi
+  fi
   local MOLD_EXTERNAL_BACKUP_CANDIDATES external_selection_mode
   MOLD_EXTERNAL_BACKUP_CANDIDATES="$(mold_backup_api_external_candidates)" || return 1
   external_selection_mode="$(mold_backup_external_candidate_field "" selectionmode)" || return 1
@@ -2890,7 +2918,7 @@ mold_backup_pre_notify() {
 }
 
 mold_backup_post_notify() {
-  local job state_file line vm_name status
+  local job state_file line vm_name status backup_id
   job="$(mold_backup_normalize_job_name "${2:-${VEEAM_JOB_NAME:-}}")"
   [[ -n "$job" ]] || mold_backup_die "VEEAM_JOB_NAME is required for post-notify"
   VEEAM_JOB_NAME="$job"
@@ -2904,14 +2932,19 @@ mold_backup_post_notify() {
       [[ "$line" == vm=* ]] || continue
       vm_name="$(mold_backup_state_parse_field "$line" vm)"
       status="$(mold_backup_state_parse_field "$line" status)"
+      backup_id="$(mold_backup_state_parse_field "$line" backup_id)"
       [[ -n "$vm_name" ]] || continue
       mold_backup_trigger_clear veeam-active "$vm_name"
       mold_backup_trigger_mark backup-cooldown "$vm_name"
+      if [[ -n "$backup_id" && -n "$VEEAM_AGENT_PAYLOAD_PATH" && -f "$VEEAM_AGENT_PAYLOAD_PATH/$backup_id.json" ]]; then
+        python3 "$(mold_backup_bootstrap_helper)" retire --payload-root "$VEEAM_AGENT_PAYLOAD_PATH" \
+          --backup-uuid "$backup_id" || return 1
+      fi
       mold_backup_notify_log info "Parent session finished vm=${vm_name} status=${status}; Mold owns volume transfers and metadata completion"
     done < "$state_file"
     rm -f -- "$state_file"
   fi
-  # Never delete payload files or stamp the parent restore point onto a logical backup.
+  # Retire only parent markers; image payloads and catalog completion belong to Mold.
   mold_backup_notify_log info "post-notify: volume staging and catalog completion remain owned by Mold"
 }
 

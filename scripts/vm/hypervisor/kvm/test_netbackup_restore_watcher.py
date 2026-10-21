@@ -38,7 +38,9 @@ class NetBackupRestoreWatcherTest(unittest.TestCase):
         self.root = self.stage / "i-2-10-VM/2026.10.20.10.00.00.000"
         self.root.mkdir(parents=True)
         config = self.base / "watcher.conf"
-        config.write_text(f'NETBACKUP_STAGING_ROOT="{self.stage}"\nLOG_FILE="{self.base}/watcher.log"\nNETBACKUP_CLIENT_NAME="host-test"\n')
+        config.write_text(f'NETBACKUP_STAGING_ROOT="{self.stage}"\nLOG_FILE="{self.base}/watcher.log"\n'
+                          f'STATE_FILE="{self.base}/state.json"\nLOCK_FILE="{self.base}/watcher.lock"\n'
+                          'NETBACKUP_CLIENT_NAME="host-test"\n')
         spec = importlib.util.spec_from_file_location("netbackup_restore_watcher", Path(__file__).with_name("netbackup-host-restore-watcher.py"))
         self.watcher = importlib.util.module_from_spec(spec)
         with patch.dict(os.environ, NETBACKUP_WATCHER_CONFIG=str(config)):
@@ -186,6 +188,35 @@ class NetBackupRestoreWatcherTest(unittest.TestCase):
         notify.assert_not_called()
         self.assertIn("predates", state["restoreValidation"]["200"]["reason"])
 
+    def relocated_metadata(self):
+        original = self.root
+        moved = self.base / "new/ablestack-netbackup" / original.parent.name / original.name
+        moved.parent.mkdir(parents=True)
+        original.rename(moved)
+        return dict(matched=True, tracked=False, restoreallowed=True, artifacttype="METADATA", provider="ablestack-netbackup",
+                    metadatapath=str(original), metadatarestorepath=str(moved), id="backup-test", virtualmachineid="vm-test",
+                    vmname=original.parent.name, timestamp=original.name)
+
+    def test_partial_metadata_relocated_after_global_root_change_retains_catalog_source_paths(self):
+        expected = self.relocated_metadata()
+        with patch.object(self.watcher, "resolve_restore_metadata", return_value=expected):
+            state, notify = self.poll()
+        notify.assert_called_once_with(expected["metadatapath"], "200")
+        self.assertEqual(expected["metadatarestorepath"], state["processed"]["200"]["validation"]["root"])
+
+    def test_relocated_partial_restore_rejects_another_backup_or_redirected_destination(self):
+        expected = self.relocated_metadata()
+        with patch.object(self.watcher, "resolve_restore_metadata", return_value=dict(expected, id="different-backup")):
+            _, notify = self.poll()
+        notify.assert_not_called()
+        moved = Path(expected["metadatarestorepath"])
+        actual = moved.with_name("other-directory")
+        moved.rename(actual)
+        moved.symlink_to(actual, target_is_directory=True)
+        with patch.object(self.watcher, "resolve_restore_metadata", return_value=expected):
+            _, notify = self.poll()
+        notify.assert_not_called()
+
     def test_original_backup_mtime_is_not_mistaken_for_stale_restore_data(self):
         for path in self.root.iterdir():
             os.utime(path, (946684800, 946684800))
@@ -274,11 +305,108 @@ class NetBackupRestoreWatcherTest(unittest.TestCase):
     def test_startup_baseline_skips_completed_partial_jobs_without_triggering_them(self):
         state = {}
         with patch.object(self.watcher, "fetch_restore_jobs", return_value=[self.job()]), \
-                patch.object(self.watcher, "candidate_restore_identifiers", return_value=[]):
+                patch.object(self.watcher, "candidate_restore_identifiers") as identifiers:
             self.watcher.mark_existing_jobs_processed(state)
+        identifiers.assert_not_called()
         self.assertEqual("initialJobBaseline", state["processed"]["200"]["skipped"])
         _, notify = self.poll(state=state)
         notify.assert_not_called()
+
+    def test_separate_timer_passes_preserve_baseline_and_process_new_job_only_once(self):
+        old_job = self.job(0)
+        new_job = self.job(0)
+        new_job["id"] = "201"
+        with patch.object(self.watcher, "fetch_restore_jobs", return_value=[old_job]) as jobs, \
+                patch.object(self.watcher, "candidate_restore_identifiers", return_value=["host-test_1792458000"]), \
+                patch.object(self.watcher, "invoke_restore_notify", return_value="submitted") as notify, \
+                patch.object(self.watcher.time, "sleep", side_effect=AssertionError("Watcher must exit after one pass")):
+            self.assertEqual(0, self.watcher.main([]))
+            notify.assert_not_called()
+            jobs.return_value = [old_job, new_job]
+            self.assertEqual(0, self.watcher.main(["--once"]))
+            self.assertEqual(0, self.watcher.main([]))
+        notify.assert_called_once_with("host-test_1792458000", "201")
+        self.assertEqual(4, jobs.call_count)  # Baseline + three polling passes.
+        state = self.watcher.load_state()
+        self.assertTrue(state["initialJobBaselineCompleted"])
+        self.assertEqual("initialJobBaseline", state["processed"]["200"]["skipped"])
+        self.assertEqual("submitted", state["processed"]["201"]["status"])
+
+    def test_restore_active_at_first_start_is_processed_when_it_finishes(self):
+        job = self.job(0, "ACTIVE")
+        with patch.object(self.watcher, "fetch_restore_jobs", return_value=[job]), \
+                patch.object(self.watcher, "candidate_restore_identifiers", return_value=["host-test_1792458000"]), \
+                patch.object(self.watcher, "invoke_restore_notify", return_value="submitted") as notify:
+            self.assertEqual(0, self.watcher.main([]))
+            notify.assert_not_called()
+            self.assertNotIn("200", self.watcher.load_state()["processed"])
+            job["attributes"]["state"] = "DONE"
+            self.assertEqual(0, self.watcher.main([]))
+        notify.assert_called_once_with("host-test_1792458000", "200")
+
+    def test_baseline_failure_exits_with_error_without_polling_and_can_retry(self):
+        with patch.object(self.watcher, "fetch_restore_jobs", side_effect=RuntimeError("API unavailable")), \
+                patch.object(self.watcher, "poll_once") as poll:
+            self.assertEqual(1, self.watcher.main([]))
+        poll.assert_not_called()
+        self.assertFalse((self.base / "state.json").exists())
+        with patch.object(self.watcher, "fetch_restore_jobs", return_value=[]):
+            self.assertEqual(0, self.watcher.main([]))
+        self.assertTrue(self.watcher.load_state()["initialJobBaselineCompleted"])
+
+    def test_baseline_must_be_persisted_before_polling(self):
+        with patch.object(self.watcher, "fetch_restore_jobs", return_value=[]), \
+                patch.object(self.watcher, "save_state", side_effect=OSError("No space left")), \
+                patch.object(self.watcher, "poll_once") as poll:
+            self.assertEqual(1, self.watcher.main([]))
+        poll.assert_not_called()
+
+    def test_invalid_history_is_preserved_instead_of_resetting_the_baseline(self):
+        for content in ("{truncated", "[]", '{"processed": []}'):
+            with self.subTest(content=content):
+                (self.base / "state.json").write_text(content)
+                with patch.object(self.watcher, "fetch_restore_jobs") as jobs:
+                    self.assertEqual(1, self.watcher.main([]))
+                jobs.assert_not_called()
+                self.assertEqual(content, (self.base / "state.json").read_text())
+
+    def test_notification_is_checkpointed_before_a_later_job_fails(self):
+        self.watcher.save_state({"initialJobBaselineCompleted": True, "processed": {}})
+        first = self.job(0)
+        second = self.job(0)
+        second["id"] = "201"
+        with patch.object(self.watcher, "fetch_restore_jobs", return_value=[first, second]), \
+                patch.object(self.watcher, "candidate_restore_identifiers", return_value=["host-test_1792458000"]), \
+                patch.object(self.watcher, "invoke_restore_notify", side_effect=["submitted", RuntimeError("Interrupted")]):
+            self.assertEqual(1, self.watcher.main([]))
+        self.assertEqual(["200"], list(self.watcher.load_state()["processed"]))
+        with patch.object(self.watcher, "fetch_restore_jobs", return_value=[first, second]), \
+                patch.object(self.watcher, "candidate_restore_identifiers", return_value=["host-test_1792458000"]), \
+                patch.object(self.watcher, "invoke_restore_notify", return_value="submitted") as notify:
+            self.assertEqual(0, self.watcher.main([]))
+        notify.assert_called_once_with("host-test_1792458000", "201")
+
+    def test_manual_poll_cannot_overlap_another_watcher(self):
+        handle = self.watcher.acquire_process_lock()
+        self.assertIsNotNone(handle)
+        try:
+            with patch.object(self.watcher, "fetch_restore_jobs") as jobs:
+                self.assertEqual(0, self.watcher.main([]))
+            jobs.assert_not_called()
+        finally:
+            handle.close()
+        # The file stays in place and can be reused after the owner exits.
+        replacement = self.watcher.acquire_process_lock()
+        self.assertIsNotNone(replacement)
+        replacement.close()
+
+    def test_unconfirmed_jobs_response_cannot_complete_the_initial_baseline(self):
+        for response in ({}, {"errors": []}, {"data": None}, {"data": [None]}, {"data": [{}]}):
+            with self.subTest(response=response), patch.object(self.watcher, "netbackup_get", return_value=response):
+                self.assertEqual(1, self.watcher.main([]))
+            self.assertFalse((self.base / "state.json").exists())
+        with patch.object(self.watcher, "netbackup_get", return_value={"data": []}):
+            self.assertEqual(0, self.watcher.main([]))
 
 
 if __name__ == "__main__":

@@ -127,6 +127,57 @@ test ! -e "$state"
         self.assertNotIn("UNEXPECTED_API", result.stderr)
         self.assertIn("CLEAR:veeam-active i-2-1-VM", result.stdout)
 
+    def test_stale_common_parent_path_fails_before_requesting_a_backup(self):
+        result = self.run_hook(r'''
+mold_backup_load_config() { :; }
+mold_backup_notify_log() { echo "$*" >&2; }
+mold_backup_api_external_candidates() { echo UNEXPECTED_API >&2; return 1; }
+VEEAM_AGENT_PAYLOAD_MODE=COMMON
+VEEAM_HOST_BACKUP_PATH="$TEST_ROOT/new-stage/ablestack-veeam"
+VEEAM_AGENT_PAYLOAD_PATH="$TEST_ROOT/old-stage/bootstrap"
+KVM_HOSTNAME=host-test
+mold_backup_pre_notify host-test parent-policy default
+''')
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Rerun veeam-host-config.py", result.stderr)
+        self.assertNotIn("UNEXPECTED_API", result.stderr)
+
+    def test_parent_post_hook_removes_only_its_owned_marker_copy(self):
+        result = self.run_hook(r'''
+TEST_ROOT="$(cd "$TEST_ROOT" && pwd -P)"
+state="$TEST_ROOT/parent.state"
+echo 'vm=i-2-1-VM backup_id=backup-one status=pipeline' > "$state"
+mkdir -p "$TEST_ROOT/source"
+echo backup-one > "$TEST_ROOT/source/.volume-bootstrap"
+echo preserved > "$TEST_ROOT/source/volume.qcow2"
+VEEAM_AGENT_PAYLOAD_PATH="$TEST_ROOT/parent-markers"
+python3 "$(mold_backup_bootstrap_helper)" publish --payload-root "$VEEAM_AGENT_PAYLOAD_PATH" --source-marker "$TEST_ROOT/source/.volume-bootstrap"
+mold_backup_load_config() { :; }
+mold_backup_notify_log() { :; }
+mold_backup_latest_state_file() { echo "$TEST_ROOT/parent.state"; }
+mold_backup_trigger_clear() { :; }
+mold_backup_trigger_mark() { :; }
+mold_backup_post_notify host-test parent-policy default
+test ! -e "$VEEAM_AGENT_PAYLOAD_PATH/backup-one.json"
+test -f "$TEST_ROOT/source/.volume-bootstrap"
+test -f "$TEST_ROOT/source/volume.qcow2"
+''')
+        self.assertEqual(0, result.returncode, result.stderr)
+
+    def test_common_parent_path_matches_provisioner_for_unicode_job_names(self):
+        result = self.run_hook(r'''
+mold_backup_load_config() { :; }
+mold_backup_notify_log() { echo "$*" >&2; }
+mold_backup_api_external_candidates() { echo VALIDATED_CONFIG >&2; return 1; }
+VEEAM_AGENT_PAYLOAD_MODE=COMMON
+VEEAM_HOST_BACKUP_PATH="$TEST_ROOT/stage/ablestack-veeam"
+VEEAM_AGENT_PAYLOAD_PATH="$VEEAM_HOST_BACKUP_PATH/bootstrap/host-test/___Job"
+KVM_HOSTNAME=host-test
+mold_backup_pre_notify host-test '백업 Job' default
+''')
+        self.assertIn("VALIDATED_CONFIG", result.stderr)
+        self.assertNotIn("Staging changed", result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

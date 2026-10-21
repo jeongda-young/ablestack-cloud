@@ -1983,6 +1983,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             backupDao.loadDetails(backup);
             ThirdPartyBackupManifest manifest = ThirdPartyBackupManifest.fromJson(backup.getDetail(ThirdPartyBackupManifest.DETAIL_KEY));
             if (!provider.equals(manifest.getProvider())) { continue; }
+            String metadataRestorePath = metadataRestorePath(manifest);
             ThirdPartyBackupManifest.Artifact found = null;
             boolean tracked = false;
             if (StringUtils.isNotBlank(jobId)) {
@@ -2007,6 +2008,10 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                         if (found != null && found != artifact) { throw new CloudRuntimeException("Artifact selection is ambiguous"); }
                         found = artifact;
                     }
+                }
+                if (found == null && metadataRestorePath != null && metadataRestorePath.equals(externalId)
+                        && manifest.getMetadata() != null) {
+                    found = manifest.getMetadata();
                 }
             }
             if (found != null && StringUtils.isNotBlank(jobId)) {
@@ -2040,6 +2045,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             match.timestamp = manifest.getTimestamp();
             match.artifactpath = found.path;
             match.metadatapath = manifest.getMetadata() == null ? null : manifest.getMetadata().path;
+            match.metadatarestorepath = metadataRestorePath;
             match.artifacttype = !tracked && found == manifest.getMetadata() ? "METADATA" : "VOLUME";
             match.tracked = tracked;
             VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(backup.getVmId());
@@ -2054,6 +2060,18 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             else { match.restoreallowed = true; }
         }
         return match == null ? new org.apache.cloudstack.api.response.BackupArtifactResolutionResponse() : match;
+    }
+
+    private String metadataRestorePath(ThirdPartyBackupManifest manifest) {
+        if (!ThirdPartyStagingEnable.value()) { return null; }
+        String providerRoot = thirdPartyBackupStagingService.getStageRootPath(manifest.getProvider());
+        if (StringUtils.isBlank(providerRoot)) { return null; }
+        java.nio.file.Path root = java.nio.file.Path.of(providerRoot);
+        java.nio.file.Path destination = root.resolve(manifest.getVmName()).resolve(manifest.getTimestamp()).normalize();
+        if (destination.getParent() == null || !root.equals(destination.getParent().getParent())) {
+            throw new CloudRuntimeException("Metadata restore path must remain inside the configured provider root");
+        }
+        return destination.toString();
     }
 
     private String externalUiRestoreKey(String provider, String jobId) {

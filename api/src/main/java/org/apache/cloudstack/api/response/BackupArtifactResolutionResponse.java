@@ -33,6 +33,7 @@ public class BackupArtifactResolutionResponse extends BaseResponse {
     @SerializedName("artifacttype") @Param(description = "METADATA or VOLUME") public String artifacttype;
     @SerializedName("artifactpath") @Param(description = "Original artifact selection") public String artifactpath;
     @SerializedName("metadatapath") @Param(description = "Metadata Job selection for external UI restores") public String metadatapath;
+    @SerializedName("metadatarestorepath") @Param(description = "Current staging destination for restoring this backup's metadata; original catalog paths are retained") public String metadatarestorepath;
     @SerializedName("tracked") @Param(description = "This external restore job was submitted by Mold; its post callback must not start another restore") public boolean tracked;
     @SerializedName("restoreallowed") @Param(description = "Metadata UI restore may trigger Mold; VM must be Stopped and the logical backup restorable") public boolean restoreallowed;
     @SerializedName("reason") @Param(description = "Why a post callback must skip or wait") public String reason;

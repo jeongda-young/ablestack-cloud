@@ -40,11 +40,37 @@ import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 
 public class ThirdPartyBackupRestoreCleanupTest {
     @Rule
     public TemporaryFolder folder = new TemporaryFolder();
+
+    @Test
+    public void deletingOldBackupPreparesItsRecordedMountRatherThanTheCurrentRoot() {
+        ThirdPartyBackupManifest manifest = ThirdPartyBackupManifest.create("ablestack-veeam", "backup-old", "i-2-1-VM", "point",
+                "FULL", "cube1", "/old/jobs/ablestack-veeam/i-2-1-VM/point", "QCOW2", java.util.List.of(
+                        new Backup.VolumeInfo("volume", "root.volume.qcow2", com.cloud.storage.Volume.Type.ROOT,
+                                100L, 0L, null, null, null)), null, null);
+        ThirdPartyBackupStagingService.Snapshot configuration = new ThirdPartyBackupStagingService.Snapshot();
+        configuration.type = "NFS";
+        configuration.rootPath = "/old/jobs";
+        configuration.mountPath = "/old";
+        configuration.nfsSource = "old-nas:/jobs";
+        Backup backup = mock(Backup.class);
+        when(backup.getDetail(ThirdPartyBackupStagingService.SNAPSHOT_KEY)).thenReturn(new Gson().toJson(configuration));
+        Host host = mock(Host.class);
+        ThirdPartyBackupStagingService staging = mock(ThirdPartyBackupStagingService.class);
+        ThirdPartyBackupVolumeServiceImpl service = new ThirdPartyBackupVolumeServiceImpl();
+        ReflectionTestUtils.setField(service, "stagingService", staging);
+        ReflectionTestUtils.invokeMethod(service, "validateCleanupMount", backup, host, manifest);
+        org.mockito.ArgumentCaptor<ThirdPartyBackupStagingService.Snapshot> saved = org.mockito.ArgumentCaptor.forClass(
+                ThirdPartyBackupStagingService.Snapshot.class);
+        verify(staging).prepareCleanup(eq(host), eq("/old/jobs/ablestack-veeam"), saved.capture());
+        org.junit.Assert.assertEquals("old-nas:/jobs", saved.getValue().nfsSource);
+        verify(staging, never()).getStageRootPath(anyString());
+    }
 
     @Test
     public void mountPreparationDoesNotRecreateAnUnownedRestoreDestination() throws Exception {

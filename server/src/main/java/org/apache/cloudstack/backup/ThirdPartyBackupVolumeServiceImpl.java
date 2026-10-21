@@ -64,6 +64,26 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
 
     @Override
     public void persistBackupPlan(Backup backup) {
+        withStagingConfigurationLock(() -> {
+            persistBackupPlanLocked(backup);
+            return null;
+        });
+    }
+
+    private <T> T withStagingConfigurationLock(java.util.function.Supplier<T> action) {
+        GlobalLock lock = GlobalLock.getInternLock(ThirdPartyBackupStagingService.CONFIGURATION_LOCK);
+        boolean acquired = false;
+        try {
+            acquired = lock.lock(10);
+            if (!acquired) { throw new CloudRuntimeException("Staging configuration is being changed; retry the operation"); }
+            return action.get();
+        } finally {
+            if (acquired) { lock.unlock(); }
+            lock.releaseRef();
+        }
+    }
+
+    private void persistBackupPlanLocked(Backup backup) {
         if (!ThirdPartyBackupManifest.VOLUME_MODE.equals(backup.getDetail(ThirdPartyBackupManifest.MODE_KEY))) {
             throw new CloudRuntimeException("The backup does not contain a volume staging plan");
         }
@@ -72,6 +92,14 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
         if (!backup.getUuid().equals(manifest.getBackupUuid())) {
             throw new CloudRuntimeException("The volume staging plan belongs to a different backup");
         }
+        stagingService.requireEnabled();
+        ThirdPartyBackupStagingService.Snapshot configuration = stagingService.captureConfiguration();
+        java.nio.file.Path recorded = java.nio.file.Path.of(manifest.getCurrentArtifacts().get(0).path)
+                .getParent().getParent().getParent();
+        if (configuration == null || !recorded.equals(java.nio.file.Path.of(configuration.rootPath, manifest.getProvider()))) {
+            throw new CloudRuntimeException("Staging configuration changed before the backup plan was persisted; retry the backup");
+        }
+        backup.getDetails().put(ThirdPartyBackupStagingService.SNAPSHOT_KEY, new Gson().toJson(configuration));
         com.cloud.utils.db.Transaction.execute((com.cloud.utils.db.TransactionCallback<Boolean>) status -> {
             BackupVO current = backupDao.lockRow(backup.getId(), true);
             if (current == null || current.getRemoved() != null || current.getStatus() != Backup.Status.BackingUp
@@ -1629,7 +1657,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
         backup.getDetails().entrySet().stream().filter(entry -> entry.getKey().endsWith("rbd.disk.paths"))
                 .map(Map.Entry::getValue).findFirst().ifPresent(command::setDiskPaths);
         try {
-            validateCleanupMount(host, manifest);
+            validateCleanupMount(backup, host, manifest);
             Answer guard = agentManager.send(host.getId(), new AblestackVolumeStagingCommand(backup.getUuid(), "CLEANUP_CHECK", -1, manifest.toJson()));
             if (guard != null && !guard.getResult()) {
                 // Every owned external artifact was already confirmed deleted before this local cleanup step.
@@ -1996,7 +2024,8 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
         try {
             acquired = lock.lock(5);
             if (!acquired) { throw new CloudRuntimeException("Another restore is being prepared for this backup"); }
-            return prepareRestoreLocked(backup, host, volumeUuids, targetVolumeBytes, targetVmName, timeout);
+            return withStagingConfigurationLock(() ->
+                    prepareRestoreLocked(backup, host, volumeUuids, targetVolumeBytes, targetVmName, timeout));
         } finally {
             if (acquired) { lock.unlock(); }
             lock.releaseRef();
@@ -2066,6 +2095,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
         plan.hostName = host.getName();
         java.nio.file.Path providerRoot = java.nio.file.Path.of(stagingService.getStageRootPath(manifest.getProvider()));
         plan.stageRoot = providerRoot.getParent().toString();
+        plan.stagingConfiguration = stagingService.captureConfiguration();
         plan.destination = providerRoot.resolve("restore").resolve(plan.jobId).toString();
         plan.bufferPercent = stagingService.getCapacityBufferPercent();
         plan.primaryStorageCapacityBufferPercent = BackupManager.RestorePrimaryStorageCapacityBufferPercent.value();
@@ -2772,13 +2802,20 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
         ensureRestoreOperation(backup, plan);
         requireRestoreWritersTerminated(backup, plan);
         if (finishUnstartedRestore(backup, host, plan, true)) { return; }
-        String providerRoot = stagingService.getStageRootPath(plan.manifest.getProvider());
-        if (!java.nio.file.Path.of(providerRoot).getParent().toString().equals(plan.stageRoot)) {
-            throw new CloudRuntimeException("Restore staging configuration changed; restore the original mount before cleanup");
-        }
+        String providerRoot = java.nio.file.Path.of(plan.stageRoot, plan.manifest.getProvider()).toString();
         // Mount validation creates its requested directory. Do not recreate an unowned
         // restore destination when the worker failed before admission or already removed it.
-        stagingService.prepareCleanup(host, providerRoot);
+        if (plan.stagingConfiguration == null) {
+            if (!providerRoot.equals(stagingService.getStageRootPath(plan.manifest.getProvider()))) {
+                throw new CloudRuntimeException("Legacy restore has no recorded staging configuration; restore the original mount before cleanup");
+            }
+            stagingService.prepareCleanup(host, providerRoot);
+        } else {
+            if (!plan.stageRoot.equals(plan.stagingConfiguration.rootPath)) {
+                throw new CloudRuntimeException("Restore cleanup differs from the recorded staging root");
+            }
+            stagingService.prepareCleanup(host, providerRoot, plan.stagingConfiguration);
+        }
         saveRestoreCleanup(backup.getId(), plan.jobId, "RUNNING", null);
         Answer answer = agentManager.send(host.getId(), new AblestackVolumeStagingCommand(plan.jobId, "RESTORE_CLEANUP", -1,
                 new Gson().toJson(plan)));
@@ -3298,7 +3335,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
         try {
             manifest.validate(true);
             long size = manifest.getCurrentArtifacts().stream().mapToLong(artifact -> artifact.size).reduce(0L, Math::addExact);
-            validateCleanupMount(host, manifest);
+            validateCleanupMount(backup, host, manifest);
             // The Host engine may already be finalized, but metadata must survive
             // until the provider durably records the checkpoint needed for retries/incrementals.
             transfer.completed(backup);
@@ -3477,7 +3514,7 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
                 }
             }
             saveCleanupState(backup.getId(), "RUNNING", null);
-            validateCleanupMount(host, manifest);
+            validateCleanupMount(backup, host, manifest);
             Answer cleanup = agentManager.send(host.getId(), new AblestackVolumeStagingCommand(backup.getUuid(),
                     sourceNotStarted ? "CLEANUP_UNSTARTED" : "CLEANUP_FAILED", -1, manifest.toJson()));
             if (cleanup == null || !cleanup.getResult()) {
@@ -3543,13 +3580,21 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
         }
     }
 
-    private void validateCleanupMount(Host host, ThirdPartyBackupManifest manifest) {
-        java.nio.file.Path providerRoot = java.nio.file.Path.of(stagingService.getStageRootPath(manifest.getProvider()));
+    private void validateCleanupMount(Backup backup, Host host, ThirdPartyBackupManifest manifest) {
         java.nio.file.Path recordedRoot = java.nio.file.Path.of(manifest.getCurrentArtifacts().get(0).path).getParent().getParent().getParent();
-        if (!providerRoot.equals(recordedRoot)) {
-            throw new CloudRuntimeException("Backup staging configuration changed; restore the original mount before cleanup");
+        String json = backup.getDetail(ThirdPartyBackupStagingService.SNAPSHOT_KEY);
+        if (StringUtils.isNotBlank(json)) {
+            ThirdPartyBackupStagingService.Snapshot configuration = new Gson().fromJson(json, ThirdPartyBackupStagingService.Snapshot.class);
+            if (configuration == null || !recordedRoot.equals(java.nio.file.Path.of(configuration.rootPath, manifest.getProvider()))) {
+                throw new CloudRuntimeException("Backup cleanup differs from its recorded staging configuration");
+            }
+            stagingService.prepareCleanup(host, recordedRoot.toString(), configuration);
+        } else {
+            if (!recordedRoot.toString().equals(stagingService.getStageRootPath(manifest.getProvider()))) {
+                throw new CloudRuntimeException("Legacy backup has no recorded staging configuration; restore the original settings before cleanup");
+            }
+            stagingService.prepareCleanup(host, recordedRoot.toString());
         }
-        stagingService.prepareCleanup(host, providerRoot.toString());
     }
 
     private void notifyFailure(Transfer transfer, Backup backup) {

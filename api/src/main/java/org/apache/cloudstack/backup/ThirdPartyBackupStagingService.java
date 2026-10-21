@@ -24,6 +24,20 @@ import com.cloud.host.Host;
 /** Shared staging lifecycle for the three ABLESTACK third-party backup providers. */
 public interface ThirdPartyBackupStagingService {
     String CONFIG_PREFIX = "backup.thirdparty.staging.";
+    String CONFIGURATION_LOCK = "backup.thirdparty.staging.configuration";
+    String SNAPSHOT_KEY = "thirdparty.staging.configuration";
+
+    /** Mount identity retained with a backup/restore; catalog source paths are never rewritten. */
+    class Snapshot {
+        public int version = 1;
+        public String type;
+        public String rootPath;
+        public String mountPath;
+        public String nfsSource;
+        public String mountOptions;
+        public int timeoutSeconds;
+        public int bufferPercent;
+    }
 
     static boolean isStagingProvider(String providerName) {
         return BackupProviderNameUtils.isCommvaultFamily(providerName)
@@ -38,11 +52,16 @@ public interface ThirdPartyBackupStagingService {
 
     String getStageRootPath(String providerName);
 
+    Snapshot captureConfiguration();
+
     /** Ensure the configured mount and verify the actual filesystem before querying space. */
     long getAvailableBytes(Host host, String path);
 
     /** Existing jobs may clean up after staging is disabled; still verify the configured filesystem. */
     default void prepareCleanup(Host host, String path) { getAvailableBytes(host, path); }
+
+    /** Cleanup must validate the recorded filesystem even when the active root has moved. */
+    void prepareCleanup(Host host, String path, Snapshot configuration);
 
     long getCapacityBufferBytes(long requiredBytes);
 

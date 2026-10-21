@@ -55,6 +55,7 @@ public final class ThirdPartyBackupRestore {
         public long hostId;
         public String hostName;
         public String stageRoot;
+        public ThirdPartyBackupStagingService.Snapshot stagingConfiguration;
         public String destination;
         public int bufferPercent;
         /** Primary storage policy captured separately from the staging percentage. Null means legacy 20%. */

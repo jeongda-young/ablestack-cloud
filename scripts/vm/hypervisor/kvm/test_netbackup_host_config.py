@@ -22,6 +22,7 @@ import contextlib
 import importlib.util
 import io
 from pathlib import Path
+import shlex
 import subprocess
 import sys
 import tempfile
@@ -295,6 +296,123 @@ class NetBackupConfigurationTest(unittest.TestCase):
         update.assert_not_called()
         offering.assert_called_once()
         output.assert_called_once()
+
+    def test_host_reconfiguration_migrates_the_daemon_to_a_timer_and_is_retryable(self):
+        args = self.arguments("--vm-schedule-backup", "false")
+        with patch.object(sys.stdin, "isatty", return_value=False):
+            config.configure_vm_selection(args)
+        with tempfile.TemporaryDirectory() as directory, contextlib.ExitStack() as stack:
+            base = Path(directory)
+            service = base / "systemd/netbackup-host-restore-watcher.service"
+            timer = service.with_suffix(".timer")
+            service.parent.mkdir()
+            old_service = "[Service]\nType=simple\nRestart=always\n"
+            service.write_text(old_service)
+            locations = {
+                "HOOK_OUTPUT_DIR": base / "hooks", "CONFIG_OUTPUT_DIR": base / "config",
+                "SECRET_OUTPUT_DIR": base / "config/secrets", "BACKUP_STAGING_ROOT": base / "staging",
+                "WATCHER_SERVICE_PATH": service, "WATCHER_TIMER_PATH": timer,
+                "WATCHER_OUTPUT_PATH": base / "bin/watcher", "RESTORE_NOTIFY_OUTPUT_PATH": base / "bin/notify",
+                "WATCHER_CONFIG_PATH": base / "config/watcher.conf", "RESTORE_CONFIG_PATH": base / "config/restore.conf",
+                "LOGROTATE_CONFIG_PATH": base / "logrotate/netbackup",
+            }
+            stack.enter_context(patch.multiple(config, **locations))
+            stack.enter_context(patch.object(config.shutil, "which", return_value="/usr/bin/systemctl"))
+            stack.enter_context(patch.object(config, "write_encrypted_secret_file"))
+            stack.enter_context(patch.object(config, "apply_permissions"))
+            stack.enter_context(patch.object(config, "ensure_backup_staging_root"))
+            stack.enter_context(patch.object(config, "apply_netbackup_bp_conf", return_value=False))
+            stack.enter_context(contextlib.redirect_stdout(io.StringIO()))
+            stack.enter_context(contextlib.redirect_stderr(io.StringIO()))
+            calls = []
+
+            def systemctl(command, **unused):
+                calls.append(command)
+                if command[1] == "show":
+                    kind = "oneshot" if "Type=oneshot" in service.read_text() else "simple"
+                    return subprocess.CompletedProcess(command, 0, f"Type={kind}\nActiveState=inactive\n", "")
+                if command[1:3] == ["enable", "--now"]:
+                    self.assertEqual(timer.name, command[3])
+                    self.assertIn("Type=oneshot", service.read_text())
+                    self.assertIn("TimeoutStartSec=300", service.read_text())
+                    self.assertNotIn("Restart=always", service.read_text())
+                    self.assertIn("OnCalendar=minutely", timer.read_text())
+                    self.assertIn(f"Unit={service.name}", timer.read_text())
+                    self.assertNotIn("POLL_INTERVAL_SECONDS", locations["WATCHER_CONFIG_PATH"].read_text())
+                return subprocess.CompletedProcess(command, 0)
+
+            stack.enter_context(patch.object(config.subprocess, "run", side_effect=systemctl))
+            config.generate_host_outputs("zone-id", args)
+            self.assertEqual(["systemctl", "disable", "--now", service.name], calls[2])
+            self.assertEqual(["systemctl", "enable", "--now", timer.name], calls[-1])
+            self.assertEqual(old_service, next(service.parent.glob(service.name + ".bak.*")).read_text())
+            self.assertIn(f"ExecStart={locations['WATCHER_OUTPUT_PATH']} --once", service.read_text())
+            calls.clear()
+            config.generate_host_outputs("zone-id", args)
+            self.assertEqual(["systemctl", "stop", timer.name], calls[1])
+            self.assertEqual(["systemctl", "disable", "--now", service.name], calls[3])
+            self.assertEqual(["systemctl", "enable", "--now", timer.name], calls[-1])
+            self.assertIn(old_service, [path.read_text() for path in service.parent.glob(service.name + ".bak.*")])
+
+    def test_reconfiguration_waits_for_an_active_oneshot_before_replacing_files(self):
+        with tempfile.TemporaryDirectory() as directory:
+            service = Path(directory) / "watcher.service"
+            timer = service.with_suffix(".timer")
+            service.write_text("[Service]\nType=oneshot\n")
+            timer.touch()
+            result = subprocess.CompletedProcess("systemctl", 0, "Type=oneshot\nActiveState=activating\n", "")
+            with patch.object(config, "WATCHER_SERVICE_PATH", service), patch.object(config, "WATCHER_TIMER_PATH", timer), \
+                    patch.object(config.shutil, "which", return_value="/usr/bin/systemctl"), \
+                    patch.object(config.subprocess, "run", return_value=result) as command, \
+                    contextlib.redirect_stderr(io.StringIO()) as errors, self.assertRaises(SystemExit):
+                config.pause_watcher_for_configuration()
+            self.assertIn("Wait for it to finish", errors.getvalue())
+            self.assertIn(["systemctl", "stop", timer.name], [call.args[0] for call in command.call_args_list])
+            self.assertFalse(any(call.args[0][1] == "disable" for call in command.call_args_list))
+            self.assertEqual("[Service]\nType=oneshot\n", service.read_text())
+
+    def test_activation_failure_can_be_retried_without_enabling_the_direct_service(self):
+        with patch.object(config.shutil, "which", return_value="/usr/bin/systemctl"), \
+                patch.object(config.subprocess, "run") as command:
+            command.side_effect = [subprocess.CompletedProcess("reload", 0),
+                                   subprocess.CalledProcessError(1, "enable"),
+                                   subprocess.CompletedProcess("reload", 0), subprocess.CompletedProcess("enable", 0)]
+            with self.assertRaises(subprocess.CalledProcessError):
+                config.enable_watcher_timer()
+            with contextlib.redirect_stdout(io.StringIO()):
+                config.enable_watcher_timer()
+        enable_commands = [call.args[0] for call in command.call_args_list if call.args[0][1] == "enable"]
+        self.assertEqual([["systemctl", "enable", "--now", config.WATCHER_TIMER_PATH.name]] * 2, enable_commands)
+
+    def test_timer_migration_retains_custom_history_and_lock_paths(self):
+        with tempfile.TemporaryDirectory() as directory:
+            base = Path(directory)
+            state = base / "old history.json"
+            lock = base / "old watcher.lock"
+            state.write_text('{"initialJobBaselineCompleted": true, "processed": {"123": {}}}')
+            lock.touch()
+            inode = lock.stat().st_ino
+            path = base / "watcher.conf"
+            path.write_text(f"STATE_FILE={shlex.quote(str(state))}\nLOCK_FILE={shlex.quote(str(lock))}\nPOLL_INTERVAL_SECONDS=30\n")
+            with contextlib.redirect_stdout(io.StringIO()):
+                config.write_watcher_config(path, self.arguments())
+            values = {line.split("=", 1)[0]: shlex.split(line.split("=", 1)[1])[0]
+                      for line in path.read_text().splitlines() if "=" in line}
+            self.assertEqual(str(state), values["STATE_FILE"])
+            self.assertEqual(str(lock), values["LOCK_FILE"])
+            self.assertEqual(inode, lock.stat().st_ino)
+            self.assertIn('"123"', state.read_text())
+            self.assertNotIn("POLL_INTERVAL_SECONDS", values)
+
+    def test_invalid_existing_history_location_prevents_watcher_config_replacement(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "watcher.conf"
+            original = 'STATE_FILE="relative/state.json"\n'
+            path.write_text(original)
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                config.write_watcher_config(path, self.arguments())
+            self.assertEqual(original, path.read_text())
+            self.assertEqual([], list(path.parent.glob("*.bak.*")))
 
 
 if __name__ == "__main__":

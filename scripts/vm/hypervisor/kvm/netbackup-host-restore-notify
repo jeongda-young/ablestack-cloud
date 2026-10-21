@@ -335,7 +335,7 @@ main() {
     return 0
   fi
 
-  if [[ -n "${operation}" && "${operation,,}" != "restore" ]]; then
+  if [[ -n "${operation}" && "${operation,,}" != "restore" && "${operation,,}" != "resolve" ]]; then
     log_line "RESTORE skip externalid=${external_id} operation=${operation} reason=unsupported-operation"
     return 0
   fi
@@ -344,6 +344,10 @@ main() {
   # A metadata UI restore only triggers Mold; Mold reserves capacity and restores
   # every volume itself. Its own restore jobs must never re-enter this post hook.
   response="$(invoke_mold_api "${MOLD_RESTORE_API_METHOD}" "resolveBackupArtifact" "externalid" "${external_id}" "${netbackup_job_id}" "provider=ablestack-netbackup")" || return 1
+  if [[ "${operation,,}" == "resolve" ]]; then
+    printf '%s\n' "${response}"
+    return 0
+  fi
   local matched tracked allowed reason
   matched="$(extract_json_value_by_key "${response}" "matched" 2>/dev/null || true)"
   [[ -n "${matched}" ]] || fail "Mold resolveBackupArtifact returned no resolution: ${response}"

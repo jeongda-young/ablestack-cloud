@@ -44,6 +44,7 @@ import org.springframework.test.util.ReflectionTestUtils;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
@@ -135,6 +136,56 @@ public class ThirdPartyBackupArtifactPersistenceTest {
             String action = ((AblestackVolumeStagingCommand) command).getAction();
             return new Answer(command, true, "STATUS".equals(action) ? request : "ok");
         });
+    }
+
+    @Test
+    public void backupPlanPersistsItsMountSnapshotBeforeHostDispatch() throws Exception {
+        prepare("ablestack-commvault");
+        ThirdPartyBackupStagingService staging = mock(ThirdPartyBackupStagingService.class);
+        ThirdPartyBackupStagingService.Snapshot configuration = new ThirdPartyBackupStagingService.Snapshot();
+        configuration.type = "GFS2";
+        configuration.mountPath = "/staging";
+        configuration.rootPath = "/staging";
+        when(staging.captureConfiguration()).thenReturn(configuration);
+        ReflectionTestUtils.setField(service, "stagingService", staging);
+        BackupVO current = mock(BackupVO.class);
+        when(current.getId()).thenReturn(BACKUP_ID);
+        when(current.getUuid()).thenReturn(JOB_ID);
+        when(current.getStatus()).thenReturn(Backup.Status.BackingUp);
+        when(current.getHostId()).thenReturn(HOST_ID);
+        String backupPath = backup.getExternalId();
+        when(current.getExternalId()).thenReturn(backupPath);
+        when(backupDao.lockRow(BACKUP_ID, true)).thenReturn(current);
+        BackupVO update = mock(BackupVO.class);
+        when(backupDao.createForUpdate(BACKUP_ID)).thenReturn(update);
+        when(backupDao.update(BACKUP_ID, update)).thenReturn(true);
+        GlobalLock lock = mock(GlobalLock.class);
+        when(lock.lock(Mockito.anyInt())).thenReturn(true);
+        try (MockedStatic<GlobalLock> locks = Mockito.mockStatic(GlobalLock.class);
+                MockedStatic<Transaction> transactions = Mockito.mockStatic(Transaction.class)) {
+            locks.when(() -> GlobalLock.getInternLock(ThirdPartyBackupStagingService.CONFIGURATION_LOCK)).thenReturn(lock);
+            transactions.when(() -> Transaction.execute(Mockito.<TransactionCallback<Boolean>>any()))
+                    .thenAnswer(invocation -> invocation.<TransactionCallback<Boolean>>getArgument(0).doInTransaction(null));
+            service.persistBackupPlan(backup);
+        }
+        verify(update).setDetails(Mockito.argThat(values -> values.containsKey(ThirdPartyBackupStagingService.SNAPSHOT_KEY)
+                && new Gson().fromJson(values.get(ThirdPartyBackupStagingService.SNAPSHOT_KEY), ThirdPartyBackupStagingService.Snapshot.class)
+                        .rootPath.equals("/staging")));
+        verify(lock).unlock();
+        verify(agentManager, never()).send(anyLong(), any(Command.class));
+    }
+
+    @Test
+    public void backupPlanCannotPersistAPathSelectedBeforeTheConfigurationChanged() throws Exception {
+        prepare("ablestack-commvault");
+        ThirdPartyBackupStagingService staging = mock(ThirdPartyBackupStagingService.class);
+        ThirdPartyBackupStagingService.Snapshot configuration = new ThirdPartyBackupStagingService.Snapshot();
+        configuration.rootPath = "/different-stage";
+        when(staging.captureConfiguration()).thenReturn(configuration);
+        ReflectionTestUtils.setField(service, "stagingService", staging);
+        assertThrows(com.cloud.utils.exception.CloudRuntimeException.class, () ->
+                ReflectionTestUtils.invokeMethod(service, "persistBackupPlanLocked", backup));
+        verify(backupDao, never()).lockRow(anyLong(), eq(true));
     }
 
     @Test

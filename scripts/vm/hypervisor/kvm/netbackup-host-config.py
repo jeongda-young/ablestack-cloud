@@ -23,6 +23,7 @@ import hmac
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -45,6 +46,7 @@ STAGING_MOUNT_PATH = None
 WATCHER_OUTPUT_PATH = Path(os.environ.get("WATCHER_OUTPUT_PATH", "/usr/local/sbin/netbackup-host-restore-watcher"))
 RESTORE_NOTIFY_OUTPUT_PATH = Path(os.environ.get("RESTORE_NOTIFY_OUTPUT_PATH", "/usr/local/sbin/netbackup-host-restore-notify"))
 WATCHER_SERVICE_PATH = Path(os.environ.get("WATCHER_SERVICE_PATH", "/etc/systemd/system/netbackup-host-restore-watcher.service"))
+WATCHER_TIMER_PATH = Path(os.environ.get("WATCHER_TIMER_PATH", str(WATCHER_SERVICE_PATH.with_suffix(".timer"))))
 LOGROTATE_CONFIG_PATH = Path(os.environ.get("LOGROTATE_CONFIG_PATH", "/etc/logrotate.d/ablestack-netbackup"))
 WATCHER_CONFIG_PATH = Path(os.environ.get("WATCHER_CONFIG_PATH", str(CONFIG_OUTPUT_DIR / "restore-watcher.conf")))
 RESTORE_CONFIG_PATH = Path(os.environ.get("RESTORE_CONFIG_PATH", str(CONFIG_OUTPUT_DIR / "restore.conf")))
@@ -91,6 +93,10 @@ def backup_existing_file(target: Path) -> None:
         return
     stamp = time.strftime("%Y%m%d%H%M%S")
     backup = target.with_name(f"{target.name}.bak.{stamp}")
+    suffix = 1
+    while backup.exists():
+        backup = target.with_name(f"{target.name}.bak.{stamp}.{suffix}")
+        suffix += 1
     shutil.move(str(target), str(backup))
     print(f"Backed up existing file: {target} -> {backup}")
 
@@ -523,6 +529,7 @@ def write_config_file(path: Path, args: argparse.Namespace) -> None:
         "VM_EXCLUDE": args.vm_exclude,
         "MOLD_URL": args.mold_url,
         "ADMIN_APIKEY": args.admin_apikey,
+        "NETBACKUP_PARENT_PAYLOAD_PATH": shlex.quote(str(BACKUP_STAGING_ROOT / "bootstrap" / sanitize_name(args.policy_name))),
     })
     path.write_text(content, encoding="utf-8")
     path.chmod(0o600)
@@ -545,6 +552,25 @@ def write_restore_config(path: Path, args: argparse.Namespace, secret_path: Path
 
 
 def write_watcher_config(path: Path, args: argparse.Namespace) -> None:
+    history_paths = {
+        "STATE_FILE": "/var/lib/ablestack/netbackup/restore-watcher-state.json",
+        "LOCK_FILE": "/var/lib/ablestack/netbackup/restore-watcher.lock",
+    }
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "=" not in line:
+                continue
+            key, value = line.split("=", 1)
+            key = key.strip()
+            if key not in history_paths:
+                continue
+            try:
+                values = shlex.split(value, comments=True)
+            except ValueError:
+                values = []
+            if len(values) != 1 or not Path(values[0]).is_absolute():
+                fail(f"Invalid {key} in existing watcher config; correct it before reconfiguration: {path}")
+            history_paths[key] = values[0]
     backup_existing_file(path)
     content = "\n".join([
         f'NETBACKUP_URL="{args.netbackup_url}"',
@@ -555,9 +581,8 @@ def write_watcher_config(path: Path, args: argparse.Namespace) -> None:
         f'RESTORE_NOTIFY_SCRIPT="{RESTORE_NOTIFY_OUTPUT_PATH}"',
         f'MOLD_CONFIG_FILE="{RESTORE_CONFIG_PATH}"',
         f'LOG_FILE="{WATCHER_LOG_PATH}"',
-        'STATE_FILE="/var/lib/ablestack/netbackup/restore-watcher-state.json"',
-        'LOCK_FILE="/var/lib/ablestack/netbackup/restore-watcher.lock"',
-        'POLL_INTERVAL_SECONDS="60"',
+        f'STATE_FILE={shlex.quote(history_paths["STATE_FILE"])}',
+        f'LOCK_FILE={shlex.quote(history_paths["LOCK_FILE"])}',
         'NETBACKUP_CLIENT_NAME=""',
         'NETBACKUP_BP_CONF_PATH="/usr/openv/netbackup/bp.conf"',
         'PROCESS_SINGLE_RESTORE_PATH_ONLY="true"',
@@ -595,21 +620,38 @@ def write_watcher_service() -> None:
     backup_existing_file(WATCHER_SERVICE_PATH)
     content = f"""[Unit]
 Description=AbleStack NetBackup WebUI restore watcher
-After=network-online.target libvirtd.service mold-agent.service mold.service
-Wants=network-online.target mold-agent.service mold.service
+After=network-online.target libvirtd.service cloudstack-agent.service
+Wants=network-online.target
 
 [Service]
-Type=simple
+Type=oneshot
+TimeoutStartSec=300
+TimeoutStopSec=30
 Environment=NETBACKUP_WATCHER_CONFIG={WATCHER_CONFIG_PATH}
-ExecStart={WATCHER_OUTPUT_PATH}
-Restart=always
-RestartSec=30
-
-[Install]
-WantedBy=multi-user.target
+ExecStart={WATCHER_OUTPUT_PATH} --once
 """
     WATCHER_SERVICE_PATH.write_text(content, encoding="utf-8")
     WATCHER_SERVICE_PATH.chmod(0o644)
+
+
+def write_watcher_timer() -> None:
+    backup_existing_file(WATCHER_TIMER_PATH)
+    content = f"""[Unit]
+Description=Poll NetBackup WebUI restores every minute
+
+[Timer]
+OnBootSec=1min
+# Calendar polling resumes even after a previous service execution timed out.
+OnCalendar=minutely
+AccuracySec=1s
+Persistent=true
+Unit={WATCHER_SERVICE_PATH.name}
+
+[Install]
+WantedBy=timers.target
+"""
+    WATCHER_TIMER_PATH.write_text(content, encoding="utf-8")
+    WATCHER_TIMER_PATH.chmod(0o644)
 
 
 def write_logrotate_config() -> None:
@@ -633,13 +675,34 @@ def write_logrotate_config() -> None:
     LOGROTATE_CONFIG_PATH.chmod(0o644)
 
 
-def enable_watcher_service() -> None:
+def pause_watcher_for_configuration() -> None:
     if not shutil.which("systemctl"):
-        print(f"systemctl not found. Please enable watcher manually: {WATCHER_OUTPUT_PATH}")
+        return
+    # Stop scheduling before replacing configuration or executables. Keep the
+    # existing state and lock files: they belong to the same watcher after migration.
+    if not WATCHER_SERVICE_PATH.exists() and not WATCHER_TIMER_PATH.exists():
         return
     subprocess.run(["systemctl", "daemon-reload"], check=True)
-    subprocess.run(["systemctl", "enable", "--now", WATCHER_SERVICE_PATH.name], check=True)
-    print(f"Enabled and started watcher service: {WATCHER_SERVICE_PATH.name}")
+    if WATCHER_TIMER_PATH.exists():
+        subprocess.run(["systemctl", "stop", WATCHER_TIMER_PATH.name], check=True)
+    if WATCHER_SERVICE_PATH.exists():
+        result = subprocess.run(["systemctl", "show", WATCHER_SERVICE_PATH.name,
+                                 "--property=Type,ActiveState"],
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, check=True)
+        properties = dict(line.split("=", 1) for line in result.stdout.splitlines() if "=" in line)
+        if properties.get("Type") == "oneshot" and properties.get("ActiveState") not in {"inactive", "failed"}:
+            fail("Watcher timer is paused, but a polling pass is still running. Wait for it to finish, then rerun configuration.")
+        # Remove the old multi-user.target enablement before installing the oneshot.
+        subprocess.run(["systemctl", "disable", "--now", WATCHER_SERVICE_PATH.name], check=True)
+
+
+def enable_watcher_timer() -> None:
+    if not shutil.which("systemctl"):
+        print(f"systemctl not found. Run one polling pass manually: {WATCHER_OUTPUT_PATH} --once")
+        return
+    subprocess.run(["systemctl", "daemon-reload"], check=True)
+    subprocess.run(["systemctl", "enable", "--now", WATCHER_TIMER_PATH.name], check=True)
+    print(f"Enabled and started watcher timer: {WATCHER_TIMER_PATH.name}")
 
 
 def write_encrypted_secret_file(path: Path, secret: str, secret_key_file: Path = SECRET_KEY_FILE,
@@ -782,6 +845,7 @@ def generate_host_outputs(zone_id: str, args: argparse.Namespace) -> None:
     SECRET_OUTPUT_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
     SECRET_OUTPUT_DIR.chmod(0o700)
     WATCHER_SERVICE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    WATCHER_TIMER_PATH.parent.mkdir(parents=True, exist_ok=True)
     LOGROTATE_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
 
     policy_safe = sanitize_name(args.policy_name)
@@ -790,6 +854,7 @@ def generate_host_outputs(zone_id: str, args: argparse.Namespace) -> None:
     config_path = CONFIG_OUTPUT_DIR / f"netbackup-host-{policy_safe}.conf"
     secret_path = SECRET_OUTPUT_DIR / "secret.enc"
 
+    pause_watcher_for_configuration()
     write_hook(pre_hook, f"bpstart_notify.{policy_safe}", PRE_HELPER_PATH, False)
     write_hook(post_hook, f"bpend_notify.{policy_safe}", POST_HELPER_PATH, True)
     write_config_file(config_path, args)
@@ -798,14 +863,17 @@ def generate_host_outputs(zone_id: str, args: argparse.Namespace) -> None:
     write_watcher_config(WATCHER_CONFIG_PATH, args)
     install_watcher_files()
     write_watcher_service()
+    write_watcher_timer()
     write_logrotate_config()
     ensure_backup_staging_root()
+    parent_payload = BACKUP_STAGING_ROOT / "bootstrap" / policy_safe
+    parent_payload.mkdir(parents=True, exist_ok=True)
     apply_permissions()
-    enable_watcher_service()
     if apply_netbackup_bp_conf():
         restart_netbackup_service()
     else:
         print("Skipped NetBackup service restart because bp.conf was not found.")
+    enable_watcher_timer()
 
     print("\nGenerated host files:")
     print(f"  PRE hook   : {pre_hook}")
@@ -816,8 +884,10 @@ def generate_host_outputs(zone_id: str, args: argparse.Namespace) -> None:
     print(f"  Watcher cfg: {WATCHER_CONFIG_PATH}")
     print(f"  Watcher    : {WATCHER_OUTPUT_PATH}")
     print(f"  Service    : {WATCHER_SERVICE_PATH}")
+    print(f"  Timer      : {WATCHER_TIMER_PATH}")
     print(f"  Logrotate  : {LOGROTATE_CONFIG_PATH}")
     print(f"  Staging dir: {BACKUP_STAGING_ROOT}")
+    print(f"  Parent policy Backup Selections: {parent_payload} (small bootstrap markers only)")
     print(f"  Mold config: {NETBACKUP_STAGE_ROOT_CONFIG_NAME} (provider directory: {NETBACKUP_PROVIDER_NAME})")
     print(f"  Zone ID    : {zone_id}")
 

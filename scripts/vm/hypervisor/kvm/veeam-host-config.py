@@ -57,7 +57,7 @@ RUNTIME_FILES = (
     "ablestack_veeam_restore_notify.sh", "ablestack_veeam_restore_event.sh",
     "mold-veeam-restore-agent.sh",
 )
-COMMON_FILES = ("ablestack_backup_secret_key.py", "ablestack_backup_secret.py", "veeam-host-config.py")
+COMMON_FILES = ("ablestack_backup_secret_key.py", "ablestack_backup_secret.py", "thirdparty_bootstrap.py", "veeam-host-config.py")
 UNIT_FILES = ("mold-veeam-restore-agent.service", "mold-veeam-restore-agent.timer")
 
 
@@ -105,7 +105,7 @@ def parse_args(argv=None):
     parser.add_argument("--vm-exclude", default=None)
     parser.add_argument("--incremental-backup", type=boolean, default=True)
     parser.add_argument("--backup-chain-size", type=int, help="optional positive kvm.backup.chain.size; Mold default is 8")
-    parser.add_argument("--agent-payload-path", default="/tmp/mold/veeam-agent", help="small bootstrap-marker directory selected in the parent Veeam Job")
+    parser.add_argument("--agent-payload-path", help="optional parent marker directory; default: common staging/ablestack-veeam/bootstrap/<host>/<job>")
     parser.add_argument("--script-timeout", type=int, default=1800)
     parser.add_argument("--secret-key-file", type=Path, default=Path(os.environ.get("ABLESTACK_SECRET_KEY_FILE", "/root/.ssh/ablestack.key")))
     args = parser.parse_args(argv)
@@ -121,9 +121,10 @@ def parse_args(argv=None):
         parser.error("--script-timeout must be positive")
     if not args.secret_key_file.is_absolute():
         parser.error("--secret-key-file must be absolute")
-    payload = Path(args.agent_payload_path)
-    if not payload.is_absolute() or payload == Path("/") or "\n" in args.agent_payload_path:
-        parser.error("--agent-payload-path must be an absolute directory other than /")
+    if args.agent_payload_path:
+        payload = Path(args.agent_payload_path)
+        if not payload.is_absolute() or payload == Path("/") or any(c in args.agent_payload_path for c in "\r\n"):
+            parser.error("--agent-payload-path must be an absolute directory other than /")
     if not args.install_only:
         for name in ("admin_apikey", "admin_secretkey", "veeam_host", "veeam_password"):
             if not getattr(args, name):
@@ -439,6 +440,7 @@ def render_config(values):
 def write_job(files, locations, args, host, stage, offering):
     etc = locations["etc"]
     safe_job = safe_name(args.job_name)
+    payload = args.agent_payload_path or str(Path(stage) / "bootstrap" / safe_name(host["name"]) / safe_job)
     secret = etc / "secrets" / (safe_job + ".enc")
     files.secret(secret, args.admin_secretkey, args.secret_key_file)
     values = {
@@ -450,7 +452,8 @@ def write_job(files, locations, args, host, stage, offering):
         "VM_AUTO_EXCLUDE": "true", "BACKUP_MODE": "host", "VEEAM_BACKUP_INTERVAL_TYPE": "EXTERNAL",
         "VEEAM_URL": f"https://{args.veeam_host}:9398/api/", "VEEAM_USERNAME": args.veeam_user, "VEEAM_PASSWORD": args.veeam_password,
         "VEEAM_SSH_HOST": args.veeam_host, "VEEAM_SSH_USER": args.veeam_ssh_user, "VEEAM_SSH_KEY": args.veeam_ssh_key,
-        "VEEAM_HOST_BACKUP_PATH": stage, "STAGING_PATH": stage, "VEEAM_AGENT_PAYLOAD_PATH": args.agent_payload_path,
+        "VEEAM_HOST_BACKUP_PATH": stage, "STAGING_PATH": stage, "VEEAM_AGENT_PAYLOAD_PATH": payload,
+        "VEEAM_AGENT_PAYLOAD_MODE": "EXPLICIT" if args.agent_payload_path else "COMMON",
         "RESTORE_WATCH_TRIGGER_MOLD": "true", "RESTORE_WATCH_SKIP_EXISTING_ON_START": "true",
         "VEEAM_RESTORE_WATCH_WINDOW_MIN": "10", "RESTORE_AUTO_STOP": "true",
         "LOG_FILE": locations["logs"] / "veeam-hook.log", "LOG_TAG": "mold-veeam-hook",
@@ -465,8 +468,9 @@ def write_job(files, locations, args, host, stage, offering):
         files.write(target, script, 0o755)
         # VBR uploads this file to the Linux Agent; execution occurs locally on KVM.
         files.write(etc / (safe_job + "-" + hook + "-notify.sh"), "#!/usr/bin/bash\nexec " + shlex.quote(str(target)) + '\n', 0o755)
-    Path(args.agent_payload_path).mkdir(parents=True, exist_ok=True)
+    Path(payload).mkdir(parents=True, exist_ok=True)
     locations["logs"].mkdir(parents=True, exist_ok=True)
+    return payload
 
 
 def set_agent_timeout(files, ini, timeout, pending=None):
@@ -561,14 +565,14 @@ def main(argv=None):
             phase = "install runtime"
             install_runtime(files, locations, args)
             phase = "write Job configuration and Hooks"
-            write_job(files, locations, args, host, stage, offering)
+            payload = write_job(files, locations, args, host, stage, offering)
             phase = "configure Veeam Linux Agent"
             agent_changed = set_agent_timeout(files, locations["ini"], args.script_timeout, locations["etc"] / ".agent-restart-required")
             phase = "activate restore watcher"
             activate(files, locations, agent_changed)
             info("DONE: Veeam host configuration completed. Matching settings and files were reused.")
             info(f"Veeam UI: upload {locations['etc']}/{safe_name(args.job_name)}-pre-notify.sh and -post-notify.sh under Guest Processing > Scripts.")
-            info(f"Parent Job SelectedFiles: {args.agent_payload_path}. Configure the Job and its host schedule in Veeam UI.")
+            info(f"Parent Job SelectedFiles: {payload}. Configure the Job and its host schedule in Veeam UI.")
             return 0
     except (ConfigurationError, SecretKeyError, OSError, ValueError, configparser.Error) as exc:
         info(f"FAILED at {phase}: {exc}")

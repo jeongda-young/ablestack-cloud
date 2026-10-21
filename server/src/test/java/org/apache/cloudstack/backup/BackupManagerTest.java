@@ -458,6 +458,7 @@ public class BackupManagerTest {
         when(vm.getUuid()).thenReturn("vm-2");
         when(vm.getState()).thenReturn(VirtualMachine.State.Stopped);
         for (String provider : List.of("ablestack-netbackup", "ablestack-veeam")) {
+            when(thirdPartyBackupStagingService.getStageRootPath(provider)).thenReturn("/new-staging/" + provider);
             for (String engine : List.of("RBD_DIFF", "QCOW2")) {
                 for (String type : List.of("FULL", "INCREMENTAL")) {
                     ThirdPartyBackupManifest manifest = ThirdPartyBackupManifest.create(provider, "backup-1", "i-2-25-VM",
@@ -491,6 +492,9 @@ public class BackupManagerTest {
                                     : "b81acbeb-6cfa-424b-95b2-f4d26280a8c0", null);
                     assertTrue(provider + " " + engine + " " + type, resolved.restoreallowed);
                     assertEquals("METADATA", resolved.artifacttype);
+                    assertEquals("/new-staging/" + provider + "/i-2-25-VM/2026.10.12.15.00.00.000", resolved.metadatarestorepath);
+                    assertEquals(metadata.path, resolved.metadatapath);
+                    assertTrue(backupManager.resolveBackupArtifact(provider, resolved.metadatarestorepath, null, null).restoreallowed);
                     assertFalse(backupManager.resolveBackupArtifact(provider, volume.externalId, null, null).restoreallowed);
                     when(vm.getState()).thenReturn(VirtualMachine.State.Running);
                     assertFalse(backupManager.resolveBackupArtifact(provider, metadata.externalId, null, null).restoreallowed);

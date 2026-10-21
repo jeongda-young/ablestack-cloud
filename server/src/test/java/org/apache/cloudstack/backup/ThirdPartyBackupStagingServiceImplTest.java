@@ -38,6 +38,8 @@ import java.util.function.Supplier;
 import org.apache.cloudstack.framework.config.ConfigKey;
 import org.apache.cloudstack.framework.config.dao.ConfigurationDao;
 import org.apache.cloudstack.framework.config.impl.ConfigDepotImpl;
+import org.apache.cloudstack.backup.dao.BackupDao;
+import org.apache.cloudstack.backup.dao.BackupDetailsDao;
 import org.junit.After;
 import org.junit.Before;
 import org.junit.Test;
@@ -60,6 +62,7 @@ import com.cloud.resource.ResourceState;
 import com.cloud.storage.dao.VolumeDao;
 import com.cloud.utils.db.GlobalLock;
 import com.cloud.utils.exception.CloudRuntimeException;
+import com.google.gson.Gson;
 
 public class ThirdPartyBackupStagingServiceImplTest {
     @InjectMocks
@@ -74,6 +77,10 @@ public class ThirdPartyBackupStagingServiceImplTest {
     private AgentManager agentManager;
     @Mock
     private Supplier<String> saveConfiguration;
+    @Mock
+    private BackupDao backupDao;
+    @Mock
+    private BackupDetailsDao backupDetailsDao;
 
     private AutoCloseable mocks;
     private MockedStatic<GlobalLock> lockFactory;
@@ -205,6 +212,82 @@ public class ThirdPartyBackupStagingServiceImplTest {
 
         assertThrows(CloudRuntimeException.class, () -> service.getAvailableBytes(host(1L, "cube1"), "/tmp/mold/backup"));
         verify(agentManager, never()).send(anyLong(), any(AblestackThirdPartyStagingCommand.class));
+    }
+
+    @Test
+    public void locationChangeSnapshotsLegacyBackupsBeforeSavingNewRoot() {
+        Map<String, String> details = legacyBackup();
+        when(saveConfiguration.get()).thenAnswer(invocation -> {
+            verify(backupDetailsDao).addDetail(eq(7L), eq(ThirdPartyBackupStagingService.SNAPSHOT_KEY), any(String.class), eq(false));
+            return "/mnt/new/jobs";
+        });
+        assertEquals("/mnt/new/jobs", service.updateConfiguration(BackupManager.ThirdPartyStagingRootPath.key(),
+                "/mnt/new/jobs", saveConfiguration));
+        ArgumentCaptor<String> json = ArgumentCaptor.forClass(String.class);
+        verify(backupDetailsDao).addDetail(eq(7L), eq(ThirdPartyBackupStagingService.SNAPSHOT_KEY), json.capture(), eq(false));
+        ThirdPartyBackupStagingService.Snapshot recorded = new Gson().fromJson(json.getValue(), ThirdPartyBackupStagingService.Snapshot.class);
+        assertEquals("/mnt/staging/jobs", recorded.rootPath);
+        assertEquals("/mnt/staging", recorded.mountPath);
+        assertTrue(details.get(ThirdPartyBackupManifest.DETAIL_KEY).contains("/mnt/staging/jobs/"));
+    }
+
+    @Test
+    public void queuedRestoreAndUnconfirmedCleanupBlockLocationChanges() {
+        Map<String, String> details = legacyBackup();
+        for (String key : List.of(ThirdPartyBackupAdmission.BACKUP_KEY, ThirdPartyBackupAdmission.RESTORE_KEY)) {
+            details.put(key, "{\"jobId\":\"queued\",\"state\":\"WAITING\"}");
+            assertThrows(CloudRuntimeException.class, () -> service.updateConfiguration(
+                    BackupManager.ThirdPartyStagingRootPath.key(), "/mnt/new/jobs", saveConfiguration));
+            details.remove(key);
+        }
+        details.put(ThirdPartyBackupRestore.PLAN_KEY, "{}");
+        details.put(ThirdPartyBackupRestore.CLEANUP_STATE_KEY, "WAITING");
+        assertThrows(CloudRuntimeException.class, () -> service.updateConfiguration(
+                BackupManager.ThirdPartyStagingRootPath.key(), "/mnt/new/jobs", saveConfiguration));
+        verify(saveConfiguration, never()).get();
+    }
+
+    @Test
+    public void recordedCleanupUsesOriginalMountAfterActiveRootMoves() throws Exception {
+        ThirdPartyBackupStagingService.Snapshot original = service.captureConfiguration();
+        settings.put(BackupManager.ThirdPartyStagingRootPath.key(), "/mnt/new/jobs");
+        settings.put(BackupManager.ThirdPartyStagingMountPath.key(), "/mnt/new");
+        when(agentManager.send(eq(1L), any(AblestackThirdPartyStagingCommand.class))).thenReturn(new Answer(null, true, "0"));
+        service.prepareCleanup(host(1L, "cube1"), "/mnt/staging/jobs/ablestack-veeam", original);
+        ArgumentCaptor<AblestackThirdPartyStagingCommand> command = ArgumentCaptor.forClass(AblestackThirdPartyStagingCommand.class);
+        verify(agentManager).send(eq(1L), command.capture());
+        assertEquals("/mnt/staging", command.getValue().getMountPath());
+        assertEquals("/mnt/staging/jobs/ablestack-veeam", command.getValue().getPath());
+        assertThrows(CloudRuntimeException.class, () -> service.prepareCleanup(host(1L, "cube1"), "/mnt/new/jobs", original));
+    }
+
+    @Test
+    public void unknownLegacyMountCannotBeInferredFromNewSettings() {
+        Map<String, String> details = legacyBackup();
+        details.put(ThirdPartyBackupManifest.DETAIL_KEY, details.get(ThirdPartyBackupManifest.DETAIL_KEY)
+                .replace("/mnt/staging/jobs", "/old/unknown"));
+        service.updateConfiguration(BackupManager.ThirdPartyStagingRootPath.key(), "/old/unknown", saveConfiguration);
+        verify(saveConfiguration).get();
+        verify(backupDetailsDao, never()).addDetail(anyLong(), eq(ThirdPartyBackupStagingService.SNAPSHOT_KEY), any(String.class), eq(false));
+    }
+
+    private Map<String, String> legacyBackup() {
+        Map<String, String> details = new HashMap<>();
+        details.put(ThirdPartyBackupManifest.MODE_KEY, ThirdPartyBackupManifest.VOLUME_MODE);
+        details.put(ThirdPartyBackupManifest.CLEANUP_STATE_KEY, "COMPLETED");
+        details.put(ThirdPartyBackupManifest.DETAIL_KEY, "{\"provider\":\"ablestack-veeam\",\"backupUuid\":\"backup-old\","
+                + "\"vmName\":\"i-2-1-VM\",\"timestamp\":\"2026.10.20\",\"backupType\":\"FULL\",\"volumes\":[{"
+                + "\"uuid\":\"volume\",\"provisionedBytes\":100,\"engine\":\"QCOW2\",\"chain\":[{\"backupUuid\":\"backup-old\","
+                + "\"path\":\"/mnt/staging/jobs/ablestack-veeam/i-2-1-VM/2026.10.20/root.volume.qcow2\"}]}]}");
+        BackupVO backup = mock(BackupVO.class);
+        when(backup.getId()).thenReturn(7L);
+        when(backup.getUuid()).thenReturn("backup-old");
+        when(backup.getStatus()).thenReturn(Backup.Status.BackedUp);
+        when(backup.getDetail(any(String.class))).thenAnswer(invocation -> details.get(invocation.getArgument(0)));
+        when(backupDao.findById(7L)).thenReturn(backup);
+        when(backupDetailsDao.findDetails(ThirdPartyBackupManifest.MODE_KEY, ThirdPartyBackupManifest.VOLUME_MODE, false))
+                .thenReturn(List.of(new BackupDetailVO(7L, ThirdPartyBackupManifest.MODE_KEY, ThirdPartyBackupManifest.VOLUME_MODE, false)));
+        return details;
     }
 
     private HostVO host(long id, String name) {

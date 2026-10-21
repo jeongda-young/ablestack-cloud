@@ -118,6 +118,21 @@ fi
         self.write_metadata()
         self.assertIn("API restoreBackupArtifact", self.watch())
 
+    def test_warning_metadata_uses_current_destination_and_original_catalog_paths(self):
+        moved = self.base / "new-stage/ablestack-veeam" / self.root.parent.name / self.root.name
+        moved.parent.mkdir(parents=True)
+        self.root.rename(moved)
+        self.expected["metadatarestorepath"] = str(moved)
+        self.assertIn("API restoreBackupArtifact", self.watch())
+
+    def test_warning_metadata_in_two_fresh_destinations_is_ambiguous(self):
+        moved = self.base / "new-stage/ablestack-veeam" / self.root.parent.name / self.root.name
+        moved.mkdir(parents=True)
+        for source in self.root.iterdir():
+            (moved / source.name).write_bytes(source.read_bytes())
+        self.expected["metadatarestorepath"] = str(moved)
+        self.assertIn("ambiguous", self.assert_blocked())
+
     def test_failed_canceled_unknown_and_empty_results_never_trigger(self):
         for result in ("Failed", "Canceled", "Cancelled", "None", "", "Unknown"):
             with self.subTest(result=result):

@@ -16,6 +16,7 @@
 # specific language governing permissions and limitations
 # under the License.
 
+import argparse
 import fcntl
 import json
 import os
@@ -25,7 +26,6 @@ import socket
 import ssl
 import stat
 import subprocess
-import sys
 import time
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
@@ -76,20 +76,33 @@ def require_config(name: str) -> str:
 
 def load_state() -> dict[str, Any]:
     state_file = Path(CONFIG.get("STATE_FILE", str(DEFAULT_STATE_FILE)))
-    if not state_file.is_file():
-        return {"processed": {}}
     try:
-        return json.loads(state_file.read_text(encoding="utf-8"))
-    except Exception:
+        state = json.loads(state_file.read_text(encoding="utf-8"))
+    except FileNotFoundError:
         return {"processed": {}}
+    # Never replace unreadable history with a fresh baseline: completed restore
+    # sessions could otherwise be silently skipped or requested again.
+    if not isinstance(state, dict) or any(not isinstance(state.get(key, {}), dict)
+                                          for key in ("processed", "restoreValidation")):
+        raise ValueError(f"Invalid watcher state: {state_file}")
+    return state
 
 
 def save_state(state: dict[str, Any]) -> None:
     state_file = Path(CONFIG.get("STATE_FILE", str(DEFAULT_STATE_FILE)))
     state_file.parent.mkdir(parents=True, exist_ok=True)
     tmp_file = state_file.with_suffix(".tmp")
-    tmp_file.write_text(json.dumps(state, sort_keys=True, indent=2), encoding="utf-8")
+    with tmp_file.open("w", encoding="utf-8") as handle:
+        os.fchmod(handle.fileno(), 0o600)
+        json.dump(state, handle, sort_keys=True, indent=2)
+        handle.flush()
+        os.fsync(handle.fileno())
     tmp_file.replace(state_file)
+    directory_fd = os.open(state_file.parent, os.O_RDONLY)
+    try:
+        os.fsync(directory_fd)
+    finally:
+        os.close(directory_fd)
 
 
 def prune_state(state: dict[str, Any]) -> None:
@@ -444,11 +457,31 @@ def verify_partial_restore_metadata(job: dict[str, Any], selections: list[str]) 
         raise ValueError("Partial restore must identify exactly one metadata directory")
     root = Path(roots[0])
     stage = Path(CONFIG.get("NETBACKUP_STAGING_ROOT", "/tmp/mold/netbackup")).resolve()
-    if root.resolve() != root or stage not in root.parents or not root.is_dir():
+    expected = None
+    source_root = root
+    if not root.is_dir() or stage not in root.parents:
+        expected = resolve_restore_metadata(job)
+    elif (root / "backup-manifest.json").is_file():
+        candidate = json.loads(read_restored_metadata(root / "backup-manifest.json", started_at))
+        if any(Path(v.get("chain", [{}])[-1].get("path", "")).parent != root for v in candidate.get("volumes", [])):
+            expected = resolve_restore_metadata(job)
+    if expected is not None:
+        source_root = Path(expected["metadatapath"])
+        destinations = {Path(p) for p in (expected.get("metadatarestorepath"), expected.get("metadatapath")) if p}
+        # File lists may describe the original selection rather than its alternate destination.
+        if root not in destinations:
+            raise ValueError("Restore selection differs from the exact Mold metadata artifact")
+        available = [p for p in destinations if (p / "backup-manifest.json").is_file()
+                     and (p / "backup-manifest.json").lstat().st_ctime >= started_at - 5]
+        if len(available) != 1:
+            raise ValueError("Restored metadata destination is missing or ambiguous")
+        root = available[0]
+    if root.resolve() != root or not root.is_dir() or (expected is None and stage not in root.parents):
         raise ValueError("Partial restore metadata directory is unavailable or redirects outside staging")
     required = [root / name for name in ("backup-manifest.json", "domain-config.xml", ".staging.complete")]
     normalized = {str(Path(value)) for value in selections if value.startswith("/")}
-    if str(root) not in normalized and not all(str(path) in normalized for path in required):
+    selected_root = Path(roots[0])
+    if str(selected_root) not in normalized and not all(str(selected_root / path.name) in normalized for path in required):
         raise ValueError("NetBackup file selection does not include all required restore metadata")
     texts = [read_restored_metadata(path, started_at) for path in required]
     manifest = json.loads(texts[0])
@@ -466,18 +499,44 @@ def verify_partial_restore_metadata(job: dict[str, Any], selections: list[str]) 
             raise ValueError("Restored manifest contains an invalid volume restore plan")
         ids.add(volume["uuid"])
         artifact = volume["chain"][-1]
-        if (artifact.get("backupUuid") != manifest["backupUuid"] or Path(artifact.get("path", "")).parent != root
+        if (artifact.get("backupUuid") != manifest["backupUuid"] or Path(artifact.get("path", "")).parent != source_root
                 or artifact.get("completed") is not True or not artifact.get("externalId") or not artifact.get("jobId")):
             raise ValueError("Restored manifest has an unconfirmed or mismatched volume artifact")
     domain = ET.fromstring(texts[1])
     if domain.tag != "domain" or domain.findtext("name") != manifest["vmName"] or not domain.findtext("uuid"):
         raise ValueError("Restored domain XML is invalid or belongs to another VM")
+    if expected is not None and (manifest["backupUuid"] != expected.get("id")
+            or manifest["vmName"] != expected.get("vmname") or manifest["timestamp"] != expected.get("timestamp")
+            or domain.findtext("uuid") != expected.get("virtualmachineid")):
+        raise ValueError("Restored metadata differs from the exact Mold backup")
     marker = dict(line.split("=", 1) for line in texts[2].splitlines() if "=" in line)
     if marker.get("volume_pipeline") != "true" or marker.get("backup_uuid") != manifest["backupUuid"]:
         raise ValueError("Restored completion marker does not match the manifest")
     # This UI Job restores metadata only. Mold downloads and verifies every volume
     # itself; requiring image payloads here would reject valid per-volume backups.
-    return {"root": str(root), "backupUuid": manifest["backupUuid"], "requiredFiles": [str(path) for path in required]}
+    result = {"root": str(root), "backupUuid": manifest["backupUuid"], "requiredFiles": [str(path) for path in required]}
+    if expected is not None:
+        result["externalId"] = str(source_root)
+    return result
+
+
+def resolve_restore_metadata(job: dict[str, Any]) -> dict[str, Any]:
+    identifiers = candidate_restore_identifiers(job, job_id(job))
+    if len(identifiers) != 1:
+        raise ValueError("Relocated metadata requires one exact catalog selection")
+    env = os.environ.copy()
+    if CONFIG.get("MOLD_CONFIG_FILE"):
+        env["MOLD_CONFIG_FILE"] = CONFIG["MOLD_CONFIG_FILE"]
+    proc = subprocess.run([require_config("RESTORE_NOTIFY_SCRIPT"), "netbackup-host-restore-watcher",
+                           identifiers[0], "resolve", job_id(job)], capture_output=True, text=True, env=env, timeout=60)
+    if proc.returncode:
+        raise ValueError("Unable to resolve the exact Mold metadata destination")
+    result = json.loads(proc.stdout)["resolvebackupartifactresponse"]["backupartifact"]
+    if (result.get("matched") is not True or result.get("tracked") is not False
+            or result.get("restoreallowed") is not True or result.get("artifacttype") != "METADATA"
+            or result.get("provider") != "ablestack-netbackup" or not result.get("metadatapath")):
+        raise ValueError("Mold did not authorize this metadata artifact")
+    return result
 
 
 def extract_staging_paths_from_strings(values: list[str]) -> list[str]:
@@ -488,11 +547,15 @@ def extract_staging_paths_from_strings(values: list[str]) -> list[str]:
                       "dominfo.xml", "domiflist.xml", "domblklist.xml", ".volume-bootstrap"}
     for value in values:
         normalized = value.rstrip("/")
-        if normalized.startswith(staging_root + "/"):
-            suffix = normalized[len(staging_root) + 1:]
+        provider_marker = "/ablestack-netbackup/"
+        if normalized.startswith(staging_root + "/") or (normalized.startswith("/") and provider_marker in normalized):
+            prefix = staging_root if normalized.startswith(staging_root + "/") else normalized.split(provider_marker, 1)[0] + "/ablestack-netbackup"
+            suffix = normalized[len(prefix) + 1:]
             parts = [part for part in suffix.split("/") if part]
             if len(parts) >= 2:
-                root = f"{staging_root}/{parts[0]}/{parts[1]}"
+                root = f"{prefix}/{parts[0]}/{parts[1]}"
+                if not parts[0].startswith("i-") or not parts[0].endswith("-VM") or parts[1] in {".", ".."}:
+                    continue
                 if len(parts) == 3 and parts[2] not in metadata_names:
                     # Do not collapse a volume child selection into its parent's
                     # metadata directory and accidentally trigger a VM restore.
@@ -596,7 +659,15 @@ def fetch_restore_jobs() -> list[dict[str, Any]]:
         params["page[limit]"] = page_limit
 
     payload = netbackup_get(CONFIG.get("NETBACKUP_JOBS_PATH", "/admin/jobs"), params)
-    return extract_jobs(payload)
+    listing = payload
+    if isinstance(payload, dict):
+        listing = next((payload[key] for key in ("data", "jobs", "job", "items") if key in payload), None)
+    if not isinstance(listing, (list, dict)):
+        raise ValueError("NetBackup Jobs API returned no confirmed job listing")
+    entries = [listing] if isinstance(listing, dict) else listing
+    if any(not isinstance(job, dict) or not job_id(job) for job in entries):
+        raise ValueError("NetBackup Jobs API returned an invalid job listing")
+    return entries
 
 
 def mark_existing_jobs_processed(state: dict[str, Any]) -> None:
@@ -614,10 +685,10 @@ def mark_existing_jobs_processed(state: dict[str, Any]) -> None:
         if restore_job_outcome(job) not in {"SUCCESS", "PARTIAL", "FAILED"} and job_state(job) not in {
                 "done", "completed", "succeeded", "successful", "success"}:
             continue
-        identifiers = candidate_restore_identifiers(job, current_job_id)
+        # Only Job IDs are needed to retire historical sessions. Fetching every
+        # old Job's file list could exhaust the oneshot timeout before baselining.
         processed[current_job_id] = {
             "skipped": "initialJobBaseline",
-            "externalIds": identifiers,
             "permanent": True,
             "timestamp": int(time.time()),
         }
@@ -708,7 +779,7 @@ def poll_once(state: dict[str, Any]) -> None:
             continue
         # A partial Job may submit only the exact metadata directory verified above,
         # never an unverified catalog ID or a stale directory discovered by proximity.
-        restore_identifier = validation["root"] if validation else local_identifiers[0]
+        restore_identifier = validation.get("externalId", validation["root"]) if validation else local_identifiers[0]
         notification_status = invoke_restore_notify(restore_identifier, current_job_id)
         if notification_status:
             processed[current_job_id] = {
@@ -719,6 +790,9 @@ def poll_once(state: dict[str, Any]) -> None:
                 "timestamp": int(time.time()),
             }
             validations.pop(current_job_id, None)
+            # Persist each accepted notification before looking at another Job.
+            # A later request may hang until the oneshot service timeout.
+            save_state(state)
 
 
 def acquire_process_lock() -> Optional[Any]:
@@ -734,30 +808,33 @@ def acquire_process_lock() -> Optional[Any]:
     return handle
 
 
-def main() -> None:
-    interval = int(CONFIG.get("POLL_INTERVAL_SECONDS", "60"))
-    once = "--once" in sys.argv
-    lock_handle = acquire_process_lock()
-    if lock_handle is None:
-        return
-    log(f"Starting NetBackup restore watcher config=[{CONFIG_FILE}] once=[{once}] sslVerify=[{CONFIG.get('NETBACKUP_SSL_VERIFY', 'false')}] caFile=[{CONFIG.get('NETBACKUP_CA_FILE', '')}]")
-    state = load_state()
+def main(argv: Optional[list[str]] = None) -> int:
+    parser = argparse.ArgumentParser(description="Check completed NetBackup UI restores once, then exit.")
+    parser.add_argument("--once", action="store_true", help="Run one polling pass (also the default).")
+    parser.parse_args(argv)
+    phase = "initialization"
     try:
-        mark_existing_jobs_processed(state)
-        save_state(state)
-    except Exception as exc:
-        log(f"FAILED watcher initial baseline error=[{exc}]")
-    while True:
-        try:
+        lock_handle = acquire_process_lock()
+        if lock_handle is None:
+            return 0
+        with lock_handle:
+            log(f"Starting NetBackup restore watcher config=[{CONFIG_FILE}] once=[True] sslVerify=[{CONFIG.get('NETBACKUP_SSL_VERIFY', 'false')}] caFile=[{CONFIG.get('NETBACKUP_CA_FILE', '')}]")
+            state = load_state()
+            phase = "initial baseline"
+            mark_existing_jobs_processed(state)
+            # Confirm and persist the initial baseline before any restore request.
+            # Subsequent timer executions reuse it instead of baselining new Jobs.
+            save_state(state)
+            phase = "poll"
             prune_state(state)
             poll_once(state)
             save_state(state)
-        except Exception as exc:
-            log(f"FAILED watcher poll error=[{exc}]")
-        if once:
-            break
-        time.sleep(interval)
+            log("Completed NetBackup restore watcher polling pass")
+    except Exception as exc:
+        log(f"FAILED watcher {phase} error=[{exc}]")
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

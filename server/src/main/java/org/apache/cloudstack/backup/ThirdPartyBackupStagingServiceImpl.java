@@ -30,6 +30,8 @@ import javax.inject.Inject;
 
 import org.apache.cloudstack.framework.config.ConfigKey;
 import org.apache.cloudstack.framework.config.dao.ConfigurationDao;
+import org.apache.cloudstack.backup.dao.BackupDao;
+import org.apache.cloudstack.backup.dao.BackupDetailsDao;
 import org.apache.commons.lang3.StringUtils;
 
 import com.cloud.agent.AgentManager;
@@ -47,6 +49,7 @@ import com.cloud.storage.dao.VolumeDao;
 import com.cloud.utils.component.ManagerBase;
 import com.cloud.utils.db.GlobalLock;
 import com.cloud.utils.exception.CloudRuntimeException;
+import com.google.gson.Gson;
 
 /** Activation and runtime validation share the same host-side staging preparation command. */
 public class ThirdPartyBackupStagingServiceImpl extends ManagerBase implements ThirdPartyBackupStagingService {
@@ -58,10 +61,14 @@ public class ThirdPartyBackupStagingServiceImpl extends ManagerBase implements T
     private VolumeDao volumeDao;
     @Inject
     private AgentManager agentManager;
+    @Inject
+    private BackupDao backupDao;
+    @Inject
+    private BackupDetailsDao backupDetailsDao;
 
     @Override
     public <T> T updateConfiguration(String name, String value, Supplier<T> saveConfiguration) {
-        GlobalLock lock = GlobalLock.getInternLock("backup.thirdparty.staging.configuration");
+        GlobalLock lock = GlobalLock.getInternLock(CONFIGURATION_LOCK);
         boolean locked = false;
         try {
             locked = lock.lock(10);
@@ -72,10 +79,18 @@ public class ThirdPartyBackupStagingServiceImpl extends ManagerBase implements T
             if (BackupManager.ThirdPartyStagingEnable.key().equals(name)) {
                 if (Boolean.parseBoolean(StringUtils.trimToEmpty(value))) {
                     validateActivation();
+                    preserveRecordedConfigurations(false);
                 }
             } else if (!isAdmissionSetting(name) && isEnabled() && !StringUtils.equals(readValue(name), value)) {
                 throw new InvalidParameterValueException(
                         "Disable backup.thirdparty.staging.enable before changing staging settings, then enable it again to validate the new configuration.");
+            }
+            if (isLocationSetting(name) && !StringUtils.equals(readValue(name), value)) {
+                preserveRecordedConfigurations(true);
+            } else if (BackupManager.ThirdPartyStagingEnable.key().equals(name) && isEnabled()
+                    && !Boolean.parseBoolean(StringUtils.trimToEmpty(value))) {
+                // Capture legacy backups while the old configuration is still complete.
+                preserveRecordedConfigurations(false);
             }
             return saveConfiguration.get();
         } finally {
@@ -98,7 +113,7 @@ public class ThirdPartyBackupStagingServiceImpl extends ManagerBase implements T
     }
 
     private void validateActivation() {
-        StagingConfiguration configuration = loadConfiguration();
+        Snapshot configuration = loadConfiguration();
         long largestVolumeBytes = volumeDao.findLargestUserVmVolumeSize();
         long requiredBytes = Math.addExact(largestVolumeBytes, capacityBuffer(largestVolumeBytes, configuration.bufferPercent));
         List<HostVO> hosts = findActivationHosts();
@@ -149,6 +164,11 @@ public class ThirdPartyBackupStagingServiceImpl extends ManagerBase implements T
     }
 
     @Override
+    public Snapshot captureConfiguration() {
+        return loadConfiguration();
+    }
+
+    @Override
     public long getAvailableBytes(Host host, String path) {
         requireEnabled();
         return preparePath(host, path);
@@ -159,8 +179,18 @@ public class ThirdPartyBackupStagingServiceImpl extends ManagerBase implements T
         preparePath(host, path);
     }
 
+    @Override
+    public void prepareCleanup(Host host, String path, Snapshot configuration) {
+        validateSnapshot(configuration);
+        Path requested = absolutePath("recorded staging cleanup path", path);
+        if (!requested.startsWith(Path.of(configuration.rootPath))) {
+            throw new CloudRuntimeException("Cleanup path differs from the recorded staging configuration");
+        }
+        prepareHost(host, configuration, requested.toString(), 0);
+    }
+
     private long preparePath(Host host, String path) {
-        StagingConfiguration configuration = loadConfiguration();
+        Snapshot configuration = loadConfiguration();
         Path requestedPath = absolutePath("staging operation path", path);
         if (!requestedPath.startsWith(Path.of(configuration.rootPath))) {
             throw new CloudRuntimeException("The staging operation path must be inside backup.thirdparty.staging.root.path: " + path
@@ -187,7 +217,7 @@ public class ThirdPartyBackupStagingServiceImpl extends ManagerBase implements T
                 .add(BigInteger.valueOf(99)).divide(BigInteger.valueOf(100)).longValueExact();
     }
 
-    private long prepareHost(Host host, StagingConfiguration configuration, String path, long requiredBytes) {
+    private long prepareHost(Host host, Snapshot configuration, String path, long requiredBytes) {
         if (host == null || host.getStatus() != Status.Up || host.getHypervisorType() != HypervisorType.KVM
                 || host.getResourceState() != ResourceState.Enabled) {
             throw new CloudRuntimeException("The staging host must be an enabled, connected KVM host.");
@@ -213,8 +243,8 @@ public class ThirdPartyBackupStagingServiceImpl extends ManagerBase implements T
         }
     }
 
-    private StagingConfiguration loadConfiguration() {
-        StagingConfiguration configuration = new StagingConfiguration();
+    private Snapshot loadConfiguration() {
+        Snapshot configuration = new Snapshot();
         configuration.type = readValue(BackupManager.ThirdPartyStagingStorageType).trim().toUpperCase(Locale.ROOT);
         validateSetting(BackupManager.ThirdPartyStagingStorageType.key(), configuration.type);
         if (configuration.type.isEmpty()) {
@@ -238,6 +268,91 @@ public class ThirdPartyBackupStagingServiceImpl extends ManagerBase implements T
             throw new InvalidParameterValueException("backup.thirdparty.staging.nfs.source must use server:/export format.");
         }
         return configuration;
+    }
+
+    private void validateSnapshot(Snapshot configuration) {
+        if (configuration == null || configuration.version != 1) {
+            throw new CloudRuntimeException("Recorded staging configuration is missing or unsupported");
+        }
+        validateSetting(BackupManager.ThirdPartyStagingStorageType.key(), configuration.type);
+        Path root = absolutePath("recorded staging root", configuration.rootPath);
+        Path mount = absolutePath("recorded staging mount", configuration.mountPath);
+        if (!List.of("GFS2", "NFS", "LOCAL").contains(configuration.type) || mount.getParent() == null
+                || !root.startsWith(mount) || !root.toString().equals(configuration.rootPath)
+                || !mount.toString().equals(configuration.mountPath)
+                || ("NFS".equals(configuration.type) && (configuration.nfsSource == null
+                        || !configuration.nfsSource.matches("[^\\s]+:/.*")))) {
+            throw new CloudRuntimeException("Recorded staging mount identity is invalid");
+        }
+        validateSetting(BackupManager.ThirdPartyStagingMountOptions.key(), configuration.mountOptions);
+        validateSetting(BackupManager.ThirdPartyStagingMountTimeout.key(), String.valueOf(configuration.timeoutSeconds));
+        validateSetting(BackupManager.ThirdPartyStagingCapacityBufferPercent.key(), String.valueOf(configuration.bufferPercent));
+    }
+
+    private boolean isLocationSetting(String name) {
+        return BackupManager.ThirdPartyStagingStorageType.key().equals(name)
+                || BackupManager.ThirdPartyStagingRootPath.key().equals(name)
+                || BackupManager.ThirdPartyStagingMountPath.key().equals(name)
+                || BackupManager.ThirdPartyStagingNfsSource.key().equals(name)
+                || BackupManager.ThirdPartyStagingMountOptions.key().equals(name);
+    }
+
+    private void preserveRecordedConfigurations(boolean requireQuiescent) {
+        Snapshot current = null;
+        List<BackupVO> legacy = new ArrayList<>();
+        for (BackupDetailVO detail : backupDetailsDao.findDetails(ThirdPartyBackupManifest.MODE_KEY,
+                ThirdPartyBackupManifest.VOLUME_MODE, false)) {
+            BackupVO backup = backupDao.findById(detail.getResourceId());
+            if (backup == null) { continue; }
+            backupDao.loadDetails(backup);
+            if (requireQuiescent) { requireQuiescent(backup); }
+            if (StringUtils.isNotBlank(backup.getDetail(SNAPSHOT_KEY))) {
+                validateSnapshot(new Gson().fromJson(backup.getDetail(SNAPSHOT_KEY), Snapshot.class));
+                continue;
+            }
+            ThirdPartyBackupManifest manifest = ThirdPartyBackupManifest.fromJson(backup.getDetail(ThirdPartyBackupManifest.DETAIL_KEY));
+            Path recorded = Path.of(manifest.getCurrentArtifacts().get(0).path).getParent().getParent().getParent();
+            String configuredRoot = readValue(BackupManager.ThirdPartyStagingRootPath);
+            if (StringUtils.isBlank(configuredRoot) || !recorded.equals(Path.of(configuredRoot, manifest.getProvider()))) {
+                logger.warn("Legacy backup [{}] has no staging snapshot for [{}]. Its original mount settings must be restored before cleanup; no configuration was inferred.",
+                        backup.getUuid(), recorded);
+                continue;
+            }
+            if (current == null) {
+                try { current = loadConfiguration(); }
+                catch (InvalidParameterValueException e) {
+                    // Permit completing/correcting a disabled, partially edited configuration.
+                    logger.warn("Legacy staging snapshot for backup [{}] is deferred until valid mount settings are restored: {}", backup.getUuid(), e.getMessage());
+                    continue;
+                }
+            }
+            legacy.add(backup);
+        }
+        if (current != null) {
+            String json = new Gson().toJson(current);
+            for (BackupVO backup : legacy) { backupDetailsDao.addDetail(backup.getId(), SNAPSHOT_KEY, json, false); }
+        }
+    }
+
+    private void requireQuiescent(BackupVO backup) {
+        boolean busy = backup.getStatus() == Backup.Status.BackingUp || backup.getStatus() == Backup.Status.Restoring
+                || ThirdPartyBackupVolumeService.needsBackupCleanup(backup)
+                || StringUtils.isNotBlank(backup.getDetail(ThirdPartyBackupManifest.DELETE_PROGRESS_KEY))
+                || (StringUtils.isNotBlank(backup.getDetail(ThirdPartyBackupRestore.PLAN_KEY))
+                        && !"COMPLETED".equals(backup.getDetail(ThirdPartyBackupRestore.CLEANUP_STATE_KEY)))
+                || List.of("WAITING", "RUNNING").contains(StringUtils.defaultString(
+                        backup.getDetail(ThirdPartyBackupManifest.SOURCE_CLEANUP_STATE_KEY)));
+        for (String key : List.of(ThirdPartyBackupAdmission.BACKUP_KEY, ThirdPartyBackupAdmission.RESTORE_KEY)) {
+            String json = backup.getDetail(key);
+            if (StringUtils.isNotBlank(json)) {
+                ThirdPartyBackupAdmission.Entry entry = new Gson().fromJson(json, ThirdPartyBackupAdmission.Entry.class);
+                busy |= entry == null || !"RELEASED".equals(entry.state);
+            }
+        }
+        if (busy) {
+            throw new CloudRuntimeException("Staging location cannot change while backup [" + backup.getUuid()
+                    + "] has queued, active or unconfirmed cleanup work. Finish or cancel it using the original configuration first.");
+        }
     }
 
     private Path absolutePath(String name, String value) {
@@ -303,13 +418,4 @@ public class ThirdPartyBackupStagingServiceImpl extends ManagerBase implements T
         return configurationDao.getValue(name);
     }
 
-    private static final class StagingConfiguration {
-        private String type;
-        private String rootPath;
-        private String mountPath;
-        private String nfsSource;
-        private String mountOptions;
-        private int timeoutSeconds;
-        private int bufferPercent;
-    }
 }

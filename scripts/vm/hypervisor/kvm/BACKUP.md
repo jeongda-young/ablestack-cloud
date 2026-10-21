@@ -25,6 +25,7 @@ under the License.
 ## 목차
 
 - [운영자용 백업 구성 요약](#운영자용-백업-구성-요약)
+- [공통 스테이징 경로 변경](#공통-스테이징-경로-변경)
 - [백업 솔루션별 준비와 실행 순서](#백업-솔루션별-준비와-실행-순서)
 - [NetBackup·Veeam 사전 구성 파라미터 비교](#netbackupveeam-사전-구성-파라미터-비교)
 - [Full 및 증분 백업 운영](#full-및-증분-백업-운영)
@@ -114,6 +115,183 @@ QCOW2 정지 VM은 게스트 OS를 실행하지 않는 임시 백업 환경을 �
 GFS2·LOCAL은 Host의 `/etc/fstab`에 마운트 정보가 있어야 자동으로 다시 연결할 수 있으므로
 각 Host에서 파일시스템과 마운트 설정을 먼저 준비한다.
 
+## 공통 스테이징 경로 변경
+
+Commvault·NetBackup·Veeam의 `backup.thirdparty.staging.*`는 공통 글로벌 설정이다.
+한 솔루션만 테스트하더라도 변경 범위에 포함된 모든 솔루션과 백업 Host를 함께 확인한다.
+이 변경 버전으로 업그레이드할 때도 진행 중인 백업·복원을 먼저 종료하고, 관리 서버와 Host 업데이트 후 사전구성을 갱신한다.
+NAS 백업 저장소의 경로 변경은 이 절의 대상이 아니다.
+
+현재 글로벌 설정을 변경하면 이후 작업은 새 스테이징 설정을 읽는다.
+외부 정책/Job의 선택 경로와 Host에 저장한 구성까지 자동 변경하는 기능은 없으므로 아래 수동 절차가 필요하다.
+
+| 항목 | 현재 동작과 필요한 작업 |
+| --- | --- |
+| Mold의 새 볼륨별 작업 | 현재 글로벌 설정으로 스테이징과 복원 목적지를 결정한다. |
+| 진행 중이거나 정리 대기 중인 작업 | 기존 설정에서 종료·정리를 완료한다. 대기·실행·삭제·정리 중인 기록이 있으면 위치 설정 변경을 거부한다. |
+| NetBackup Host 구성 | `restore-watcher.conf` 등에 스테이징 경로가 저장된다. 변경 후 사전구성 도구로 갱신한다. |
+| NetBackup 기준 정책 | Backup Selections는 사전구성이 출력하는 `<root>/ablestack-netbackup/bootstrap/<policy>`만 선택한다. root 변경 후 Host 재구성과 외부 정책 수정이 필요하다. |
+| Veeam Host 구성 | 기본 마커 경로는 `<root>/ablestack-veeam/bootstrap/<host>/<job>`로 계산한다. Job별 conf는 재구성으로 갱신하며 `--agent-payload-path`는 명시적 경로가 필요할 때만 지정한다. |
+| Veeam 부모 Job | SelectedFiles를 사전구성이 출력한 마커 디렉터리와 맞춘다. 외부 Job의 선택 경로는 자동 변경하지 않는다. |
+
+두 솔루션은 부모 작업의 작은 마커 사본과 원본 볼륨 스테이징을 분리한다.
+부모 작업에는 `<backup UUID>.json`만 저장하며 사본은 Post Hook에서 소유권을 확인하고 제거한다.
+원본 `.volume-bootstrap`과 볼륨 데이터는 Mold의 작업별 정리가 관리한다.
+공통 root 또는 provider 디렉터리 전체를 부모 정책/Job의 대상으로 선택하지 않는다.
+구성 파일의 기본 마커 경로가 현재 root와 다르면 Pre Hook은 백업 요청 전에 재구성과 외부 선택 경로 수정을 요구한다.
+
+### 변경 유형과 기존 백업 보존 조건
+
+Mold는 새 백업의 `backup_details`에 `thirdparty.staging.configuration`을 저장하고,
+새 복원 계획에도 해당 작업의 스테이징 구성을 저장한다.
+여기에는 종류·root·마운트·NFS 공유·마운트 옵션이 포함되며, 원본 카탈로그 경로와 외부 작업 ID는 변경하지 않는다.
+기존 백업은 스테이징 비활성화·위치 설정 변경·활성화 시 현재 구성과 원래 provider 경로가 일치하면 구성을 자동 보완한다.
+업그레이드 후 처음 경로를 바꾸기 전에 기존 구성이 올바른 상태에서 비활성화한다.
+
+| 변경 유형 | 진행 조건 |
+| --- | --- |
+| 절대 경로 유지, 스토리지 또는 마운트 구성 변경 | 모든 작업·정리를 완료하고 새 스토리지를 준비한다. 이전 구성이 필요한 정리는 해당 마운트에 접근할 수 있어야 한다. |
+| `root.path` 변경, 기존 백업 없음 | 이전 작업의 대기·실행·정리와 외부 복원 세션도 종료한 뒤 아래 절차를 따른다. |
+| `root.path` 변경, 기존 백업 보존 | 원본 백업 선택은 유지하고 새 복원 작업은 현재 스테이징을 사용한다. 기존 백업의 삭제 정리는 기록된 이전 구성을 사용하므로 필요한 기존 마운트 접근은 유지한다. |
+
+기존 백업 삭제 시 글로벌 설정을 구경로로 되돌릴 필요는 없다.
+저장한 구성을 사용해 이전 마운트를 검증한 뒤 해당 백업의 체크포인트·작업 파일을 정리한다.
+이전 마운트가 없거나 NFS 공유가 기록과 달라 마운트 검증에 실패하면 삭제 정리는 대기한다.
+기록이 없고 현재 구성과도 다른 구형 경로는 마운트 정보를 추정하지 않는다.
+이 경우 원래 설정을 복구하고 활성화하여 구성을 기록한 뒤 변경 절차를 다시 수행한다.
+
+외부 UI에서 이전 백업의 메타데이터를 복원할 때 원본 선택과 수신 위치를 구분한다.
+
+| API 응답 필드 | 의미 |
+| --- | --- |
+| `metadatapath` | 외부 백업에 저장된 원래 메타데이터 선택 경로 |
+| `metadatarestorepath` | 현재 root 기준 수신 경로: `<root>/<provider>/<VM 내부 이름>/<백업 timestamp>` |
+
+`resolveBackupArtifact`는 정확한 메타데이터 카탈로그 ID 또는 Restore Point ID로 두 경로를 반환한다.
+외부 UI에서는 원래 메타데이터 백업을 선택하되, 최종 파일 수신 디렉터리가 `metadatarestorepath`가 되도록 지정한다.
+NetBackup 부분 성공과 Veeam Warning은 새 위치의 파일이 이번 복원에서 생성됐는지 확인하고,
+manifest의 원본 경로·백업 UUID·VM·시점·완료 마커를 함께 대조한 뒤 Mold 복원에 연결한다.
+이전 위치와 새 위치에 모두 이번 작업 시점의 메타데이터가 남아 있으면 모호한 결과로 보류한다.
+manifest·카탈로그의 원본 경로나 외부 작업 ID를 DB에서 일괄 치환하지 않는다.
+
+### 수동 변경 순서
+
+**1. 기존 값을 기록하고 새 작업 유입을 중단한다.**
+
+Mold의 storage type, mount path, root path, NFS source, mount options, 여유율을 기록한다.
+각 Host의 구성·암호화 키와 외부 기준 정책/Job의 선택 경로·Hook·스케줄도 복구할 수 있게 보관한다.
+NetBackup·Veeam 재구성에 사용할 정책/Job 이름, `VM_SCHEDULE_BACKUP`, include/exclude와
+현재 Cluster의 `kvm.incremental.backup` 유효값도 확인한다.
+
+외부 솔루션의 기준 정책/Job 스케줄을 일시 중지하고 수동 요청도 받지 않는다.
+Mold 백업 스케줄에는 별도 일시 중지 플래그가 없으므로 변경 중 실행될 스케줄은
+주기·시각·시간대·보관 개수를 기록한 뒤 해당 스케줄만 삭제하고, 검증 완료 후 같은 값으로 다시 등록한다.
+기존 설정에서 대기 중인 작업을 완료하거나 지원되는 취소 절차로 정리한다.
+실행 중인 백업·복원, 외부 파일 복원 세션과 `WAITING`·`RUNNING` 정리 작업이 남지 않았는지 확인한다.
+`backup.thirdparty.staging.enable=false`는 실행 중인 작업을 종료하거나 예약을 해제하는 명령이 아니다.
+대기·실행·삭제·정리 중인 작업이 있으면 위치 설정 변경이 거부되므로 기존 설정에서 해당 작업부터 정리한다.
+
+**2. 외부 UI 복원 감시를 잠시 중지한다.**
+
+설치된 솔루션에 해당하는 명령만 각 Host에서 실행하고 기존 활성 상태를 기록한다.
+timer를 중지해도 현재 조회는 계속되므로 service가 `inactive` 또는 `failed`가 된 뒤 다음 단계로 진행한다.
+
+```bash
+# NetBackup: 새 주기 실행을 막고 현재 조회가 끝났는지 확인
+systemctl stop netbackup-host-restore-watcher.timer
+systemctl is-active netbackup-host-restore-watcher.service
+
+# Veeam: 새 주기 실행을 막고 현재 조회가 끝났는지 확인
+systemctl stop mold-veeam-restore-agent.timer
+systemctl is-active mold-veeam-restore-agent.service
+```
+
+timer가 없는 구형 NetBackup 상시 서비스 구성은 실행 중인 복원 요청이 없음을 확인한 뒤
+`systemctl stop netbackup-host-restore-watcher.service`로 중지한다.
+
+**3. 공통 스테이징을 비활성화하고 새 마운트·경로를 준비한다.**
+
+Mold에서 `backup.thirdparty.staging.enable=false`로 변경한 뒤
+storage type, mount path, root path와 필요한 NFS source·mount options를 수정한다.
+활성화 상태에서는 경로·스토리지 설정의 변경을 허용하지 않는다.
+새 root는 새 mount와 같거나 그 하위의 절대 경로여야 한다.
+
+모든 대상 Host에 실제 파일시스템과 마운트 구성을 준비한다.
+GFS2·LOCAL은 `/etc/fstab`도 맞추고, NFS는 지정한 서버·공유 경로가 실제 마운트와 일치하도록 한다.
+각 Host에서 아래 명령으로 확인한다. 디렉터리만 존재하는 상태를 마운트 완료로 판단하지 않는다.
+
+```bash
+findmnt -rn --mountpoint '<새 mount.path>' -o SOURCE,TARGET,FSTYPE
+df -B1 '<새 mount.path>'
+```
+
+`/mnt/glue-gfs`처럼 VM 기본스토리지와 공유하는 마운트는 스테이징 변경을 이유로 해제하거나 삭제하지 않는다.
+root의 하위 디렉터리만 바꾸는 경우에는 기존 마운트를 유지한다.
+
+**4. Mold에서 새 설정을 활성화·검증한다.**
+
+`backup.thirdparty.staging.enable=true`로 변경한다.
+Mold가 대상 KVM Host의 마운트, 쓰기와 용량을 검증한 후 값을 저장한다.
+실패하면 표시된 Host·스토리지 문제를 해결하고 다시 활성화한다.
+이 검사는 외부 기준 정책/Job의 선택 경로를 수정하지 않는다.
+
+**5. 각 Host 구성과 외부 기준 정책/Job을 맞춘다.**
+
+NetBackup은 [netbackup-host-config.py](netbackup-host-config.py),
+Veeam은 [veeam-host-config.py](veeam-host-config.py)를 기존 정책/Job과 인증정보로 다시 실행한다.
+명령 형식은 [사전 구성 파라미터 비교](#netbackupveeam-사전-구성-파라미터-비교)를 따른다.
+두 도구는 스테이징이 활성화되어 있어야 실행할 수 있으므로 4번을 먼저 완료한다.
+
+- `--vm-schedule-backup`과, `false`일 때의 include/exclude를 기존 운영 값으로 명시한다.
+- `--incremental-backup`도 현재 적용할 값으로 명시한다. 생략하면 기본 `true`가 Global·해당 Cluster에 반영될 수 있다.
+- 체인 길이를 변경하지 않으면 `--backup-chain-size`는 생략하여 기존 `kvm.backup.chain.size`를 유지한다.
+- Veeam 기본 구성을 사용하면 `--agent-payload-path`를 생략하고 출력된 새 마커 디렉터리로 부모 Job의 SelectedFiles를 변경한다.
+  명시적 경로를 유지할 경우에는 해당 옵션을 같은 값으로 지정한다.
+- NetBackup 기준 정책의 Backup Selections는 출력된 새 bootstrap 디렉터리 하나로 변경한다.
+  기존 백업 이미지나 복원 시점에 저장된 원본 파일 경로는 변경하지 않는다.
+
+구성 도구가 비동적 설정 변경으로 Mold 재기동을 요구하면 안내에 따라 재기동하고 같은 명령을 재실행한다.
+NetBackup은 `bp.conf`를 갱신하면서 Client를 재시작할 수 있고,
+Veeam은 Agent 설정이 바뀌면 Agent 서비스를 재시작할 수 있다.
+두 도구 모두 복원 감시를 다시 활성화하므로 모든 Host 구성이 끝나기 전에는 외부 UI 복원을 새로 시작하지 않는다.
+기존에 별도 조정한 감시 옵션은 생성된 `.bak`와 비교하여 필요한 값을 유지한다.
+
+**6. 감시와 백업·복원을 검증한 뒤 스케줄을 재개한다.**
+
+외부 UI 복원을 사용할 Host에서 감시가 실행 중인지 확인한다.
+서비스가 첫 조회를 완료한 것을 로그에서 확인한 뒤 새 외부 복원 세션을 생성한다.
+시작 전부터 존재하던 외부 복원 작업은 중복 방지를 위해 제외될 수 있다.
+
+```bash
+# NetBackup
+systemctl start netbackup-host-restore-watcher.timer
+systemctl status netbackup-host-restore-watcher.timer --no-pager
+
+# Veeam
+systemctl start mold-veeam-restore-agent.timer
+systemctl status mold-veeam-restore-agent.timer --no-pager
+```
+
+테스트 VM으로 Full 백업, 증분 활성 환경에서는 후속 증분, Mold 복원과 완료 후 정리를 확인한다.
+외부 UI 복원을 운영한다면 최종 메타데이터 작업을 선택한 복원도 확인한다.
+기존 백업을 보존한 경우에는 이전 Full·증분 복원도 검증하고,
+삭제 가능한 테스트 백업으로 삭제 후 정리가 완료되는지 확인한다.
+새 임시 파일의 경로가 설정과 일치하고 Mold의 최종 상태와 정리 상태가 완료된 뒤 스케줄을 재개한다.
+이전에 감시를 사용하지 않던 Host는 구성 도구의 자동 활성화 결과를 확인하여 기존 운영 정책에 맞춘다.
+
+### 변경 실패 시 되돌리기
+
+새 경로에서 작업을 시작하지 않았다면 스케줄·감시를 중지한 상태로 공통 스테이징을 비활성화하고,
+기록해 둔 글로벌 설정과 마운트, 외부 기준 정책/Job의 선택 경로를 복구한다.
+기존 스토리지 접근을 확인한 뒤 다시 활성화하고 Host 구성을 기존 운영 값으로 재실행하여 검증한다.
+암호화 키와 작업 이력은 유지한다.
+
+새 경로에서 이미 작업을 시작했다면 먼저 **새 설정을 유지한 채 해당 작업의 종료·정리를 완료**한다.
+종료·정리가 확인되지 않은 상태에서는 위치 설정을 바꿀 수 없다.
+새 경로에 백업까지 저장한 경우에는 그 백업도 위의 기존 백업 보존 조건에 포함한다.
+공통 root나 `/var/lib/ablestack/backup` 전체 삭제로 변경을 마무리하지 않는다.
+작업별 정리와 기록 처리는 [임시 파일 정리 안내](#임시-파일-정리와-실패한-백업-삭제)를 따른다.
+
 ## 백업 솔루션별 준비와 실행 순서
 
 ### NetBackup·Veeam 호스트 정책의 VM 대상 선택
@@ -122,7 +300,7 @@ GFS2·LOCAL은 Host의 `/etc/fstab`에 마운트 정보가 있어야 자동으�
 Mold의 별도 글로벌 설정이 아니라 **호스트의 정책/작업별 구성**이며, 대상 조회와 백업 실행 요청에 이 값을 전달한다.
 NetBackup은 `/etc/ablestack/netbackup/netbackup-host-<policy>.conf`,
 Veeam은 `/etc/ablestack/veeam/<job>.conf`에 저장한다.
-Veeam bootstrap의 `/etc/ablestack/veeam/mold-backup.env`에도 같은 값을 저장한다.
+Veeam의 VM 대상 설정도 Job별 conf에 저장하며 공통 env에 중복 저장하지 않는다.
 
 사전 구성의 입력 순서는 다음과 같다.
 
@@ -334,6 +512,8 @@ QCOW2는 이전 백업 체인의 스테이징 호스트와 달라지면 새 Full
    `kvm.backup.chain.size`는 여러 백업 공급자가 공유하는 전역값이다.
    관리 서버 재기동 안내와 함께 중단되면 Mold를 재기동하고 같은 명령을 다시 실행한다.
 7. 사전·사후 백업 스크립트, 암호화된 Mold 인증정보와 복원 감시 서비스를 Host에 구성한다.
+   **NetBackup 기준 정책의 Backup Selections는 구성 결과에 출력된 bootstrap 디렉터리 하나로 설정한다.**
+   볼륨 스테이징 전체 경로를 선택하지 않는다. 기존 Host도 업그레이드 후 재구성과 이 선택 경로 변경을 한 번 수행한다.
    신규 Host 키는 자동 준비하지만 Mold API key 자체를 발급하는 기능은 아니므로 3번의 키는 필요하다.
 8. NetBackup 연결 설정과 서비스 상태를 확인한다. VM별 일정을 사용할 때는 등록된 오퍼링을 VM에 연결하고 Mold 백업 스케줄을 추가한다.
    `VM_SCHEDULE_BACKUP=false` 방식은 설정 파일 대상의 미할당 VM에 기본 오퍼링을 자동 연결한다.
@@ -414,8 +594,8 @@ Full/증분 정책과 VM 선택 방식은 별개이다.
 | 복원 감시 접속 | NetBackup API | KVM → VBR SSH. `--veeam-ssh-user` 기본 Veeam 사용자, `--veeam-ssh-key` 선택 |
 | 오퍼링 | 기본 `NetBackup` 자동 생성·재사용 | 기본 `VeeamBackup` 자동 생성·재사용. `--offering-name`은 신규 생성 이름에만 사용 |
 | 백업 데이터 스테이징 | Mold `backup.thirdparty.staging.*` | 동일. 로컬 datadisk/NAS 저장소 생성 옵션 제거 |
-| 부모 Job의 bootstrap 경로 | 정책 스크립트 처리 | `--agent-payload-path`, 기본 `/tmp/mold/veeam-agent`. 실제 볼륨 데이터와 별개 |
-| 설치·감시 | Hook, watcher, `bp.conf` 구성 | Hook, Job conf, Agent timeout, restore service/timer 구성 |
+| 부모 작업의 bootstrap 경로 | `<root>/ablestack-netbackup/bootstrap/<policy>` | 기본 `<root>/ablestack-veeam/bootstrap/<host>/<job>`. 명시적 경로가 필요할 때만 `--agent-payload-path` 사용 |
+| 설치·감시 | Hook, restore service/timer, `bp.conf` 구성 | Hook, Job conf, Agent timeout, restore service/timer 구성 |
 
 Veeam은 Linux Agent 설치와 VBR의 SSH 접속 구성을 먼저 완료한다.
 두 사전구성 도구는 공통 스테이징의 활성화·경로·현재 Host의 마운트를 먼저 검사한다.
@@ -1054,8 +1234,8 @@ Commvault는 Mold UI에서 복원을 시작한다.
 2. 원하는 Mold 백업 시점에 연결된 메타데이터 작업을 확인한다.
    외부 작업 이름은 **`ABLESTACK-<Mold 백업 UUID>-metadata`**이다.
 3. NetBackup/Veeam UI에서 해당 작업의 복원 시점을 선택한다.
-4. 메타데이터를 복원 감시 서비스가 접근할 수 있는 마운트된 경로로 복원한다.
-   Host의 복원 감시 설정에 등록된 경로를 사용하고, 외부 복원 전에 마운트 상태를 확인한다.
+4. 원본 메타데이터 선택은 유지하고 `resolveBackupArtifact`가 안내하는 현재 `metadatarestorepath`로 복원한다.
+   최종 수신 디렉터리는 `<현재 root>/<provider>/<VM 내부 이름>/<백업 timestamp>`이며 외부 복원 전에 마운트를 확인한다.
 5. NetBackup 사후 스크립트·복원 감시 서비스 또는 Veeam 복원 에이전트가 완료된 작업을 확인하여
    해당 Mold 백업 시점의 VM 복원을 요청한다.
 6. Mold가 복원 Host와 용량을 준비하고 필요한 볼륨을 순서대로 가져와 VM을 복원한다.
@@ -1067,7 +1247,7 @@ Commvault는 Mold UI에서 복원을 시작한다.
 외부 복원 완료 알림이 반복되어도 같은 작업으로 새 VM 복원을 반복 요청하지 않는다.
 
 Veeam 외부 UI의 `Warning` 결과는 정상 성공과 구분한다. 정확한 세션을 다시 조회하여 종료 시각과 상세 로그를 확인하고,
-권한·소유자·시간 속성 설정 경고만 남은 경우에 한해 메타데이터를 검증한다. 선택한 백업의 원래 메타데이터 경로에서
+권한·소유자·시간 속성 설정 경고만 남은 경우에 한해 메타데이터를 검증한다. 선택한 백업의 원래 경로 또는 현재 수신 경로에서
 `backup-manifest.json`, `domain-config.xml`, `.staging.complete`가 해당 복원 작업 이후 기록된 정상 파일인지 확인하고,
 백업 UUID·시점·VM 이름·VM UUID·볼륨 참조가 Mold 정보와 일치할 때만 VM 복원을 연결한다.
 내용 읽기·쓰기 오류, 로그 조회 불가, 필수 파일 누락·불일치, 다른 경로로 복원하여 파일을 확인할 수 없는 경우에는
@@ -1097,6 +1277,7 @@ GFS2 기본스토리지의 `/mnt/glue-gfs`를 마운트 경로와 `<root>`로 �
 | --- | --- | --- |
 | NAS 백업본 | `<NAS 공유 루트>/<VM>/<시점>/` | QCOW2 또는 RBD 백업 파일, VM 구성과 체크포인트 정보. NAS가 최종 보관 위치다. |
 | NAS 작업 중 마운트 | Host 임시 디렉터리의 `csbackup*` 아래 `<VM>/<시점>/` | NAS의 같은 백업 파일을 마운트하여 읽고 쓴다. 백업 스크립트의 기본 예는 `/tmp/csbackup.XXXXX/<VM>/<시점>/`이며, 복원은 JVM 임시 디렉터리를 사용한다. |
+| NetBackup·Veeam 부모 작업의 마커 사본 | `<root>/ablestack-netbackup/bootstrap/<policy>/`, `<root>/ablestack-veeam/bootstrap/<host>/<job>/` | `<백업 UUID>.json`에 원본 마커 위치와 백업 ID를 기록한다. Post Hook은 소유권을 확인하고 이 사본만 제거한다. |
 | 세 솔루션의 백업 스테이징 | `<root>/<provider>/<VM>/<시점>/` | 외부 전송 전 볼륨 파일과 `domain-config.xml`, `backup-manifest.json`, 체크포인트 정보 등을 생성한다. |
 | 세 솔루션의 복원 메타데이터 | `<root>/<provider>/restore/<복원 작업 ID>/metadata/` | 외부 저장소에서 가져온 VM 구성, `backup-manifest.json` 등 해당 백업 시점의 메타데이터를 둔다. |
 | 세 솔루션의 복원 볼륨 파일 | `<root>/<provider>/restore/<복원 작업 ID>/payload/` | 필요한 Full·증분 파일을 가져와 기본스토리지의 새 볼륨을 준비하는 데 사용한다. |
@@ -1187,6 +1368,7 @@ PY
 
 | 중앙 DB 키 | 저장 내용 |
 | --- | --- |
+| `thirdparty.staging.configuration` | 백업 당시 종류·root·마운트·NFS 공유·옵션. 경로 변경 후에도 해당 백업 정리에 사용 |
 | `thirdparty.volume.manifest` | 볼륨 식별자, Full·증분 파일 경로와 체인, 외부 백업 Job 참조 |
 | `thirdparty.volume.restore.plan` | 복원 작업 ID, 실행 Host, 대상 VM, 스테이징 경로와 선택한 볼륨 |
 | `thirdparty.volume.restore.history.*` | 복원 시도별 상태, 외부 전송 요청·결과, Host에서 확인한 VM 복원 결과 |
@@ -1316,7 +1498,8 @@ Host 작업 기록도 Mold의 정리 결과를 확인하기 전에 수동으로 
 
 | 실행 위치 | 서비스 또는 작업 | 역할 | 기본 실행 방식 |
 | --- | --- | --- | --- |
-| NetBackup Client Host | `netbackup-host-restore-watcher.service` | NetBackup의 완료된 외부 UI 복원을 확인하고 복원 알림 스크립트로 Mold에 연결 | 상시 실행, 조회 사이에 기본 60초 대기 |
+| NetBackup Client Host | `netbackup-host-restore-watcher.timer` | NetBackup 복원 감시 프로그램을 주기적으로 실행 | 기본 1분 주기 |
+| NetBackup Client Host | `netbackup-host-restore-watcher.service` | NetBackup의 완료된 외부 UI 복원을 확인하고 복원 알림 스크립트로 Mold에 연결 | 타이머가 호출할 때 한 번 실행 후 종료, 조회 최대 300초 |
 | Veeam Agent Host | `mold-veeam-restore-agent.timer` | Veeam 복원 감시 프로그램을 주기적으로 실행 | 기본 3분 주기 |
 | Veeam Agent Host | `mold-veeam-restore-agent.service` | 완료된 Veeam 복원 세션의 정확한 복원 시점을 Mold 백업과 연결 | 타이머가 호출할 때 한 번 실행 후 종료 |
 | Management Server | 백업 목록·카탈로그 동기화 | 외부 백업 파일의 존재 여부와 만료 결과를 Mold에 반영 | `backup.framework.sync.interval`, 기본 300초 |
@@ -1328,12 +1511,22 @@ RBD·QCOW2 모두 같은 서비스를 통해 메타데이터 복원 완료를 Mo
 
 **NetBackup**
 
-- [netbackup-host-config.py](netbackup-host-config.py)가 감시 프로그램과 서비스 파일을 생성하고 활성화한다.
-- 기본 서비스 파일은 `/etc/systemd/system/netbackup-host-restore-watcher.service`이다.
-  별도의 timer 파일은 사용하지 않는다.
+- [netbackup-host-config.py](netbackup-host-config.py)가 감시 프로그램과 service·timer 파일을 생성하고 timer를 활성화한다.
+- 기본 서비스 파일은 `/etc/systemd/system/netbackup-host-restore-watcher.service`,
+  타이머 파일은 `/etc/systemd/system/netbackup-host-restore-watcher.timer`이다.
+  service는 `Type=oneshot`이며 timer만 부팅 시 자동 활성화한다.
 - 감시 설정은 `/etc/ablestack/netbackup/restore-watcher.conf`,
   Mold 복원 요청 설정은 `/etc/ablestack/netbackup/restore.conf`이다.
-- 감시 주기는 `restore-watcher.conf`의 `POLL_INTERVAL_SECONDS`로 조정한다. 기본값은 `60`이다.
+- timer는 기본 1분 간격으로 실행하고, 재부팅·중지 중 놓친 실행은 재개 후 한 번 보충한다.
+  실행 중에는 같은 service를 중복 실행하지 않으며 수동 실행도 기존 `restore-watcher.lock`으로 동시 실행을 막는다.
+  `POLL_INTERVAL_SECONDS`는 사용하지 않으며 새 구성 파일에서도 제거한다.
+- 각 실행에서 설정 파일을 다시 읽는다. 조회는 최대 300초이며 시간 초과·전체 Job 목록 조회 오류는 service 실패로 표시하고 다음 timer 주기에 재시도한다.
+  이 제한은 외부 UI 복원 완료 조회와 Mold 요청에만 적용되며, Mold가 접수한 실제 VM 복원은 별도 작업으로 계속 진행한다.
+- 최초 실행에서 이미 종료된 Job ID를 기준 기록으로 저장한다. 이후 실행은 이 기록을 재사용하며 새 Job을 매번 제외하지 않는다.
+  최초 조회나 기록 저장에 실패하면 복원 요청을 시작하지 않는다.
+  접수된 요청은 Job마다 디스크에 기록하여 이후 Job의 오류·시간 초과에도 재요청을 줄인다.
+  요청 직후 기록 전 종료된 경우에는 같은 외부 Job ID로 재시도하며 Mold의 중복 요청 방지를 따른다.
+  기록 파일이 손상되면 자동 초기화하지 않고 실패로 표시한다.
 - NetBackup 10.5·11.1에서 사용하는 Jobs API의 실행 상태와 종료 코드를 분리해서 판단한다.
   종료된 Job의 코드 `0`만 정상 성공이며, `1`은 부분 성공, 그 외 종료 오류는 실패로 기록한다.
   실행·대기·중단 상태와 종료 코드가 확인되지 않은 응답으로는 Mold 복원을 시작하지 않는다.
@@ -1349,6 +1542,37 @@ RBD·QCOW2 모두 같은 서비스를 통해 메타데이터 복원 완료를 Mo
 - NetBackup Client의 `netbackup` 서비스는 별도이다. 구성 스크립트는 Client를 설치하지 않으며,
   기존 `bp.conf`를 갱신한 경우 Client 서비스를 재시작한다.
 
+**기존 NetBackup 상시 서비스에서 전환**
+
+RPM 업데이트만으로 `/usr/local/sbin`에 복사된 감시 프로그램과 호스트의 기존 unit 파일은 전환되지 않는다.
+실행 중인 백업·복원과 외부 UI 복원 요청을 먼저 완료하고, 각 Host에서
+`netbackup-host-config.py`를 기존 정책명·인증정보·스케줄 모드·증분 설정으로 다시 실행한다.
+명령 형식과 설정 유지 옵션은 [사전 구성 파라미터 비교](#netbackupveeam-사전-구성-파라미터-비교)를 따른다.
+
+구성 도구는 기존 timer를 중지하고, 상시 서비스의 자동 실행을 해제·중지한 뒤 oneshot service와 timer를 설치한다.
+이미 oneshot 조회가 실행 중이면 파일을 교체하지 않고 대기 후 재실행하도록 안내한다.
+이때 timer는 중지된 상태이므로 조회 완료 후 반드시 사전구성을 재실행한다.
+기존 구성·unit 파일은 `.bak.<시각>`으로 보관하며, 활성화 단계가 실패해도 같은 사전구성을 다시 실행할 수 있다.
+중간 실패 시 timer가 계속 중지되어 있을 수 있으므로 완료 메시지와 활성 상태를 함께 확인한다.
+
+`/var/lib/ablestack/netbackup/restore-watcher-state.json`과 `restore-watcher.lock`은 지우지 않는다.
+처리 기록과 최초 기준 기록을 보존하며, 잠금 파일 자체는 감시 작업이 끝나도 재사용한다.
+기존 구성에서 `STATE_FILE`·`LOCK_FILE`을 다른 절대 경로로 지정했다면 그 경로도 그대로 유지한다.
+이전 `restore-watcher.conf`에서 별도 조정한 옵션은 `.bak`와 비교하여 다시 반영한다.
+주기를 바꾸려면 `systemctl edit netbackup-host-restore-watcher.timer`로 아래 예시처럼 drop-in을 작성한다.
+서비스·timer 본문을 직접 수정하면 사전구성 재실행 시 교체될 수 있다.
+
+```ini
+[Timer]
+OnCalendar=
+OnCalendar=*:0/3
+```
+
+위 예시는 3분 주기이다. 변경 후에는 `systemctl daemon-reload`와
+`systemctl restart netbackup-host-restore-watcher.timer`를 실행한다.
+한 번만 즉시 확인하려면 `systemctl start netbackup-host-restore-watcher.service`를 사용한다.
+service를 직접 `enable`하지 않는다.
+
 **Veeam**
 
 - [veeam-host-config.py](veeam-host-config.py)가 호스트 사전구성 완료 후 복원 감시 service·timer를 설치·활성화한다.
@@ -1362,7 +1586,8 @@ RBD·QCOW2 모두 같은 서비스를 통해 메타데이터 복원 완료를 Mo
   service는 한 번 조회한 뒤 종료하므로 조회 사이에 `inactive`로 보이는 것은 정상이다.
 
 외부 UI에서 복원을 시작하기 전에 감시 서비스를 활성화한다.
-서비스 시작 시 이미 존재하는 복원 작업은 중복 요청 방지를 위해 처리 대상으로 제외할 수 있다.
+두 솔루션 모두 평상시에는 timer가 `active`인지 확인하며 조회 사이에 service가 `inactive`인 것은 정상이다.
+처음 감시를 구성했을 때 이미 존재하는 복원 작업은 중복 요청 방지를 위해 처리 대상으로 제외할 수 있다.
 서비스 활성화만으로 스테이징이 마운트되는 것은 아니므로 공통 스테이징 설정을 준비하고,
 외부 솔루션이 메타데이터를 쓸 경로의 마운트와 접근 권한을 유지한다.
 
@@ -1373,7 +1598,9 @@ RBD·QCOW2 모두 같은 서비스를 통해 메타데이터 복원 완료를 Mo
 **NetBackup**
 
 ```bash
-systemctl is-enabled netbackup-host-restore-watcher.service
+systemctl is-enabled netbackup-host-restore-watcher.timer
+systemctl status netbackup-host-restore-watcher.timer --no-pager
+systemctl list-timers --all netbackup-host-restore-watcher.timer
 systemctl status netbackup-host-restore-watcher.service --no-pager
 journalctl -u netbackup-host-restore-watcher.service -n 100 --no-pager
 tail -n 100 /var/log/netbackup-mold-restore-watcher.log
@@ -1410,16 +1637,19 @@ Veeam은 파일을 KVM Linux Agent의 관리 경로로 업로드하여 root로 �
 Veeam 서버에서 등록하는 파일 경로와 KVM에서 실행하는 경로를 동일하게 만들 필요는 없다.
 Storage → Advanced → Scripts는 Backup Server에서 실행하는 설정이므로 이 Agent Hook 등록과 구분한다.
 
-부모 Host Job의 SelectedFiles 대상은 `VEEAM_AGENT_PAYLOAD_PATH`이며 작은 bootstrap 파일을 백업한다.
+부모 Host Job의 SelectedFiles 대상은 사전구성이 출력한 `VEEAM_AGENT_PAYLOAD_PATH`이며 작은 bootstrap 사본만 백업한다.
+기본값은 `<root>/ablestack-veeam/bootstrap/<host>/<job>`이며 새 구성에서 `/tmp/mold/veeam-agent`를 기본 생성하지 않는다.
+기존 Host도 업그레이드 후 재구성하고 Veeam UI의 SelectedFiles를 출력된 경로로 한 번 변경한다.
 사전 Hook은 `createAblestackVeeamBackup`을 요청하고 Mold가 볼륨별 Job과 최종 metadata Job을 관리한다.
-사후 Hook은 볼륨 staging 파일을 지우거나 부모 Restore Point로 백업 시점을 덮어쓰지 않는다.
+사후 Hook은 부모용 마커 사본만 정리한다. 원본 마커·볼륨 staging 파일과 최종 백업 시점은 Mold가 관리한다.
 Veeam의 Active Full/Start 선택만으로 Mold의 Full/증분을 결정하지 않는다.
 
 Veeam UI 복원은 다음 순서로 진행한다.
 
 1. Mold에서 원본 VM을 정지한다.
 2. 원하는 백업의 `ABLESTACK-<백업 UUID>-metadata` Job과 Restore Point를 선택한다.
-3. metadata 파일을 원래 KVM 경로에 복원한다. 부모 Host Job의 bootstrap이나 개별 볼륨 Job만 복원한 것은 VM 복원 요청으로 처리하지 않는다.
+3. metadata 파일을 현재 스테이징 수신 경로(`resolveBackupArtifact`의 `metadatarestorepath`)에 복원한다.
+   원본과 현재 root가 같으면 기존 경로와 동일하다. 부모 Host Job의 bootstrap이나 개별 볼륨 Job만 복원한 것은 VM 복원 요청으로 처리하지 않는다.
 4. `mold-veeam-restore-agent.timer`가 완료된 실제 Restore Session UUID와 Restore Point ID를 조회한다.
 5. `resolveBackupArtifact`가 manifest와 정확히 대조하여 백업과 VM을 식별한다. `VM_INCLUDE`의 첫 VM이나 파일 수정 시간으로 추정하지 않는다.
 6. `restoreBackupArtifact`가 중복 요청을 제어하고 공통 `restoreBackup`으로 연결한다. Mold가 필요한 Full·증분을 볼륨별로 회수·적용한다.

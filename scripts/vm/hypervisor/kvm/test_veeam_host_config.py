@@ -109,6 +109,23 @@ class VeeamHostConfigTest(unittest.TestCase):
         self.assertEqual(1, len(self.api.offers))
         self.assertEqual(1, len(list(self.root.rglob("*.bak.*"))))
 
+    def test_default_parent_payload_follows_common_root_without_changing_offering_or_chain(self):
+        options = self.options[:]
+        index = options.index("--agent-payload-path")
+        del options[index:index + 2]
+        result, output = self.run_config(options)
+        self.assertEqual(0, result, output)
+        conf = self.locations["etc"] / "Job_with_spaces.conf"
+        expected = Path(self.api.settings[("backup.thirdparty.staging.root.path", "")]).resolve() / "ablestack-veeam/bootstrap/host-test/Job_with_spaces"
+        self.assertIn("VEEAM_AGENT_PAYLOAD_PATH=" + str(expected), conf.read_text())
+        self.assertIn("VEEAM_AGENT_PAYLOAD_MODE=COMMON", conf.read_text())
+        self.api.settings[("backup.thirdparty.staging.root.path", "")] += "/new-root"
+        self.api.calls.clear()
+        result, output = self.run_config(options)
+        self.assertEqual(0, result, output)
+        self.assertIn("/new-root/ablestack-veeam/bootstrap/host-test/Job_with_spaces", conf.read_text())
+        self.assertFalse(any(cmd in ("updateConfiguration", "importBackupOffering") for cmd, _ in self.api.calls))
+
     def test_changed_configuration_is_backed_up_without_reencrypting_unchanged_secret(self):
         self.assertEqual(0, self.run_config()[0])
         conf = self.locations["etc"] / "Job_with_spaces.conf"

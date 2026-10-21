@@ -427,7 +427,7 @@ for entry in os.scandir(root):
         continue
     if marker_mtime < threshold and dir_mtime < threshold:
         continue
-    if os.path.exists(inprogress_marker):
+    if os.path.exists(inprogress_marker) and not os.path.isfile(bootstrap_marker):
         continue
     candidates.append((marker_mtime, dir_mtime, entry.path))
 
@@ -562,6 +562,7 @@ load_policy_schedule_config() {
   VM_INCLUDE="*"
   VM_EXCLUDE=""
   VM_SCHEDULE_BACKUP=""
+  NETBACKUP_PARENT_PAYLOAD_PATH=""
   MOLD_URL=""
   ADMIN_APIKEY=""
 
@@ -1042,6 +1043,12 @@ run_stage_vm_backup() {
   local error_text=""
   local -a api_args=()
 
+  local parent_payload="${BACKUP_STAGING_ROOT}/bootstrap/${POLICY_SAFE}"
+  if [[ "${NETBACKUP_PARENT_PAYLOAD_PATH:-}" != "$parent_payload" ]]; then
+    printf 'FAILED\t%s\t%s\t\t%s\n' "$vm_id" "$job_id" "Rerun netbackup-host-config.py and update parent policy Backup Selections to $parent_payload"
+    return 1
+  fi
+
   vm_id="$(lookup_mold_vm_id "${vm_name}" 2>/dev/null || true)"
   if [[ -z "${vm_id}" ]]; then
     printf 'FAILED\t\t\t\t%s\n' "$(tsv_escape "Unable to resolve Mold VM id for instance name ${vm_name}")"
@@ -1097,6 +1104,11 @@ run_stage_vm_backup() {
   if [[ -z "${backup_path}" ]]; then
     printf 'FAILED\t%s\t%s\t\t%s\n' "${vm_id}" "${job_id}" "$(tsv_escape "No completed backup path found under ${BACKUP_STAGING_ROOT}/${vm_name} for vm=${vm_name}")"
     return 1
+  fi
+
+  if [[ -f "${backup_path}/.volume-bootstrap" ]]; then
+    python3 "${SCRIPT_DIR}/thirdparty_bootstrap.py" publish --payload-root "$parent_payload" \
+      --source-marker "${backup_path}/.volume-bootstrap" >/dev/null || return 1
   fi
 
   printf 'SUCCESS\t%s\t%s\t%s\t\n' "${vm_id}" "${job_id}" "${backup_path}"

@@ -51,6 +51,10 @@ cleanup_runtime_backup_paths() {
   while IFS= read -r backup_path; do
     [[ -z "${backup_path}" ]] && continue
     if [[ -f "${backup_path}/.volume-bootstrap" ]]; then
+      local bootstrap_id
+      bootstrap_id="$(cat -- "${backup_path}/.volume-bootstrap")"
+      python3 "${SCRIPT_DIR}/thirdparty_bootstrap.py" retire --payload-root "${NETBACKUP_PARENT_PAYLOAD_PATH}" \
+        --backup-uuid "$bootstrap_id" || return 1
       log -ne "Volume pipeline owns staging cleanup for ${backup_path}"
       continue
     fi
