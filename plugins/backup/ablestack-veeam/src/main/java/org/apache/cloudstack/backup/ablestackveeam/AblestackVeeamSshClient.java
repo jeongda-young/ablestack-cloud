@@ -90,48 +90,6 @@ public class AblestackVeeamSshClient {
     }
 
     /**
-     * Export all hard disks from a Veeam restore point to a directory on the Veeam server.
-     * The directory must be reachable from the KVM hypervisor (shared NFS recommended).
-     *
-     * @return absolute paths of exported disk files on the Veeam server
-     */
-    public List<String> exportRestorePointDisksToStaging(final String restorePointId, final String stagingPath) {
-        logger.debug(String.format("Exporting Veeam restore point [%s] to staging [%s] via SSH", restorePointId, stagingPath));
-        final String escapedStaging = stagingPath.replace("'", "''");
-        final String escapedId = restorePointId.replace("'", "''");
-        final List<String> cmds = Arrays.asList(
-                String.format("$staging = '%s'", escapedStaging),
-                "New-Item -ItemType Directory -Force -Path $staging | Out-Null",
-                String.format("$restorePoint = Get-VBRRestorePoint | Where-Object { $_.Id -eq '%s' -or $_.Id.Guid -eq '%s' }", escapedId, escapedId),
-                "if (-not $restorePoint) { Write-Output 'Failed: restore point not found'; Exit 1 }",
-                "$session = Start-VBRFLRSession -RestorePoint $restorePoint",
-                "$items = Get-VBRFLRItem -Session $session",
-                "$exported = @()",
-                "foreach ($item in $items) {",
-                "  if ($item.Type -eq 'HardDisk') {",
-                "    $target = Join-Path $staging ($item.Name + '.vmdk')",
-                "    Copy-VBRFLRItem -FLRSession $session -Item $item -Destination $target",
-                "    $exported += $target",
-                "  }",
-                "}",
-                "Stop-VBRFLRSession -Session $session",
-                "if ($exported.Count -eq 0) { Write-Output 'Failed: no disks exported'; Exit 1 }",
-                "$exported -join ','"
-        );
-        final Pair<Boolean, String> result = executePowerShellCommands(cmds);
-        if (result == null || !result.first() || StringUtils.isBlank(result.second())) {
-            throw new CloudRuntimeException(String.format("Failed to export Veeam restore point [%s] to [%s]", restorePointId, stagingPath));
-        }
-        if (result.second().contains("Failed:")) {
-            throw new CloudRuntimeException(result.second().trim());
-        }
-        return Arrays.stream(result.second().trim().split(","))
-                .map(String::trim)
-                .filter(s -> !s.isEmpty())
-                .collect(Collectors.toList());
-    }
-
-    /**
      * Live Veeam job names including Agent (computer) backup jobs.
      * Uses SSH/PowerShell only — does not require Enterprise Manager (9398).
      */

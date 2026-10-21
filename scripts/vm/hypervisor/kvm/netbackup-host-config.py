@@ -313,13 +313,14 @@ def ensure_backup_framework_configuration(zone_id: str, cluster_id: str, args: a
             update_configuration_value("kvm.backup.chain.size", desired_chain_size, args.mold_url, args.admin_apikey, args.admin_secretkey)
             print(f"Updated global configuration: kvm.backup.chain.size={desired_chain_size}")
 
-    log_info("Checking zone configuration: backup.framework.provider.plugin")
-    current = get_configuration_value("backup.framework.provider.plugin", args.mold_url, args.admin_apikey, args.admin_secretkey, zone_id)
-    updated = append_provider_if_missing(current, NETBACKUP_PROVIDER_NAME)
-    if updated != current:
-        log_info(f"Updating zone configuration: backup.framework.provider.plugin={updated}")
-        update_configuration_value("backup.framework.provider.plugin", updated, args.mold_url, args.admin_apikey, args.admin_secretkey, zone_id)
-        print(f"Updated zone configuration: backup.framework.provider.plugin={updated} (zoneid={zone_id})")
+    for scope_zone in (None, zone_id):
+        scope = "global" if scope_zone is None else f"zone {scope_zone}"
+        log_info(f"Checking {scope} configuration: backup.framework.provider.plugin")
+        current = get_configuration_value("backup.framework.provider.plugin", args.mold_url, args.admin_apikey, args.admin_secretkey, scope_zone)
+        updated = append_provider_if_missing(current, NETBACKUP_PROVIDER_NAME)
+        if updated != current:
+            update_configuration_value("backup.framework.provider.plugin", updated, args.mold_url, args.admin_apikey, args.admin_secretkey, scope_zone)
+            print(f"Updated {scope} configuration: backup.framework.provider.plugin={updated}")
 
     log_info("Checking zone configuration: backup.plugin.netbackup.url")
     current = get_configuration_value("backup.plugin.netbackup.url", args.mold_url, args.admin_apikey, args.admin_secretkey, zone_id)

@@ -17,7 +17,7 @@
 # under the License.
 
 # Prepare the shared NetBackup/Veeam Host key without replacing existing material.
-# Safe to run from /etc/ablestack/veeam when full install.sh is not present.
+# Safe to run from /etc/ablestack/veeam when full veeam-host-config.py is not present.
 
 set -euo pipefail
 

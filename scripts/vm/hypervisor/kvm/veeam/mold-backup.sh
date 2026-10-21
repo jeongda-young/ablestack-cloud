@@ -38,7 +38,6 @@ VM_NAME_ARG=""
 VM_UUID_ARG=""
 CLIENT="$(hostname -s)"
 DRY_RUN="${DRY_RUN:-false}"
-RESTORE_SOURCE="${RESTORE_SOURCE:-}"
 SINCE_MIN="${VEEAM_RESTORE_WATCH_WINDOW_MIN:-60}"
 TRIGGER_MOLD="${RESTORE_WATCH_TRIGGER_MOLD:-false}"
 RESTORE_EVENT=""
@@ -49,13 +48,13 @@ usage() {
 Usage: mold-backup.sh <command> [options]
 
 Commands:
-  backup            Pre: Mold API + /tmp/mold/veeam export (대상: VM_INCLUDE)
-  backup-complete   Post: registry + staging 정리
+  backup            Pre: Mold 볼륨별 백업 요청 + bootstrap marker
+  backup-complete   Post: bootstrap marker 정리
   backup-full       backup + backup-complete (전체/다중 VM 한 번에)
   list-backups      VM별 BackedUp 백업 목록 (개별 복원용 ID 확인)
   restore           개별 VM 복원 (--vm-name + --backup-id, VM 정지 권장)
   restore-notify    restore 와 동일 (ablestack_veeam_restore_notify.sh 호출)
-  restore-watch     Veeam UI 복원 감지 → (옵션) Mold datadisk restoreBackup 호출
+  restore-watch     Veeam UI 복원 감지 → (옵션) 정확한 metadata artifact로 Mold 복원 요청
   restore-event     복원 이벤트 수동 주입 (veeam.restore.completed | mold.restore.manual)
   backup-watch      Veeam UI에서 직접 백업한 세션을 감지해 Mold 상태에 반영
   catalog-sync      Veeam Remove-from-Disk 감지 → VM_INCLUDE VM에 대해 MS catalog sync 트리거
@@ -67,15 +66,11 @@ Options:
   --backup-id UUID        restore 시 백업 ID
   --vm-name NAME          libvirt 이름 (restore/status/list)
   --vm-uuid UUID          Mold VM UUID
-  --restore-source SRC    복원 소스: auto | veeam | mold-only (default: auto)
-                          auto     = FULL은 Mold, INCREMENTAL은 Veeam 체인 회수 후 Mold 복원
-                          veeam    = Veeam 체인을 호스트로 회수 후 Mold 복원
-                          mold-only= datadisk 백업만으로 복원 (NAS·Veeam chain export 없음)
   --since-min N           restore-watch/backup-watch 조회 창(분, default: 60)
   --trigger-mold          restore-watch: VM 소유 호스트만 Mold restoreBackup 호출
   -n, --dry-run
 
-Mold backup offering: BACKUP_OFFERING_NAME=VeeamBackup (veeam_config --offering-name)
+Mold backup offering: BACKUP_OFFERING_NAME=VeeamBackup (veeam-host-config.py --offering-name)
 
 Examples:
   # 전체 실행 중 VM 백업
@@ -84,21 +79,15 @@ Examples:
   # VM별 백업 ID 확인
   mold-backup.sh list-backups --job VeeamBackup
 
-  # i-2-11-VM 만 복원 (auto: FULL=Mold, INCREMENTAL=Veeam 회수 후 Mold)
+  # i-2-11-VM 만 복원 (Mold가 볼륨별 Full·증분을 회수)
   virsh shutdown i-2-11-VM
   mold-backup.sh restore --job VeeamBackup --vm-name i-2-11-VM --backup-id <uuid>
 
-  # Veeam 리포지토리에서 복원 (Veeam 체인 회수 후 Mold 복원)
-  mold-backup.sh restore --job VeeamBackup --vm-name i-2-11-VM --backup-id <uuid> --restore-source veeam
-
-  # Mold datadisk만으로 복원 (NAS/Veeam chain 없음)
-  mold-backup.sh restore --job VeeamBackup --vm-name i-2-11-VM --backup-id <uuid> --restore-source mold-only
-
-  # Veeam UI 복원 감지 (+ --trigger-mold 시 KVM이 datadisk restoreBackup 실행)
-  mold-backup.sh restore-watch --job Mold_Guest_Backup --since-min 10 --trigger-mold
+  # Veeam UI 복원 감지 (+ --trigger-mold 시 정확한 metadata 복원 시점으로 Mold 복원 요청)
+  mold-backup.sh restore-watch --job ablecube3 --since-min 10 --trigger-mold
 
   # 이벤트 직접 주입 (Veeam PS1 SSH push)
-  mold-backup.sh restore-event --job Mold_Guest_Backup veeam.restore.completed <session-id> i-2-63-VM
+  mold-backup.sh restore-event --job ablecube3 veeam.restore.completed <session-id> i-2-63-VM
 
   # Veeam UI에서 직접 백업한 내역을 Mold에 반영 (cron/systemd timer로 주기 실행 권장)
   mold-backup.sh backup-watch --job VeeamBackup --since-min 60
@@ -116,7 +105,6 @@ while [[ $# -gt 0 ]]; do
     --backup-id) BACKUP_ID="$2"; shift 2 ;;
     --vm-name) VM_NAME_ARG="$2"; shift 2 ;;
     --vm-uuid) VM_UUID_ARG="$2"; shift 2 ;;
-    --restore-source) RESTORE_SOURCE="$2"; shift 2 ;;
     --since-min) SINCE_MIN="$2"; shift 2 ;;
     --trigger-mold) TRIGGER_MOLD=true; shift ;;
     -n|--dry-run) DRY_RUN=true; shift ;;
@@ -135,12 +123,11 @@ done
 [[ -n "$CMD" ]] || { usage; exit 1; }
 
 export VEEAM_JOB_NAME="$JOB_NAME"
-mold_backup_load_config || die "Job config not found — run veeam_config.sh first"
+mold_backup_load_config || die "Job config not found — run veeam-host-config.py first"
 
 [[ -n "$VM_NAME_ARG" ]] && export VM_NAME="$VM_NAME_ARG"
 [[ -n "$VM_UUID_ARG" ]] && export VM_UUID="$VM_UUID_ARG"
 [[ -n "$BACKUP_ID" ]] && export BACKUP_ID
-[[ -n "${RESTORE_SOURCE:-}" ]] && export RESTORE_SOURCE
 
 run_pre() {
   echo "=== backup (pre-notify) job=${JOB_NAME} offering=$(mold_backup_offering_name) vm_include=${VM_INCLUDE:-*} ==="
@@ -188,13 +175,8 @@ run_veeam_trigger() {
 run_restore() {
   [[ -n "$BACKUP_ID" ]] || die "restore requires --backup-id or BACKUP_ID"
   [[ -n "${VM_NAME:-}${VM_UUID:-}" ]] || die "restore requires --vm-name or --vm-uuid (individual VM)"
-  case "${RESTORE_SOURCE:-auto}" in
-    auto|veeam|mold-only) ;;
-    *) die "--restore-source must be auto | veeam | mold-only (got: ${RESTORE_SOURCE})" ;;
-  esac
   export BACKUP_ID VM_NAME VM_UUID
-  [[ -n "${RESTORE_SOURCE:-}" ]] && export RESTORE_SOURCE
-  echo "=== restore vm=${VM_NAME:-${VM_UUID}} backup_id=${BACKUP_ID} source=${RESTORE_SOURCE:-auto} ==="
+  echo "=== restore vm=${VM_NAME:-${VM_UUID}} backup_id=${BACKUP_ID} ==="
   if [[ "$DRY_RUN" == "true" ]]; then
     echo "[DRY-RUN] ablestack_veeam_restore_notify.sh"
     return 0

@@ -40,13 +40,15 @@ class NetBackupConfigurationTest(unittest.TestCase):
         with patch.object(sys, "argv", argv + list(options)):
             return config.parse_args()
 
-    def configure(self, args, current_incremental="true", chain="8", global_incremental=None):
+    def configure(self, args, current_incremental="true", chain="8", global_incremental=None, global_plugins="ablestack-netbackup", zone_plugins="ablestack-netbackup"):
         if global_incremental is None:
             global_incremental = current_incremental
         values = {"backup.framework.enabled": "true", "kvm.incremental.backup": current_incremental,
                   "kvm.backup.chain.size": chain, "backup.framework.provider.plugin": "ablestack-netbackup",
                   "backup.plugin.netbackup.url": args.netbackup_url, "backup.plugin.netbackup.apikey": args.netbackup_apikey}
         def read_value(name, *args, **kwargs):
+            if name == "backup.framework.provider.plugin":
+                return zone_plugins if len(args) > 3 and args[3] else global_plugins
             if name == "kvm.incremental.backup" and not kwargs.get("cluster_id"):
                 return global_incremental
             return values[name]
@@ -56,6 +58,15 @@ class NetBackupConfigurationTest(unittest.TestCase):
                 contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
             restart = config.ensure_backup_framework_configuration("zone-id", "cluster-id", args)
         return restart, read, update
+
+    def test_provider_registration_preserves_each_scope_and_adds_ablestack_name(self):
+        _, _, update = self.configure(self.arguments(), global_plugins="ablestack-nas", zone_plugins="ablestack-veeam")
+        calls = [call.args for call in update.call_args_list if call.args[0] == "backup.framework.provider.plugin"]
+        self.assertEqual(2, len(calls))
+        self.assertEqual(("backup.framework.provider.plugin", "ablestack-nas,ablestack-netbackup"), calls[0][:2])
+        self.assertIsNone(calls[0][-1])
+        self.assertEqual(("backup.framework.provider.plugin", "ablestack-veeam,ablestack-netbackup"), calls[1][:2])
+        self.assertEqual("zone-id", calls[1][-1])
 
     def test_existing_invocations_default_to_incremental_without_resetting_chain_size(self):
         args = self.arguments()

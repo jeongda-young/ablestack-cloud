@@ -215,7 +215,7 @@ NetBackup의 무인 구성 예시는 기존 명령에 다음 중 하나를 추�
 --vm-schedule-backup false --vm-include 'i-2-218-VM,i-2-285-VM' --vm-exclude 'i-2-285-VM'
 ```
 
-Veeam의 `bootstrap-host-veeam-env.sh`와 `veeam_config.sh`도 같은 옵션을 받는다.
+Veeam의 `veeam-host-config.py`도 같은 VM 대상 선택 옵션을 받는다.
 
 ### NAS: `ablestack-nas`
 
@@ -240,11 +240,12 @@ Europa 업데이트 후 Mold 관리 서버를 시작하면 버전 번호가 같�
 
 | 정리하는 구형 설정 | 현재 기준 |
 | --- | --- |
-| `backup.command.timeout`, `backup.restore.timeout`, `nas.backup.restore.timeout` | `backup.data.operation.timeout`으로 통합 |
+| `backup.command.timeout`, `backup.restore.timeout`, `nas.backup.restore.timeout`, `netbackup.restore.timeout` | `backup.data.operation.timeout`으로 통합 |
 | `backup.plugin.commvault.stage.root.path`, `backup.plugin.netbackup.stage.root.path`, `backup.plugin.ablestack-veeam.stage.root.path` | 공통 `backup.thirdparty.staging.*` 설정 사용. 기존 스테이징 마이그레이션에서 정리 |
 | `backup.plugin.ablestack-veeam.sync.delete.missing.catalog`, `backup.plugin.ablestack-veeam.sync.delete.rbd.diff` | 현재 카탈로그 검증·만료 동기화 흐름 사용 |
 
 이미 `backup.data.operation.timeout`이 있으면 값을 유지한다.
+이전 정리 단계가 이미 완료된 설치에서도 후속 마이그레이션으로 남은 `netbackup.restore.timeout`을 정리한다.
 새 설정이 없는 설치에서는 구형 timeout 값 중 기존 기본값과 다른 유효한 양의 정수 설정을 이관하며, 여러 값이면 가장 큰 값을 사용한다.
 이관할 값이 없으면 새 기본값 `43200`초를 사용한다. 구형 설정은 새 값 보존이 성공한 뒤 삭제하며, 실패한 마이그레이션은 다음 시작 시 재시도한다.
 `backup.chain.size`는 KBOSS에서 사용하므로 유지한다. `kvm.backup.chain.size`와 자동으로 합치거나 삭제하지 않는다.
@@ -385,70 +386,43 @@ QCOW2는 이전 백업 체인의 스테이징 호스트와 달라지면 새 Full
 
 ## NetBackup·Veeam 사전 구성 파라미터 비교
 
-입력 파라미터 전체가 같지는 않다. VM 대상 선택과 Full/증분 관련 핵심 옵션은 공통으로 맞췄으며,
-기존 정책 이름·인증 옵션과 솔루션 서버 접속 옵션은 도구별 이름을 유지한다.
-비교 대상은 다음 세 도구다.
+두 솔루션 모두 각 KVM Host에서 Python 구성 도구를 한 번 실행한다.
+Veeam의 기존 환경 생성·설치·설정용 셸 스크립트는 `veeam-host-config.py`로 통합했다.
+실제 백업 시 호출되는 Pre/Post Hook과 복원 감시 스크립트는 별도 런타임 파일로 유지한다.
 
-- NetBackup: `python3 netbackup-host-config.py`
-- Veeam 기본 구성: `bash veeam/veeam_config.sh`
-- Veeam 최초 호스트 구성: `bash veeam/bootstrap-host-veeam-env.sh` — env 생성 후 `veeam_config.sh`를 실행한다.
-
-**세 도구에 공통인 옵션**
-
-| 옵션 | 의미와 기본 동작 |
+| 공통 옵션 | 의미와 기본 동작 |
 | --- | --- |
-| `--vm-schedule-backup true\|false` | VM별 Mold 스케줄 사용 여부. 최초 기본값 `false`, 구성 파일에 `VM_SCHEDULE_BACKUP`으로 저장 |
-| `--vm-include LIST` | `false`일 때 사용할 대상 VM 내부 이름 목록 또는 `*`. 기본 `*`, 터미널에서는 생략 시 입력받음 |
-| `--vm-exclude LIST` | `false`일 때 제외할 VM 내부 이름/패턴. 기본 빈 값, exclude 우선 적용 |
-| `--incremental-backup true\|false` | Full/증분 선택. 기본 `true`, Mold 전역값과 대상 Cluster의 `kvm.incremental.backup` 설정 |
-| `--backup-chain-size N` | 증분일 때만 지정. 생략 시 기존 `kvm.backup.chain.size` 유지, 제품 기본값 `8` |
-| `--mold-url URL` | Mold API 주소. NetBackup은 필수, Veeam은 기존 설정/Agent 정보로 자동 채울 수 있음 |
+| `--admin-apikey`, `--admin-secretkey` | Mold Admin API 인증정보. Veeam은 `--api-key`, `--api-secret` 별칭도 지원 |
+| `--mold-url URL` | Mold API 주소. NetBackup 필수, Veeam 생략 시 Agent의 `agent.properties`에서 조회 |
+| `--vm-schedule-backup true\|false` | VM별 Mold 스케줄 사용 여부. 기본 `false`, `VM_SCHEDULE_BACKUP`으로 저장 |
+| `--vm-include LIST`, `--vm-exclude LIST` | `false`일 때 대상/제외 필터. 기본 `*`/빈 값. 터미널에서 생략 시 입력받음 |
+| `--incremental-backup true\|false` | 최초 구성할 Full/증분 정책. 기본 `true`. Mold Global 및 해당 Cluster에 반영 |
+| `--backup-chain-size N` | 증분일 때만 지정. 생략하면 기존 `kvm.backup.chain.size` 유지, 제품 기본값 `8` |
 
-`true` 모드에서 include/exclude CLI를 함께 지정하면 오류로 중단한다.
-필터 입력을 건너뛰는 것과 Full/증분 모드는 별개이므로,
-예를 들어 `--vm-schedule-backup true --incremental-backup false`는 VM별 일정으로 매번 Full 백업한다.
+`--vm-schedule-backup true`는 필터를 묻지 않고 `VM_INCLUDE=*`, `VM_EXCLUDE=*`를 저장한다.
+Mold에서 오퍼링을 연결하고 VM별 스케줄을 설정한다. 스케줄 조회 실패 시 백업을 중단하며 호스트 필터로 대체하지 않는다.
+`false`는 호스트 필터를 사용하고, 다른 공급자 오퍼링이 연결된 VM은 제외한다.
+호환되는 오퍼링이 없는 대상 VM에는 해당 공급자 오퍼링을 자동 할당한 뒤 백업한다.
+Full/증분 정책과 VM 선택 방식은 별개이다.
 
-**서로 다른 옵션**
+| 항목 | NetBackup `netbackup-host-config.py` | Veeam `veeam-host-config.py` |
+| --- | --- | --- |
+| 외부 정책/Job 이름 | `--policy-name` 필수, Mold Host 이름과 일치시킴 | `--job-name`, 기본 현재 호스트 이름. Veeam UI Job과 일치시킴 |
+| 솔루션 서버 인증 | `--netbackup-url`, `--netbackup-apikey` | `--veeam-host`, `--veeam-password`, `--veeam-user`(기본 `administrator`) |
+| Host 자동 식별 | 정책 이름으로 Host 조회 | 현재 호스트 이름으로 정확히 조회. 필요할 때만 `--kvm-hostname` 또는 `--kvm-ip` 지정 |
+| Zone | 조회한 Host의 Zone | 조회한 Host의 Zone, `--zone-id` 지정 시 일치 검증 |
+| 복원 감시 접속 | NetBackup API | KVM → VBR SSH. `--veeam-ssh-user` 기본 Veeam 사용자, `--veeam-ssh-key` 선택 |
+| 오퍼링 | 기본 `NetBackup` 자동 생성·재사용 | 기본 `VeeamBackup` 자동 생성·재사용. `--offering-name`은 신규 생성 이름에만 사용 |
+| 백업 데이터 스테이징 | Mold `backup.thirdparty.staging.*` | 동일. 로컬 datadisk/NAS 저장소 생성 옵션 제거 |
+| 부모 Job의 bootstrap 경로 | 정책 스크립트 처리 | `--agent-payload-path`, 기본 `/tmp/mold/veeam-agent`. 실제 볼륨 데이터와 별개 |
+| 설치·감시 | Hook, watcher, `bp.conf` 구성 | Hook, Job conf, Agent timeout, restore service/timer 구성 |
 
-| 항목 | NetBackup `netbackup-host-config.py` | Veeam `veeam_config.sh` | Veeam `bootstrap-host-veeam-env.sh` |
-| --- | --- | --- | --- |
-| 외부 정책/작업 이름 | `--policy-name` 필수 | `--job-name`; 기존 설정/env로 자동 채움 가능 | `--job-name`; 기본 `Agent Backup Job 1` |
-| Mold API key | `--admin-apikey` 필수 | `--api-key` 또는 기존 env/conf | `--api-key` 또는 환경 변수 |
-| Mold API secret | `--admin-secretkey` 필수 | `--api-secret` 또는 기존 암호화 설정 | `--api-secret` 또는 환경 변수 |
-| NetBackup 서버 인증 | `--netbackup-url`, `--netbackup-apikey` 필수 | 해당 없음 | 해당 없음 |
-| Veeam 서버 인증 | 해당 없음 | `--veeam-url`, `--veeam-user`, `--veeam-password` | `--veeam-host`, `--veeam-user`, `--veeam-password` |
-| Veeam SSH | 해당 없음 | `--veeam-ssh-host`, `--veeam-ssh-user`, `--veeam-ssh-key` | `--veeam-ssh-user`; 서버 주소는 `--veeam-host`에서 구성 |
-| KVM 호스트 지정 | `--policy-name`으로 Mold Host 조회 | `--kvm-host`, `--kvm-ssh-user`, `--kvm-ssh-key` | `--kvm-ip`, `--kvm-hostname` |
-| include 패턴 | 쉼표로 나눈 이름 또는 glob 패턴 | 정확한 VM 이름 목록 또는 전체 `*` | 생성한 Veeam 구성의 같은 필터 사용 |
-| exclude 패턴 | 쉼표로 나눈 이름 또는 glob 패턴 | 이름 또는 glob 패턴 | 생성한 Veeam 구성의 같은 필터 사용 |
-| 추가 자동 제외 | 공통 대상 조회에서 User VM으로 제한 | `VM_AUTO_EXCLUDE=true`: `scvm*`, System VM/Router 형태, 템플릿 이름 추가 제외 | `--no-auto-exclude`로 이 추가 필터 해제 가능 |
-| Zone 지정 | 조회한 Host의 Zone 사용, 별도 옵션 없음 | `--zone-id`, 생략 시 자동 조회 | `--zone-id`, 생략 시 자동 조회 |
-| 오퍼링 이름 | 기본 `NetBackup`, 변경 CLI 없음 | `--offering-name`, 기본 `VeeamBackup` | `--offering-name`, 기본 `VeeamBackup` |
-| 증분 체인 별칭 | `--backup-chain-size` | `--max-chain`도 지원 | `--max-chain`도 지원 |
-| 스테이징 호환 옵션 | `--backup-staging-root` | `--host-backup-path` / `--stage-root-path` | `--host-backup-path` / `--stage-root-path` |
-| Veeam Agent payload | 해당 없음 | 기존 env의 `VEEAM_AGENT_PAYLOAD_PATH` | `--agent-payload-path` |
-| 기존 env 읽기 | 해당 없음 | `--env-file` | env 생성 위치 `--env-out` |
-| 개별 VM 보조 식별자 | 대상 필터만 사용 | `--vm-name`, `--vm-uuid` | 호스트 구성에서는 빈 값 저장 |
-| 백업 실행 모드 | 호스트 정책 방식 | `--backup-mode` (`host` 기본), `--backup-target host` | `host` 고정 |
-| 저장소 호환 옵션 | 공통 Mold 스테이징 사용 | `--nas-repo`, `--repo-name`, `--repo-type`, `--repo-mount-opts`, `--nas-repo-mount` | 호스트 datadisk 프로필 생성 |
-| 보존 기간 | 구성 CLI 없음 | `--retention`, 기본 `P7D` | 별도 CLI 없음 |
-| 추가 설치/배포 | 구성 과정에서 NetBackup hook·감시 서비스 설치 및 `bp.conf` 반영 | `--install`, `--no-configure-mold`, `--secret-key-file` | env 생성 후 `veeam_config.sh --install` 호출 |
-
-NetBackup은 현재 `--policy-name` 값을 Mold `listHosts`의 검색어로도 사용한다.
-따라서 정책 이름을 Mold Host 이름과 맞춰 구성한다. Veeam은 작업 이름과 KVM 호스트 주소를 별도로 지정한다.
-Veeam `veeam_config.sh`는 작업 이름이 없으면 호스트 이름을 이용한 기본값도 만들지만,
-외부 UI의 실제 작업과 일치시키기 위해 두 솔루션 모두 정책/작업 이름을 명시하는 편이 명확하다.
-공통 스테이징이 활성화된 실행에서는 위 호환 경로 옵션보다 Mold의
-`backup.thirdparty.staging.mount.path`·`backup.thirdparty.staging.root.path`가 실제 볼륨 스테이징 기준이다.
-Veeam Agent payload 경로는 이 대용량 볼륨 스테이징과 구분한다.
-Veeam의 저장소 호환 옵션은 기존 설치와의 호환을 위해 남아 있으며,
-현재 `ablestack-veeam` 볼륨 스테이징을 위해 별도 NAS 저장소를 만들 필요는 없다.
-백업 대상 필터의 추가 자동 제외는 호스트 필터 방식에 적용되며, VM별 스케줄 방식은 Mold가 선택한 User VM을 사용한다.
-
-**같은 실행 방식을 선택하는 명령 예시**
+Veeam은 Linux Agent 설치와 VBR의 SSH 접속 구성을 먼저 완료한다.
+호스트마다 같은 Mold/Zone 설정을 변경하므로 사전구성 명령은 순서대로 실행한다.
+두 솔루션 모두 증분 여부는 매 백업 시 Mold 유효값을 따르며, Host 구성 파일로 런타임 값을 덮어쓰지 않는다.
 
 ```bash
-# NetBackup: VM별 스케줄 방식
+# NetBackup: VM별 스케줄 사용
 python3 netbackup-host-config.py \
   --policy-name '<Mold Host 이름과 맞춘 정책 이름>' \
   --mold-url 'http://<Mold>:8080/client/api' \
@@ -456,24 +430,17 @@ python3 netbackup-host-config.py \
   --netbackup-url 'https://<NetBackup>/netbackup' --netbackup-apikey '<NetBackup API key>' \
   --vm-schedule-backup true --incremental-backup true --backup-chain-size 8
 
-# Veeam: 최초 호스트 구성에서 VM별 스케줄 방식
-bash veeam/bootstrap-host-veeam-env.sh \
-  --job-name '<Veeam 기준 작업 이름>' \
+# Veeam: VM별 스케줄 사용
+python3 veeam-host-config.py \
+  --job-name '<Veeam 부모 Host Job 이름>' \
   --mold-url 'http://<Mold>:8080/client/api' \
-  --api-key '<Mold API key>' --api-secret '<Mold API secret>' \
+  --admin-apikey '<Mold API key>' --admin-secretkey '<Mold API secret>' \
   --veeam-host '<Veeam 서버>' --veeam-password '<Veeam 암호>' \
   --vm-schedule-backup true --incremental-backup true --backup-chain-size 8
-
-# Veeam: env가 준비된 호스트의 작업 재구성
-bash veeam/veeam_config.sh --env-file /etc/ablestack/veeam/mold-backup.env \
-  --job-name '<Veeam 기준 작업 이름>' --vm-schedule-backup true
 ```
 
-세 명령 모두 VM별 스케줄을 끄고 수동 필터를 사용하려면 다음 선택 옵션으로 바꾼다.
-
-```bash
---vm-schedule-backup false --vm-include 'i-2-218-VM,i-2-285-VM' --vm-exclude 'i-2-285-VM'
-```
+호스트 필터 방식은 `--vm-schedule-backup false --vm-include '*' --vm-exclude ''`로 지정한다.
+재실행할 때 운영 중 변경한 증분 정책을 유지하려면 `--incremental-backup`에 현재 원하는 값을 명시한다.
 
 ## Full 및 증분 백업 운영
 
@@ -1382,8 +1349,8 @@ RBD·QCOW2 모두 같은 서비스를 통해 메타데이터 복원 완료를 Mo
 
 **Veeam**
 
-- [install.sh](veeam/install.sh)가 복원 감시 service·timer를 설치하고 timer 활성화를 시도한다.
-  설치 후 실제 활성 상태를 확인한다.
+- [veeam-host-config.py](veeam-host-config.py)가 호스트 사전구성 완료 후 복원 감시 service·timer를 설치·활성화한다.
+  RPM의 `--install-only`는 런타임만 설치하며 미구성 Host의 감시를 활성화하지 않는다.
 - 기본 서비스 파일은 `/etc/systemd/system/mold-veeam-restore-agent.service`,
   타이머 파일은 `/etc/systemd/system/mold-veeam-restore-agent.timer`이다.
 - Host의 `/etc/ablestack/veeam/mold-backup.env`와 Job별 `.conf`에 Mold 인증정보,
@@ -1411,7 +1378,58 @@ tail -n 100 /var/log/netbackup-mold-restore-watcher.log
 tail -n 100 /var/log/netbackup-mold-restore.log
 ```
 
-**Veeam**
+**Veeam 신규 구성과 외부 UI 복원**
+
+각 KVM Host에 Veeam Linux Agent를 설치하고 Host별 Agent Job을 사용한다.
+사전구성 진입점은 `veeam-host-config.py` 하나이다. 내부 단계별 함수로
+인증정보·Job conf·Hook·Agent timeout·복원 감시 서비스를 구성한다.
+
+```bash
+python3 /etc/ablestack/veeam/veeam-host-config.py \
+  --admin-apikey '<Mold Admin API key>' \
+  --admin-secretkey '<Mold Admin secret key>' \
+  --job-name 'ablecube3' \
+  --veeam-host '<Veeam server address>' \
+  --veeam-password '<Veeam password>'
+```
+
+`--kvm-hostname`·`--kvm-ip`는 자동 조회가 맞지 않을 때만 지정한다.
+오퍼링은 기본 이름 `VeeamBackup`으로 자동 생성·재사용하고 신규 오퍼링 이름을 지정할 때만 `--offering-name`을 사용한다.
+NetBackup과 Veeam은 각각 `ablestack-netbackup`, `ablestack-veeam`을
+`backup.framework.provider.plugin`의 Global 및 대상 Zone 값에 추가하며 기존 다른 공급자는 보존한다.
+증분 체인은 `kvm.backup.chain.size`를 사용하고 제품 기본값은 8이다.
+체인 값을 생략하면 기존 Mold 설정을 보존한다. 실행 시 증분 여부와 체인 길이는 Mold 설정을 따른다.
+
+Veeam UI에 등록할 `<JOB>-pre-notify.sh`·`<JOB>-post-notify.sh`도 자동 생성한다.
+이 파일을 Veeam Backup Server에 복사하여 Job의 Guest Processing → Pre-job/Post-job에 등록한다.
+Veeam은 파일을 KVM Linux Agent의 관리 경로로 업로드하여 root로 실행한다.
+래퍼는 KVM의 `hooks/pre-notify.<JOB>`·`hooks/post-notify.<JOB>`를 SSH 없이 직접 호출한다.
+따라서 래퍼에 적힌 KVM Hook 경로는 사전구성에서 설치되어 있어야 한다.
+Veeam 서버에서 등록하는 파일 경로와 KVM에서 실행하는 경로를 동일하게 만들 필요는 없다.
+Storage → Advanced → Scripts는 Backup Server에서 실행하는 설정이므로 이 Agent Hook 등록과 구분한다.
+
+부모 Host Job의 SelectedFiles 대상은 `VEEAM_AGENT_PAYLOAD_PATH`이며 작은 bootstrap 파일을 백업한다.
+사전 Hook은 `createAblestackVeeamBackup`을 요청하고 Mold가 볼륨별 Job과 최종 metadata Job을 관리한다.
+사후 Hook은 볼륨 staging 파일을 지우거나 부모 Restore Point로 백업 시점을 덮어쓰지 않는다.
+Veeam의 Active Full/Start 선택만으로 Mold의 Full/증분을 결정하지 않는다.
+
+Veeam UI 복원은 다음 순서로 진행한다.
+
+1. Mold에서 원본 VM을 정지한다.
+2. 원하는 백업의 `ABLESTACK-<백업 UUID>-metadata` Job과 Restore Point를 선택한다.
+3. metadata 파일을 원래 KVM 경로에 복원한다. 부모 Host Job의 bootstrap이나 개별 볼륨 Job만 복원한 것은 VM 복원 요청으로 처리하지 않는다.
+4. `mold-veeam-restore-agent.timer`가 완료된 실제 Restore Session UUID와 Restore Point ID를 조회한다.
+5. `resolveBackupArtifact`가 manifest와 정확히 대조하여 백업과 VM을 식별한다. `VM_INCLUDE`의 첫 VM이나 파일 수정 시간으로 추정하지 않는다.
+6. `restoreBackupArtifact`가 중복 요청을 제어하고 공통 `restoreBackup`으로 연결한다. Mold가 필요한 Full·증분을 볼륨별로 회수·적용한다.
+7. 최종 성공 여부는 Mold에서 확인한다. Veeam FLR 성공은 metadata 파일 복원 완료이며 VM 볼륨 복원 완료와 구분한다.
+
+Warning 종료는 상세 결과와 복원된 metadata를 검증한 경우에만 연결한다. 실패·진행 중 작업은 연결하지 않는다.
+수동 CLI의 `restore`·`restore-notify`는 공통 `restoreBackup`을 사용한다.
+Seed import API·전용 restore API·Host export 스크립트·datadisk 별도 설치/활성화 단계는 제거했다.
+`backup.plugin.ablestack-veeam.staging.path`도 등록하지 않으며 후속 업그레이드에서 Global 값과 Zone override를 삭제한다.
+실제 staging은 `backup.thirdparty.staging.*` 설정을 사용한다.
+
+**Veeam 서비스 확인**
 
 ```bash
 systemctl is-enabled mold-veeam-restore-agent.timer
@@ -1440,8 +1458,8 @@ systemctl list-units --all 'mold-veeam-*'
 ```
 
 이전 `catalog-sync`·`flr-watch` 서비스가 실행 중이면 현재 감시 구성으로 전환한 뒤 사용을 중지한다.
-현재 설치 도구는 이전 `mold-veeam-restore-watch.timer`만 자동 중지하므로
-`catalog-sync`·`flr-watch`가 남아 있는 Host는 별도로 확인해야 한다.
+신규 구성 도구는 구형 서비스의 사용 여부를 추정하여 자동 삭제하지 않는다.
+테스트용 이전 설치가 있으면 `restore-watch`·`catalog-sync`·`flr-watch`를 별도로 확인해 중지한다.
 현재 사용하는 `mold-veeam-restore-agent.service/.timer`는 유지한다.
 
 ## NetBackup 및 Veeam 인증정보 관리
@@ -1460,7 +1478,7 @@ Host의 `/root/.ssh/ablestack.key`는 API secret을 보호하는 암호화 키�
 | 기존 Host 구성 | 구성·갱신 시 동작 |
 | --- | --- |
 | 키와 암호화 파일 모두 없음 | 신규 키를 생성하여 인증정보를 저장한다. |
-| 기존 키만 있고 암호화 파일 없음 | 설치 시 키를 보존하고 솔루션 구성 시 미사용 키를 신규 형식으로 전환한다. |
+| 기존 키만 있고 암호화 파일 없음 | Veeam은 키를 보존한다. NetBackup은 미사용 키를 신규 형식으로 전환할 수 있다. |
 | 기존 키와 암호화 파일 있음 | 키를 보존하며 기존 인증정보를 읽을 수 있다. |
 | 암호화 파일은 있는데 키 없음 | 새 키 생성을 차단한다. 원래 키를 복구하거나 인증정보를 다시 구성해야 한다. |
 | 신규 형식 키가 이미 있음 | 동일한 키를 재사용한다. |
@@ -1474,22 +1492,40 @@ Host의 `/root/.ssh/ablestack.key`는 API secret을 보호하는 암호화 키�
 
 | 목적 | 구성 도구 |
 | --- | --- |
-| Host 스크립트 설치 | [install.sh](veeam/install.sh) |
-| 원격 Host 배포 | [push-to-kvm.sh](veeam/push-to-kvm.sh) |
-| 최초 환경 구성 | [bootstrap-host-veeam-env.sh](veeam/bootstrap-host-veeam-env.sh) |
-| Job 및 API 인증정보 구성 | [veeam_config.sh](veeam/veeam_config.sh) |
-| Veeam 사전 백업 스크립트 | [ablestack_veeam_pre_notify.sh](veeam/ablestack_veeam_pre_notify.sh) |
-| Veeam 사후 백업 스크립트 | [ablestack_veeam_post_notify.sh](veeam/ablestack_veeam_post_notify.sh) |
+| 최초 구성·재구성 | [veeam-host-config.py](veeam-host-config.py) |
+| RPM 런타임 설치 | 같은 Python의 `--install-only`, RPM에서 호출 |
+| 백업 실행 Hook | [Pre](veeam/ablestack_veeam_pre_notify.sh), [Post](veeam/ablestack_veeam_post_notify.sh) |
+| 외부 UI 복원 감시 | [mold-veeam-restore-agent.sh](veeam/mold-veeam-restore-agent.sh) |
 
-Host 설치 경로는 기본 `/etc/ablestack/veeam`이다.
-Mold API key와 secret을 준비한 뒤 구성 도구의 `--help`와 운영 환경의 conf/env 설정을 확인하여 적용한다.
-신규 구성은 API secret을 암호화 파일에 저장하고 설정 파일에는 해당 파일의 경로를 기록한다.
-`bootstrap-host-veeam-env.sh`와 `veeam_config.sh`는 `--incremental-backup true|false`를 받으며 기본값은 `true`다.
-NetBackup과 같이 `kvm.incremental.backup`의 전역 기본값과 대상 Host의 Cluster 설정을 선택한 값으로 변경한다.
-`false`는 매번 독립 Full을 생성하며, `true`는 최초 Full 이후 정상 체인을 증분으로 이어간다.
-`--backup-chain-size 8` 또는 별칭 `--max-chain 8`은 `true`일 때만 지정할 수 있다.
-생략하면 기존 `kvm.backup.chain.size`를 유지하며, 제품 기본값은 `8`이다.
-증분 활성화 설정이 변경되어 재기동 안내와 함께 중단되면 Mold 관리 서버를 재기동하고 같은 명령을 다시 실행한다.
-구성 파일의 모드 값은 사전 구성에 사용한다. 매 백업의 Pre 스크립트는 모드·체인 설정을 덮어쓰지 않고 Mold Provider의 판단을 따른다.
-Veeam 기준 Job의 Pre/Post에는 설치한 사전·사후 스크립트 경로를 지정한다.
-스테이징 경로는 Mold의 공통 글로벌 설정을 사용한다.
+Host 설치 경로는 `/etc/ablestack/veeam`이다. 최초 RPM 설치 후 이 경로의 Python을 실행한다.
+일반 사전구성에는 `--install-only`를 지정하지 않는다. Veeam UI의 Agent Job 생성과 Pre/Post 등록은 수동 단계다.
+Job 이름에 공백 등이 있으면 파일 이름에서는 `_`로 치환하고, 다른 Job과 파일 이름이 충돌하면 중단한다.
+Watcher는 설치된 모든 Job `.conf`를 조회하므로 사용자 지정 Job 이름도 처리한다.
+
+구성은 다음 순서로 진행한다.
+
+1. 입력값, Agent 설치, Host/Zone/Cluster, 공통 staging 마운트를 확인한다.
+2. Global/Zone의 백업 프레임워크와 공급자를 확인하고 선택한 증분 정책을 Global/Cluster에 반영한다.
+3. 비동적 설정이 변경되면 관리 서버 재기동을 안내하고 중단한다. 재기동 후 같은 명령을 다시 실행한다.
+4. 같은 Zone·`ablestack-veeam`·`externalid=veeam` 오퍼링이 있으면 재사용한다. 없으면 생성하고 완료를 확인한다.
+5. 런타임, 암호화한 API secret, Job conf, Pre/Post Hook과 업로드용 래퍼를 기록한다.
+6. Agent의 `timeoutPrePost`를 설정하고 변경 시 Agent 서비스를 재시작한다.
+7. systemd를 갱신하고 복원 감시 timer의 활성화를 확인한다.
+
+**실패 후 재시도와 기존 파일**
+
+- 같은 설정·파일은 건너뛴다. API secret도 복호화 비교 후 같으면 재암호화하지 않는다.
+- 내용·권한을 변경하는 기존 파일은 `<파일>.bak.<UTC 시각>.<식별자>`에 복사한 후 원자적으로 교체한다.
+  API secret 백업도 보호된 secrets 디렉터리에 보관하며 Host 암호화 키는 재사용한다.
+- 실패하면 실패 단계를 출력하고 0이 아닌 종료 코드를 반환한다. 이미 반영한 Mold 설정과 생성한 오퍼링은 유지한다.
+  전체 구성을 자동 원복하는 방식이 아니며, 원인을 수정한 뒤 같은 명령을 재실행한다.
+- 오퍼링 생성의 비동기 작업 ID는 `.offering-import.json`에 남겨 재실행 시 생성 결과를 먼저 확인한다.
+- Agent 재시작 실패는 `.agent-restart-required`에 남겨 INI가 이미 갱신된 상태에서도 다시 재시작한다.
+- 같은 Host에서 동시 사전구성을 실행하면 `.configure.lock`으로 차단한다.
+- Mold의 Secure 설정은 암호화되어 조회되므로 기존 Veeam 암호는 평문과 비교하지 않는다.
+  값이 이미 있으면 재사용하고, 서버·사용자 변경 또는 `--update-veeam-credentials` 지정 시 새 암호를 반영한다.
+  이 옵션을 생략해 기존 암호를 재사용할 때는 `--veeam-password`에도 현재 Veeam 암호를 입력한다.
+
+실제 볼륨 데이터는 Mold 공통 staging을 사용한다. 부모 Agent Job의 작은 bootstrap 경로와 구분한다.
+Veeam의 Full/증분 초기 정책과 체인 길이는 Mold 설정으로 관리하며 기본 체인 길이는 8이다.
+호스트 사전구성 완료 후 Veeam UI의 Job 및 Hook을 등록하고 백업과 metadata 기반 복원을 검증한다.

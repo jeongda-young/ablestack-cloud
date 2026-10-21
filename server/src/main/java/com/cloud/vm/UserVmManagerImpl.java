@@ -3425,6 +3425,19 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
 
         ServiceOfferingVO currentServiceOffering = serviceOfferingDao.findByIdIncludingRemoved(vmInstance.getId(), vmInstance.getServiceOfferingId());
         ServiceOfferingVO svcOffering = serviceOfferingDao.findById(vmInstance.getServiceOfferingId());
+        if (!currentServiceOffering.isDynamic() && MapUtils.isNotEmpty(details)) {
+            Map<String, String> existingDetails = vmInstanceDetailsDao.listDetailsKeyPairs(vmInstance.getId());
+            Map<String, String> unchangedResources = new HashMap<>();
+            for (String key : Arrays.asList(VmDetailConstants.CPU_NUMBER, VmDetailConstants.MEMORY, VmDetailConstants.CPU_SPEED)) {
+                if (existingDetails != null && existingDetails.containsKey(key) && details.containsKey(key)
+                        && Objects.equals(existingDetails.get(key), details.get(key))) {
+                    unchangedResources.put(key, details.get(key));
+                }
+            }
+            // Settings forms replace the whole map, including stale template resource values.
+            normalizeVmResourceDetails(unchangedResources, currentServiceOffering);
+            details.putAll(unchangedResources);
+        }
         long currentCpu = getLongValue(currentServiceOffering.getCpu());
         long currentMemory = getLongValue(currentServiceOffering.getRamSize());
         long currentCpuSpeed = getLongValue(currentServiceOffering.getSpeed());
@@ -3465,6 +3478,19 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
             throw new InvalidParameterValueException(e.getLocalizedMessage());
         } finally {
             ReservationHelper.closeAll(reservations);
+        }
+    }
+
+    protected void normalizeVmResourceDetails(Map<String, String> details, ServiceOffering offering) {
+        if (MapUtils.isEmpty(details)) { return; }
+        normalizeVmResourceDetail(details, VmDetailConstants.CPU_NUMBER, offering.getCpu());
+        normalizeVmResourceDetail(details, VmDetailConstants.MEMORY, offering.getRamSize());
+        normalizeVmResourceDetail(details, VmDetailConstants.CPU_SPEED, offering.getSpeed());
+    }
+
+    private void normalizeVmResourceDetail(Map<String, String> details, String key, Integer value) {
+        if (details.containsKey(key) && value != null) {
+            details.put(key, String.valueOf(value));
         }
     }
 
@@ -5665,6 +5691,7 @@ public class UserVmManagerImpl extends ManagerBase implements UserVmManager, Vir
             });
         }
         if (pcieTopology != null) { vm.setDetail(VmDetailConstants.KVM_Q35_PCIE_TOPOLOGY, pcieTopology.value()); }
+        if (HypervisorType.KVM.equals(hypervisorType)) { normalizeVmResourceDetails(vm.details, offering); }
         vm.setDetail(VmDetailConstants.DEPLOY_VM, "true");
 
         persistVMDeployAsIsProperties(vm, userVmOVFPropertiesMap);

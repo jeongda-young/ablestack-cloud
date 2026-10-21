@@ -22,6 +22,7 @@ import json
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -135,16 +136,16 @@ mold_backup_api_ensure_global_settings
         cases = [("--incremental-backup", "invalid"),
                  ("--incremental-backup", "false", "--backup-chain-size", "8"),
                  ("--incremental-backup", "true", "--backup-chain-size", "0")]
-        for tool in ("veeam_config.sh", "bootstrap-host-veeam-env.sh"):
-            for options in cases:
-                with self.subTest(tool=tool, options=options), tempfile.TemporaryDirectory() as directory:
-                    config_dir = Path(directory) / "not-created"
-                    result = subprocess.run(["bash", str(VEEAM / tool), *options], capture_output=True, text=True,
-                                            timeout=10, env=dict(os.environ, ABLESTACK_VEEAM_ETC_DIR=str(config_dir),
-                                                                 MOLD_BACKUP_SHARE_DIR=directory))
-                    self.assertNotEqual(0, result.returncode)
-                    self.assertIn("--incremental-backup" if options[1] != "true" else "--backup-chain-size", result.stderr)
-                    self.assertFalse(config_dir.exists())
+        for options in cases:
+            with self.subTest(options=options), tempfile.TemporaryDirectory() as directory:
+                config_dir = Path(directory) / "not-created"
+                result = subprocess.run([sys.executable, str(VEEAM.parent / "veeam-host-config.py"), *options],
+                                        capture_output=True, text=True, timeout=10,
+                                        env=dict(os.environ, ABLESTACK_VEEAM_ETC_DIR=str(config_dir)))
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("--incremental-backup" if options[1] != "true" else "--backup-chain-size", result.stderr)
+                self.assertFalse(config_dir.exists())
+
 
 
 if __name__ == "__main__":

@@ -19,8 +19,8 @@
 # Entry point for mold-agent or cloudstack-common RPM %post.
 set -e
 DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-if [[ -x "${DIR}/veeam/install.sh" ]]; then
-  "${DIR}/veeam/install.sh"
+if [[ -f "${DIR}/veeam-host-config.py" ]]; then
+  python3 "${DIR}/veeam-host-config.py" --install-only
 fi
-# veeam/install.sh prepares a random shared Host key when missing and no encrypted secrets remain.
-# mold-backup hooks decrypt MOLD_API_SECRET via mold-backup-secret.sh + MOLD_SECRET_KEY_FILE.
+# Runtime installation preserves existing Host keys and Job configuration.
+# Configure each KVM host before enabling the restore watcher.

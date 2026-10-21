@@ -4737,6 +4737,85 @@ public class UserVmManagerImplTest {
     }
 
     @Test
+    public void verifyVmLimits_fixedOfferingWithStaleUnchangedResourceDetails_repairsMetadata() {
+        when(userVmVoMock.getId()).thenReturn(1L);
+        when(userVmVoMock.getServiceOfferingId()).thenReturn(1L);
+        when(accountDao.findById(anyLong())).thenReturn(callerAccount);
+        ServiceOfferingVO offering = mock(ServiceOfferingVO.class);
+        when(offering.getCpu()).thenReturn(8);
+        when(offering.getRamSize()).thenReturn(16384);
+        when(offering.getSpeed()).thenReturn(2000);
+        when(_serviceOfferingDao.findById(anyLong())).thenReturn(offering);
+        when(_serviceOfferingDao.findByIdIncludingRemoved(anyLong(), anyLong())).thenReturn(offering);
+        Map<String, String> existing = Map.of(VmDetailConstants.CPU_NUMBER, "2", VmDetailConstants.MEMORY, "4096",
+                VmDetailConstants.CPU_SPEED, "1000");
+        when(vmInstanceDetailsDao.listDetailsKeyPairs(1L)).thenReturn(existing);
+        Map<String, String> details = new HashMap<>(existing);
+        details.put(VmDetailConstants.KVM_Q35_PCIE_TOPOLOGY, "legacy");
+
+        userVmManagerImpl.verifyVmLimits(userVmVoMock, details);
+
+        assertEquals("8", details.get(VmDetailConstants.CPU_NUMBER));
+        assertEquals("16384", details.get(VmDetailConstants.MEMORY));
+        assertEquals("2000", details.get(VmDetailConstants.CPU_SPEED));
+        assertEquals("legacy", details.get(VmDetailConstants.KVM_Q35_PCIE_TOPOLOGY));
+        assertEquals("2", existing.get(VmDetailConstants.CPU_NUMBER));
+        verify(userVmManagerImpl, never()).validateCustomParameters(any(), anyMap());
+    }
+
+    @Test
+    public void verifyVmLimits_fixedOfferingWithStaleDetails_stillRejectsExplicitResize() {
+        when(userVmVoMock.getId()).thenReturn(1L);
+        when(userVmVoMock.getServiceOfferingId()).thenReturn(1L);
+        when(accountDao.findById(anyLong())).thenReturn(callerAccount);
+        ServiceOfferingVO offering = mock(ServiceOfferingVO.class);
+        when(offering.getCpu()).thenReturn(8);
+        when(offering.getRamSize()).thenReturn(16384);
+        when(offering.getSpeed()).thenReturn(2000);
+        when(_serviceOfferingDao.findById(anyLong())).thenReturn(offering);
+        when(_serviceOfferingDao.findByIdIncludingRemoved(anyLong(), anyLong())).thenReturn(offering);
+        when(vmInstanceDetailsDao.listDetailsKeyPairs(1L)).thenReturn(Map.of(VmDetailConstants.CPU_NUMBER, "2"));
+        Map<String, String> details = new HashMap<>();
+        details.put(VmDetailConstants.CPU_NUMBER, "4");
+        details.put(VmDetailConstants.KVM_Q35_PCIE_TOPOLOGY, "legacy");
+
+        Assert.assertThrows(InvalidParameterValueException.class, () -> userVmManagerImpl.verifyVmLimits(userVmVoMock, details));
+    }
+
+    @Test
+    public void normalizeVmResourceDetails_usesSelectedOfferingInsteadOfTemplateSizing() {
+        ServiceOfferingVO offering = mock(ServiceOfferingVO.class);
+        when(offering.getCpu()).thenReturn(8);
+        when(offering.getRamSize()).thenReturn(16384);
+        when(offering.getSpeed()).thenReturn(2000);
+        Map<String, String> details = new HashMap<>(Map.of(VmDetailConstants.CPU_NUMBER, "2", VmDetailConstants.MEMORY, "4096",
+                VmDetailConstants.CPU_SPEED, "1000", VmDetailConstants.KVM_Q35_PCIE_TOPOLOGY, "legacy"));
+
+        userVmManagerImpl.normalizeVmResourceDetails(details, offering);
+
+        assertEquals("8", details.get(VmDetailConstants.CPU_NUMBER));
+        assertEquals("16384", details.get(VmDetailConstants.MEMORY));
+        assertEquals("2000", details.get(VmDetailConstants.CPU_SPEED));
+        assertEquals("legacy", details.get(VmDetailConstants.KVM_Q35_PCIE_TOPOLOGY));
+    }
+
+    @Test
+    public void normalizeVmResourceDetails_preservesCustomValuesWhenOfferingFieldsAreUnresolved() {
+        ServiceOfferingVO offering = mock(ServiceOfferingVO.class);
+        when(offering.getCpu()).thenReturn(null);
+        when(offering.getRamSize()).thenReturn(null);
+        when(offering.getSpeed()).thenReturn(2000);
+        Map<String, String> details = new HashMap<>(Map.of(VmDetailConstants.CPU_NUMBER, "8", VmDetailConstants.MEMORY, "16384",
+                VmDetailConstants.CPU_SPEED, "1000"));
+
+        userVmManagerImpl.normalizeVmResourceDetails(details, offering);
+
+        assertEquals("8", details.get(VmDetailConstants.CPU_NUMBER));
+        assertEquals("16384", details.get(VmDetailConstants.MEMORY));
+        assertEquals("2000", details.get(VmDetailConstants.CPU_SPEED));
+    }
+
+    @Test
     public void verifyVmLimits_dynamicOfferingWithUnchangedFixedCpuSpeed_doesNotThrowException() {
         when(userVmVoMock.getId()).thenReturn(1L);
         when(userVmVoMock.getServiceOfferingId()).thenReturn(1L);

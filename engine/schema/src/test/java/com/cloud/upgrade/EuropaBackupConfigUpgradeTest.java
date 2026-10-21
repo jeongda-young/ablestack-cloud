@@ -51,12 +51,14 @@ public class EuropaBackupConfigUpgradeTest {
     private static final String COMMAND = "backup.command.timeout";
     private static final String RESTORE = "backup.restore.timeout";
     private static final String NAS = "nas.backup.restore.timeout";
+    private static final String NETBACKUP = "netbackup.restore.timeout";
     private static final String CATALOG = "backup.plugin.ablestack-veeam.sync.delete.missing.catalog";
     private static final String RBD_DIFF = "backup.plugin.ablestack-veeam.sync.delete.rbd.diff";
     private final Connection connection = mock(Connection.class);
     private final PreparedStatement select = mock(PreparedStatement.class);
     private final PreparedStatement insert = mock(PreparedStatement.class);
     private final PreparedStatement delete = mock(PreparedStatement.class);
+    private final PreparedStatement deleteZoneSetting = mock(PreparedStatement.class);
     private final Map<String, String[]> rows = new LinkedHashMap<>();
     private final Map<Integer, String> selectArgs = new HashMap<>();
     private final Map<Integer, String> insertArgs = new HashMap<>();
@@ -67,6 +69,7 @@ public class EuropaBackupConfigUpgradeTest {
         when(connection.prepareStatement(startsWith("SELECT name, value, default_value"))).thenReturn(select);
         when(connection.prepareStatement(startsWith("INSERT INTO cloud.configuration"))).thenReturn(insert);
         when(connection.prepareStatement(startsWith("DELETE FROM cloud.configuration"))).thenReturn(delete);
+        when(connection.prepareStatement("DELETE FROM cloud.data_center_details WHERE name = ?")).thenReturn(deleteZoneSetting);
         capture(select, selectArgs);
         capture(insert, insertArgs);
         capture(delete, deleteArgs);
@@ -107,14 +110,24 @@ public class EuropaBackupConfigUpgradeTest {
     @Test
     public void onlyExplicitlyRetiredSettingsAreRemoved() {
         put(CURRENT, "50000", "43200");
-        for (String name : List.of(COMMAND, RESTORE, NAS, CATALOG, RBD_DIFF)) { put(name, "1", "0"); }
+        for (String name : List.of(COMMAND, RESTORE, NAS, NETBACKUP, CATALOG, RBD_DIFF, "backup.plugin.ablestack-veeam.staging.path")) { put(name, "1", "0"); }
         for (String name : List.of("backup.chain.size", "kvm.backup.chain.size", "nas.backup.incremental.enabled",
-                "backup.plugin.ablestack-veeam.restore.timeout", "backup.plugin.veeam.request.timeout")) {
+                "backup.plugin.ablestack-veeam.restore.timeout", "backup.plugin.veeam.request.timeout",
+                "netbackup.prepared.restore.path.ready.timeout")) {
             put(name, "8", "8");
         }
         EuropaBackupConfigUpgrade.migrate(connection);
-        for (String name : List.of(COMMAND, RESTORE, NAS, CATALOG, RBD_DIFF)) { assertFalse(rows.containsKey(name)); }
-        assertEquals(6, rows.size());
+        for (String name : List.of(COMMAND, RESTORE, NAS, NETBACKUP, CATALOG, RBD_DIFF, "backup.plugin.ablestack-veeam.staging.path")) { assertFalse(rows.containsKey(name)); }
+        assertEquals(7, rows.size());
+        assertEquals("50000", rows.get(CURRENT)[0]);
+    }
+
+    @Test
+    public void retiredVeeamExportPathIsRemovedFromZoneOverrides() throws Exception {
+        put(CURRENT, "50000", "43200");
+        EuropaBackupConfigUpgrade.migrate(connection);
+        verify(deleteZoneSetting).setString(1, "backup.plugin.ablestack-veeam.staging.path");
+        verify(deleteZoneSetting).executeUpdate();
         assertEquals("50000", rows.get(CURRENT)[0]);
     }
 
@@ -124,6 +137,23 @@ public class EuropaBackupConfigUpgradeTest {
         put(COMMAND, "86400", "7200");
         EuropaBackupConfigUpgrade.migrate(connection);
         assertEquals("12000", rows.get(CURRENT)[0]);
+    }
+
+    @Test
+    public void customizedNetBackupTimeoutIsMigratedWhenUnifiedSettingIsAbsent() {
+        put(NETBACKUP, "60000", "7200");
+        EuropaBackupConfigUpgrade.migrate(connection);
+        assertEquals("60000", rows.get(CURRENT)[0]);
+        assertFalse(rows.containsKey(NETBACKUP));
+    }
+
+    @Test
+    public void followUpRemovesNetBackupTimeoutWithoutOverwritingAnAlreadyMigratedValue() {
+        put(CURRENT, "50000", "43200");
+        put(NETBACKUP, "86400", "7200");
+        EuropaBackupConfigUpgrade.migrate(connection);
+        assertEquals("50000", rows.get(CURRENT)[0]);
+        assertFalse(rows.containsKey(NETBACKUP));
     }
 
     @Test

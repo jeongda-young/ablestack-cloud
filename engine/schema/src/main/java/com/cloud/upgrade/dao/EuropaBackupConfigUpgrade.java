@@ -20,6 +20,7 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -28,11 +29,13 @@ import com.cloud.utils.exception.CloudRuntimeException;
 /** Retire settings removed since the Europa backup providers were unified. */
 public final class EuropaBackupConfigUpgrade {
     public static final String PHASE = "europa-4.23-s14-backup-config-v1";
+    public static final String FOLLOW_UP_PHASE = "europa-4.23-s15-netbackup-timeout-config-v1";
+    public static final String VEEAM_VOLUME_PHASE = "europa-4.23-s16-veeam-volume-config-v1";
     private static final String DATA_TIMEOUT = "backup.data.operation.timeout";
     private static final int DEFAULT_DATA_TIMEOUT = 43200;
-    private static final String[] LEGACY_TIMEOUTS = {"backup.command.timeout", "backup.restore.timeout", "nas.backup.restore.timeout"};
-    private static final String[] OBSOLETE = {LEGACY_TIMEOUTS[0], LEGACY_TIMEOUTS[1], LEGACY_TIMEOUTS[2],
-            "backup.plugin.ablestack-veeam.sync.delete.missing.catalog", "backup.plugin.ablestack-veeam.sync.delete.rbd.diff"};
+    private static final String[] LEGACY_TIMEOUTS = {"backup.command.timeout", "backup.restore.timeout", "nas.backup.restore.timeout", "netbackup.restore.timeout"};
+    private static final String[] OBSOLETE = {LEGACY_TIMEOUTS[0], LEGACY_TIMEOUTS[1], LEGACY_TIMEOUTS[2], LEGACY_TIMEOUTS[3],
+            "backup.plugin.ablestack-veeam.sync.delete.missing.catalog", "backup.plugin.ablestack-veeam.sync.delete.rbd.diff", "backup.plugin.ablestack-veeam.staging.path"};
 
     private EuropaBackupConfigUpgrade() { }
 
@@ -40,10 +43,14 @@ public final class EuropaBackupConfigUpgrade {
         try {
             migrateTimeout(conn);
             try (PreparedStatement statement = conn.prepareStatement(
-                    "DELETE FROM cloud.configuration WHERE name IN (?, ?, ?, ?, ?)")) {
+                    "DELETE FROM cloud.configuration WHERE name IN (" + String.join(", ", Collections.nCopies(OBSOLETE.length, "?")) + ")")) {
                 for (int i = 0; i < OBSOLETE.length; i++) {
                     statement.setString(i + 1, OBSOLETE[i]);
                 }
+                statement.executeUpdate();
+            }
+            try (PreparedStatement statement = conn.prepareStatement("DELETE FROM cloud.data_center_details WHERE name = ?")) {
+                statement.setString(1, "backup.plugin.ablestack-veeam.staging.path");
                 statement.executeUpdate();
             }
         } catch (SQLException e) {
@@ -55,7 +62,8 @@ public final class EuropaBackupConfigUpgrade {
         Map<String, String> values = new HashMap<>();
         Map<String, String> defaults = new HashMap<>();
         try (PreparedStatement statement = conn.prepareStatement(
-                "SELECT name, value, default_value FROM cloud.configuration WHERE name IN (?, ?, ?, ?)")) {
+                "SELECT name, value, default_value FROM cloud.configuration WHERE name IN (" +
+                        String.join(", ", Collections.nCopies(LEGACY_TIMEOUTS.length + 1, "?")) + ")")) {
             statement.setString(1, DATA_TIMEOUT);
             for (int i = 0; i < LEGACY_TIMEOUTS.length; i++) {
                 statement.setString(i + 2, LEGACY_TIMEOUTS[i]);

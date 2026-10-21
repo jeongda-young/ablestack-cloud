@@ -27,7 +27,7 @@ try:
     from ablestack_backup_secret import MAX_SECRET_BYTES, decrypt_secret, write_secret
     from ablestack_backup_secret_key import SecretKeyError, ensure_key
 except ModuleNotFoundError:
-    # Repository/RPM layout. install.sh places the same module beside this helper for standalone installs.
+    # Repository/RPM layout. veeam-host-config.py places the same module beside this helper for standalone installs.
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from ablestack_backup_secret import MAX_SECRET_BYTES, decrypt_secret, write_secret
     from ablestack_backup_secret_key import SecretKeyError, ensure_key

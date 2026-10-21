@@ -33,7 +33,6 @@ import org.apache.cloudstack.api.command.user.backup.UpdateAblestackVeeamBackupC
 import org.apache.cloudstack.api.command.user.backup.SyncAblestackVeeamBackupsCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateBackupCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateNetBackupCmd;
-import org.apache.cloudstack.api.command.user.backup.ImportAblestackVeeamBackupSeedCmd;
 import org.apache.cloudstack.api.command.user.backup.ListAblestackVeeamBackupsCmd;
 import org.apache.cloudstack.api.command.user.backup.ListVeeamRestorePointsCmd;
 import org.apache.cloudstack.api.response.BackupRestorePointResponse;
@@ -434,11 +433,6 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
      */
     boolean createBackup(CreateBackupCmd cmd, Object job) throws ResourceAllocationException;
 
-    /**
-     * Import a Veeam restore point as NAS seed for Ablestack Veeam incremental backups.
-     */
-    Backup importAblestackVeeamBackupSeed(ImportAblestackVeeamBackupSeedCmd cmd) throws ResourceAllocationException;
-
     List<Backup.RestorePoint> listVeeamRestorePoints(ListVeeamRestorePointsCmd cmd);
 
     List<BackupRestorePointResponse> createVeeamRestorePointResponses(List<Backup.RestorePoint> points);
@@ -456,8 +450,6 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
      * (catalog-driven delete, same model as NetBackup / BackupSyncTask).
      */
     boolean syncAblestackVeeamBackups(SyncAblestackVeeamBackupsCmd cmd);
-
-    boolean restoreAblestackVeeamBackup(Long backupId, String sessionId);
 
     Pair<List<Backup>, Integer> listAblestackVeeamBackups(ListAblestackVeeamBackupsCmd cmd);
 

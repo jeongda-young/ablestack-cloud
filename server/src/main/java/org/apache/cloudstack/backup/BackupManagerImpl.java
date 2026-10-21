@@ -73,10 +73,8 @@ import org.apache.cloudstack.api.command.user.backup.UpdateAblestackVeeamBackupC
 import org.apache.cloudstack.api.command.user.backup.SyncAblestackVeeamBackupsCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateBackupCmd;
 import org.apache.cloudstack.api.command.user.backup.CreateNetBackupCmd;
-import org.apache.cloudstack.api.command.user.backup.ImportAblestackVeeamBackupSeedCmd;
 import org.apache.cloudstack.api.command.user.backup.ListAblestackVeeamBackupsCmd;
 import org.apache.cloudstack.api.command.user.backup.ListVeeamRestorePointsCmd;
-import org.apache.cloudstack.api.command.user.backup.RestoreAblestackVeeamBackupCmd;
 import org.apache.cloudstack.api.response.BackupRestorePointResponse;
 import org.apache.cloudstack.api.command.user.backup.CreateBackupScheduleCmd;
 import org.apache.cloudstack.api.command.user.backup.DeleteBackupCmd;
@@ -344,11 +342,6 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     private static final String RETENTION_CLEANUP_FAILED_AT = "retention.cleanup.failed.at";
     private static final String RETENTION_CLEANUP_SCHEDULE_ID = "retention.cleanup.schedule.id";
     private static final String RETENTION_CLEANUP_REASON = "retention.cleanup.reason";
-    private static final String VEEAM_RESTORE_SESSION_ID = "veeam.restore.session.id";
-    private static final String VEEAM_RESTORE_VM_UUID = "veeam.restore.vm.uuid";
-    private static final String VEEAM_RESTORE_PHASE = "veeam.restore.phase";
-    private static final String VEEAM_RESTORE_UPDATED_AT = "veeam.restore.updated.at";
-    private static final String VEEAM_RESTORE_FAILURE_REASON = "veeam.restore.failure.reason";
     private static final long MIN_ACTIVE_JOB_SYNC_INTERVAL_SECONDS = 5L;
     private static final long RESTORE_JOB_START_GRACE_PERIOD_MS = TimeUnit.SECONDS.toMillis(60);
 
@@ -1432,54 +1425,6 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
     }
 
-    @Override
-    @ActionEvent(eventType = EventTypes.EVENT_VM_BACKUP_CREATE, eventDescription = "importing Ablestack Veeam backup seed", async = true)
-    public Backup importAblestackVeeamBackupSeed(ImportAblestackVeeamBackupSeedCmd cmd) throws ResourceAllocationException {
-        final VMInstanceVO vm = findVmById(cmd.getVmId());
-        validateBackupForZone(vm.getDataCenterId());
-        final Account caller = CallContext.current().getCallingAccount();
-        accountManager.checkAccess(caller, null, true, vm);
-
-        if (vm.getBackupOfferingId() == null) {
-            throw new CloudRuntimeException("VM must be assigned to an Ablestack Veeam backup offering before importing a seed");
-        }
-
-        final BackupOffering offering = backupOfferingDao.findById(vm.getBackupOfferingId());
-        if (offering == null || !BackupProviderNameUtils.isVeeamFamily(offering.getProvider())) {
-            throw new CloudRuntimeException("VM backup offering must use the ablestack-veeam provider");
-        }
-
-        // Seed import must use standalone ablestack-veeam (not veeam/NAS-hybrid which requires a repository).
-        final BackupProvider backupProvider = getAblestackVeeamBackupProvider(offering.getProvider());
-
-        List<String> stagingPaths = null;
-        if (org.apache.commons.lang3.StringUtils.isNotBlank(cmd.getStagingDiskPaths())) {
-            stagingPaths = Arrays.stream(cmd.getStagingDiskPaths().split(","))
-                    .map(String::trim)
-                    .filter(s -> !s.isEmpty())
-                    .collect(Collectors.toList());
-        }
-
-        final Pair<Boolean, Backup> result = backupProvider.importAblestackVeeamBackupSeed(
-                vm, cmd.getVeeamRestorePointId(), stagingPaths, cmd.getSourceDiskFormat(), cmd.getBootstrapCheckpoint());
-
-        if (!result.first() || result.second() == null) {
-            throw new CloudRuntimeException("Failed to import Ablestack Veeam backup seed");
-        }
-
-        BackupVO backupVO = backupDao.findById(result.second().getId());
-        if (cmd.getName() != null) {
-            backupVO.setName(cmd.getName());
-            backupDao.update(backupVO.getId(), backupVO);
-        }
-
-        resourceLimitMgr.incrementResourceCount(vm.getAccountId(), Resource.ResourceType.backup);
-        if (result.second().getSize() != null) {
-            resourceLimitMgr.incrementResourceCount(vm.getAccountId(), Resource.ResourceType.backup_storage, result.second().getSize());
-        }
-        return backupVO;
-    }
-
     private BackupOffering validateVmAblestackVeeamOffering(final VMInstanceVO vm) {
         if (vm.getBackupOfferingId() == null) {
             throw new CloudRuntimeException("VM must be assigned to an Ablestack Veeam backup offering");
@@ -1699,104 +1644,6 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
         logger.warn("Ignoring unsupported Ablestack Veeam backup interval type [{}]", intervalType);
         return null;
-    }
-
-    @Override
-    @ActionEvent(eventType = EventTypes.EVENT_VM_BACKUP_RESTORE, eventDescription = "restoring VM from Ablestack Veeam backup", async = true)
-    public boolean restoreAblestackVeeamBackup(final Long backupId, final String sessionId) {
-        BackupVO backup = backupDao.findById(backupId);
-        if (backup == null) {
-            backup = backupDao.findByIdIncludingRemoved(backupId);
-            if (backup != null && backup.getRemoved() != null) {
-                throw new CloudRuntimeException(String.format(
-                        "Backup %s (%s) was removed and cannot be restored. Use an active backup for this VM.",
-                        backup.getUuid(), backupId));
-            }
-            throw new CloudRuntimeException("Backup " + backupId + " does not exist");
-        }
-        final BackupOffering backupOffering = backupOfferingDao.findByIdIncludingRemoved(backup.getBackupOfferingId());
-        if (backupOffering == null || !BackupProviderNameUtils.isVeeamFamily(backupOffering.getProvider())) {
-            throw new CloudRuntimeException("Backup is not from an ablestack-veeam offering");
-        }
-        if (StringUtils.isBlank(sessionId)) {
-            return restoreBackup(backupId, false, null);
-        }
-
-        backupDao.loadDetails(backup);
-        final VMInstanceVO vm = vmInstanceDao.findByIdIncludingRemoved(backup.getVmId());
-        if (vm == null || VirtualMachine.State.Expunging.equals(vm.getState())) {
-            throw new CloudRuntimeException("The Instance from which the Veeam backup was taken could not be found.");
-        }
-        final String existingSessionId = backup.getDetail(VEEAM_RESTORE_SESSION_ID);
-        final String existingPhase = backup.getDetail(VEEAM_RESTORE_PHASE);
-        if (StringUtils.equals(sessionId, existingSessionId) && "COMPLETED".equalsIgnoreCase(existingPhase)) {
-            logger.info("Skipping already completed Veeam restore session [{}] for backup [{}].", sessionId, backup.getUuid());
-            return true;
-        }
-        final BackupVO activeRestore = findActiveVeeamRestoreForVm(vm);
-        if (activeRestore != null) {
-            backupDao.loadDetails(activeRestore);
-            final String activeSessionId = activeRestore.getDetail(VEEAM_RESTORE_SESSION_ID);
-            if (StringUtils.equals(sessionId, activeSessionId)) {
-                logger.info("Skipping duplicate Veeam restore session [{}] for VM [{}]; phase=[{}].",
-                        sessionId, vm.getInstanceName(), activeRestore.getDetail(VEEAM_RESTORE_PHASE));
-                return true;
-            }
-            throw new CloudRuntimeException(String.format(
-                    "Veeam restore session [%s] is already active for VM [%s] in phase [%s].",
-                    activeSessionId, vm.getInstanceName(), activeRestore.getDetail(VEEAM_RESTORE_PHASE)));
-        }
-
-        persistVeeamRestoreState(backup, vm, sessionId, "CLAIMED", null);
-        try {
-            final boolean restored = restoreBackup(backupId, false, null);
-            persistVeeamRestoreState(backup, vm, sessionId, restored ? "COMPLETED" : "FAILED",
-                    restored ? null : "Veeam restore returned false");
-            return restored;
-        } catch (RuntimeException e) {
-            persistVeeamRestoreState(backup, vm, sessionId, "FAILED", e.getMessage());
-            throw e;
-        }
-    }
-
-    private BackupVO findActiveVeeamRestoreForVm(final VMInstanceVO vm) {
-        if (vm == null || StringUtils.isBlank(vm.getUuid())) {
-            return null;
-        }
-        return backupDetailsDao.findDetails(VEEAM_RESTORE_VM_UUID, vm.getUuid(), false).stream()
-                .map(BackupDetailVO::getResourceId)
-                .map(backupDao::findByIdIncludingRemoved)
-                .filter(Objects::nonNull)
-                .peek(backupDao::loadDetails)
-                .filter(candidate -> isActiveExternalRestorePhase(candidate.getDetail(VEEAM_RESTORE_PHASE)))
-                .findFirst()
-                .orElse(null);
-    }
-
-    private boolean isActiveExternalRestorePhase(final String phase) {
-        return StringUtils.isNotBlank(phase) && !isTerminalExternalRestorePhase(phase);
-    }
-
-    private boolean isTerminalExternalRestorePhase(final String phase) {
-        return "COMPLETED".equalsIgnoreCase(phase) || "FAILED".equalsIgnoreCase(phase);
-    }
-
-    private void persistVeeamRestoreState(final BackupVO backup, final VMInstanceVO vm, final String sessionId,
-            final String phase, final String failureReason) {
-        if (backup == null || vm == null || StringUtils.isBlank(sessionId) || StringUtils.isBlank(phase)) {
-            return;
-        }
-        persistBackupDetail(backup.getId(), VEEAM_RESTORE_SESSION_ID, sessionId);
-        persistBackupDetail(backup.getId(), VEEAM_RESTORE_VM_UUID, vm.getUuid());
-        persistBackupDetail(backup.getId(), VEEAM_RESTORE_PHASE, phase);
-        persistBackupDetail(backup.getId(), VEEAM_RESTORE_UPDATED_AT, String.valueOf(System.currentTimeMillis()));
-        if (StringUtils.isNotBlank(failureReason)) {
-            persistBackupDetail(backup.getId(), VEEAM_RESTORE_FAILURE_REASON,
-                    StringUtils.abbreviate(failureReason, 1024));
-        } else {
-            backupDetailsDao.removeDetail(backup.getId(), VEEAM_RESTORE_FAILURE_REASON);
-        }
-        backupDao.loadDetails(backup);
     }
 
     @Override
@@ -4558,18 +4405,6 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         throw new CloudRuntimeException("Failed to find backup provider by the name: " + name);
     }
 
-    /**
-     * Resolve the standalone Ablestack Veeam KVM provider for seed import APIs.
-     * When both "ablestack-veeam" and display-name "veeam" (often NAS-hybrid) are loaded,
-     * prefer ablestack-veeam so host staging import does not require a Mold backup repository.
-     */
-    private BackupProvider getAblestackVeeamBackupProvider(final String offeringProviderName) {
-        if (backupProvidersMap.containsKey(BackupProviderNameUtils.ABLESTACK_VEEAM)) {
-            return backupProvidersMap.get(BackupProviderNameUtils.ABLESTACK_VEEAM);
-        }
-        return getBackupProvider(offeringProviderName);
-    }
-
     @Override
     public List<Class<?>> getCommands() {
         final List<Class<?>> cmdList = new ArrayList<Class<?>>();
@@ -4609,12 +4444,10 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         cmdList.add(UpdateBackupJobBandwidthCmd.class);
         cmdList.add(ListNetBackupBackupCandidatesCmd.class);
         cmdList.add(ListExternalBackupCandidatesCmd.class);
-        cmdList.add(ImportAblestackVeeamBackupSeedCmd.class);
         cmdList.add(ListVeeamRestorePointsCmd.class);
         cmdList.add(CreateAblestackVeeamBackupCmd.class);
         cmdList.add(UpdateAblestackVeeamBackupCmd.class);
         cmdList.add(SyncAblestackVeeamBackupsCmd.class);
-        cmdList.add(RestoreAblestackVeeamBackupCmd.class);
         cmdList.add(ListAblestackVeeamBackupsCmd.class);
         cmdList.add(ListBackupsCmd.class);
         cmdList.add(RestoreBackupCmd.class);
@@ -5369,14 +5202,6 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                         netBackupRestoreCoordinator.persistRestoreFailure(backup, vm, requestIdentifier, reason);
                         netBackupRestoreCoordinator.failSession(vm.getId(), requestIdentifier, reason);
                     }
-                }
-            }
-            if (BackupProviderNameUtils.isVeeamFamily(offering.getProvider())) {
-                backupDao.loadDetails(backup);
-                final String sessionId = backup.getDetail(VEEAM_RESTORE_SESSION_ID);
-                if (StringUtils.isNotBlank(sessionId)) {
-                    persistVeeamRestoreState(backup, vm, sessionId, completed ? "COMPLETED" : "FAILED",
-                            completed ? null : reason);
                 }
             }
         }
@@ -7413,10 +7238,6 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     }
 
     private String getProviderRestoreState(final Backup backup) {
-        final String veeamRestorePhase = backup.getDetail(VEEAM_RESTORE_PHASE);
-        if (StringUtils.isNotBlank(veeamRestorePhase)) {
-            return veeamRestorePhase;
-        }
         if (backup instanceof BackupVO) {
             return netBackupRestoreCoordinator.getRestorePhase((BackupVO) backup);
         }

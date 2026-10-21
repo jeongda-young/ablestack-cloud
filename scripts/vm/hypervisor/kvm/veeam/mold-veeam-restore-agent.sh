@@ -23,7 +23,7 @@
 # Flow: Veeam UI Guest files restore (FLR)
 #   → this agent (per job conf: ablecubeN.conf + Agent_Backup_Job_*.conf)
 #   → ensure VM Stopped (RESTORE_AUTO_STOP)
-#   → Mold restoreAblestackVeeamBackup
+#   → exact metadata artifact resolution → Mold restoreBackupArtifact
 #
 # Manual:
 #   bash /etc/ablestack/veeam/mold-veeam-restore-agent.sh
@@ -51,10 +51,8 @@ fi
 mkdir -p "${ETC_DIR}/events" "${ETC_DIR}/registry" "${ETC_DIR}/state" 2>/dev/null || true
 
 job_name_from_conf() {
-  local conf="$1" job
-  job="$(grep -E '^VEEAM_JOB_NAME=' "$conf" 2>/dev/null | head -1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
-  [[ -z "$job" ]] && job="$(grep -E '^JOB_NAME=' "$conf" 2>/dev/null | head -1 | cut -d= -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")"
-  echo "$job"
+  # Generated configurations are root-owned shell assignments, including quoted Job names.
+  ( unset VEEAM_JOB_NAME; source "$1"; printf '%s' "${VEEAM_JOB_NAME:-}" )
 }
 
 run_restore_watch() {
@@ -65,14 +63,13 @@ run_restore_watch() {
     return 0
   }
   echo "=== restore-watch job=${job} conf=$(basename "$conf") window=${SINCE_MIN}min trigger_mold=true host=$(hostname -s) ==="
-  # Each job conf sets VM_INCLUDE / VEEAM_RESTORE_VM / RESTORE_AUTO_STOP for that chain.
+  # Each Job has its own authentication and metadata restore identity.
   export MOLD_BACKUP_CONF="$conf"
   export VEEAM_JOB_NAME="$job"
   export RESTORE_WATCH_TRIGGER_MOLD=true
   # The timer service only bridges completed Veeam restores into Mold. The
   # management async job and detached host restore own the long-running work.
   export MOLD_RESTORE_ASYNC_DETACH=true
-  export RESTORE_RP_TIME_MATCH="${RESTORE_RP_TIME_MATCH:-true}"
   # Ensure stop-before-restore unless the job conf explicitly disables it.
   if ! grep -qE '^RESTORE_AUTO_STOP=' "$conf" 2>/dev/null; then
     export RESTORE_AUTO_STOP=true
@@ -83,42 +80,16 @@ run_restore_watch() {
     --trigger-mold || true
 }
 
-# Collect unique job confs:
-#  1) hostname.conf (ablecube2.conf) — primary host Agent job for mold-native RBD
-#  2) Agent_Backup_Job_*.conf — additional guest/host chains on the same cube
-#  3) legacy single conf fallback
+# Every configured Job is watched, including custom names. Backup copies do not end in .conf.
 declare -a job_confs=()
-declare -A seen_conf=()
-
-add_conf() {
-  local c="$1"
-  [[ -f "$c" ]] || return 0
-  [[ -n "${seen_conf[$c]:-}" ]] && return 0
-  seen_conf[$c]=1
-  job_confs+=("$c")
-}
-
-hn="$(hostname -s 2>/dev/null || hostname)"
-hn="${hn%%.*}"
-add_conf "${ETC_DIR}/${hn}.conf"
-
 shopt -s nullglob
-for conf in "${ETC_DIR}"/Agent_Backup_Job_*.conf; do
-  add_conf "$conf"
+for conf in "${ETC_DIR}"/*.conf; do
+  [[ -n "$(job_name_from_conf "$conf")" ]] && job_confs+=("$conf")
 done
 shopt -u nullglob
-
 if [[ ${#job_confs[@]} -eq 0 ]]; then
-  if [[ -n "${MOLD_BACKUP_CONF:-}" && -f "${MOLD_BACKUP_CONF}" ]]; then
-    add_conf "${MOLD_BACKUP_CONF}"
-  elif [[ -f "${ETC_DIR}/mold-backup.conf" ]]; then
-    add_conf "${ETC_DIR}/mold-backup.conf"
-  elif [[ -f "${ETC_DIR}/Mold_Host_Backup.conf" ]]; then
-    add_conf "${ETC_DIR}/Mold_Host_Backup.conf"
-  else
-    echo "[restore-agent] ERROR: no job conf under ${ETC_DIR}" >&2
-    exit 1
-  fi
+  echo "[restore-agent] ERROR: no Job conf; run veeam-host-config.py" >&2
+  exit 1
 fi
 
 for conf in "${job_confs[@]}"; do

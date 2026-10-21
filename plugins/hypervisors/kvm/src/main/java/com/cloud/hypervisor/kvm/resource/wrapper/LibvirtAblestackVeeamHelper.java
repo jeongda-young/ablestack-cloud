@@ -27,7 +27,6 @@ import com.cloud.hypervisor.kvm.storage.KVMStoragePoolManager;
 import com.cloud.storage.Storage;
 import com.cloud.utils.Pair;
 import com.cloud.utils.script.Script;
-import org.apache.cloudstack.backup.AblestackVeeamImportSeedCommand;
 import org.apache.cloudstack.backup.AblestackVeeamTakeBackupCommand;
 import org.apache.cloudstack.storage.to.PrimaryDataStoreTO;
 import org.apache.commons.collections.CollectionUtils;
@@ -88,17 +87,6 @@ class LibvirtAblestackVeeamHelper {
 
     LibvirtAblestackVeeamHelper(LibvirtComputingResource resource) {
         this.resource = resource;
-    }
-
-    Pair<Integer, String> executeImportSeed(AblestackVeeamImportSeedCommand command, List<String> diskPaths) {
-        if (CollectionUtils.isEmpty(command.getStagingDiskPaths())) {
-            return new Pair<>(1, "Staging disk paths are required for Veeam seed import");
-        }
-        String[] scriptCommand = buildImportSeedScriptCommand(command, diskPaths);
-        List<String[]> commands = new ArrayList<>();
-        commands.add(scriptCommand);
-        final int timeout = command.getWait() > 0 ? command.getWait() * 1000 : resource.getCmdsTimeout();
-        return Script.executePipedCommands(commands, timeout);
     }
 
     long parseBackupSize(String output, List<String> diskPaths) {
@@ -226,22 +214,6 @@ class LibvirtAblestackVeeamHelper {
             diskPaths.add(KVMPhysicalDisk.RBDStringBuilder(volumeStoragePool, volumePath));
         }
         return diskPaths;
-    }
-
-    private String[] buildImportSeedScriptCommand(AblestackVeeamImportSeedCommand command, List<String> diskPaths) {
-        return new String[] {
-                resource.getAbleVeeamPath(),
-                "-o", "import-seed",
-                "-v", command.getVmName(),
-                "-p", command.getBackupPath(),
-                "-c", Objects.nonNull(command.getCheckpointName()) ? command.getCheckpointName() : "",
-                "-f", CollectionUtils.isEmpty(command.getBackupFiles()) ? "" : String.join(",", command.getBackupFiles()),
-                "-d", diskPaths.isEmpty() ? "" : String.join(",", diskPaths),
-                "--staging-disks", String.join(",", command.getStagingDiskPaths()),
-                "--source-format", Objects.nonNull(command.getSourceFormat()) ? command.getSourceFormat() : "vmdk",
-                "--veeam-restore-point", Objects.nonNull(command.getVeeamRestorePointId()) ? command.getVeeamRestorePointId() : "",
-                "--bootstrap-checkpoint", command.getBootstrapCheckpoint() != null && command.getBootstrapCheckpoint() ? "true" : "false"
-        };
     }
 
     private String[] buildBackupScriptCommand(AblestackVeeamTakeBackupCommand command, List<String> diskPaths, BackupExecutionMode executionMode) {
