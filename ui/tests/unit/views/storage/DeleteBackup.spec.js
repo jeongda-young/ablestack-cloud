@@ -25,7 +25,13 @@ const point = id => ({ id, name: id, type: id === 'full' ? 'FULL' : 'INCREMENTAL
 function mount (props = {}, mocks = {}) {
   return shallowMount(DeleteBackup, {
     props: { resource: record(), ...props },
-    global: { mocks: { $t: key => key, $route: { path: '/backup' }, $pollJob: jest.fn(options => { options.successMethod({ jobstatus: 1 }); return Promise.resolve() }), ...mocks } }
+    global: {
+      stubs: {
+        ASpin: { template: '<div><slot /></div>' },
+        AAlert: { props: ['message'], template: '<div class="delete-alert">{{ message }}</div>' }
+      },
+      mocks: { $t: key => key, $route: { path: '/backup' }, $pollJob: jest.fn(options => { options.successMethod({ jobstatus: 1 }); return Promise.resolve() }), ...mocks }
+    }
   })
 }
 beforeEach(() => {
@@ -46,12 +52,24 @@ beforeEach(() => {
     }))
   postAPI.mockResolvedValue({ deletebackupresponse: { jobid: 'delete-job' } })
 })
-test('ordinary preview displays deferred dependents; force loads expanded scope and submits its fingerprint', async () => {
+test('ordinary deletion stays simple; force alone displays its warning and affected scope', async () => {
   const w = mount(); await flush()
-  expect(w.vm.deferred.map(point => point.id)).toEqual(['inc'])
+  expect(w.find('.backup-delete-scope').exists()).toBe(false)
+  expect(w.find('.delete-alert').exists()).toBe(false)
+  expect(w.html()).not.toContain('message.backup.delete.normal')
+  expect(w.html()).not.toContain('message.backup.delete.deferred')
+  expect(w.html()).not.toContain('message.backup.delete.force')
   expect(w.vm.affected.map(point => point.id)).toEqual(['full'])
   await w.setData({ forced: true }); await flush()
   expect(w.vm.affected.map(point => point.id)).toEqual(['inc', 'full'])
+  expect(w.find('.backup-delete-scope').text()).toContain('(2)')
+  expect(w.findAll('.delete-alert')).toHaveLength(1)
+  expect(w.find('.delete-alert').text()).toBe('message.backup.delete.force')
+  expect(w.html()).not.toContain('message.backup.delete.deferred')
+  await w.setData({ forced: false }); await flush()
+  expect(w.find('.backup-delete-scope').exists()).toBe(false)
+  expect(w.find('.delete-alert').exists()).toBe(false)
+  await w.setData({ forced: true }); await flush()
   await w.vm.submit()
   expect(postAPI).toHaveBeenCalledWith('deleteBackup', { id: 'full', forced: true, deletionplan: 'full-true' })
   expect(w.emitted('close-action')).toHaveLength(1); w.unmount()

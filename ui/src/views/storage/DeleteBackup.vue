@@ -19,21 +19,17 @@
   <div class="backup-delete-dialog">
     <p>{{ $t('message.delete.backup') }}</p>
     <a-form layout="vertical">
-      <a-form-item :label="$t('label.forced')" :extra="$t(hasAblestack ? 'message.backup.delete.force' : 'message.vmbackup.force')">
+      <a-form-item :label="$t('label.forced')">
         <a-switch v-model:checked="forced" :disabled="busy" />
       </a-form-item>
     </a-form>
     <a-spin :spinning="loading">
       <a-alert v-if="error" type="error" show-icon :message="error" />
-      <a-alert v-if="hasAblestack" :type="forced ? 'warning' : 'info'" show-icon :message="$t(forced ? 'message.backup.delete.force' : 'message.backup.delete.normal')" />
-      <a-alert v-if="hasOther" type="warning" show-icon :message="$t('message.vmbackup.delete')" />
-      <div v-if="hasAblestack && !loading && !error" class="backup-delete-scope">
+      <a-alert v-if="forced && hasAblestack" type="warning" show-icon :message="$t('message.backup.delete.force')" />
+      <a-alert v-if="forced && hasOther" type="warning" show-icon :message="$t('message.vmbackup.delete')" />
+      <div v-if="forced && hasAblestack && !loading && !error" class="backup-delete-scope">
         <strong>{{ $t('label.backup.delete.affected') }} ({{ affected.length }})</strong>
         <ul><li v-for="point in affected" :key="point.id">{{ point.name || point.id }} · {{ point.type }}</li></ul>
-        <template v-if="deferred.length">
-          <p>{{ $t('message.backup.delete.deferred') }}</p>
-          <ul><li v-for="point in deferred" :key="point.id">{{ point.name || point.id }} · {{ point.type }}</li></ul>
-        </template>
       </div>
     </a-spin>
     <div class="backup-delete-footer">
@@ -61,8 +57,7 @@ export default {
   computed: {
     hasAblestack () { return this.records.some(isAblestackBackupProvider) },
     hasOther () { return this.records.some(record => !isAblestackBackupProvider(record)) },
-    affected () { return this.unique(this.plans.flatMap(plan => plan.backup || [])) },
-    deferred () { return this.unique(this.plans.filter(plan => plan.state === 'WAITING_DEPENDENCIES').flatMap(plan => plan.dependentbackup || [])) }
+    affected () { return this.unique(this.plans.flatMap(plan => plan.backup || [])) }
   },
   watch: {
     forced () { if (this.records.length) this.loadPlans() },
