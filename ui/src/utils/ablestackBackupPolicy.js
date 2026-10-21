@@ -18,6 +18,9 @@
 export const isAblestackBackupProvider = record =>
   ['ablestack-nas', 'ablestack-commvault', 'ablestack-netbackup', 'ablestack-veeam'].includes(String(record?.backupprovider || record?.provider || '').toLowerCase())
 
+export const isKbossBackupProvider = record =>
+  String(record?.provider || record?.backupprovider || '').toLowerCase() === 'kboss'
+
 export const getAblestackBackupOfferingRemovalMessage = record =>
   isAblestackBackupProvider(record) ? 'message.backup.offering.remove.preserve' : 'message.backup.offering.remove'
 

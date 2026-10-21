@@ -60,7 +60,7 @@
             <a-descriptions-item :label="$t('label.id')">{{ selected.id }}</a-descriptions-item>
             <a-descriptions-item :label="$t('label.created')">{{ $toLocaleDate(selected.created) }}</a-descriptions-item>
           </a-descriptions>
-          <a-form v-if="actionApi !== 'cancelBackupStagingJob'" layout="vertical" class="backup-form">
+          <a-form v-if="actionApi === 'deleteBackup' || (actionApi === 'restoreBackup' && supportsQuickRestore)" layout="vertical" class="backup-form">
             <template v-if="actionApi === 'restoreBackup'">
               <a-form-item :label="$t('label.quickrestore')"><a-switch v-model:checked="quickrestore" /></a-form-item>
               <a-form-item v-if="isAdmin && quickrestore && allowed('listHosts')" :label="$t('label.hostid')"><a-select v-model:value="hostId" allow-clear :loading="hostsLoading" :placeholder="$t('label.vmbackup.automatic')"><a-select-option v-for="host in hosts" :key="host.id" :value="host.id">{{ host.name }}</a-select-option></a-select></a-form-item>
@@ -82,7 +82,7 @@ import { listRefreshMixin } from '@/utils/listRefreshMixin'
 import compute from '@/config/section/compute'
 import storage from '@/config/section/storage'
 import eventBus from '@/config/eventBus'
-import { isAblestackOriginalVmUnavailable } from '@/utils/ablestackBackupPolicy'
+import { isAblestackOriginalVmUnavailable, isKbossBackupProvider } from '@/utils/ablestackBackupPolicy'
 import BackupProgress from '@/components/view/BackupProgress'
 
 const vmApis = ['createBackup', 'assignVirtualMachineToBackupOffering', 'removeVirtualMachineFromBackupOffering', 'createBackupSchedule', 'finishBackupChain']
@@ -98,6 +98,7 @@ export default {
   computed: {
     scopeKey () { return JSON.stringify([this.resource.id, this.$store.getters.project?.id, this.$store.getters.userInfo?.id, this.$store.state?.user?.token]) },
     isAdmin () { return this.$store.getters.userInfo?.roletype === 'Admin' },
+    supportsQuickRestore () { return isKbossBackupProvider({ provider: this.provider(this.selected) }) },
     selectedAction () { return this.definition(this.actionApi) || {} },
     modalComponent () { return unref(this.selectedAction.component) },
     modalWidth () { return this.actionApi === 'createVMFromBackup' ? '90%' : this.actionApi === 'getBackupStagingInfo' ? 1200 : 680 },
@@ -167,7 +168,7 @@ export default {
           if (!fresh || !this.visible(api, fresh) || this.originalVmUnavailable(api, fresh) || (['restoreBackup', 'restoreVolumeFromBackupAndAttachToVM', 'createVMFromBackup'].includes(api) && fresh.restoreavailable === false)) throw new Error(this.$t('message.vmbackup.unavailable'))
         }
         this.actionApi = api; this.selected = { ...fresh }; this.quickrestore = false; this.forced = false; this.hostId = undefined; this.hosts = []
-        if (api === 'restoreBackup' && this.isAdmin && this.allowed('listHosts')) {
+        if (api === 'restoreBackup' && this.supportsQuickRestore && this.isAdmin && this.allowed('listHosts')) {
           this.hostsLoading = true
           try {
             const response = await getAPI('listHosts', { zoneid: this.resource.zoneid, type: 'Routing', state: 'Up', resourcestate: 'Enabled', listall: true })
@@ -181,8 +182,7 @@ export default {
       const api = this.actionApi; const selected = { ...this.selected }; const scope = this.scopeKey
       if (!['restoreBackup', 'deleteBackup', 'cancelBackupStagingJob'].includes(api) || this.disabled(api, selected)) return
       const cancelWaiting = api === 'cancelBackupStagingJob'
-      const params = { id: selected.id, ...(cancelWaiting ? { operation: selected.stagingqueue.operation, stagingjobid: selected.stagingqueue.stagingjobid } : api === 'deleteBackup' ? { forced: this.forced } : { quickrestore: this.quickrestore }) }
-      if (api === 'restoreBackup' && this.isAdmin && this.quickrestore && this.hostId) params.hostid = this.hostId
+      const params = { id: selected.id, ...(cancelWaiting ? { operation: selected.stagingqueue.operation, stagingjobid: selected.stagingqueue.stagingjobid } : api === 'deleteBackup' ? { forced: this.forced } : {}) }
       this.submitting = true
       let sent = false
       try {
@@ -191,7 +191,10 @@ export default {
         const fresh = backups.listbackupsresponse.backup?.find(item => item.id === selected.id && item.virtualmachineid === this.resource.id)
         const vm = machines.listvirtualmachinesresponse.virtualmachine?.find(item => item.id === this.resource.id)
         if (!fresh || !vm || this.originalVmUnavailable(api, fresh) || (!cancelWaiting && (vm.hostcontrolstate === 'Offline' || activeStates.includes(fresh.status))) || !this.visible(api, fresh) || (cancelWaiting && fresh.stagingqueue.stagingjobid !== params.stagingjobid) || (api === 'restoreBackup' && fresh.restoreavailable === false)) throw new Error(this.$t('message.vmbackup.unavailable'))
-        if (!this.isAdmin || !this.quickrestore || !this.allowed('listHosts')) delete params.hostid
+        if (api === 'restoreBackup' && isKbossBackupProvider({ provider: this.provider(fresh) })) {
+          params.quickrestore = this.quickrestore
+          if (this.isAdmin && this.quickrestore && this.hostId && this.allowed('listHosts')) params.hostid = this.hostId
+        }
         sent = true
         const result = await postAPI(api, params)
         if (scope !== this.scopeKey || this.listRefreshDisposed) return

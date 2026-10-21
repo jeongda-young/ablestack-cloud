@@ -36,7 +36,7 @@
             <tooltip-label :title="$t('label.use.backup.ip.address')" :tooltip="$t('label.use.backup.ip.address.tooltip')"/>
           </template>
         </a-form-item>
-        <a-form-item v-if="apiParams.quickrestore" name="quickRestore" ref="quickRestore" >
+        <a-form-item v-if="supportsQuickRestore && apiParams.quickrestore" name="quickRestore" ref="quickRestore" >
           <template #label>
             <tooltip-label :title="$t('label.quickrestore')" :tooltip="apiParams.quickrestore?.description"/>
           </template>
@@ -73,6 +73,7 @@ import { Button } from 'ant-design-vue'
 import TooltipLabel from '@/components/widgets/TooltipLabel'
 import eventBus from '@/config/eventBus'
 import { isAblestackInstanceCreation, trackBackupInstanceCreation } from '@/utils/backupInstanceCreation'
+import { isKbossBackupProvider } from '@/utils/ablestackBackupPolicy'
 
 import DeployVMFromBackup from '@/components/view/DeployVMFromBackup'
 
@@ -101,6 +102,9 @@ export default {
       type: Object,
       required: true
     }
+  },
+  computed: {
+    supportsQuickRestore () { return isKbossBackupProvider(this.resource) }
   },
   activated () { this.configure = false },
   watch: {
@@ -291,7 +295,7 @@ export default {
         args.name = this.form.name
         args.displayname = this.form.name
       }
-      if (this.apiParams.quickrestore) {
+      if (this.supportsQuickRestore && this.apiParams.quickrestore) {
         args.quickrestore = this.form.quickRestore
       }
       if (this.form.preserveIpAddresses) {

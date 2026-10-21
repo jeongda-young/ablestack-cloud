@@ -17,7 +17,7 @@
 
 import { shallowRef, defineAsyncComponent } from 'vue'
 import store from '@/store'
-import { getAblestackBackupOfferingRemovalMessage, isAblestackBackupProvider, isAblestackOriginalVmUnavailable } from '@/utils/ablestackBackupPolicy'
+import { getAblestackBackupOfferingRemovalMessage, isAblestackBackupProvider, isAblestackOriginalVmUnavailable, isKbossBackupProvider } from '@/utils/ablestackBackupPolicy'
 import { isZoneCreated } from '@/utils/zone'
 import { isAdmin } from '@/role'
 
@@ -615,7 +615,8 @@ export default {
           tooltip: (record) => isAblestackOriginalVmUnavailable(record)
             ? 'message.backup.original.vm.unavailable'
             : getBackupOperationActionTooltip(record, 'label.backup.restore'),
-          args: () => {
+          args: (record) => {
+            if (!isKbossBackupProvider(record)) return []
             const fields = []
             fields.push('quickrestore')
             if (isAdmin()) {
