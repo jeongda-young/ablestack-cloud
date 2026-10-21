@@ -435,7 +435,6 @@ test.each([
   wrapper.unmount()
 })
 
-
 test('pending deletion is visible with its persisted English state and reason', () => {
   const wrapper = shallowMount(BackupProgress, {
     props: { record: { id: 'backup', status: 'BackedUp', deletionpending: true, deletionstate: 'WAITING_DEPENDENCIES', deletiondetails: 'Dependent recovery points remain' } },

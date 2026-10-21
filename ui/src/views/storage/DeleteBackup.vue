@@ -17,7 +17,7 @@
 
 <template>
   <div class="backup-delete-dialog">
-    <p>{{ $t('message.delete.backup') }}</p>
+    <a-alert type="warning" :message="$t('message.delete.backup')" style="margin-bottom: 16px" />
     <a-form layout="vertical">
       <a-form-item :label="$t('label.forced')">
         <a-switch v-model:checked="forced" :disabled="busy" />
@@ -25,9 +25,9 @@
     </a-form>
     <a-spin :spinning="loading">
       <a-alert v-if="error" type="error" show-icon :message="error" />
-      <a-alert v-if="forced && hasAblestack" type="warning" show-icon :message="$t('message.backup.delete.force')" />
+      <a-alert v-if="showDependentDeletion" type="warning" show-icon :message="$t('message.backup.delete.force')" />
       <a-alert v-if="forced && hasOther" type="warning" show-icon :message="$t('message.vmbackup.delete')" />
-      <div v-if="forced && hasAblestack && !loading && !error" class="backup-delete-scope">
+      <div v-if="showDependentDeletion" class="backup-delete-scope">
         <strong>{{ $t('label.backup.delete.affected') }} ({{ affected.length }})</strong>
         <ul><li v-for="point in affected" :key="point.id">{{ point.name || point.id }} · {{ point.type }}</li></ul>
       </div>
@@ -35,7 +35,7 @@
     <div class="backup-delete-footer">
       <a-button :disabled="busy" @click="$emit('close-action')">{{ $t('label.cancel') }}</a-button>
       <a-button v-if="error" :disabled="busy || loading" @click="loadPlans">{{ $t('label.refresh') }}</a-button>
-      <a-button type="primary" danger :loading="busy" :disabled="loading || !!error || !records.length" @click="submit">{{ $t('label.delete.backup') }}</a-button>
+      <a-button type="primary" :loading="busy" :disabled="loading || !!error || !records.length" @click="submit">{{ $t('label.ok') }}</a-button>
     </div>
   </div>
 </template>
@@ -57,7 +57,10 @@ export default {
   computed: {
     hasAblestack () { return this.records.some(isAblestackBackupProvider) },
     hasOther () { return this.records.some(record => !isAblestackBackupProvider(record)) },
-    affected () { return this.unique(this.plans.flatMap(plan => plan.backup || [])) }
+    affected () { return this.unique(this.plans.flatMap(plan => plan.backup || [])) },
+    showDependentDeletion () {
+      return this.forced && !this.loading && !this.error && this.plans.some(plan => plan.backup.some(point => point.id !== plan.id))
+    }
   },
   watch: {
     forced () { if (this.records.length) this.loadPlans() },
