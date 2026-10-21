@@ -43,6 +43,7 @@
 <script>
 import { getAPI, postAPI } from '@/api'
 import { isAblestackBackupProvider } from '@/utils/ablestackBackupPolicy'
+import { orderBackupDeletions, validBackupDeletionPlan, withinBackupDeletionPlan } from '@/utils/backupDeletion'
 
 export default {
   name: 'DeleteBackup',
@@ -68,9 +69,14 @@ export default {
   },
   mounted () { this.initialize() },
   activated () { this.initialize() },
+  deactivated () { this.revision++; this.busy = false },
   beforeUnmount () { this.revision++ },
   methods: {
     unique (points) { return [...new Map(points.map(point => [point.id, point])).values()] },
+    failureMessage (error) {
+      const apiError = Object.values(error?.response?.data || {}).find(value => value?.errortext)
+      return error?.jobresult?.errortext || apiError?.errortext || error?.message || this.$t('message.backup.delete.unconfirmed')
+    },
     async initialize () {
       if (this.busy) return
       this.forced = this.resource.deletionforced === true
@@ -80,7 +86,7 @@ export default {
       this.loading = true; this.error = ''; this.plans = []
       try {
         const records = await Promise.all(ids.map(async id => {
-          const response = await getAPI('listBackups', { id, listall: true })
+          const response = await getAPI('listBackups', { id, listall: true }, { preserveOnFailure: true })
           const record = response.listbackupsresponse?.backup?.find(point => point.id === id)
           if (!record) throw new Error(this.$t('message.vmbackup.unavailable'))
           return record
@@ -88,7 +94,7 @@ export default {
         if (token !== this.revision) return
         this.records = records
         await this.loadPlans()
-      } catch (error) { if (token === this.revision) { this.error = error.message || String(error); this.loading = false } }
+      } catch (error) { if (token === this.revision) { this.error = this.failureMessage(error); this.loading = false } }
     },
     async loadPlans () {
       const token = ++this.revision
@@ -96,47 +102,93 @@ export default {
       this.loading = true; this.error = ''; this.plans = []
       try {
         const plans = await Promise.all(this.records.filter(isAblestackBackupProvider).map(async record => {
-          const response = await getAPI('getBackupDeletionPlan', { id: record.id, forced })
+          const response = await getAPI('getBackupDeletionPlan', { id: record.id, forced }, { preserveOnFailure: true })
           const plan = response.getbackupdeletionplanresponse?.backupdeletionplan
-          if (!plan?.deletionplan || !plan.backup?.length) throw new Error(this.$t('message.backup.delete.preview.failed'))
+          if (!validBackupDeletionPlan(plan, record, forced)) throw new Error(this.$t('message.backup.delete.preview.failed'))
           return plan
         }))
         if (token === this.revision) this.plans = plans
-      } catch (error) { if (token === this.revision) this.error = error.message || String(error) } finally { if (token === this.revision) this.loading = false }
+      } catch (error) { if (token === this.revision) this.error = this.failureMessage(error) } finally { if (token === this.revision) this.loading = false }
     },
     async submit () {
       if (this.busy || this.loading || this.error) return
       this.busy = true
       const forced = this.forced
-      // An ancestor's forced scope already contains a selected descendant. Submit it once.
-      const roots = this.plans.filter(plan => !forced || !this.plans.some(other => other.id !== plan.id && other.backup.some(point => point.id === plan.id)))
-      const planned = this.records.filter(record => !isAblestackBackupProvider(record)).map(record => ({ id: record.id }))
-      planned.push(...roots)
+      const planned = orderBackupDeletions(this.records, this.plans, forced)
+      const originalPage = this.$route.path
+      const revision = this.revision
+      const scope = () => JSON.stringify([this.$store?.state?.user?.token, this.$store?.getters.userInfo?.id, this.$store?.getters.project?.id])
+      const originalScope = scope()
+      let closed = false
+      let polling = false
+      const ownsDialog = () => !closed && revision === this.revision
+      const close = () => {
+        if (closed) return
+        if (ownsDialog()) {
+          this.busy = false
+          this.$emit('refresh-data'); this.$emit('refresh'); this.$emit('close-action')
+        }
+        closed = true
+      }
       try {
-        for (const plan of planned) {
-          const response = await postAPI('deleteBackup', { id: plan.id, forced, ...(plan.deletionplan ? { deletionplan: plan.deletionplan } : {}) })
+        if (!planned?.length) throw new Error(this.$t('message.backup.delete.preview.failed'))
+        for (const { record, plan: confirmed } of planned) {
+          if (originalScope !== scope()) return
+          polling = false
+          let plan
+          if (confirmed) {
+            const listed = await getAPI('listBackups', { id: record.id, listall: true }, { preserveOnFailure: true })
+            if (originalScope !== scope()) return
+            if (!listed.listbackupsresponse) throw new Error(this.$t('message.backup.delete.preview.failed'))
+            const fresh = (listed.listbackupsresponse.backup || []).find(point => point.id === record.id)
+            // A preceding deletion may also sweep an already pending ancestor.
+            if (!fresh) continue
+            const response = await getAPI('getBackupDeletionPlan', { id: record.id, forced }, { preserveOnFailure: true })
+            if (originalScope !== scope()) return
+            plan = response.getbackupdeletionplanresponse?.backupdeletionplan
+            if (!validBackupDeletionPlan(plan, record, forced) || fresh.provider !== record.provider || !withinBackupDeletionPlan(confirmed, plan)) {
+              throw new Error(this.$t('message.backup.delete.scope.changed'))
+            }
+          }
+          const response = await postAPI('deleteBackup', { id: record.id, forced, ...(plan ? { deletionplan: plan.deletionplan } : {}) }, { preserveOnFailure: true })
+          if (originalScope !== scope()) return
           const jobId = response.deletebackupresponse?.jobid
           if (!jobId) throw new Error(this.$t('message.backup.delete.unconfirmed'))
+          const name = record.name || record.id
+          polling = true
           // Keep bulk operations ordered; a failed or unconfirmed deletion must stop the batch.
-          await new Promise((resolve, reject) => {
+          const completion = new Promise((resolve, reject) => {
             this.$pollJob({
               jobId,
-              originalPage: this.$route.path,
+              originalPage,
               title: this.$t('label.delete.backup'),
-              description: plan.id,
-              showLoading: false,
-              showSuccessMessage: false,
+              description: name,
+              name,
+              loadingMessage: `${this.$t('label.delete.backup')} - ${name}`,
+              showLoading: true,
+              showSuccessMessage: true,
+              successMessage: plan?.state === 'WAITING_DEPENDENCIES' ? this.$t('label.backup.delete.requested') : undefined,
+              resourceId: record.id,
+              action: { api: 'deleteBackup', label: 'label.delete.backup' },
               successMethod: resolve,
               errorMethod: reject,
               catchMethod: reject
             }).catch(reject)
           })
+          close()
+          await completion
         }
-        this.$emit('refresh-data'); this.$emit('refresh'); this.$emit('close-action')
+        close()
       } catch (error) {
-        this.error = error?.jobresult?.errortext || error?.message || this.$t('message.backup.delete.unconfirmed')
-        this.$emit('refresh-data'); this.$emit('refresh')
-      } finally { this.busy = false }
+        if (originalScope !== scope()) return
+        if (ownsDialog()) {
+          this.error = this.failureMessage(error)
+          this.$emit('refresh-data'); this.$emit('refresh')
+        } else if (!polling) {
+          // Job failures are reported by the common tracker; later submission failures need a notification.
+          this.$notifyError(error)
+        }
+      } finally { if (ownsDialog()) this.busy = false }
     }
   }
 }

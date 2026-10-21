@@ -9387,9 +9387,11 @@
   "label.backup.delete.affected": "삭제 대상 백업",
   "label.backup.delete.state": "삭제 상태",
   "label.backup.delete.pending": "삭제 대기",
+  "label.backup.delete.requested": "삭제 요청 접수",
   "message.backup.delete.force": "선택한 백업과 이를 참조하는 후속 증분 백업이 함께 삭제됩니다. 삭제 후에는 해당 시점으로 복원할 수 없습니다.",
   "message.backup.delete.normal": "선택한 백업만 삭제합니다. 후속 증분 백업에서 필요한 파일은 해당 복원 지점들이 삭제될 때까지 보관합니다.",
   "message.backup.delete.deferred": "다음 복원 지점이 선택한 백업을 참조하므로 일반 삭제는 보류됩니다. 함께 삭제하려면 강제 옵션을 선택하세요.",
   "message.backup.delete.preview.failed": "삭제 대상 목록을 확인하지 못했습니다. 새로고침 후 다시 확인하세요.",
+  "message.backup.delete.scope.changed": "백업 삭제 대상 또는 참조 관계가 변경되었습니다. 목록을 새로고침한 뒤 삭제 대상을 다시 확인하세요.",
   "message.backup.delete.unconfirmed": "삭제 완료를 확인하지 못했습니다. 백업 목록에서 삭제 상태를 확인한 뒤 재시도하세요."
 }

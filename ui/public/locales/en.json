@@ -9373,9 +9373,11 @@
   "label.backup.delete.affected": "Backups to delete",
   "label.backup.delete.state": "Deletion state",
   "label.backup.delete.pending": "Deletion pending",
+  "label.backup.delete.requested": "Deletion requested",
   "message.backup.delete.force": "The selected backup and dependent incremental recovery points will be deleted together. These recovery points will no longer be restorable.",
   "message.backup.delete.normal": "Delete the selected backup only. Files required by dependent recovery points remain until those points are deleted.",
   "message.backup.delete.deferred": "These recovery points still reference the selected backup, so ordinary deletion is deferred. Enable forced deletion to delete them together.",
   "message.backup.delete.preview.failed": "Unable to verify the deletion scope. Refresh the preview before retrying.",
+  "message.backup.delete.scope.changed": "The backup deletion targets or dependencies changed. Refresh the list and confirm the deletion scope again.",
   "message.backup.delete.unconfirmed": "Deletion completion is unconfirmed. Check the backup deletion state before retrying."
 }

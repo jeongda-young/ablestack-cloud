@@ -30,7 +30,7 @@ function mount (props = {}, mocks = {}) {
         ASpin: { template: '<div><slot /></div>' },
         AAlert: { props: ['message'], template: '<div class="delete-alert">{{ message }}</div>' }
       },
-      mocks: { $t: key => key, $route: { path: '/backup' }, $pollJob: jest.fn(options => { options.successMethod({ jobstatus: 1 }); return Promise.resolve() }), ...mocks }
+      mocks: { $t: key => key, $route: { path: '/backup' }, $notifyError: jest.fn(), $pollJob: jest.fn(options => { options.successMethod({ jobstatus: 1 }); return Promise.resolve() }), ...mocks }
     }
   })
 }
@@ -42,6 +42,7 @@ beforeEach(() => {
       getbackupdeletionplanresponse: {
         backupdeletionplan: {
           id: params.id,
+          provider: 'ablestack-nas',
           forced: params.forced,
           deletionplan: params.id + '-' + params.forced,
           state: params.forced ? 'READY' : 'WAITING_DEPENDENCIES',
@@ -72,7 +73,7 @@ test('ordinary deletion stays simple; force alone displays its warning and affec
   expect(w.find('.delete-alert').text()).toBe('message.delete.backup')
   await w.setData({ forced: true }); await flush()
   await w.vm.submit()
-  expect(postAPI).toHaveBeenCalledWith('deleteBackup', { id: 'full', forced: true, deletionplan: 'full-true' })
+  expect(postAPI).toHaveBeenCalledWith('deleteBackup', { id: 'full', forced: true, deletionplan: 'full-true' }, { preserveOnFailure: true })
   expect(w.emitted('close-action')).toHaveLength(1); w.unmount()
 })
 test('failed preview prevents deletion', async () => {
@@ -118,5 +119,82 @@ test('upstream providers retain provider-specific force and require no ABLESTACK
   const w = mount(); await flush(); await w.vm.submit()
   expect(w.vm.hasOther).toBe(true)
   expect(getAPI.mock.calls.every(([api]) => api === 'listBackups')).toBe(true)
-  expect(postAPI).toHaveBeenCalledWith('deleteBackup', { id: 'full', forced: false }); w.unmount()
+  expect(postAPI).toHaveBeenCalledWith('deleteBackup', { id: 'full', forced: false }, { preserveOnFailure: true }); w.unmount()
+})
+
+test('closes after request acceptance while the common tracker continues the job', async () => {
+  let accept; let finish
+  postAPI.mockReturnValue(new Promise(resolve => { accept = resolve }))
+  const poll = jest.fn(options => new Promise(resolve => { finish = () => { options.successMethod({ jobstatus: 1 }); resolve() } }))
+  const close = jest.fn()
+  const w = mount({ onCloseAction: close }, { $pollJob: poll }); await flush()
+  const pending = w.vm.submit(); await flush()
+  expect(w.vm.busy).toBe(true)
+  expect(w.emitted('close-action')).toBeUndefined()
+  accept({ deletebackupresponse: { jobid: 'delete-job' } }); await flush()
+  expect(w.emitted('close-action')).toHaveLength(1)
+  expect(w.emitted('refresh-data')).toHaveLength(1)
+  expect(w.vm.busy).toBe(false)
+  expect(poll).toHaveBeenCalledWith(expect.objectContaining({
+    jobId: 'delete-job',
+    originalPage: '/backup',
+    title: 'label.delete.backup',
+    description: 'full',
+    name: 'full',
+    loadingMessage: 'label.delete.backup - full',
+    showLoading: true,
+    showSuccessMessage: true,
+    resourceId: 'full',
+    action: { api: 'deleteBackup', label: 'label.delete.backup' }
+  }))
+  w.unmount(); finish(); await pending
+  expect(close).toHaveBeenCalledTimes(1)
+})
+
+test('bulk deletion continues in order after the dialog is unmounted', async () => {
+  const jobs = []
+  const poll = jest.fn(options => new Promise(resolve => { jobs.push(() => { options.successMethod({ jobstatus: 1 }); resolve() }) }))
+  const close = jest.fn()
+  const w = mount({ currentAction: { invokedAsGroupAction: true }, selectedRowKeys: ['a', 'b'], onCloseAction: close }, { $pollJob: poll }); await flush()
+  const pending = w.vm.submit(); await flush()
+  expect(w.emitted('close-action')).toHaveLength(1)
+  expect(postAPI).toHaveBeenCalledTimes(1)
+  w.unmount()
+  jobs[0](); await flush()
+  expect(postAPI).toHaveBeenCalledTimes(2)
+  expect(postAPI.mock.calls.map(([, params]) => params.id)).toEqual(['a', 'b'])
+  jobs[1](); await pending
+  expect(close).toHaveBeenCalledTimes(1)
+})
+
+test.each(['errorMethod', 'catchMethod'])('a job %s stops the closed bulk dialog without duplicate errors', async callback => {
+  let finish
+  const poll = jest.fn(options => new Promise(resolve => { finish = () => { options[callback]({ jobstatus: callback === 'errorMethod' ? 2 : null }); resolve() } }))
+  const notify = jest.fn()
+  const w = mount({ currentAction: { invokedAsGroupAction: true }, selectedRowKeys: ['a', 'b'] }, { $pollJob: poll, $notifyError: notify }); await flush()
+  const pending = w.vm.submit(); await flush(); w.unmount()
+  finish(); await pending
+  expect(postAPI).toHaveBeenCalledTimes(1)
+  expect(notify).not.toHaveBeenCalled()
+})
+
+test('a later request failure is notified after closure and stops the remaining bulk requests', async () => {
+  const error = new Error('second request failed')
+  postAPI.mockResolvedValueOnce({ deletebackupresponse: { jobid: 'first-job' } }).mockRejectedValueOnce(error)
+  const notify = jest.fn()
+  const w = mount({ currentAction: { invokedAsGroupAction: true }, selectedRowKeys: ['a', 'b', 'c'] }, { $notifyError: notify }); await flush()
+  await w.vm.submit()
+  expect(w.emitted('close-action')).toHaveLength(1)
+  expect(postAPI).toHaveBeenCalledTimes(2)
+  expect(notify).toHaveBeenCalledWith(error)
+  expect(w.vm.error).toBe(''); w.unmount()
+})
+
+test('a response without a job ID keeps the confirmation open without claiming success', async () => {
+  postAPI.mockResolvedValue({ deletebackupresponse: {} })
+  const w = mount(); await flush(); await w.vm.submit()
+  expect(w.emitted('close-action')).toBeUndefined()
+  expect(w.vm.$pollJob).not.toHaveBeenCalled()
+  expect(w.vm.error).toBe('message.backup.delete.unconfirmed')
+  expect(w.vm.busy).toBe(false); w.unmount()
 })
