@@ -30,6 +30,11 @@ import java.util.Map;
 
 @EntityReference(value = Backup.class)
 public class BackupResponse extends BaseResponse {
+    @SerializedName("deletionrootid") @Param(description = "Selected backup owning this deletion request") public String deletionrootid;
+    @SerializedName("deletionpending") @Param(description = "An accepted deletion request retains artifacts or cleanup evidence") public boolean deletionpending;
+    @SerializedName("deletionstate") @Param(description = "RUNNING, WAITING or WAITING_DEPENDENCIES") public String deletionstate;
+    @SerializedName("deletiondetails") @Param(description = "Reason deletion is deferred or cleanup is waiting") public String deletiondetails;
+    @SerializedName("deletionforced") @Param(description = "Deletion includes dependent recovery points") public boolean deletionforced;
 
     @SerializedName(ApiConstants.ID)
     @Param(description = "ID of the Instance backup")

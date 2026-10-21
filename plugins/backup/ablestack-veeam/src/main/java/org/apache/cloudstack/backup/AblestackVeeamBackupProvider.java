@@ -207,6 +207,9 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             true, ConfigKey.Scope.Zone, BackupFrameworkEnabled.key());
 
     @Inject
+    private BackupDeletionService backupDeletionService;
+
+    @Inject
     private BackupDao backupDao;
 
     @Inject
@@ -1215,17 +1218,32 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     }
 
     @Override
-    public boolean deleteBackup(final Backup backup, final boolean forced) {
+    public boolean handlesChainDeleteResourceAccounting() { return true; }
+
+    @Override
+    public boolean deleteBackup(Backup backup, boolean forced) {
+        return deleteBackup(backup, forced, null);
+    }
+
+    @Override
+    public boolean deleteBackup(Backup backup, boolean forced, String expectedPlan) {
+        if (backup == null) { return true; }
+        loadBackupDetailsIfNeeded(backup);
+        if (!ThirdPartyBackupManifest.VOLUME_MODE.equals(getBackupDetail(backup, ThirdPartyBackupManifest.MODE_KEY))
+                && !java.util.Set.of(Backup.Status.Failed, Backup.Status.Error).contains(backup.getStatus())) {
+            throw new CloudRuntimeException("Legacy recovery points must be removed through the external backup catalog");
+        }
+        return backupDeletionService.delete(backup, forced, expectedPlan, point -> deleteOwnedBackup(point, false));
+    }
+
+    private boolean deleteOwnedBackup(Backup backup, boolean forced) {
         if (backup == null) {
             return true;
         }
         loadBackupDetailsIfNeeded(backup);
         if (ThirdPartyBackupManifest.VOLUME_MODE.equals(getBackupDetail(backup, ThirdPartyBackupManifest.MODE_KEY))) {
-            return thirdPartyBackupVolumeService.delete(backup, (artifact, metadata, ticket, policyExpiration) ->
+            return thirdPartyBackupVolumeService.deleteOwnedArtifacts(backup, (artifact, metadata, ticket, policyExpiration) ->
                     new ThirdPartyBackupVolumeService.DeleteResult(getSshClient(backup.getZoneId()).deleteVolumeArtifact(artifact, metadata, policyExpiration), null));
-        }
-        if (Backup.Status.Error.equals(backup.getStatus()) && !forced) {
-            throw new CloudRuntimeException("Veeam backup in Error state requires forced deletion after manual cleanup verification.");
         }
         if (Backup.Status.Failed.equals(backup.getStatus()) || Backup.Status.Error.equals(backup.getStatus())) {
             return cleanupFailedOrErrorBackupArtifacts(backup, forced);
@@ -2286,6 +2304,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                 .filter(this::isVeeamBackup)
                 .filter(backup -> {
                     loadBackupDetailsIfNeeded(backup);
+                    if (backupDeletionService.resume(backup, point -> deleteOwnedBackup(point, false))) { return false; }
                     if (!ThirdPartyBackupManifest.VOLUME_MODE.equals(getBackupDetail(backup, ThirdPartyBackupManifest.MODE_KEY))) { return true; }
                     if (StringUtils.isNotBlank(getBackupDetail(backup, ThirdPartyBackupManifest.DELETE_PROGRESS_KEY))
                             || (backup.getDate() != null && backup.getDate().getTime() <= System.currentTimeMillis() - VEEAM_SYNC_DELETE_GRACE_MS)) {

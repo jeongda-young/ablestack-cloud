@@ -515,6 +515,10 @@ public interface BackupManager extends BackupService, Configurable, PluggableSer
      */
     boolean deleteBackup(final Long backupId, final Boolean forced) throws ResourceAllocationException;
 
+    boolean deleteBackup(Long backupId, Boolean forced, String expectedPlan) throws ResourceAllocationException;
+
+    org.apache.cloudstack.api.response.BackupDeletionPlanResponse getBackupDeletionPlan(Long backupId, boolean forced);
+
     void validateBackupForZone(Long zoneId);
 
     BackupOffering updateBackupOffering(UpdateBackupOfferingCmd updateBackupOfferingCmd);

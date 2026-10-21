@@ -177,7 +177,7 @@
         @refresh-data="fetchData"
         @close-action="closeAction"
       />
-      <keep-alive v-else-if="currentAction.component && (!currentAction.invokedAsGroupAction || currentAction.api === 'destroyVirtualMachine')">
+      <keep-alive v-else-if="currentAction.component && (!currentAction.invokedAsGroupAction || ['destroyVirtualMachine', 'deleteBackup'].includes(currentAction.api))">
         <a-modal
           class="mold-dialog"
           :class="{ 'autoscale-dialog': $route.meta?.name === 'autoscalevmgroup' }"

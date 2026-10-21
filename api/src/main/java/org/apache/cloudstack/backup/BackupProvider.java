@@ -135,6 +135,11 @@ public interface BackupProvider {
      */
     boolean deleteBackup(Backup backup, boolean forced);
 
+    /** Optional preview fingerprint; providers with a deletion planner validate it under the VM lease. */
+    default boolean deleteBackup(Backup backup, boolean forced, String expectedPlan) {
+        return deleteBackup(backup, forced);
+    }
+
     /**
      * Whether {@link #deleteBackup(Backup, boolean)} owns DB-row removal and resource-count /
      * usage accounting for every backup it physically removes. Providers that manage incremental

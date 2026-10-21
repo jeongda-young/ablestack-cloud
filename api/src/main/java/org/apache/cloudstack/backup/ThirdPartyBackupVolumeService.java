@@ -168,6 +168,9 @@ public interface ThirdPartyBackupVolumeService {
     /** Delete owned image jobs and the metadata job, retaining persisted progress until local cleanup succeeds. */
     boolean delete(Backup backup, ArtifactCleanup cleanup);
 
+    /** Physical cleanup only; the deletion coordinator already holds the VM lifecycle lease. */
+    boolean deleteOwnedArtifacts(Backup backup, ArtifactCleanup cleanup);
+
     /** Check every required image and metadata reference; keep partial groups available for explicit cleanup. */
     void reconcileCatalog(Backup backup, ArtifactInventory inventory, ArtifactCleanup cleanup);
 

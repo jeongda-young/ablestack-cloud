@@ -31,6 +31,10 @@
             <div v-if="showRestoreDetails && !isRestoring && latestRestoreState" class="backup-progress-tooltip-row">
               <span>{{ $t('label.latest.restore.result') }} :</span><span>{{ latestRestoreState }}</span>
             </div>
+            <div v-if="record.deletionpending" class="backup-progress-tooltip-row">
+              <span>{{ $t('label.backup.delete.state') }} :</span><span>{{ record.deletionstate }}</span>
+            </div>
+            <div v-if="record.deletiondetails" class="backup-progress-tooltip-row"><span>{{ $t('label.details') }} :</span><span>{{ record.deletiondetails }}</span></div>
             <div v-if="showProgress" class="backup-progress-tooltip-row">
               <span>{{ $t('label.progress') }} :</span>
               <span>{{ progress }}%</span>
@@ -194,6 +198,7 @@ export default {
       return !this.isRestoring && String(this.jobState || '').toUpperCase() === 'CANCEL_PENDING'
     },
     displayStatus () {
+      if (this.record.deletionpending) return this.$t('label.backup.delete.pending')
       if (this.isCancellationPending) return this.$t('label.backup.cancellation.pending')
       const status = this.localStatus || String(this.record?.status || this.statusText || '')
       if (this.isRestoring) {
@@ -266,7 +271,7 @@ export default {
     },
     showJobDetails () {
       const backupDetails = !this.showRestoreDetails && (this.record?.catalogstate || this.record?.cleanupdetails || this.record?.sourcecleanupdetails)
-      return !!this.vmRestore || !!this.stagingQueue || !!backupDetails || !!this.record?.restorecleanupdetails || !!this.failureDetails || (this.isActive && (this.showProgress || !!this.jobState || !!this.displayStep || !!this.logPath ||
+      return !!this.record.deletionpending || !!this.vmRestore || !!this.stagingQueue || !!backupDetails || !!this.record?.restorecleanupdetails || !!this.failureDetails || (this.isActive && (this.showProgress || !!this.jobState || !!this.displayStep || !!this.logPath ||
         (!this.isRestoring && !this.isRbdBackup && (this.bandwidthLimitMbps !== null || !!this.bandwidthStatus))))
     },
     showRestoreFailure () {

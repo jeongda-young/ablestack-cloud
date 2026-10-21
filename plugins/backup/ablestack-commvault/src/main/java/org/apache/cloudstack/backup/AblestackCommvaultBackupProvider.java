@@ -182,6 +182,9 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
             "Commvault Command Center API request timeout in seconds.", true, ConfigKey.Scope.Zone);
 
     @Inject
+    private BackupDeletionService backupDeletionService;
+
+    @Inject
     private BackupDao backupDao;
 
     @Inject
@@ -2081,10 +2084,23 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
     }
 
     @Override
+    public boolean handlesChainDeleteResourceAccounting() { return true; }
+
+    @Override
     public boolean deleteBackup(Backup backup, boolean forced) {
+        return deleteBackup(backup, forced, null);
+    }
+
+    @Override
+    public boolean deleteBackup(Backup backup, boolean forced, String expectedPlan) {
+        if (backup == null) { return true; }
+        return backupDeletionService.delete(backup, forced, expectedPlan, point -> deleteOwnedBackup(point, false));
+    }
+
+    private boolean deleteOwnedBackup(Backup backup, boolean forced) {
         loadBackupDetailsIfNeeded(backup);
         if (ThirdPartyBackupManifest.VOLUME_MODE.equals(getBackupDetail(backup, ThirdPartyBackupManifest.MODE_KEY))) {
-            return thirdPartyBackupVolumeService.delete(backup, (artifact, metadata, ticket, policyExpiration) ->
+            return thirdPartyBackupVolumeService.deleteOwnedArtifacts(backup, (artifact, metadata, ticket, policyExpiration) ->
                     new ThirdPartyBackupVolumeService.DeleteResult(getClient(backup.getZoneId()).deleteVolumeArtifact(artifact,
                             ThirdPartyBackupManifest.fromJson(getBackupDetail(backup, ThirdPartyBackupManifest.DETAIL_KEY)).getVmName()), null));
         }
@@ -2131,8 +2147,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         if (!forced) {
             throw new CloudRuntimeException(message);
         }
-        LOG.warn("{}; skipping Commvault remote delete and allowing forced Mold backup metadata deletion.", message);
-        return true;
+        throw new CloudRuntimeException(message + "; remote deletion is unconfirmed and Mold records are retained");
     }
 
     public void syncBackupMetrics(Long zoneId) {
@@ -2381,6 +2396,7 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
                 continue;
             }
             loadBackupDetailsIfNeeded(backup);
+            if (backupDeletionService.resume(backup, point -> deleteOwnedBackup(point, false))) { continue; }
             resumeStagedRestore(backup);
             if (reconcileVolumeBackup(vm, backup)) {
                 continue;

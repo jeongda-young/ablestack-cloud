@@ -121,7 +121,7 @@ public class ThirdPartyBackupManifest {
     /** Added, removed, resized or replaced disks require a new Full chain. */
     public static boolean canContinue(Backup parent, String provider, String vmName, String engine,
             List<? extends com.cloud.storage.Volume> sourceVolumes) {
-        if (parent == null || blank(parent.getDetail(DETAIL_KEY)) || !blank(parent.getDetail(DELETE_PROGRESS_KEY))
+        if (parent == null || BackupDeletionService.isPending(parent) || blank(parent.getDetail(DETAIL_KEY)) || !blank(parent.getDetail(DELETE_PROGRESS_KEY))
                 || !blank(parent.getDetail(CATALOG_FAILURE_KEY))) {
             return false;
         }

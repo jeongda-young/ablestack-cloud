@@ -241,6 +241,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
 
     @Inject
     private ThirdPartyBackupVolumeService thirdPartyBackupVolumeService;
+    @Inject private BackupDeletionService backupDeletionService;
 
     @Inject
     private AblestackBackupVmRemovalGuard ablestackBackupVmRemovalGuard;
@@ -2905,6 +2906,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         if (backup == null) {
             throw new CloudRuntimeException("Backup " + backupId + " does not exist");
         }
+        checkBackupDeletion(backup);
         if (backup.getStatus() != Backup.Status.BackedUp) {
             throw new CloudRuntimeException("Backup should be in BackedUp state");
         }
@@ -3017,6 +3019,13 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
         updateVolumeState(vm, Volume.Event.RestoreSucceeded, Volume.State.Ready);
         updateVmState(vm, VirtualMachine.Event.RestoringSuccess, VirtualMachine.State.Stopped);
+    }
+
+    private void checkBackupDeletion(BackupVO backup) {
+        backupDao.loadDetails(backup);
+        if (BackupDeletionService.isPending(backup)) {
+            throw new CloudRuntimeException("Backup deletion is pending; this recovery point cannot be restored");
+        }
     }
 
     protected void validateBackupVolumes(BackupVO backup, VMInstanceVO vm, BackupOffering offering) {
@@ -3635,6 +3644,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     @Override
     public Boolean canCreateInstanceFromBackup(final Long backupId) {
         final BackupVO backup = backupDao.findById(backupId);
+        checkBackupDeletion(backup);
         BackupOffering offering = backupOfferingDao.findByIdIncludingRemoved(backup.getBackupOfferingId());
         if (offering == null) {
             throw new CloudRuntimeException("Failed to find backup offering");
@@ -3682,6 +3692,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         if (backup == null) {
             throw new CloudRuntimeException("Backup " + backupId + " does not exist");
         }
+        checkBackupDeletion(backup);
         if (backup.getStatus() != Backup.Status.BackedUp) {
             throw new CloudRuntimeException("Backup should be in BackedUp state");
         }
@@ -3827,6 +3838,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         if (backup == null) {
             throw new CloudRuntimeException("Provided backup not found");
         }
+        checkBackupDeletion(backup);
         if (backup.getStatus() != Backup.Status.BackedUp) {
             throw new CloudRuntimeException("Backup should be in BackedUp state");
         }
@@ -4110,6 +4122,33 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
     @Override
     @ActionEvent(eventType = EventTypes.EVENT_VM_BACKUP_DELETE, eventDescription = "deleting Instance backup", async = true)
     public boolean deleteBackup(final Long backupId, final Boolean forced) throws ResourceAllocationException {
+        return deleteBackup(backupId, forced, null);
+    }
+
+    @Override
+    public org.apache.cloudstack.api.response.BackupDeletionPlanResponse getBackupDeletionPlan(Long backupId, boolean forced) {
+        BackupVO backup = backupDao.findById(backupId);
+        if (backup == null) { throw new InvalidParameterValueException("Backup does not exist"); }
+        accountManager.checkAccess(CallContext.current().getCallingAccount(), null, true, backup);
+        validateBackupForZone(backup.getZoneId());
+        return new org.apache.cloudstack.api.response.BackupDeletionPlanResponse(authorizedDeletionPlan(backup, forced));
+    }
+
+    private BackupDeletionService.Plan authorizedDeletionPlan(BackupVO backup, boolean forced) {
+        BackupDeletionService.Plan plan = backupDeletionService.plan(backup, forced);
+        java.util.Set<Long> checked = new java.util.HashSet<>();
+        java.util.stream.Stream.concat(plan.backups.stream(), plan.dependents.stream()).forEach(point -> {
+            if (!checked.add(point.id)) { return; }
+            BackupVO candidate = backupDao.findById(point.id);
+            if (candidate == null) { throw new CloudRuntimeException("Backup deletion scope changed; refresh the preview"); }
+            accountManager.checkAccess(CallContext.current().getCallingAccount(), null, true, candidate);
+        });
+        return plan;
+    }
+
+    @Override
+    @ActionEvent(eventType = EventTypes.EVENT_VM_BACKUP_DELETE, eventDescription = "deleting Instance backup", async = true)
+    public boolean deleteBackup(final Long backupId, final Boolean forced, String expectedPlan) throws ResourceAllocationException {
         final BackupVO backup = backupDao.findByIdIncludingRemoved(backupId);
         if (backup == null) {
             throw new CloudRuntimeException("Backup " + backupId + " does not exist");
@@ -4138,10 +4177,18 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
                 throw new CloudRuntimeException("Backup termination or cleanup is unconfirmed; deletion is not available yet");
             }
         }
-        return deleteCheckedBackup(forced, backupProvider, backup, vm);
+        if (backup.getRemoved() == null && BackupDeletionService.supports(offering.getProvider())) {
+            BackupDeletionService.Plan plan = authorizedDeletionPlan(backup, Boolean.TRUE.equals(forced));
+            if (StringUtils.isNotBlank(expectedPlan) && !expectedPlan.equals(plan.fingerprint)) {
+                throw new CloudRuntimeException("Backup deletion scope changed; refresh the deletion preview and try again");
+            }
+            // Also bind direct API callers to the exact scope whose access was checked above.
+            expectedPlan = plan.fingerprint;
+        }
+        return deleteCheckedBackup(forced, backupProvider, backup, vm, expectedPlan);
     }
 
-    private boolean deleteCheckedBackup(Boolean forced, BackupProvider backupProvider, BackupVO backup, VMInstanceVO vm) throws ResourceAllocationException {
+    private boolean deleteCheckedBackup(Boolean forced, BackupProvider backupProvider, BackupVO backup, VMInstanceVO vm, String expectedPlan) throws ResourceAllocationException {
         Account owner = accountManager.getAccount(backup.getAccountId());
         long backupSize = backup.getSize() != null ? backup.getSize() : 0L;
         try (CheckedReservation backupReservation = new CheckedReservation(owner, Resource.ResourceType.backup,
@@ -4149,7 +4196,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             CheckedReservation backupStorageReservation = new CheckedReservation(owner,
                      Resource.ResourceType.backup_storage, backup.getId(), null, -1 * backupSize,
                     reservationDao, resourceLimitMgr)) {
-            boolean result = backupProvider.deleteBackup(backup, forced);
+            boolean result = BackupDeletionService.supports(backupProvider.getName())
+                    ? backupProvider.deleteBackup(backup, Boolean.TRUE.equals(forced), expectedPlan)
+                    : backupProvider.deleteBackup(backup, forced);
             if (result) {
                 // Chain-aware providers (e.g. NAS) physically remove several backups per call
                 // (leaf + swept delete-pending ancestors) and decrement resource count/usage and
@@ -4472,6 +4521,7 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         cmdList.add(PrepareNetBackupRestoreCmd.class);
         cmdList.add(RestoreNetBackupCmd.class);
         cmdList.add(DeleteBackupCmd.class);
+        cmdList.add(org.apache.cloudstack.api.command.user.backup.GetBackupDeletionPlanCmd.class);
         cmdList.add(RestoreVolumeFromBackupAndAttachToVMCmd.class);
         cmdList.add(AddBackupRepositoryCmd.class);
         cmdList.add(UpdateBackupRepositoryCmd.class);
@@ -7070,6 +7120,26 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
         }
         populateRestoreJobResponseFields(backup, response);
         populateThirdPartyCatalogResponseFields(backup, response);
+        if (BackupDeletionService.isPending(backup)) {
+            response.deletionpending = true;
+            response.setRestoreAvailable(false);
+            response.deletionstate = "WAITING";
+            try {
+                String deletionJson = backup.getDetail(BackupDeletionService.REQUEST_KEY);
+                String owner = backup.getDetail(BackupDeletionService.OWNER_KEY);
+                if (StringUtils.isNotBlank(owner) && !owner.equals(backup.getUuid())) {
+                    BackupVO root = backupDao.findByUuid(owner);
+                    if (root != null) { backupDao.loadDetails(root); deletionJson = root.getDetail(BackupDeletionService.REQUEST_KEY); }
+                }
+                response.deletionrootid = StringUtils.defaultIfBlank(owner, backup.getUuid());
+                BackupDeletionService.Plan deletion = new Gson().fromJson(deletionJson, BackupDeletionService.Plan.class);
+                if (deletion != null) {
+                    response.deletionstate = deletion.state;
+                    response.deletiondetails = deletion.reason;
+                    response.deletionforced = deletion.forced;
+                }
+            } catch (RuntimeException e) { response.deletiondetails = "Saved deletion request could not be read"; }
+        }
         response.setDeleteAllowed(!externalProvider || ThirdPartyBackupManifest.VOLUME_MODE.equals(
                 backup.getDetail(ThirdPartyBackupManifest.MODE_KEY)));
         if (account != null) {

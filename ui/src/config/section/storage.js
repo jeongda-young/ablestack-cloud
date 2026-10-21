@@ -731,6 +731,8 @@ export default {
         },
         {
           api: 'deleteBackup',
+          component: shallowRef(defineAsyncComponent(() => import('@/views/storage/DeleteBackup.vue'))),
+          dialogWidth: 720,
           icon: 'delete-outlined',
           label: 'label.delete.backup',
           message: 'message.delete.backup',

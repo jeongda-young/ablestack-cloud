@@ -1424,6 +1424,11 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
         }
     }
 
+    @Override
+    public boolean deleteOwnedArtifacts(Backup backup, ArtifactCleanup cleanup) {
+        return deleteLocked(backup.getId(), cleanup);
+    }
+
     private boolean deleteLocked(long backupId, ArtifactCleanup cleanup) {
         return deleteLocked(backupId, cleanup, null);
     }
@@ -1462,7 +1467,8 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
             return true;
         }
         if (progress.policyExpiration && inventory == null) {
-            throw new CloudRuntimeException("Expiration cleanup must first reconfirm the external catalog during synchronization");
+            // Explicit operator deletion may remove retained owned images after an expiration attempt.
+            progress.policyExpiration = false;
         }
         progress.failure = null;
         saveDeleteProgress(tracked, progress);
@@ -1692,6 +1698,8 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
             BackupVO tracked = backupDao.findById(backup.getId());
             if (tracked == null) { return; }
             backupDao.loadDetails(tracked);
+            // Operator requests are resumed by their provider's deletion coordinator, including their accepted scope.
+            if (BackupDeletionService.isPending(tracked)) { return; }
             if (StringUtils.isNotBlank(tracked.getDetail(ThirdPartyBackupManifest.DELETE_PROGRESS_KEY))) {
                 try {
                     if (deleteLocked(tracked.getId(), cleanup, inventory)) {
@@ -2013,6 +2021,10 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
     public ThirdPartyBackupRestore.Plan prepareRestore(Backup backup, Host host, java.util.List<String> volumeUuids,
             java.util.List<Long> targetVolumeBytes, String targetVmName, int timeout) {
         try (Lease lease = acquireLifecycle(backup.getVmId())) {
+            BackupVO current = backupDao.findById(backup.getId());
+            if (current == null) { throw new CloudRuntimeException("Backup no longer exists"); }
+            backupDao.loadDetails(current);
+            if (BackupDeletionService.isPending(current)) { throw new CloudRuntimeException("Backup deletion is pending"); }
             return prepareRestoreWithLock(backup, host, volumeUuids, targetVolumeBytes, targetVmName, timeout);
         }
     }

@@ -434,3 +434,16 @@ test.each([
   expect(wrapper.find('.status-tooltip').text()).toContain('COMPLETED')
   wrapper.unmount()
 })
+
+
+test('pending deletion is visible with its persisted English state and reason', () => {
+  const wrapper = shallowMount(BackupProgress, {
+    props: { record: { id: 'backup', status: 'BackedUp', deletionpending: true, deletionstate: 'WAITING_DEPENDENCIES', deletiondetails: 'Dependent recovery points remain' } },
+    global: { stubs: { Status: statusWithTooltip }, mocks: { $t: key => korean[key] || key, $store: { getters: { apis: {} } } } }
+  })
+  expect(wrapper.vm.displayStatus).toBe('삭제 대기')
+  expect(wrapper.text()).toContain('삭제 상태')
+  expect(wrapper.text()).toContain('WAITING_DEPENDENCIES')
+  expect(wrapper.text()).toContain('Dependent recovery points remain')
+  wrapper.unmount()
+})

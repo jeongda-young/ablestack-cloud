@@ -129,6 +129,12 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
             BackupFrameworkEnabled.key());
 
     @Inject
+    private BackupDeletionService backupDeletionService;
+
+    @Inject
+    private ThirdPartyBackupVolumeService thirdPartyBackupVolumeService;
+
+    @Inject
     private BackupDao backupDao;
 
     @Inject
@@ -263,6 +269,12 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
 
     @Override
     public Pair<Boolean, Backup> takeBackup(final VirtualMachine vm, Boolean quiesceVM, boolean isolated, Long backupScheduleId) {
+        try (ThirdPartyBackupVolumeService.Lease lease = thirdPartyBackupVolumeService.acquireLifecycle(vm.getId())) {
+            return takeNasBackup(vm, quiesceVM, isolated, backupScheduleId);
+        }
+    }
+
+    private Pair<Boolean, Backup> takeNasBackup(final VirtualMachine vm, Boolean quiesceVM, boolean isolated, Long backupScheduleId) {
         final Host host = getVMHypervisorHostForBackup(vm);
 
         final BackupRepository backupRepository = backupRepositoryDao.findByBackupOfferingId(vm.getBackupOfferingId());
@@ -535,6 +547,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
             return false;
         }
         loadBackupDetailsIfNeeded(latestBackup);
+        if (BackupDeletionService.isPending(latestBackup)) { return false; }
 
         if (Boolean.parseBoolean(getBackupDetail(latestBackup, DETAIL_CHAIN_SEALED))) {
             LOG.info("NAS backup for VM [{}] will be FULL: backup chain [{}] is sealed ({})",
@@ -812,6 +825,16 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
     }
 
     private Pair<Boolean, String> restoreVMBackup(VirtualMachine vm, Backup backup) {
+        try (ThirdPartyBackupVolumeService.Lease lease = thirdPartyBackupVolumeService.acquireLifecycle(backup.getVmId())) {
+            BackupVO current = backupDao.findById(backup.getId());
+            if (current == null) { throw new CloudRuntimeException("Backup no longer exists"); }
+            backupDao.loadDetails(current);
+            if (BackupDeletionService.isPending(current)) { throw new CloudRuntimeException("Backup deletion is pending"); }
+            return restoreNasVMBackup(vm, backup);
+        }
+    }
+
+    private Pair<Boolean, String> restoreNasVMBackup(VirtualMachine vm, Backup backup) {
         validateNasRestoreSnapshotCompatibility(vm);
         validateRestoreChainIntegrity(backup);
         List<Backup.VolumeInfo> backupVolumes = backup.getBackedUpVolumes();
@@ -1142,6 +1165,17 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
 
     @Override
     public Pair<Boolean, String> restoreBackedUpVolume(Backup backup, Backup.VolumeInfo backupVolumeInfo, String hostIp, String dataStoreUuid, Pair<String, VirtualMachine.State> vmNameAndState, VirtualMachine targetVm, boolean quickRestore) {
+        try (ThirdPartyBackupVolumeService.Lease lease = thirdPartyBackupVolumeService.acquireLifecycle(backup.getVmId())) {
+            BackupVO current = backupDao.findById(backup.getId());
+            if (current == null) { throw new CloudRuntimeException("Backup no longer exists"); }
+            backupDao.loadDetails(current);
+            if (BackupDeletionService.isPending(current)) { throw new CloudRuntimeException("Backup deletion is pending"); }
+            return restoreNasBackedUpVolume(current, backupVolumeInfo, hostIp, dataStoreUuid, vmNameAndState, targetVm, quickRestore);
+        }
+    }
+
+    private Pair<Boolean, String> restoreNasBackedUpVolume(Backup backup, Backup.VolumeInfo backupVolumeInfo, String hostIp, String dataStoreUuid,
+            Pair<String, VirtualMachine.State> vmNameAndState, VirtualMachine targetVm, boolean quickRestore) {
         validateRestoreChainIntegrity(backup);
         final VolumeVO volume = volumeDao.findByUuidIncludingRemoved(backupVolumeInfo.getUuid());
         final DiskOffering diskOffering = diskOfferingDao.findByUuid(backupVolumeInfo.getDiskOfferingId());
@@ -1304,7 +1338,20 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
     }
 
     @Override
+    public boolean handlesChainDeleteResourceAccounting() { return true; }
+
+    @Override
     public boolean deleteBackup(Backup backup, boolean forced) {
+        return deleteBackup(backup, forced, null);
+    }
+
+    @Override
+    public boolean deleteBackup(Backup backup, boolean forced, String expectedPlan) {
+        if (backup == null) { return true; }
+        return backupDeletionService.delete(backup, forced, expectedPlan, point -> deleteOwnedBackup(point, false));
+    }
+
+    private boolean deleteOwnedBackup(Backup backup, boolean forced) {
         if (backup instanceof BackupVO && backup.getDetails() == null) {
             backupDao.loadDetails((BackupVO) backup);
         }
@@ -1636,6 +1683,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         if (!isBackupManagedByThisProvider(backup)) {
             return false;
         }
+        if (backupDeletionService.resume(backup, point -> deleteOwnedBackup(point, false))) { return true; }
         if (completeStartedBackupIfMarkerExists(vm, backup)) {
             return true;
         }
@@ -1646,7 +1694,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
         LOG.warn("Removing stale NAS backup [{}] for VM [{}] stuck in BackingUp for over one day. Repository path: [{}]",
                 backup.getUuid(), vm.getInstanceName(), backup.getExternalId());
         try {
-            if (deleteBackup(backup, true)) {
+            if (deleteOwnedBackup(backup, true)) {
                 backupDao.remove(backup.getId());
                 return true;
             }
@@ -1845,7 +1893,7 @@ public class AblestackNasBackupProvider extends AdapterBase implements BackupPro
 
     private boolean cleanupFailedBackupArtifacts(final Backup backup) {
         try {
-            return deleteBackup(backup, true);
+            return deleteOwnedBackup(backup, true);
         } catch (Exception e) {
             LOG.warn("Failed to clean up NAS backup [{}]: {}",
                     backup.getUuid(), e.getMessage(), e);
