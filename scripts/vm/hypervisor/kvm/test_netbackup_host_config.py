@@ -22,6 +22,7 @@ import contextlib
 import importlib.util
 import io
 from pathlib import Path
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -201,6 +202,99 @@ class NetBackupConfigurationTest(unittest.TestCase):
         _, read, update = self.configure(args, current_incremental="false")
         update.assert_not_called()
         self.assertNotIn("kvm.backup.chain.size", [call.args[0] for call in read.call_args_list])
+
+    def provision_with_staging(self, overrides=None, query_failure=False, mount_result=0, mount_error=None):
+        args = self.arguments("--vm-schedule-backup", "false")
+        with tempfile.TemporaryDirectory() as directory:
+            mount = Path(directory) / "mount"
+            values = {"backup.thirdparty.staging.enable": "true",
+                      "backup.thirdparty.staging.mount.path": str(mount),
+                      "backup.thirdparty.staging.root.path": str(mount / "staging"),
+                      "backup.framework.enabled": "true", "kvm.incremental.backup": "true",
+                      "backup.framework.provider.plugin": "ablestack-netbackup",
+                      "backup.plugin.netbackup.url": args.netbackup_url,
+                      "backup.plugin.netbackup.apikey": args.netbackup_apikey}
+            values.update(overrides or {})
+            events = []
+
+            def read_value(name, *unused_args, **unused_kwargs):
+                if query_failure:
+                    config.fail("Synthetic staging query failure")
+                return values[name]
+
+            def check_mount(*unused_args, **unused_kwargs):
+                events.append("mount")
+                if mount_error:
+                    raise mount_error
+                return subprocess.CompletedProcess("findmnt", mount_result)
+
+            with patch.object(config, "parse_args", return_value=args), \
+                    patch.object(sys.stdin, "isatty", return_value=False), \
+                    patch.object(config, "BACKUP_STAGING_ROOT", Path(directory) / "bootstrap"), \
+                    patch.object(config, "STAGING_MOUNT_PATH", None), \
+                    patch.object(config, "get_configuration_value", side_effect=read_value), \
+                    patch.object(config.subprocess, "run", side_effect=check_mount) as mounted, \
+                    patch.object(config, "resolve_host_context", return_value=("zone-id", "cluster-id")), \
+                    patch.object(config, "ensure_key", side_effect=lambda *a, **kw: events.append("key")) as key, \
+                    patch.object(config, "update_configuration_value") as update, \
+                    patch.object(config, "ensure_netbackup_offering") as offering, \
+                    patch.object(config, "generate_host_outputs") as output, \
+                    contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as errors:
+                result = 0
+                try:
+                    config.main()
+                except SystemExit as exc:
+                    result = exc.code
+                self.assertEqual([], list(Path(directory).iterdir()))
+            return result, errors.getvalue(), key, update, offering, output, mounted, events
+
+    def assert_staging_preflight_rejected(self, **options):
+        result, errors, key, update, offering, output, mounted, events = self.provision_with_staging(**options)
+        self.assertNotEqual(0, result)
+        key.assert_not_called()
+        update.assert_not_called()
+        offering.assert_not_called()
+        output.assert_not_called()
+        return errors, mounted
+
+    def test_disabled_staging_prevents_credentials_mold_updates_and_host_files(self):
+        errors, mounted = self.assert_staging_preflight_rejected(
+            overrides={"backup.thirdparty.staging.enable": "false"})
+        self.assertIn("enable backup.thirdparty.staging.enable", errors)
+        mounted.assert_not_called()
+
+    def test_staging_query_failure_prevents_configuration_changes(self):
+        errors, mounted = self.assert_staging_preflight_rejected(query_failure=True)
+        self.assertIn("staging query failure", errors)
+        mounted.assert_not_called()
+
+    def test_invalid_staging_paths_prevent_configuration_changes(self):
+        for root in ("", "relative/path", "/outside-staging-mount"):
+            with self.subTest(root=root):
+                _, mounted = self.assert_staging_preflight_rejected(
+                    overrides={"backup.thirdparty.staging.root.path": root})
+                mounted.assert_not_called()
+
+    def test_missing_staging_mount_prevents_configuration_changes(self):
+        errors, mounted = self.assert_staging_preflight_rejected(mount_result=1)
+        self.assertIn("not mounted on this host", errors)
+        mounted.assert_called_once()
+
+    def test_unavailable_mount_check_prevents_configuration_changes(self):
+        for error in (FileNotFoundError("findmnt"), subprocess.TimeoutExpired("findmnt", 30)):
+            with self.subTest(error=type(error).__name__):
+                errors, _ = self.assert_staging_preflight_rejected(mount_error=error)
+                self.assertIn("Unable to verify the common staging mount", errors)
+
+    def test_valid_staging_allows_normal_provisioning_after_mount_check(self):
+        result, errors, key, update, offering, output, mounted, events = self.provision_with_staging()
+        self.assertEqual(0, result, errors)
+        self.assertLess(events.index("mount"), events.index("key"))
+        key.assert_called_once()
+        mounted.assert_called_once()
+        update.assert_not_called()
+        offering.assert_called_once()
+        output.assert_called_once()
 
 
 if __name__ == "__main__":

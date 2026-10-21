@@ -418,6 +418,8 @@ Full/증분 정책과 VM 선택 방식은 별개이다.
 | 설치·감시 | Hook, watcher, `bp.conf` 구성 | Hook, Job conf, Agent timeout, restore service/timer 구성 |
 
 Veeam은 Linux Agent 설치와 VBR의 SSH 접속 구성을 먼저 완료한다.
+두 사전구성 도구는 공통 스테이징의 활성화·경로·현재 Host의 마운트를 먼저 검사한다.
+검사에 실패하면 Mold 설정 변경·오퍼링 생성·인증정보 및 Hook 파일 생성 전에 중단한다.
 호스트마다 같은 Mold/Zone 설정을 변경하므로 사전구성 명령은 순서대로 실행한다.
 두 솔루션 모두 증분 여부는 매 백업 시 Mold 유효값을 따르며, Host 구성 파일로 런타임 값을 덮어쓰지 않는다.
 

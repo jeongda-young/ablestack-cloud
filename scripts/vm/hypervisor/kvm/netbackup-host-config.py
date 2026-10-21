@@ -352,6 +352,7 @@ def load_common_staging(args: argparse.Namespace) -> None:
     BACKUP_STAGING_ROOT = Path(root).resolve(strict=False) / NETBACKUP_PROVIDER_NAME
     if STAGING_MOUNT_PATH not in BACKUP_STAGING_ROOT.parents:
         fail("Common staging root.path must be inside mount.path.")
+    validate_staging_mount()
     log_info(f"Using common staging: {BACKUP_STAGING_ROOT}")
 
 
@@ -692,11 +693,19 @@ def apply_netbackup_bp_conf() -> bool:
     return True
 
 
-def ensure_backup_staging_root() -> None:
-    mounted = subprocess.run(["findmnt", "-rn", "--mountpoint", str(STAGING_MOUNT_PATH)],
-                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+def validate_staging_mount() -> None:
+    try:
+        mounted = subprocess.run(["findmnt", "-rn", "--mountpoint", str(STAGING_MOUNT_PATH)],
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        fail("Unable to verify the common staging mount. Check findmnt and the staging filesystem on this host.")
     if mounted.returncode != 0:
         fail("The common staging filesystem is not mounted on this host. Revalidate staging activation in Mold first.")
+
+
+def ensure_backup_staging_root() -> None:
+    # Recheck before creating directories; the mount may have disappeared since preflight.
+    validate_staging_mount()
     BACKUP_STAGING_ROOT.mkdir(parents=True, exist_ok=True)
     try:
         BACKUP_STAGING_ROOT.chmod(0o755)
@@ -884,6 +893,9 @@ def validate_args(args: argparse.Namespace) -> None:
     if not args.netbackup_apikey:
         fail("--netbackup-apikey is required")
     configure_vm_selection(args)
+
+
+def prepare_secret_key() -> None:
     try:
         ensure_key(SECRET_KEY_FILE, secret_files=(SECRET_OUTPUT_DIR / "secret.enc",),
                    secret_directories=(SECRET_OUTPUT_DIR,), upgrade_unused_legacy=True)
@@ -899,11 +911,13 @@ def main() -> None:
     log_info("Starting NetBackup host configuration")
     log_info(f"VM_SCHEDULE_BACKUP={str(args.vm_schedule_backup).lower()}, VM_INCLUDE={args.vm_include}, VM_EXCLUDE={args.vm_exclude}")
 
+    # Fail before creating credentials, changing Mold settings or importing an offering.
+    load_common_staging(args)
     zone_id, cluster_id = resolve_host_context(args.policy_name, args.mold_url, args.admin_apikey, args.admin_secretkey)
+    prepare_secret_key()
     restart_required = ensure_backup_framework_configuration(zone_id, cluster_id, args)
     if restart_required:
         fail("Updated non-dynamic backup configuration. Restart the Mold management server, then run this script again to import the NetBackup offering.")
-    load_common_staging(args)
     ensure_netbackup_offering(zone_id, args)
     log_ok("Completed Mold API configuration for NetBackup host")
     generate_host_outputs(zone_id, args)
