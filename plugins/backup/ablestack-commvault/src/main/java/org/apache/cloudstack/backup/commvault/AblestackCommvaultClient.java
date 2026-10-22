@@ -85,8 +85,6 @@ public class AblestackCommvaultClient {
     private String cvtServerUsername;
     private String cvtServerPassword;
     private final int cvtServerPort = 22;
-    // Backward compatibility only. New code should use JobStatusResult directly.
-    private final ThreadLocal<String> lastJobFailureReason = new ThreadLocal<>();
 
     public AblestackCommvaultClient(final String url, final String username, final String password, final boolean validateCertificate, final int timeout) throws URISyntaxException, NoSuchAlgorithmException, KeyManagementException {
 
@@ -570,14 +568,6 @@ public class AblestackCommvaultClient {
         return true;
     }
 
-    // 기존 호출부 호환성을 위해 유지한다.
-    // 11.44에서는 StoragePolicy copyId와 ServerPlan BackupDestination ID가 서로 다른 식별자이므로
-    // storagePolicy copyId를 V5 BackupDestination API에 전달하지 않고 검증된 Plan 기반 경로를 사용한다.
-    @Deprecated
-    public boolean getStoragePolicyDetails(String planId, String storagePolicyId, String retentionPeriod) {
-        return updatePrimaryBackupDestinationRetention(planId, retentionPeriod);
-    }
-
     // GET https://<commserveIp>/commandcenter/api/V4/ServerPlan/<planId>
     // Primary Backup Destination의 retention period를 조회하는 API로 없는 경우 null, 있는 경우 retentionPeriodDays 반환
     public String getPrimaryBackupDestinationRetention(String planId) {
@@ -1000,13 +990,6 @@ public class AblestackCommvaultClient {
         return detailedPlanId.matches("[1-9][0-9]*") ? detailedPlanId : "";
     }
 
-    // GET https://<commserveIp>/commandcenter/api/Backupset?clientName=<hostName>
-    // 호스트의 VM File System BackupSet이 없으면 null, 있으면 backupsetId를 반환한다.
-    public String getVmBackupSetId(String hostName, String vmName) {
-        final JsonNode properties = getVmBackupSetProperties(hostName, vmName);
-        return properties != null ? properties.path("backupSetEntity").path("backupsetId").asText() : null;
-    }
-
     private JsonNode getVmBackupSetProperties(String hostName, String vmName) {
         JsonNode matched = null;
         for (JsonNode item : getBackupSetProperties(hostName)) {
@@ -1313,22 +1296,10 @@ public class AblestackCommvaultClient {
         return retentionInfo;
     }
 
-    // POST https://<commserveIp>/commandcenter/api/subclient/<subclientId>/action/backup 테스트 시 Incremental 백업으로 반환되어 사용 x
-    // POST https://<commserveIp>/commandcenter/api/CreateTask
-    // 백업 실행 API
-    public String createBackup(String subclientId, String storagePolicyId, String displayName, String commCellName, String clientId, String companyId, String companyName, String instanceName,
-            String appName, String applicationId, String clientName, String backupsetId, String instanceId, String subclientGUID, String subclientName, String csGUID,
-            String backupsetName, String backupType) {
-        return createBackup(subclientId, storagePolicyId, displayName, commCellName, clientId, companyId, companyName, instanceName,
-                appName, applicationId, clientName, backupsetId, instanceId, subclientGUID, subclientName, csGUID, backupsetName, backupType, null);
-    }
-
-    private String createBackup(String subclientId, String storagePolicyId, String displayName, String commCellName, String clientId, String companyId,
+    /** Protect one prepared volume or metadata artifact with an external Full job. */
+    private String createArtifactBackup(String subclientId, String storagePolicyId, String displayName, String commCellName, String clientId, String companyId,
             String companyName, String instanceName, String appName, String applicationId, String clientName, String backupsetId, String instanceId,
-            String subclientGUID, String subclientName, String csGUID, String backupsetName, String backupType, String correlation) {
-        final boolean incrementalBackup = "INCREMENTAL".equalsIgnoreCase(backupType);
-        final String backupLevel = incrementalBackup ? "INCREMENTAL" : "FULL";
-
+            String subclientGUID, String subclientName, String csGUID, String backupsetName, String correlation) {
         try {
             final ObjectNode requestBody = OBJECT_MAPPER.createObjectNode();
             final ObjectNode taskInfo = requestBody.putObject("taskInfo");
@@ -1361,9 +1332,9 @@ public class AblestackCommvaultClient {
             subTaskInfo.put("operationType", "BACKUP");
             final ObjectNode options = subTask.putObject("options");
             final ObjectNode backupOpts = options.putObject("backupOpts");
-            backupOpts.put("backupLevel", backupLevel);
-            backupOpts.put("runIncrementalBackup", incrementalBackup);
-            backupOpts.put("forceFullBackup", !incrementalBackup);
+            backupOpts.put("backupLevel", "FULL");
+            backupOpts.put("runIncrementalBackup", false);
+            backupOpts.put("forceFullBackup", true);
             final ObjectNode commonOpts = options.putObject("commonOpts");
             commonOpts.put("overrideStoragePolicySettings", true);
             commonOpts.put("notifyUserOnJobCompletion", true);
@@ -1372,7 +1343,7 @@ public class AblestackCommvaultClient {
             final HttpJsonResponse response = executeJsonRequest("POST", "/CreateTask", requestBody);
             return response.isSuccessful() ? extractJobIdsFromJsonString(response.body) : null;
         } catch (final IOException e) {
-            LOG.error("Failed to request createBackup commvault api due to : ", e);
+            LOG.error("Failed to request Commvault artifact backup: ", e);
             checkResponseTimeOut(e);
         }
         return null;
@@ -1380,20 +1351,6 @@ public class AblestackCommvaultClient {
 
     // POST https://<commserveIp>/commandcenter/api/JobDetails
     // 작업 상태를 주기적으로 조회하여 최종 작업 상태를 반환
-    public String getJobStatus(String jobId) {
-        return getJobStatus(jobId, 0);
-    }
-
-    public String getJobStatus(String jobId, long timeoutMillis) {
-        final JobStatusResult result = getJobStatusResult(jobId, timeoutMillis);
-        if (StringUtils.isBlank(result.getFailureReason())) {
-            lastJobFailureReason.remove();
-        } else {
-            lastJobFailureReason.set(result.getFailureReason());
-        }
-        return result.getStatus();
-    }
-
     public JobStatusResult getJobStatusResult(String jobId) {
         return getJobStatusResult(jobId, 0);
     }
@@ -1567,11 +1524,6 @@ public class AblestackCommvaultClient {
         }
     }
 
-    @Deprecated
-    public String getLastJobFailureReason() {
-        return lastJobFailureReason.get();
-    }
-
     // POST https://<commserveIp>/commandcenter/api/JobDetails
     // 작업의 상세 정보 조회하는 API
     /** Submit precisely one staged artifact; polling must never wait for the external job. */
@@ -1620,13 +1572,13 @@ public class AblestackCommvaultClient {
                 throw new org.apache.cloudstack.backup.ThirdPartyBackupSubmissionException("Commvault artifact storage policy is missing");
             }
             submitted = true;
-            artifact.jobId = createBackup(entity.path("subclientId").asText(), storagePolicy,
+            artifact.jobId = createArtifactBackup(entity.path("subclientId").asText(), storagePolicy,
                     entity.path("displayName").asText(), entity.path("commCellName").asText(), clientId,
                     entity.path("entityInfo").path("companyId").asText(), entity.path("entityInfo").path("companyName").asText(),
                     entity.path("instanceName").asText(), entity.path("appName").asText(), entity.path("applicationId").asText(),
                     entity.path("clientName").asText(), entity.path("backupsetId").asText(), entity.path("instanceId").asText(),
                     entity.path("subclientGUID").asText(), entity.path("subclientName").asText(), entity.path("csGUID").asText(),
-                    entity.path("backupsetName").asText(), "FULL", backupCorrelation(artifact));
+                    entity.path("backupsetName").asText(), backupCorrelation(artifact));
             // RBD/QCOW2 source deltas are already artifacts: protect each complete artifact with an external Full job.
             if (StringUtils.isBlank(artifact.jobId) || !artifact.jobId.matches("[0-9]+")) {
                 throw new CloudRuntimeException("Commvault did not return one artifact job ID");

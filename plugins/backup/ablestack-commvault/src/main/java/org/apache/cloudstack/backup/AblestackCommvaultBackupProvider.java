@@ -88,7 +88,6 @@ import org.apache.xml.utils.URI;
 import org.json.JSONException;
 import org.json.JSONObject;
 import java.net.URISyntaxException;
-import java.nio.file.Path;
 import java.security.KeyManagementException;
 import java.security.NoSuchAlgorithmException;
 import java.text.ParseException;
@@ -822,17 +821,6 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         }
     }
 
-    private BackupExecutionResult failCompletedCommvaultBackupMetadata(BackupVO backupVO, String externalId, String details) {
-        backupVO.setExternalId(externalId);
-        LOG.error("{} phase=[FAILED], backupId=[{}], backupUuid=[{}], vmId=[{}], backupType=[{}], backupPath=[{}], externalId=[{}], reason=[{}]",
-                BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), backupVO.getVmId(), backupVO.getType(), getBackupPathFromExternalId(backupVO), externalId, details);
-        markBackupFailure(backupVO, "metadata-finalize", details);
-        backupVO.setStatus(Backup.Status.Error);
-        backupDao.update(backupVO.getId(), backupVO);
-        updateBackupDetail(backupVO, DETAIL_ERROR_REASON, ERROR_REASON_METADATA_FINALIZE);
-        return BackupExecutionResult.failure(details, backupVO);
-    }
-
     private boolean cleanupFailedBackupForFullRetry(Backup backup) {
         if (backup == null) {
             return false;
@@ -1467,15 +1455,6 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         }
     }
 
-    private void cleanupBackupPathsAfterSuccessfulBackup(HostVO host, List<String> backupPaths, Backup backup) {
-        if (host == null || CollectionUtils.isEmpty(backupPaths)) {
-            return;
-        }
-        LOG.info("Cleaning up Commvault staging paths after successful backup [{}] on host [{}]: {}",
-                backup != null ? backup.getUuid() : null, host.getName(), backupPaths);
-        cleanupBackupPathsOnHost(host, backupPaths);
-    }
-
     private void cleanupBackupPathsOnHost(HostVO host, List<String> backupPaths) {
         if (host == null || CollectionUtils.isEmpty(backupPaths)) {
             return;
@@ -2029,16 +2008,6 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         return vmVolumes.stream().mapToLong(VolumeVO::getSize).max().orElse(0L);
     }
 
-    private long estimateReadyVolumeBytes(List<VolumeVO> vmVolumes) {
-        if (CollectionUtils.isEmpty(vmVolumes)) {
-            return 0L;
-        }
-        return vmVolumes.stream()
-                .filter(volume -> Volume.State.Ready.equals(volume.getState()))
-                .mapToLong(VolumeVO::getSize)
-                .sum();
-    }
-
     private long estimateRequiredStageBytesForRestore(Backup backup, List<String> restoreSourcePaths) {
         if (CollectionUtils.isEmpty(restoreSourcePaths)) {
             return Math.max(backup.getSize(), 0L);
@@ -2585,10 +2554,8 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
             return true;
         }
 
-        if (submitCommvaultJobForCompletedStaging(vm, backup, stageHostName, backupPath)) {
-            return true;
-        }
-
+        // Only persisted volume plans can submit new external jobs. Pre-volume staging
+        // records without an external Job ID follow stale cleanup instead of resubmission.
         if (isWithinBackingUpSyncGracePeriod(backup)) {
             LOG.debug("Skipping Commvault stale-backup reconciliation for recent BackingUp backup [{}] on VM [{}]",
                     backup.getUuid(), vm.getInstanceName());
@@ -2695,144 +2662,6 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         };
     }
 
-    private boolean submitCommvaultJobForCompletedStaging(VirtualMachine vm, Backup backup, String stageHostName, String backupPath) {
-        final HostVO stageHost = hostDao.findByName(stageHostName);
-        if (stageHost == null) {
-            LOG.warn("{} phase=[STAGING_HOST_MISSING], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], "
-                            + "stageHostName=[{}], backupPath=[{}]",
-                    BACKUP_TRACE, backup.getId(), backup.getUuid(), vm.getId(), vm.getInstanceName(), stageHostName, backupPath);
-            return false;
-        }
-        String jobState = getHostBackupJobState(stageHost.getId(), backup.getUuid());
-        final String jobLogPath = AblestackBackupFrameworkUtils.getAsyncBackupJobLogPath(backup.getUuid());
-        LOG.info("{} phase=[STAGING_STATUS], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], hostId=[{}], "
-                        + "hostName=[{}], backupPath=[{}], jobState=[{}], jobLog=[{}]",
-                BACKUP_TRACE, backup.getId(), backup.getUuid(), vm.getId(), vm.getInstanceName(), stageHost.getId(), stageHost.getName(),
-                backupPath, jobState, jobLogPath);
-        if ("CANCEL_PENDING".equals(jobState)) { return false; }
-        if ("FAILED".equals(jobState) || "INTERRUPTED".equals(jobState)) {
-            final String defaultFailureReason = "Host backup staging job " + jobState.toLowerCase(Locale.ROOT);
-            final String failureReason = getHostBackupJobDetails(stageHost.getId(), backup.getUuid(), defaultFailureReason);
-            BackupVO backupVO = backupDao.findById(backup.getId());
-            if (backupVO != null) {
-                backupDao.loadDetails(backupVO);
-                markBackupFailure(backupVO, "host-job", failureReason);
-                sealParentBackupChainIfIncremental(backupVO, "failed-async-child");
-                updateBackupDetail(backupVO, AblestackBackupFrameworkUtils.BACKUP_RECOVERY_REASON_DETAIL, failureReason);
-                updateBackupDetail(backupVO, AblestackBackupFrameworkUtils.BACKUP_CLEANUP_STATE_DETAIL, "WAITING");
-                if (BACKUP_TYPE_INCREMENTAL.equalsIgnoreCase(backupVO.getType())) {
-                    updateBackupDetail(backupVO, AblestackBackupFrameworkUtils.BACKUP_FULL_RETRY_STATE_DETAIL, "WAITING");
-                }
-                backupVO.setStatus(Backup.Status.Error);
-                backupDao.update(backupVO.getId(), backupVO);
-            }
-            return true;
-        } else if ("CANCELED".equals(jobState)) {
-            BackupVO backupVO = backupDao.findById(backup.getId());
-            if (backupVO != null) {
-                updateBackupDetail(backupVO, AblestackBackupFrameworkUtils.BACKUP_CANCEL_REQUESTED_DETAIL, "true");
-                updateBackupDetail(backupVO, AblestackBackupFrameworkUtils.BACKUP_CLEANUP_STATE_DETAIL, "WAITING");
-                backupVO.setStatus(Backup.Status.Canceled);
-                backupDao.update(backupVO.getId(), backupVO);
-            }
-            LOG.warn("{} phase=[STAGING_CANCELED], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], hostId=[{}], "
-                            + "hostName=[{}], backupPath=[{}], jobLog=[{}]",
-                    BACKUP_TRACE, backup.getId(), backup.getUuid(), vm.getId(), vm.getInstanceName(), stageHost.getId(), stageHost.getName(),
-                    backupPath, jobLogPath);
-            return true;
-        }
-        if (StringUtils.isBlank(readFileContentsOnHost(stageHost, backupPath + "/" + AblestackBackupFrameworkUtils.STAGING_COMPLETE_MARKER))) {
-            LOG.info("{} phase=[STAGING_MARKER_NOT_READY], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], hostId=[{}], "
-                            + "hostName=[{}], markerPath=[{}]",
-                    BACKUP_TRACE, backup.getId(), backup.getUuid(), vm.getId(), vm.getInstanceName(), stageHost.getId(), stageHost.getName(),
-                    backupPath + "/" + AblestackBackupFrameworkUtils.STAGING_COMPLETE_MARKER);
-            return false;
-        }
-        BackupVO backupVO = backupDao.findById(backup.getId());
-        if (backupVO == null) {
-            return true;
-        }
-        backupDao.loadDetails(backupVO);
-        Map<String, String> backupDetails = backupVO.getDetails();
-        final String backupEngine = getBackupDetail(backupVO, DETAIL_BACKUP_ENGINE, BACKUP_ENGINE_QCOW2);
-        final String checkpointName = getBackupDetail(backupVO, DETAIL_CHECKPOINT_NAME);
-        if (BACKUP_ENGINE_QCOW2.equals(backupEngine)) {
-            String checkpointXml = readFileContentsOnHost(stageHost, getCheckpointPath(backupPath, checkpointName, backupEngine));
-            if (StringUtils.isNotBlank(checkpointXml)) {
-                backupDetails.put(DETAIL_CHECKPOINT_XML, checkpointXml);
-            }
-        }
-
-        BackupOfferingVO offering = backupOfferingDao.findById(backupVO.getBackupOfferingId());
-        if (offering == null || StringUtils.isBlank(offering.getExternalId())) {
-            LOG.warn("{} phase=[JOB_SUBMIT_SKIPPED], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], reason=[missing-offering-plan], "
-                            + "offeringId=[{}], backupPath=[{}]",
-                    BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), backupVO.getBackupOfferingId(),
-                    backupPath);
-            return false;
-        }
-        final String planId = offering.getExternalId();
-        final AblestackCommvaultClient client = getClient(vm.getDataCenterId());
-        final String clientId = client.getClientId(stageHost.getName());
-        final String subClientEntity = client.getSubclient(clientId, vm.getInstanceName());
-        if (subClientEntity == null) {
-            markBackupFailure(backupVO, "commvault-subclient", "Failed to get Commvault subclient information");
-            return false;
-        }
-
-        JSONObject jsonObject = new JSONObject(subClientEntity);
-        String subclientId = String.valueOf(jsonObject.get("subclientId"));
-        String applicationId = String.valueOf(jsonObject.get("applicationId"));
-        String backupsetId = String.valueOf(jsonObject.get("backupsetId"));
-        String instanceId = String.valueOf(jsonObject.get("instanceId"));
-        String backupsetName = String.valueOf(jsonObject.get("backupsetName"));
-        String displayName = String.valueOf(jsonObject.get("displayName"));
-        String commCellName = String.valueOf(jsonObject.get("commCellName"));
-        String companyId = String.valueOf(jsonObject.getJSONObject("entityInfo").get("companyId"));
-        String companyName = String.valueOf(jsonObject.getJSONObject("entityInfo").get("companyName"));
-        String instanceName = String.valueOf(jsonObject.get("instanceName"));
-        String appName = String.valueOf(jsonObject.get("appName"));
-        String clientName = String.valueOf(jsonObject.get("clientName"));
-        String subclientGUID = String.valueOf(jsonObject.get("subclientGUID"));
-        String subclientName = String.valueOf(jsonObject.get("subclientName"));
-        String csGUID = String.valueOf(jsonObject.get("csGUID"));
-        String backupContentPath = Path.of(backupPath).getParent().toString();
-        addBackupSetHostDetailsIfDifferent(backupDetails, stageHost.getName(), clientName);
-
-        if (!client.updateBackupSet(backupContentPath, subclientId, clientId, applicationId, backupsetId, instanceId, subclientName, backupsetName)) {
-            markBackupFailure(backupVO, "commvault-update-backupset", "Failed to update Commvault backupset content path");
-            return false;
-        }
-        String planName = client.getPlanName(planId);
-        String storagePolicyId = client.getStoragePolicyId(planName);
-        if (planName == null || storagePolicyId == null) {
-            markBackupFailure(backupVO, "commvault-storage-policy", "Failed to get Commvault storage policy information");
-            return false;
-        }
-        String jobId = client.createBackup(subclientId, storagePolicyId, displayName, commCellName, clientId, companyId, companyName, instanceName, appName,
-                applicationId, clientName, backupsetId, instanceId, subclientGUID, subclientName, csGUID, backupsetName, backupVO.getType());
-        if (jobId == null) {
-            markBackupFailure(backupVO, "commvault-create-job", "Failed to create Commvault backup job");
-            return false;
-        }
-        String externalId = backupPath + "," + jobId;
-        backupVO.setExternalId(externalId);
-        backupVO.setDetails(backupDetails);
-        backupDao.update(backupVO.getId(), backupVO);
-        LOG.info("{} phase=[JOB_SUBMITTED], backupId=[{}], backupUuid=[{}], vmId=[{}], vmName=[{}], backupPath=[{}], externalId=[{}], jobId=[{}]",
-                BACKUP_TRACE, backupVO.getId(), backupVO.getUuid(), vm.getId(), vm.getInstanceName(), backupPath, externalId, jobId);
-        return true;
-    }
-
-    private void addBackupSetHostDetailsIfDifferent(final Map<String, String> backupDetails, final String stageHostName, final String clientName) {
-        if (backupDetails == null || StringUtils.isBlank(clientName) || StringUtils.equalsIgnoreCase(stageHostName, clientName)) {
-            return;
-        }
-        backupDetails.put(DETAIL_BACKUPSET_HOST, clientName);
-        LOG.info("Commvault backupset host differs from staging host. stageHost=[{}], backupsetClientName=[{}]",
-                stageHostName, clientName);
-    }
-
     private void sealParentBackupChainIfIncremental(final Backup backup, final String reason) {
         if (backup == null || !BACKUP_TYPE_INCREMENTAL.equalsIgnoreCase(backup.getType())) {
             return;
@@ -2881,20 +2710,6 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         return false;
     }
 
-    private boolean cleanupFailedStagingBackup(final String stageHostName, final String backupPath,
-            final String vmName, final Backup backup) {
-        try {
-            cleanupBackupPathOnStageHost(stageHostName, backupPath, false, vmName,
-                    getBackupDetail(backup, DETAIL_CHECKPOINT_NAME),
-                    getUnreferencedQcow2CheckpointNamesAfterDelete(backup),
-                    getBackupDetail(backup, DETAIL_RBD_DISK_PATHS));
-            return true;
-        } catch (Exception e) {
-            LOG.warn("Failed to clean up Commvault backup staging path [{}]: {}", backupPath, e.getMessage(), e);
-            return false;
-        }
-    }
-
     private void copyFallbackBackupMetadata(final BackupVO failedBackup, final Backup fullBackup) {
         final BackupVO fullBackupVO = backupDao.findById(fullBackup.getId());
         if (fullBackupVO == null) {
@@ -2908,25 +2723,6 @@ public class AblestackCommvaultBackupProvider extends AdapterBase implements Bac
         if (!ThirdPartyBackupManifest.VOLUME_MODE.equals(getBackupDetail(fullBackupVO, ThirdPartyBackupManifest.MODE_KEY))
                 && Boolean.parseBoolean(getBackupDetail(failedBackup, AblestackBackupFrameworkUtils.RESOURCE_COUNT_PENDING_DETAIL))) {
             updateBackupDetail(fullBackupVO, AblestackBackupFrameworkUtils.RESOURCE_COUNT_PENDING_DETAIL, Boolean.TRUE.toString());
-        }
-    }
-
-    private String getHostBackupJobState(final Long hostId, final String backupJobId) {
-        try {
-            BackupAnswer answer = (BackupAnswer) agentManager.send(hostId, new AblestackBackupJobStatusCommand(backupJobId));
-            return answer != null && answer.getResult() ? answer.getState() : null;
-        } catch (AgentUnavailableException | OperationTimedoutException e) {
-            LOG.debug("Failed to query Commvault backup job state for job [{}] on host [{}]", backupJobId, hostId, e);
-            return null;
-        }
-    }
-
-    private String getHostBackupJobDetails(final Long hostId, final String backupJobId, final String defaultDetails) {
-        try {
-            final BackupAnswer answer = (BackupAnswer) agentManager.send(hostId, new AblestackBackupJobStatusCommand(backupJobId));
-            return answer != null ? StringUtils.defaultIfBlank(answer.getDetails(), defaultDetails) : defaultDetails;
-        } catch (AgentUnavailableException | OperationTimedoutException e) {
-            return defaultDetails;
         }
     }
 

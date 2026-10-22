@@ -31,10 +31,12 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import java.util.List;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Date;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.cloudstack.backup.commvault.AblestackCommvaultClient;
@@ -58,6 +60,51 @@ import com.cloud.utils.exception.CloudRuntimeException;
 import com.cloud.vm.VirtualMachine;
 
 public class AblestackCommvaultBackupProviderTest {
+    @Test
+    public void volumeReconciliationResumesTheSavedPlanThroughTheAsyncService() {
+        AblestackCommvaultBackupProvider provider = new AblestackCommvaultBackupProvider();
+        ThirdPartyBackupVolumeService volumes = mock(ThirdPartyBackupVolumeService.class);
+        AgentManager agent = mock(AgentManager.class);
+        ReflectionTestUtils.setField(provider, "thirdPartyBackupVolumeService", volumes);
+        ReflectionTestUtils.setField(provider, "agentManager", agent);
+        BackupVO backup = new BackupVO();
+        backup.setStatus(Backup.Status.BackingUp);
+        backup.setType("INCREMENTAL");
+        backup.setDetails(new HashMap<>());
+        backup.getDetails().put(ThirdPartyBackupManifest.MODE_KEY, ThirdPartyBackupManifest.VOLUME_MODE);
+        HostVO host = mock(HostVO.class);
+        when(volumes.getWorkerHost(backup, "BACKUP")).thenReturn(host);
+
+        assertTrue(ReflectionTestUtils.invokeMethod(provider, "reconcileIncompleteBackup", mock(VirtualMachine.class), backup));
+
+        verify(volumes).track(eq(backup), eq(host), any(ThirdPartyBackupVolumeService.Transfer.class));
+        verify(volumes).reconcile(eq(backup), eq(host), any(ThirdPartyBackupVolumeService.Transfer.class));
+        verifyNoInteractions(agent);
+    }
+
+    @Test
+    public void preVolumeStagingWithoutAnExternalJobDoesNotDispatchALegacyBackup() {
+        AblestackCommvaultBackupProvider provider = new AblestackCommvaultBackupProvider();
+        AgentManager agent = mock(AgentManager.class);
+        HostDao hosts = mock(HostDao.class);
+        ThirdPartyBackupVolumeService volumes = mock(ThirdPartyBackupVolumeService.class);
+        ReflectionTestUtils.setField(provider, "agentManager", agent);
+        ReflectionTestUtils.setField(provider, "hostDao", hosts);
+        ReflectionTestUtils.setField(provider, "thirdPartyBackupVolumeService", volumes);
+        BackupVO backup = new BackupVO();
+        backup.setStatus(Backup.Status.BackingUp);
+        backup.setDate(new Date());
+        backup.setExternalId("/staging/vm/pre-volume-point");
+        backup.setDetails(new HashMap<>());
+        backup.getDetails().put("commvault.stage.host", "ablecube4");
+        when(hosts.findByName("ablecube4")).thenReturn(mock(HostVO.class));
+
+        assertFalse(ReflectionTestUtils.invokeMethod(provider, "reconcileIncompleteBackup", mock(VirtualMachine.class), backup));
+
+        assertEquals(Backup.Status.BackingUp, backup.getStatus());
+        verifyNoInteractions(agent, volumes);
+    }
+
     @Test
     public void offeringRemovalPreservesBackupSetsWithoutContactingCommvault() {
         AblestackCommvaultBackupProvider provider = new AblestackCommvaultBackupProvider() {

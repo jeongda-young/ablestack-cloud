@@ -1003,6 +1003,18 @@ Commvault·NetBackup·Veeam에 보내는 파일은 Mold가 먼저 전체 또는 
 이는 VM 전체를 다시 내보냈다는 의미가 아니라, 이번에 생성한 파일을 외부 솔루션이 보관했다는 의미이다.
 Mold의 백업 유형과 외부 작업의 유형을 각각 확인한다.
 
+현재 볼륨별 스테이징에서 Commvault·NetBackup의 요청은 다음과 같다. 볼륨 파일과 마지막 메타데이터에 같은 기준을 적용한다.
+
+| Mold VM 백업 유형 | 스테이징에 생성하는 데이터 | Commvault 요청 | NetBackup 요청 |
+| --- | --- | --- | --- |
+| `FULL` | 볼륨 전체 데이터 | `backupLevel=FULL`, `runIncrementalBackup=false`, `forceFullBackup=true` | `Full Backup` 스케줄로 실행 |
+| `INCREMENTAL` | RBD 변경분 또는 QCOW2 변경 블록으로 만든 증분 파일 | `backupLevel=FULL`, `runIncrementalBackup=false`, `forceFullBackup=true` | `Full Backup` 스케줄로 실행 |
+
+Mold가 부모 백업 관계와 복원 체인을 관리하고, 외부 솔루션은 이번에 생성된 파일 전체를 보관한다.
+현재 방식의 비동기 작업은 관리 서버 재시작 후에도 저장된 볼륨 계획과 외부 Job 참조로 이어서 처리한다.
+구형 디렉터리 스테이징에서 외부 Job ID 없이 남은 작업에 백업 요청을 새로 보내는 경로는 사용하지 않는다.
+업데이트는 진행 중인 백업·복원을 완료한 뒤 수행한다. 기존에 저장이 끝난 백업의 조회·복원과 외부 Job 상태 확인은 유지한다.
+
 Commvault·NetBackup·Veeam의 보관·만료는 외부 솔루션 정책을 따른다.
 Mold는 만료 결과를 동기화하며, 필요한 Full이나 증분 파일이 사라진 복원 시점은 복원 불가로 표시한다.
 외부 솔루션에서 볼륨별 작업이나 마지막 메타데이터를 임의로 삭제하면 전체 VM 복원에 영향을 줄 수 있다.

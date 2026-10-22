@@ -712,16 +712,6 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         return vmVolumes.stream().mapToLong(VolumeVO::getSize).max().orElse(0L);
     }
 
-    private long estimateReadyVolumeBytes(final List<VolumeVO> vmVolumes) {
-        if (CollectionUtils.isEmpty(vmVolumes)) {
-            return 0L;
-        }
-        return vmVolumes.stream()
-                .filter(volume -> Volume.State.Ready.equals(volume.getState()))
-                .mapToLong(VolumeVO::getSize)
-                .sum();
-    }
-
     private long getAvailableBytesOnHostPath(final Host host, final String path) {
         return thirdPartyBackupStagingService.getAvailableBytes(host, path);
     }
@@ -2645,18 +2635,6 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
             return answer != null ? StringUtils.defaultIfBlank(answer.getDetails(), defaultDetails) : defaultDetails;
         } catch (AgentUnavailableException | OperationTimedoutException e) {
             return defaultDetails;
-        }
-    }
-
-    private void cleanupBackupJobFiles(final Long hostId, final String backupJobId) {
-        try {
-            final Answer answer = agentManager.send(hostId, new AblestackBackupJobCleanupCommand(backupJobId));
-            if (answer == null || !answer.getResult()) {
-                LOG.warn("Failed to cleanup NetBackup backup job files [jobId: {}, hostId: {}]: {}",
-                        backupJobId, hostId, answer != null ? answer.getDetails() : null);
-            }
-        } catch (final AgentUnavailableException | OperationTimedoutException e) {
-            LOG.warn("Failed to send NetBackup backup job cleanup command [jobId: {}, hostId: {}]", backupJobId, hostId, e);
         }
     }
 

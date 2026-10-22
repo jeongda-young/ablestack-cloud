@@ -243,6 +243,55 @@ public class AblestackCommvaultClientTest {
     }
 
     @Test
+    public void stagedDeltasAndMetadataUseFullJobsAndResumeTheSavedJobWithoutResubmission() throws Exception {
+        stubTokenRenewal();
+        stubVmClient();
+        wireMockRule.stubFor(get(urlEqualTo("/api/Subclient?clientId=42"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"subClientProperties\":[{\"subClientEntity\":{"
+                        + "\"subclientId\":2,\"applicationId\":29,\"backupsetId\":3,\"instanceId\":4,"
+                        + "\"clientName\":\"ablecube4\",\"backupsetName\":\"i-2-220-VM\",\"subclientName\":\"default\","
+                        + "\"entityInfo\":{\"companyId\":0}}}]}")));
+        wireMockRule.stubFor(post(urlEqualTo("/api/Subclient/2"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"response\":[{\"errorCode\":0}]}")));
+        wireMockRule.stubFor(get(urlEqualTo("/api/V4/ServerPlan/7"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"plan\":{\"name\":\"staging-plan\"}}")));
+        wireMockRule.stubFor(get(urlEqualTo("/api/V2/StoragePolicy"))
+                .willReturn(aResponse().withStatus(200).withBody("{\"policies\":[{\"storagePolicy\":{"
+                        + "\"storagePolicyName\":\"staging-plan\",\"storagePolicyId\":8}}]}")));
+        AblestackCommvaultClient client = newClient();
+        int submissions = 0;
+        for (String path : List.of("/staging/vm/point/root.rbdiff", "/staging/vm/point/root.qcow2", "/staging/vm/point")) {
+            String jobId = String.valueOf(1200 + submissions);
+            wireMockRule.stubFor(post(urlEqualTo("/api/CreateTask"))
+                    .willReturn(aResponse().withStatus(200).withBody("{\"jobIds\":[" + jobId + "]}")));
+            ThirdPartyBackupManifest.Artifact artifact = new ThirdPartyBackupManifest.Artifact();
+            artifact.path = path;
+            artifact.backupUuid = "9474d3f1-450b-49b9-bd7b-4f714f403a8d";
+
+            client.backupVolumeArtifact("ablecube4", "i-2-220-VM", "7", artifact);
+
+            assertEquals(jobId, artifact.jobId);
+            assertFalse(artifact.completed);
+            wireMockRule.verify(postRequestedFor(urlEqualTo("/api/Subclient/2"))
+                    .withRequestBody(matchingJsonPath("$.subClientProperties.content[0].path", equalTo(path))));
+            wireMockRule.stubFor(post(urlEqualTo("/api/JobDetails"))
+                    .withRequestBody(equalToJson("{\"jobId\":" + jobId + "}"))
+                    .willReturn(aResponse().withStatus(200).withBody("{\"job\":{\"jobDetail\":{"
+                            + "\"progressInfo\":{\"state\":\"Running\"}}}}")));
+
+            // A new client represents the next polling pass after a management restart.
+            ThirdPartyBackupManifest.Artifact saved = new ObjectMapper().convertValue(artifact, ThirdPartyBackupManifest.Artifact.class);
+            newClient().backupVolumeArtifact(null, null, null, saved);
+
+            assertEquals(jobId, saved.jobId);
+            wireMockRule.verify(++submissions, postRequestedFor(urlEqualTo("/api/CreateTask"))
+                    .withRequestBody(matchingJsonPath("$.taskInfo.subTasks[0].options.backupOpts",
+                            equalToJson("{\"backupLevel\":\"FULL\",\"runIncrementalBackup\":false,\"forceFullBackup\":true}"))));
+            wireMockRule.verify(submissions, postRequestedFor(urlEqualTo("/api/CreateTask")));
+        }
+    }
+
+    @Test
     public void completedBackupResponseSavesTheCapturedEndTime() throws Exception {
         capturedJobInventory();
         ThirdPartyBackupManifest.Artifact artifact = capturedJobArtifact();

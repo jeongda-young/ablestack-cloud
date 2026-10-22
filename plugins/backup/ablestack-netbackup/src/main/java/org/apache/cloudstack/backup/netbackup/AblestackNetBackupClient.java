@@ -299,11 +299,6 @@ public class AblestackNetBackupClient {
     }
 
     public ThirdPartyBackupVolumeService.DeleteResult deleteVolumeArtifact(ThirdPartyBackupManifest.Artifact artifact,
-            boolean metadata, String pendingTicket) {
-        return deleteVolumeArtifact(artifact, metadata, pendingTicket, false);
-    }
-
-    public ThirdPartyBackupVolumeService.DeleteResult deleteVolumeArtifact(ThirdPartyBackupManifest.Artifact artifact,
             boolean metadata, String pendingTicket, boolean policyExpiration) {
         String name = filterValue(volumePolicyName(artifact, metadata));
         JSONObject jobs = artifactGetStrict(NETBACKUP_JOBS_PATH, "policyName eq '" + name + "'");
