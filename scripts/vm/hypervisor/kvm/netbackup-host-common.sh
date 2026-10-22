@@ -220,17 +220,66 @@ context_in_progress_file() {
   builtin echo "${STATE_ROOT}/contexts/${CONTEXT_KEY}.inprogress"
 }
 
+context_process_identity() {
+  python3 - "$1" <<'PY'
+from pathlib import Path
+import sys
+
+try:
+    boot = Path('/proc/sys/kernel/random/boot_id').read_text().strip()
+except OSError:
+    sys.exit(2)
+try:
+    raw = Path('/proc').joinpath(sys.argv[1], 'stat').read_text()
+    ticks = raw.rsplit(')', 1)[1].split()[19]
+except FileNotFoundError:
+    print('absent')
+    sys.exit(0)
+except (OSError, IndexError):
+    sys.exit(2)
+print(boot + ':' + ticks)
+PY
+}
+
+archive_abandoned_pre_context() {
+  local marker="$1" owner_pid owner_token old_backup current_token context_backup archive
+  # The caller holds the context flock. A legacy marker without process identity requires manual verification.
+  owner_pid="$( ( source "$marker"; printf '%s' "${CONTEXT_PRE_OWNER_PID:-}" ) )"
+  owner_token="$( ( source "$marker"; printf '%s' "${CONTEXT_PRE_OWNER_TOKEN:-}" ) )"
+  old_backup="$( ( source "$marker"; printf '%s' "${BACKUP_ID:-}" ) )"
+  [[ "$owner_pid" =~ ^[1-9][0-9]*$ && "$owner_token" =~ ^[[:xdigit:]-]+:[0-9]+$ ]] || return 1
+  [[ -n "$old_backup" && "$old_backup" != "$BACKUP_ID" ]] || return 1
+  current_token="$(context_process_identity "$owner_pid")" || return 1
+  [[ "$current_token" != "$owner_token" ]] || return 1
+  if [[ -f "$CONTEXT_FILE" ]]; then
+    context_backup="$( ( source "$CONTEXT_FILE"; printf '%s' "${BACKUP_ID:-}" ) )"
+    [[ "$context_backup" == "$old_backup" ]] || return 1
+  fi
+  archive="$(mktemp -d "${STATE_ROOT}/contexts/recovered-${CONTEXT_KEY}.XXXXXXXX")" || return 1
+  if [[ -f "$CONTEXT_FILE" ]]; then
+    mv -- "$CONTEXT_FILE" "$archive/" || return 1
+  fi
+  mv -- "$marker" "$archive/" || return 1
+  log -ne "Archived abandoned NetBackup PRE context backupId=${old_backup} archive=${archive}; staged payloads and Mold jobs are preserved"
+}
+
 mark_context_in_progress() {
-  local marker
+  local marker owner_token
   marker="$(context_in_progress_file)"
   if [[ -e "${marker}" ]]; then
-    fail "NetBackup staging context is already initialized for ${CONTEXT_KEY}. Disable multistreaming for this policy/schedule or clean stale state after verification: ${marker}"
+    if ! archive_abandoned_pre_context "$marker"; then
+      fail "NetBackup staging context is already initialized for ${CONTEXT_KEY}. Disable multistreaming for this policy/schedule or archive stale state after verifying its owner: ${marker}"
+    fi
   fi
+  owner_token="$(context_process_identity "$$")" || owner_token="unknown"
   write_state_file "${marker}" \
     POLICY_NAME "${POLICY_NAME}" \
     SCHEDULE_NAME "${SCHEDULE_NAME}" \
     CLIENT_NAME "${CLIENT_NAME}" \
-    SESSION_TIMESTAMP "${SESSION_TIMESTAMP}"
+    SESSION_TIMESTAMP "${SESSION_TIMESTAMP}" \
+    BACKUP_ID "${BACKUP_ID}" \
+    CONTEXT_PRE_OWNER_PID "$$" \
+    CONTEXT_PRE_OWNER_TOKEN "$owner_token"
 }
 
 clear_context_in_progress() {

@@ -6058,6 +6058,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             response.setCapabilities(backupAnswer.getCapabilities());
             response.setBandwidthLimitMbps(backupAnswer.getBandwidthLimitMbps());
             response.setBandwidthStatus(backupAnswer.getBandwidthStatus());
+            if (StringUtils.isNotBlank(backup.getDetail(ThirdPartyBackupManifest.PREPARATION_DETAILS_KEY))) {
+                response.setDetails(backup.getDetail(ThirdPartyBackupManifest.PREPARATION_DETAILS_KEY));
+            }
             if (ThirdPartyBackupManifest.VOLUME_MODE.equals(backup.getDetail(ThirdPartyBackupManifest.MODE_KEY))
                     && "COMPLETED".equals(backupAnswer.getState()) && backupAnswer.getResult()) {
                 response.setState("RUNNING");
@@ -7071,6 +7074,9 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             backupDao.loadDetails((BackupVO) backup);
             final boolean cancellationPending = isBackupCancellationPending((BackupVO) backup);
             response.setBackupCancellationPending(cancellationPending);
+            if (Backup.Status.BackingUp.equals(backup.getStatus()) && StringUtils.isNotBlank(backup.getDetail(ThirdPartyBackupManifest.PREPARATION_DETAILS_KEY))) {
+                response.setBackupJobDetails(backup.getDetail(ThirdPartyBackupManifest.PREPARATION_DETAILS_KEY));
+            }
             if (cancellationPending) {
                 response.setBackupJobDetails(backup.getDetail(AblestackBackupFrameworkUtils.BACKUP_CANCELLATION_DETAIL));
             }

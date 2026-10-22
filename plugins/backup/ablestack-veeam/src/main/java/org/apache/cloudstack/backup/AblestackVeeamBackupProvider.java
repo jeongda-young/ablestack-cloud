@@ -123,6 +123,8 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
     private static final String BACKUP_ENGINE_RBD_DIFF = "RBD_DIFF";
     private static final String DETAIL_CHAIN_SEALED = "veeam.chain.sealed";
     private static final String DETAIL_CHAIN_SEAL_REASON = "veeam.chain.seal.reason";
+    private static final String DETAIL_ARTIFACT_JOBS_CLEANUP = "veeam.artifact.jobs.cleanup";
+    private static final String DETAIL_ARTIFACT_JOB_REMOVED_PREFIX = "veeam.artifact.job.removed.";
     private static final String BACKUP_TRACE = "[ABLESTACK_VEEAM_BACKUP_TRACE]";
     private static final String RESTORE_TRACE = "[ABLESTACK_VEEAM_RESTORE_TRACE]";
     private static final String DETAIL_CHECKPOINT_NAME = "ablestack.veeam.checkpoint.name";
@@ -2094,6 +2096,11 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
             }
 
             @Override
+            public void committed(Backup current, ThirdPartyBackupManifest.Artifact artifact, boolean metadata) {
+                retireArtifactJob(current, artifact, metadata);
+            }
+
+            @Override
             public void completed(final Backup current) {
                 if (BACKUP_ENGINE_QCOW2.equals(getBackupDetail(current, DETAIL_BACKUP_ENGINE))
                         && StringUtils.isBlank(getBackupDetail(current, DETAIL_CHECKPOINT_XML))) {
@@ -2104,6 +2111,7 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                     backupDetailsDao.addDetail(current.getId(), DETAIL_CHECKPOINT_XML, xml, false);
                     current.getDetails().put(DETAIL_CHECKPOINT_XML, xml);
                 }
+                retireCompletedArtifactJobs(current);
             }
 
             @Override
@@ -2111,6 +2119,31 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                 sealParentBackupChainIfIncremental(current, "failed-volume-child");
             }
         };
+    }
+
+    private void retireArtifactJob(Backup backup, ThirdPartyBackupManifest.Artifact artifact, boolean metadata) {
+        if (artifact == null || StringUtils.isBlank(artifact.path) || !backup.getUuid().equals(artifact.backupUuid)) {
+            throw new CloudRuntimeException("Cannot retire another backup's Veeam job");
+        }
+        final String key = DETAIL_ARTIFACT_JOB_REMOVED_PREFIX + java.util.UUID.nameUUIDFromBytes(
+                artifact.path.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+        if ("COMPLETED".equals(getBackupDetail(backup, key))) { return; }
+        getSshClient(backup.getZoneId()).retireVolumeArtifactJob(artifact, metadata);
+        updateBackupDetail(backup, key, "COMPLETED");
+    }
+
+    private void retireCompletedArtifactJobs(Backup backup) {
+        if ("COMPLETED".equals(getBackupDetail(backup, DETAIL_ARTIFACT_JOBS_CLEANUP))) { return; }
+        final ThirdPartyBackupManifest manifest = ThirdPartyBackupManifest.fromJson(getBackupDetail(backup, ThirdPartyBackupManifest.DETAIL_KEY));
+        manifest.validate(true);
+        if (!getName().equals(manifest.getProvider()) || !backup.getUuid().equals(manifest.getBackupUuid())) {
+            throw new CloudRuntimeException("Veeam job cleanup manifest belongs to another backup");
+        }
+        updateBackupDetail(backup, DETAIL_ARTIFACT_JOBS_CLEANUP, "WAITING");
+        for (ThirdPartyBackupManifest.Artifact artifact : manifest.getOwnedArtifacts()) {
+            retireArtifactJob(backup, artifact, artifact == manifest.getMetadata());
+        }
+        updateBackupDetail(backup, DETAIL_ARTIFACT_JOBS_CLEANUP, "COMPLETED");
     }
 
     private Host findBackupJobHost(final Backup backup, final VirtualMachine vm) {
@@ -2306,6 +2339,13 @@ public class AblestackVeeamBackupProvider extends AdapterBase implements BackupP
                     loadBackupDetailsIfNeeded(backup);
                     if (backupDeletionService.resume(backup, point -> deleteOwnedBackup(point, false))) { return false; }
                     if (!ThirdPartyBackupManifest.VOLUME_MODE.equals(getBackupDetail(backup, ThirdPartyBackupManifest.MODE_KEY))) { return true; }
+                    if (Backup.Status.BackedUp.equals(backup.getStatus())) {
+                        try {
+                            retireCompletedArtifactJobs(backup);
+                        } catch (RuntimeException e) {
+                            LOG.debug("Veeam temporary job cleanup remains pending for backup [{}]: {}", backup.getUuid(), e.getMessage());
+                        }
+                    }
                     if (StringUtils.isNotBlank(getBackupDetail(backup, ThirdPartyBackupManifest.DELETE_PROGRESS_KEY))
                             || (backup.getDate() != null && backup.getDate().getTime() <= System.currentTimeMillis() - VEEAM_SYNC_DELETE_GRACE_MS)) {
                         try {

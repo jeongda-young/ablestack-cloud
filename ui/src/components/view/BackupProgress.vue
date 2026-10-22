@@ -51,7 +51,7 @@
               <span>{{ $t('label.volume') }} :</span>
               <span>{{ volumeIndex }}/{{ volumeCount }}</span>
             </div>
-            <div v-if="isRestoring && jobDetails && !isFailedJobState(jobState)" class="backup-progress-tooltip-row">
+            <div v-if="isActive && jobDetails && !isCancellationPending && !isFailedJobState(jobState)" class="backup-progress-tooltip-row">
               <span>{{ $t('label.details') }} :</span>
               <span>{{ jobDetails }}</span>
             </div>
@@ -170,14 +170,16 @@ export default {
     }
   },
   data () {
+    const backingUp = String(this.record?.status || this.statusText || '').toLowerCase() === 'backingup'
     return {
       timer: null,
       localStatus: String(this.record?.status || this.statusText || ''),
       progress: this.normalizeProgress(this.record?.backupjobprogress ?? this.record?.progress),
-      jobState: this.record?.backupcancellationpending ? 'CANCEL_PENDING' : (this.record?.restorejobstate || this.record?.backupjobstate || ''),
+      jobState: this.record?.backupcancellationpending ? 'CANCEL_PENDING'
+        : (backingUp ? this.record?.backupjobstate || '' : this.record?.restorejobstate || this.record?.backupjobstate || ''),
       cancellationDetails: this.record?.backupcancellationpending ? this.record?.backupjobdetails || '' : '',
-      step: this.record?.restorejobstep || this.record?.backupjobstep || '',
-      jobDetails: this.record?.restorejobdetails || '',
+      step: backingUp ? this.record?.backupjobstep || '' : this.record?.restorejobstep || this.record?.backupjobstep || '',
+      jobDetails: backingUp ? this.record?.backupjobdetails || '' : this.record?.restorejobdetails || '',
       volumeIndex: null,
       volumeCount: null,
       stagingQueue: this.record?.stagingqueue || null,
@@ -328,12 +330,11 @@ export default {
       if (progress !== null) {
         this.progress = progress
       }
-      this.jobState = this.record?.backupcancellationpending ? 'CANCEL_PENDING' : (this.record?.restorejobstate || this.record?.backupjobstate || '')
+      this.jobState = this.record?.backupcancellationpending ? 'CANCEL_PENDING'
+        : (this.isRestoring ? this.record?.restorejobstate || '' : this.record?.backupjobstate || '')
       this.stagingQueue = this.record?.stagingqueue || null
-      this.step = this.record?.restorejobstep || this.record?.backupjobstep || this.step
-      if (Object.prototype.hasOwnProperty.call(this.record || {}, 'restorejobdetails')) {
-        this.jobDetails = this.record.restorejobdetails || ''
-      }
+      this.step = (this.isRestoring ? this.record?.restorejobstep : this.record?.backupjobstep) || this.step
+      this.jobDetails = this.isRestoring ? this.record?.restorejobdetails || '' : this.record?.backupjobdetails || ''
       this.logPath = this.record?.restorejoblogpath || this.record?.backupjoblogpath || this.logPath
       const bandwidthLimitMbps = this.normalizeBandwidth(this.record?.bandwidthlimitmbps)
       if (bandwidthLimitMbps !== null) {
@@ -414,8 +415,8 @@ export default {
         this.$emit('capabilities-change', response.capabilities || '')
       }
       this.bandwidthStatus = response.bandwidthstatus || this.bandwidthStatus
+      this.jobDetails = response.details || ''
       if (Object.prototype.hasOwnProperty.call(response, 'details')) {
-        if (wasRestoring) this.jobDetails = response.details || ''
         const status = String(this.localStatus || '').toLowerCase()
         this.failureDetails = ['failed', 'error'].includes(status) ? (response.details || '') : ''
         if (wasRestoring && this.isFailedJobState(response.state)) {

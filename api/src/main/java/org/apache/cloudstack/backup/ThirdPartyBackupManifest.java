@@ -32,6 +32,7 @@ public class ThirdPartyBackupManifest {
     public static final String FILE_NAME = "backup-manifest.json";
     public static final String DETAIL_KEY = "thirdparty.volume.manifest";
     public static final String MODE_KEY = "thirdparty.staging.mode";
+    public static final String PREPARATION_DETAILS_KEY = "thirdparty.volume.preparation.details";
     public static final String VOLUME_MODE = "VOLUME";
     public static final String DELETE_PROGRESS_KEY = "thirdparty.volume.delete.progress";
     public static final String CATALOG_FAILURE_KEY = "thirdparty.volume.catalog.failure";

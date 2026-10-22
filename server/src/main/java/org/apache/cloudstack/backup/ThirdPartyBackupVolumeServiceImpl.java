@@ -3108,8 +3108,20 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
                     throw new CloudRuntimeException("Source preparation belongs to another backup");
                 }
                 observeAdmitted(tracked.getId(), host, tracked.getUuid(), "BACKUP");
-                if (transfer.ready()) {
-                    agentManager.send(host.getId(), new AblestackVolumeStagingCommand(tracked.getUuid(), "START", -1, null));
+                try {
+                    if (transfer.ready()) {
+                        Answer started = agentManager.send(host.getId(), new AblestackVolumeStagingCommand(tracked.getUuid(), "START", -1, null));
+                        if (started == null || !started.getResult()) {
+                            throw new CloudRuntimeException(started == null ? "Host source start response is missing" : started.getDetails());
+                        }
+                        backupDetailsDao.removeDetail(tracked.getId(), ThirdPartyBackupManifest.PREPARATION_DETAILS_KEY);
+                    } else {
+                        backupDetailsDao.addDetail(tracked.getId(), ThirdPartyBackupManifest.PREPARATION_DETAILS_KEY,
+                                StringUtils.defaultIfBlank(transfer.preparationWaitReason(), "Waiting for the external parent backup Job to finish"), false);
+                    }
+                } catch (RuntimeException e) {
+                    backupDetailsDao.addDetail(tracked.getId(), ThirdPartyBackupManifest.PREPARATION_DETAILS_KEY,
+                            "Source preparation is unconfirmed: " + e.getMessage(), false);
                 }
                 return true;
             }
@@ -3211,6 +3223,14 @@ public class ThirdPartyBackupVolumeServiceImpl extends ManagerBase implements Th
                 if (!artifact.completed) {
                     return true;
                 }
+            }
+            // A provider may remove temporary job configuration only after its exact restore-point reference is durable.
+            // Retry configuration cleanup without submitting another transfer or releasing the staged payload.
+            try {
+                transfer.committed(tracked, artifact, metadata);
+            } catch (RuntimeException e) {
+                saveCleanupState(tracked.getId(), "WAITING", "Artifact is saved; temporary job configuration cleanup is pending: " + e.getMessage());
+                return true;
             }
             if (metadata && artifact.completed) {
                 manifest.validate(true);

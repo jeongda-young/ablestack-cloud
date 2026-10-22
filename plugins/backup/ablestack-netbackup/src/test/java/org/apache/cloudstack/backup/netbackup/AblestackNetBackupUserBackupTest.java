@@ -130,6 +130,26 @@ public class AblestackNetBackupUserBackupTest {
         assertFalse(client().userBackupSourceReady(POLICY));
     }
 
+    @Test public void delayedRetryAndFailedDoneJobsDoNotKeepTheStagingSlotWaiting() throws Exception {
+        jobs(new JSONArray().put(job("78", "schedule", "DONE", 73))
+                .put(job("83", "schedule", "WAITING_FOR_RETRY", 74)));
+        assertTrue(client().userBackupSourceReady(POLICY));
+        assertEquals(null, client().userBackupSourceWaitReason(POLICY));
+    }
+
+    @Test public void sourceWaitReasonIdentifiesTheActualActiveBootstrapJob() throws Exception {
+        jobs(new JSONArray().put(job("78", "schedule", "WAITING_FOR_RETRY", 73))
+                .put(job("83", "schedule", "ACTIVE", 0)));
+        String reason = client().userBackupSourceWaitReason(POLICY);
+        assertTrue(reason.contains("Job 83 (ACTIVE)"));
+        assertTrue(reason.contains(POLICY));
+        assertFalse(reason.contains("Job 78"));
+        jobs(new JSONArray().put(job("84", "schedule", "QUEUED", 0)));
+        assertFalse(client().userBackupSourceReady(POLICY));
+        jobs(new JSONArray().put(job("85", "schedule", "UNKNOWN", 0)));
+        assertFalse(client().userBackupSourceReady(POLICY));
+    }
+
     @Test public void submissionBoundaryIsReadBeforeTheRequestAndOldJobFileListsAreNotQueried() throws Exception {
         server.stubFor(get(urlPathEqualTo("/netbackup/admin/jobs/"))
                 .withQueryParam("sort", equalTo("-jobId")).withQueryParam("page%5Blimit%5D", equalTo("1"))

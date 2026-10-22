@@ -29,6 +29,7 @@ under the License.
 - [백업 솔루션별 준비와 실행 순서](#백업-솔루션별-준비와-실행-순서)
 - [NetBackup VM별 스케줄 구성 시나리오](#netbackup-vm별-스케줄-구성-시나리오)
 - [기존 NetBackup 구성 환경의 업데이트](#기존-netbackup-구성-환경의-업데이트)
+- [Veeam 13.0 VM별 스케줄 검증 시나리오](#veeam-130-vm별-스케줄-검증-시나리오)
 - [NetBackup·Veeam 사전 구성 파라미터 비교](#netbackupveeam-사전-구성-파라미터-비교)
 - [Full 및 증분 백업 운영](#full-및-증분-백업-운영)
 - [작업 상태와 제어](#작업-상태와-제어)
@@ -824,9 +825,98 @@ tail -n 100 /var/log/netbackup-mold-hook.log
 tail -n 100 '/var/lib/ablestack/backup/jobs/<백업 UUID>/job.log'
 ```
 
+같은 Host의 두 VM 중 하나가 `PREPARING / ADMITTED`, 다른 하나가
+`WAITING / HOST_CONCURRENCY_LIMIT`이면 Host 스테이징 슬롯을 순차 사용하는 상태다.
+큐 대기 제한은 `backup.thirdparty.staging.queue.timeout`이며 기본 `3600`초다.
+VM 하나의 볼륨·메타데이터 처리가 끝나야 다음 VM이 슬롯을 얻는다. UI의 대기 만료 시각도 함께 확인한다.
+작은 `.volume-bootstrap` 마커는 슬롯 대기 전에 생성하므로, 부모 Hook이 대기 VM의 마커를 기다리면서
+먼저 허용된 VM의 진행을 막지 않는다. 실제 볼륨 파일 생성은 입장 허용과 부모 Job 종료 확인 이후에 시작한다.
+
+`PREPARING`이 계속되면 Mold 상태 툴팁의 상세 사유에서 기다리는 부모 Job ID·상태를 확인한다.
+조회가 실패하면 오류를 표시하고 파일 생성을 보류한다. Host에서는 다음을 확인한다.
+
+```bash
+cat '/var/lib/ablestack/backup/jobs/<백업 UUID>/volume-request.json'
+systemctl status 'ablestack-backup-<백업 UUID>' --no-pager -l
+tail -n 100 '/var/lib/ablestack/backup/jobs/<백업 UUID>/job.log'
+```
+
+`volume-request.json`의 `gate: true`는 부모 작업 종료를 기다리는 단계다.
+NetBackup의 `Failed / Done` 작업은 종료됐으며 source 준비를 막지 않는다.
+`Waiting for retry`도 실행 중인 Hook이 없으므로 source 준비를 막지 않지만,
+부모의 `Active`·`Queued` 또는 확인되지 않은 상태는 계속 기다린다. 외부 전송 자체의 성공 판정과는 별개다.
+상태 코드 `74`와 `Client timed out waiting for bpstart_notify to complete`는 부모 Pre Hook 시간 초과다.
+대기 중 재시도 Job이 있으면 해당 부모 Job을 확인하고 취소한 뒤 새 기준 백업을 실행한다.
+실제 볼륨 전송 Job이나 진행 중인 Mold 작업을 일괄 취소하거나 `volume-start` 파일을 수동 생성하지 않는다.
+
+이전 Pre Hook이 비정상 종료해 context가 남았으면 수정본은 context 잠금을 확보한 뒤
+기록된 부팅 ID·PID·프로세스 시작 시각과 NetBackup Backup ID를 확인한다.
+이전 프로세스가 종료된 다른 백업의 context만 보관 디렉터리로 옮기며, 실행 중이거나 확인할 수 없으면 중단한다.
+소유 프로세스 정보가 없는 구형 `.inprogress`는 자동 정리하지 않는다.
+이때는 NetBackup·Mold의 활성 작업과 잠금 소유자가 없는지 먼저 확인하고 해당 context의
+`.inprogress`와 `.env`만 별도 보관한다. 볼륨 파일·DB 행·작업 디렉터리는 삭제하지 않는다.
+Post Hook은 Pre 실패 `73`·시간 초과 `74` 또는 다른 Job의 context로 오래된 Mold 백업을 갱신하지 않는다.
+
 첫 Full과 후속 증분이 완료된 뒤 테스트 복원까지 확인한다.
 운영 중 수정본을 적용할 때는 [기존 NetBackup 구성 환경의 업데이트](#기존-netbackup-구성-환경의-업데이트)를 따른다.
 10.5와 11.1의 실서버 검증 범위는 [API 호환성 확인](#netbackup-105111-api-호환성-확인)을 참고한다.
+
+**실패 후 자동 재시도와 Frequency를 함께 구성한다.**
+
+`Frequency`만 설정해도 실패한 기준 정책이 같은 간격으로 계속 실행되는 것은 아니다.
+성공한 백업 이후의 실행 주기는 정책의 Frequency로 계산하지만, 실패 후에는 Primary 서버의
+`Host properties → Global attributes`에 있는 공통 설정을 함께 적용한다.
+
+| 설정 | 적용 내용 | 1시간 간격 재시도 예시 |
+| --- | --- | --- |
+| 기준 `Full Backup` / Frequency | 성공한 기준 백업 이후 다음 실행 주기 | `1 hour` |
+| Primary / Job retry delay | 실패한 Job의 재시도 간격. 기본 `10 minutes` | `60 minutes` |
+| Primary / Schedule backup attempts | 과거 지정 시간 동안 허용할 시도 횟수. 기본 `2 tries in 12 hours` | `4 tries in 1 hour` |
+
+이 예시는 시간당 실행에서 기본 횟수 제한 때문에 장시간 대기하는 상황을 피하기 위한 값이다.
+시도 제한을 해제하는 값은 아니며, 다른 수동 실행 등으로 한도를 소진하면 다시 대기할 수 있다.
+진행 중인 작업, 실행 창, Job 동시 실행 제한과 저장소 자원 때문에 실제 시작은 늦어질 수 있다.
+`mold-transfer`는 User Backup이므로 이 자동 스케줄 시도 제한의 적용 대상이 아니지만,
+기준 Full Job이 실행되지 않으면 새 VM 백업 요청 자체가 시작되지 않는다.
+
+Primary 서버에서 현재 값을 확인한 뒤 필요한 공통 값을 변경한다. KVM Host에서 실행하지 않는다.
+
+```bash
+# 현재 Primary 공통 설정 확인
+/usr/openv/netbackup/bin/admincmd/bpconfig -U
+
+# 실패 후 약 1시간 간격 재시도: 최근 1시간 동안 최대 4회 허용
+/usr/openv/netbackup/bin/admincmd/bpconfig -wi 60 -tries 4 -period 1
+
+# 변경된 정책을 스케줄러가 다시 읽도록 요청
+/usr/openv/netbackup/bin/admincmd/nbpemreq -updatepolicies
+
+# 저장된 정책과 실제 다음 실행 계산을 확인
+/usr/openv/netbackup/bin/admincmd/bppllist ablecube4 -L
+/usr/openv/netbackup/bin/admincmd/nbpemreq -policies screen ablecube4
+```
+
+재시도 간격과 시도 제한은 **Primary 서버 전체 정책에 적용**된다.
+예를 들어 `ablecube1`의 Frequency가 5시간이고 `ablecube4`가 5분이면, 성공 후에는 각 주기를 따르지만
+둘 다 실패한 경우 위 설정의 공통 재시도 간격은 60분이다.
+정책별 Frequency와 실패 재시도 간격을 각각 동일하게 만드는 설정으로 해석하지 않는다.
+원래 설정으로 되돌릴 때는 처음 확인한 `bpconfig -U` 값을 사용한다.
+일반 제품 기본값은 `-wi 10 -tries 2 -period 12`이며 기존 운영 값과 같다고 가정하지 않는다.
+
+정책 변경 확인 간격은 기본 10분이다. `nbpemreq -updatepolicies`는 정책 재읽기 요청이며,
+실패 이력 삭제나 강제 백업 실행 명령이 아니다.
+`nbpemreq -policies screen`에서 `Earliest time based on failure history`, `triesPerPeriod`,
+`timePeriod`, `jobRetryDelay`, `Next schedule to run`의 `Start`를 확인한다.
+예를 들어 `triesPerPeriod 2 timePeriod 43200`과 수 시간 뒤의 `Start`가 표시되면,
+정책이 활성화되고 창이 열려 있어도 실패 시도 제한으로 자동 실행이 미뤄질 수 있다.
+반대로 현재 `Last backup`과 `Due`가 5시간 차이면 스케줄러는 5시간 주기를 반영한 상태다.
+과거 Job 목록의 간격만으로 현재 Frequency 적용 여부를 판단하지 않는다.
+
+사전구성 도구는 이 공통 재시도 설정의 확인 필요성을 출력하며, 값을 조회하거나 자동 변경하지 않는다.
+실패한 Hook이나 API 인증 문제는 별도로 해결해야 한다. 재시도 주기 변경 자체가 실패 원인을 고치지는 않는다.
+공식 기준은 [10.5 Global attributes](https://origin-www.veritas.com/content/support/en_US/doc/18716246-165970620-0/v40147083-165970620),
+[bpconfig](https://origin-www.veritas.com/support/en_US/doc/15263389-165221817-0/v14660491-165221817),
+[nbpemreq](https://origin-www.veritas.com/support/en_US/doc/15263389-165221817-0/v14670858-165221817)를 따른다.
 
 **8. 백업 삭제와 테스트 초기화를 확인한다.**
 
@@ -865,6 +955,8 @@ Host에 복사·생성된 실행 파일은 패키지 업데이트 후 사전구�
 | 관리 서버의 NetBackup Java 플러그인 | 수정본이 포함된 관리 서버 패키지를 설치하고 Mold 관리 서비스를 재시작한다. 관리 서버가 여러 대이면 모두 반영한다. |
 | Host의 `netbackup-host-restore-watcher.py` 및 사전구성에서 설치하는 파일 | 수정본이 포함된 Host 패키지를 설치하고 각 Host에서 `netbackup-host-config.py`를 다시 실행한다. |
 | Host Agent의 전송 명령 처리와 `netbackup-volume-backup.py` | 모든 백업 Host의 Agent·스크립트 패키지를 함께 업데이트하고 Agent를 재시작한다. 관리 서버 재시작만으로는 반영되지 않는다. |
+| 공통 `thirdparty_volume_backup.py`와 NetBackup Pre/Post·common 스크립트 | NetBackup과 Veeam을 사용하는 모든 대상 Host의 스크립트를 함께 업데이트한다. 이번 bootstrap 생성 순서와 context 처리 수정이 포함된다. |
+| Mold 상태 툴팁 | 수정한 UI 정적 파일도 배포하여 진행 중인 백업의 대기 상세를 표시한다. |
 
 패키지의 감시기 원본은 `/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/netbackup-host-restore-watcher.py`이며,
 실제 service는 `/usr/local/sbin/netbackup-host-restore-watcher`를 실행한다.
@@ -1024,13 +1116,96 @@ Host 스크립트 변경은 없으므로 이 수정 때문에 Host 사전구성�
 1. Veeam UI 또는 Job 스케줄에서 기준 Job을 실행한다.
 2. Pre 스크립트가 Mold에 대상 VM의 백업을 요청한다.
 3. 기준 Job이 종료된 뒤 Mold가 RBD 또는 QCOW2 데이터를 볼륨별 스테이징 파일로 생성한다.
-4. Mold가 기준 Linux Agent Job을 복제하여 해당 볼륨 파일을 Veeam에 저장한다.
-5. 저장 완료를 확인한 파일을 정리하고 다음 볼륨을 처리한다.
+4. Mold가 기준 Linux Agent Job을 복제하여 해당 볼륨 파일을 snapshot-less 파일 백업으로 저장한다.
+5. 정확한 Restore Point를 Mold DB에 저장한 뒤 임시 Job 설정을 제거한다. 보관 백업과 복원 시점은 유지한다.
+   Job 제거와 백업 보존을 다시 확인한 뒤 스테이징 파일을 정리하고 다음 볼륨을 처리한다.
 6. 마지막 메타데이터 Job까지 완료한 후 Mold에서 VM 백업이 `BackedUp`인지 확인한다.
 
-기준 Job과 Mold가 만든 볼륨별 Job을 구분한다.
-외부 UI 복원에서 선택해야 하는 마지막 메타데이터 Job과 실제 VM 복원 절차는
+기준 Job은 유지하며, 볼륨·메타데이터별 Job은 전송 중에만 사용하고 성공 후 정리한다.
+한 Job의 선택 경로를 반복 변경하는 방식은 아니다. 서로 독립된 보관 백업이므로 기존 복원·삭제 단위를 유지한다.
+복원은 `Jobs` 목록 대신 `Backups`의 백업 이름과 정확한 Restore Point로 선택한다.
+Job 제거 후 보관 백업이 `Orphaned`로 분류될 수 있다.
+Job 수가 줄어도 볼륨·메타데이터 백업 수와 저장소 사용량은 별도로 남는다.
+외부 UI 복원에서 선택해야 하는 마지막 메타데이터 백업과 실제 VM 복원 절차는
 아래의 [외부 UI 복원 안내](#netbackupveeam-외부-ui의-rbdqcow2-복원)를 따른다.
+
+Job 정리는 소유권·성공 세션·단일 Restore Point가 정확히 확인된 경우에만 수행한다.
+확인 오류는 정리 `WAITING`으로 남겨 재시도하며 재전송하거나 보관 백업을 삭제하지 않는다.
+완료된 기존 볼륨별 백업의 Job도 카탈로그 동기화에서 같은 검증 후 정리한다.
+수동으로 만든 동명 Job이나 미완료·모호한 작업을 이름만 보고 일괄 삭제하지 않는다.
+기준 Job의 보존 설정은 자동 변경하지 않는다. 분리된 백업의 자동 보존은 Veeam의 일수 기반 정책을 검토한다.
+Restore Point 개수 기반 보존만으로 Orphaned 백업이 계속 만료된다고 가정하지 않는다.
+정확한 보관본 삭제는 Mold의 백업 삭제를 사용하며, 증분 의존 지점은 삭제 대기로 남을 수 있다.
+공식 명령은 [Remove-VBRComputerBackupJob](https://helpcenter.veeam.com/docs/vbr/powershell/remove-vbrcomputerbackupjob.html?ver=13),
+보관 기준은 [분리된 Agent 백업](https://helpcenter.veeam.com/docs/vbr/userguide/agent_backup_detach.html)을 참고한다.
+
+#### Veeam 13.0 VM별 스케줄 검증 시나리오
+
+third-party 스테이징이 이미 구성된 환경에서 연동부터 백업·복원까지 검증하는 순서다.
+대상은 Veeam **13.0**이며, 관리 서버 플러그인과 아래 공통 Host 수정본을 함께 배포한다.
+공식 `ver=13` 문서는 이후 13.x 빌드로 갱신될 수 있으므로 실제 13.0 빌드 번호와 PowerShell 지원 옵션을 기록한다.
+
+| 항목 | 테스트 환경 |
+| --- | --- |
+| Mold API | `http://192.168.1.30:8080/client/api` |
+| 실행 Host | 두 VM 모두 `ablecube1` |
+| RBD VM | `veeam-rbd` / `i-2-319-VM` / `9d3f75e4-da49-4a00-b9c6-c21e5233a16c` |
+| GFS2 QCOW2 VM | `veeam-gfs` / `i-2-320-VM` / `0b1deab2-d7dd-4f9d-929d-f2d58f695dd4` |
+| 공통 staging mount·root | 둘 다 `/mnt/glue-gfs`; 기존 third-party 설정 유지 |
+| Veeam 기준 Job | 예: `veeam-ablecube1`; Host명과 다르게 지정 가능 |
+| 기준 Job SelectedFiles | `/mnt/glue-gfs/ablestack-veeam/bootstrap/ablecube1/veeam-ablecube1` |
+| 실제 볼륨·metadata staging | `/mnt/glue-gfs/ablestack-veeam/<VM 내부 이름>/<백업 timestamp>`; Mold가 관리 |
+| VM 선택 / 체인 | `--vm-schedule-backup true --incremental-backup true --backup-chain-size 8` |
+
+1. 관리 서버와 `ablecube1`의 패키지를 업데이트한다. 관리 서버는 공통 API·백업 처리와 Veeam 플러그인을 포함하고
+   `mold.service`를 재시작한다. Host는 Agent·공통 백업 스크립트·Veeam 런타임을 함께 반영한다.
+   VM을 다른 Host로 이동할 테스트까지 수행하려면 이동 대상 Host도 같은 방식으로 구성한다.
+2. VBR에서 저장소와 `ablecube1` Linux Agent 연결을 확인하고, Host별 기준 파일 백업 Job을 준비한다.
+   GFS2에서는 snapshot-less 파일 백업을 사용한다. Job 자동 실행은 구성이 끝날 때까지 보류한다.
+   관리 서버의 VBR SSH·PowerShell 연결과 Host의 Mold API·VBR 연결도 확인한다.
+3. `ablecube1`에서 다음 사전구성을 실행한다. 인증정보는 실제 환경 값으로 입력한다.
+
+   ```bash
+   python3 /etc/ablestack/veeam/veeam-host-config.py \
+     --job-name 'veeam-ablecube1' \
+     --kvm-hostname 'ablecube1' \
+     --mold-url 'http://192.168.1.30:8080/client/api' \
+     --admin-apikey '<Mold 관리자 API key>' \
+     --admin-secretkey '<Mold 관리자 secret key>' \
+     --veeam-host '<VBR 주소>' \
+     --veeam-user '<VBR 사용자>' \
+     --veeam-password '<VBR 암호>' \
+     --vm-schedule-backup true \
+     --incremental-backup true \
+     --backup-chain-size 8
+   ```
+
+   비동적 설정 변경으로 재시작 안내가 나오면 관리 서버에서 `mold.service`를 재시작하고 같은 명령을 다시 실행한다.
+4. 출력된 경로를 기준 Job의 SelectedFiles에 입력한다. staging 전체 디렉터리를 선택하지 않는다.
+   생성된 `<JOB>-pre-notify.sh`와 `<JOB>-post-notify.sh`를 VBR에 복사하고
+   **Guest Processing → Scripts의 Pre-job/Post-job**으로 등록한다.
+   실행 위치·설치 경로는 [Veeam 신규 구성 안내](#활성-상태와-로그-확인)를 따른다.
+5. 두 VM에 `VeeamBackup` 오퍼링을 연결하고 각각 매시 `50`분, `Asia/Seoul` 등 원하는 Mold 스케줄을 지정한다.
+   기준 Job은 해당 시각 이후 허용 지연 안에 실행되도록 VBR 스케줄을 구성한다.
+   Mold 스케줄 도래만으로 VBR Job이 자동 시작되지는 않는다. 실제 실행 시각과 VBR 서버 시간대도 확인한다.
+6. ROOT·DATA 볼륨에 첫 검증 파일을 만든 뒤 예약 시각 이후 기준 Job을 실행한다.
+   두 VM 요청이 접수되고, Host 제한 기본 `1`이면 한 VM이 입장하고 다른 VM은 `HOST_CONCURRENCY_LIMIT`으로 대기한다.
+   두 VM 모두 bootstrap 마커를 준비하므로 대기 VM 때문에 부모 Pre Hook이 멈추면 안 된다.
+   부모 종료 후 볼륨별 전송과 최종 metadata까지 완료되어 두 VM이 `BackedUp`인지 확인한다.
+7. VBR에서 기준 Job은 남고, 성공한 임시 Job 설정은 정리되며 각 볼륨·metadata 백업과 Restore Point가 보존되는지 확인한다.
+   첫 백업은 Mold `FULL`이다. ROOT·DATA 내용을 변경한 뒤 다음 회차를 실행하여 조건을 충족하면 `INCREMENTAL`인지 확인한다.
+   준비된 변경분 파일도 Veeam에는 독립 Full로 전송한다. Veeam 전송 타입만으로 Mold 증분 여부를 판단하지 않는다.
+8. Mold UI에서 VM을 정지하고 첫 Full과 후속 증분을 각각 복원한다. 시작 후 ROOT·DATA의 검증 파일이 해당 시점과 맞는지 확인한다.
+   이어 Veeam UI의 `Backups`에서 `ABLESTACK-<백업 UUID>-metadata`와 정확한 Restore Point를 골라
+   `resolveBackupArtifact`의 `metadatarestorepath`에 복원하고 감시기가 Mold VM 복원을 요청하는지 확인한다.
+   기준 bootstrap이나 개별 볼륨 파일만 복원하지 않는다. 최종 VM 복원 성공은 Mold에서 확인한다.
+9. 마지막으로 테스트 백업을 Mold에서 삭제하여 정확한 외부 보관본이 정리되는지 확인한다.
+   증분이 참조하는 부모는 의존성에 따라 삭제 대기하는지 확인한다. Job 설정이 이미 없어도 복원·삭제가 가능해야 한다.
+
+결과에는 실제 VBR 빌드, VM·Mold 백업 UUID, Restore Point·Session GUID,
+Full/증분, Job 정리 전후와 보관본 존재 여부, Mold UI·Veeam UI 복원 결과를 함께 기록한다.
+Host 로그는 `/var/log/mold/veeam-hook.log`와 `/var/lib/ablestack/backup/jobs/<백업 UUID>/job.log`,
+외부 UI 복원은 `journalctl -u mold-veeam-restore-agent.service`와 `/etc/ablestack/veeam/events/restore.log`에서 확인한다.
 
 ## NetBackup·Veeam 사전 구성 파라미터 비교
 
@@ -2206,7 +2381,8 @@ Veeam의 Active Full/Start 선택만으로 Mold의 Full/증분을 결정하지 �
 Veeam UI 복원은 다음 순서로 진행한다.
 
 1. Mold에서 원본 VM을 정지한다.
-2. 원하는 백업의 `ABLESTACK-<백업 UUID>-metadata` Job과 Restore Point를 선택한다.
+2. `Backups`에서 원하는 `ABLESTACK-<백업 UUID>-metadata` 백업과 Restore Point를 선택한다.
+   임시 Job 설정이 정리된 경우에도 보관 백업은 남으며 `Orphaned`에 표시될 수 있다.
 3. metadata 파일을 현재 스테이징 수신 경로(`resolveBackupArtifact`의 `metadatarestorepath`)에 복원한다.
    원본과 현재 root가 같으면 기존 경로와 동일하다. 부모 Host Job의 bootstrap이나 개별 볼륨 Job만 복원한 것은 VM 복원 요청으로 처리하지 않는다.
 4. `mold-veeam-restore-agent.timer`가 완료된 실제 Restore Session UUID와 Restore Point ID를 조회한다.

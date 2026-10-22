@@ -145,12 +145,23 @@ public class AblestackNetBackupClient {
 
     /** New transfers share the parent policy; only its bootstrap jobs gate source preparation. */
     public boolean userBackupSourceReady(String policy) {
+        return userBackupSourceWaitReason(policy) == null;
+    }
+
+    public String userBackupSourceWaitReason(String policy) {
         for (Object value : userBackupJobs(policy, " and state ne 'DONE'")) {
-            JSONObject attributes = ((JSONObject) value).getJSONObject("attributes");
-            if (!USER_BACKUP_SCHEDULE.equals(attributes.optString("scheduleName"))
-                    && !terminalJob(attributes)) { return false; }
+            JSONObject job = (JSONObject) value;
+            JSONObject attributes = job.getJSONObject("attributes");
+            String state = normalizeJobState(attributes.optString("state"));
+            // Delayed retries have no active backup attempt. They must not keep
+            // an admitted VM holding the Host staging slot until the next retry.
+            if (USER_BACKUP_SCHEDULE.equals(attributes.optString("scheduleName"))
+                    || terminalJob(attributes) || "WAITING_FOR_RETRY".equals(state)) { continue; }
+            return "Waiting for NetBackup bootstrap Job " + job.optString("id", "unknown") + " ("
+                    + StringUtils.defaultIfBlank(state, "UNKNOWN") + "), policy=" + policy
+                    + ", schedule=" + attributes.optString("scheduleName", "unknown");
         }
-        return true;
+        return null;
     }
 
     public void validateUserBackupPolicy(String name, String hostName, String hostIp) {

@@ -273,6 +273,12 @@ class Backup:
             "requiredBytes": required + scratch, "stagingStorageKey": staging_key,
             "bufferPercent": self.plan["bufferPercent"],
             "capacityVersion": 0 if self.plan["rbd"] else 1})
+        # Notify the parent Hook before waiting for a Host slot. VM 1 may hold
+        # that slot while waiting for the parent to finish submitting VM 2.
+        # Only tiny ownership markers precede admission; no volume IO starts here.
+        self.root.mkdir(parents=True, exist_ok=False)
+        atomic(self.root / ".staging.inprogress", "volume_pipeline=true\n")
+        atomic(self.root / ".volume-bootstrap", self.manifest["backupUuid"] + "\n")
         self.progress("WAITING", 0)
         queue_deadline = time.monotonic() + max(1, self.plan.get("queueTimeout", 3600))
         while not (self.job / "staging-admission-granted").is_file():
@@ -591,10 +597,7 @@ class Backup:
             self.preflight_qcow2()
         self.check_cancel()
         self.reserve()
-        self.root.mkdir(parents=True, exist_ok=False)
-        atomic(self.root / ".staging.inprogress", "volume_pipeline=true\n")
         # The parent external UI job must leave its pre script and finish before child transfers start.
-        atomic(self.root / ".volume-bootstrap", self.manifest["backupUuid"] + "\n")
         atomic(self.job / "volume-request.json", {"gate": True, "backupUuid": self.manifest["backupUuid"]})
         self.progress("PREPARING", 0)
         deadline = time.monotonic() + self.timeout

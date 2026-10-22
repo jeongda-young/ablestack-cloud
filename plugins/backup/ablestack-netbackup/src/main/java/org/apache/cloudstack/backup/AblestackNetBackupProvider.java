@@ -2429,13 +2429,21 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         final String policy = getBackupDetail(backup, DETAIL_POLICY_NAME);
         final boolean userBackup = USER_BACKUP_TRANSFER.equals(getBackupDetail(backup, DETAIL_TRANSFER_MODE));
         return new ThirdPartyBackupVolumeService.Transfer() {
+            private String preparationReason;
+
             @Override
             public boolean ready() {
                 if (userBackup) {
                     getClient(vm.getDataCenterId()).validateUserBackupPolicy(policy, host.getName(), host.getPrivateIpAddress());
+                    preparationReason = getClient(vm.getDataCenterId()).userBackupSourceWaitReason(policy);
+                    return preparationReason == null;
                 }
-                return userBackup ? getClient(vm.getDataCenterId()).userBackupSourceReady(policy)
-                        : getClient(vm.getDataCenterId()).volumeSourceReady(policy);
+                return getClient(vm.getDataCenterId()).volumeSourceReady(policy);
+            }
+
+            @Override
+            public String preparationWaitReason() {
+                return StringUtils.defaultIfBlank(preparationReason, "Waiting for the NetBackup bootstrap Job to finish");
             }
 
             @Override

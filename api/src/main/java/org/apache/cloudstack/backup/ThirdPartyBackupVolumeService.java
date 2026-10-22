@@ -193,6 +193,12 @@ public interface ThirdPartyBackupVolumeService {
         /** An external UI backup's pre/post hooks must finish before its child jobs may start. */
         default boolean ready() { return true; }
 
+        /** Explain a closed source-preparation gate without claiming that file export has started. */
+        default String preparationWaitReason() { return "Waiting for the external parent backup Job to finish"; }
+
+        /** The exact successful catalog reference is durable; retire temporary configuration before acknowledging the Host. */
+        default void committed(Backup backup, ThirdPartyBackupManifest.Artifact artifact, boolean metadata) { }
+
         /** Durably persist engine checkpoint metadata before the Host removes staging; retries must use the saved copy. */
         default void completed(Backup backup) { }
 

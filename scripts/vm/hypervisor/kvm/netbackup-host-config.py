@@ -384,6 +384,9 @@ def check_netbackup_policy(args: argparse.Namespace) -> None:
     log_info(f"Mold staging jobs per Host: {concurrency}; keep additional capacity for bootstrap jobs when allowing parallel transfers")
     log_info("Also check Maximum jobs per client / Client Maximum data streams and storage unit Maximum concurrent jobs in NetBackup UI")
     log_info("Check mold-transfer storage and Retention independently of the bootstrap schedule; this tool does not change those settings")
+    log_info("Policy Frequency does not control failed retries. Check Primary Global attributes: Job retry delay and Schedule backup attempts")
+    log_info("Default 2 attempts in 12 hours can postpone a failed bootstrap job even when its start window is open; inspect nbpemreq -policies screen <policy> on the Primary")
+    log_info("Primary retry settings apply to all policies and are not read or changed by this tool; see BACKUP.md for the hourly retry example")
     if not attributes.get("active", False):
         log_info("Host policy is inactive; activate it after configuration and validation")
     log_ok("Verified Host policy Client and mold-transfer User Backup schedule")

@@ -187,6 +187,63 @@ test('shows the QCOW2 backup step separately from the running state', async () =
   wrapper.unmount()
 })
 
+test('shows the current backup wait reason after reload despite an earlier failed restore', async () => {
+  const reason = 'Waiting for NetBackup bootstrap Job 83 (ACTIVE), policy=ablecube4, schedule=schedule'
+  const wrapper = shallowMount(BackupProgress, {
+    props: {
+      record: {
+        id: 'backup-1',
+        status: 'BackingUp',
+        backupjobstate: 'RUNNING',
+        backupjobstep: 'PREPARING',
+        backupjobdetails: reason,
+        restorejobstate: 'FAILED',
+        restorejobstep: 'RESTORE_DATA',
+        restorejobdetails: 'An earlier restore failed'
+      }
+    },
+    global: {
+      stubs: { Status: statusWithTooltip },
+      mocks: { $t: key => key, $store: { getters: { apis: {} } } }
+    }
+  })
+
+  expect(wrapper.find('.status-tooltip').text()).toContain(reason)
+  expect(wrapper.vm.jobState).toBe('RUNNING')
+  expect(wrapper.vm.displayStep).toBe('PREPARING')
+  await wrapper.setProps({ record: { ...wrapper.props('record'), backupjobdetails: 'Source preparation is unconfirmed: HTTP 401' } })
+  expect(wrapper.find('.status-tooltip').text()).toContain('Source preparation is unconfirmed: HTTP 401')
+  expect(wrapper.find('.status-tooltip').text()).not.toContain(reason)
+  wrapper.unmount()
+})
+
+test('updates the backup wait reason from polling and removes it when source preparation starts', async () => {
+  getAPI.mockResolvedValue({
+    getbackupjobstatusresponse: {
+      status: 'BackingUp',
+      state: 'RUNNING',
+      step: 'PREPARING',
+      progress: 5,
+      details: 'Waiting for NetBackup bootstrap Job 83 (ACTIVE)'
+    }
+  })
+  const wrapper = shallowMount(BackupProgress, {
+    props: { record: { id: 'backup-1', status: 'BackingUp' } },
+    global: {
+      stubs: { Status: statusWithTooltip },
+      mocks: { $t: key => key, $store: { getters: { apis: { getBackupJobStatus: {} } } } }
+    }
+  })
+
+  for (let i = 0; i < 5; i++) await Promise.resolve()
+  expect(wrapper.find('.status-tooltip').text()).toContain('Waiting for NetBackup bootstrap Job 83 (ACTIVE)')
+  wrapper.vm.applyStatus({ status: 'BackingUp', state: 'RUNNING', step: 'QCOW2_BACKUP', progress: 12 })
+  await wrapper.vm.$nextTick()
+  expect(wrapper.find('.status-tooltip').text()).not.toContain('bootstrap Job 83')
+  expect(wrapper.vm.displayStep).toBe('QCOW2_BACKUP')
+  wrapper.unmount()
+})
+
 test.each(['PREPARE_SOURCE', 'RESTORE_PREPARE_TARGET', 'RESTORE_CONVERT'])('shows the restore phase %s as an English code in the Korean UI', step => {
   const wrapper = shallowMount(BackupProgress, {
     props: { record: { id: 'backup-1', status: 'Restoring', restorejobstate: 'RUNNING', restorejobstep: step } },

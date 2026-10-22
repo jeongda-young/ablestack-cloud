@@ -147,18 +147,30 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   exit 0
 fi
 
+incoming_backup_id="${BACKUP_ID:-}"
+incoming_job_id="${NETBACKUP_JOB_ID:-}"
 resolve_context "${1:-}" "${2:-}" "${3:-}" ""
 if [[ "${SCHEDULE_NAME}" == mold-transfer || "${POLICY_NAME}" =~ ^ABLESTACK-[[:xdigit:]-]{36}-(metadata|[[:xdigit:]-]{36})$ ]]; then
+  exit 0
+fi
+JOB_STATUS="$(resolve_status "$@")"
+if [[ "$JOB_STATUS" == 73 || "$JOB_STATUS" == 74 ]]; then
+  log -ne "Skipping NetBackup POST for failed/timed-out PRE status=${JOB_STATUS}; preserving prior context and Mold-owned staging"
   exit 0
 fi
 ensure_runtime_dirs
 cleanup_stale_transient_state
 cleanup_runtime_history
-JOB_STATUS="$(resolve_status "$@")"
 acquire_lock
 
 if ! load_state_file "${CONTEXT_FILE}"; then
   fail "NetBackup post-backup cleanup could not find context state: ${CONTEXT_FILE}"
+fi
+
+if [[ -n "$incoming_backup_id" && "$incoming_backup_id" != "${BACKUP_ID:-}" ]] \
+    || [[ -n "$incoming_job_id" && -n "${NETBACKUP_JOB_ID:-}" && "$incoming_job_id" != "$NETBACKUP_JOB_ID" ]]; then
+  log -ne "Skipping NetBackup POST because its Job/Backup ID differs from the saved context; no previous backup is modified"
+  exit 0
 fi
 
 BACKUP_ID="${BACKUPID:-${BACKUP_ID:-}}"

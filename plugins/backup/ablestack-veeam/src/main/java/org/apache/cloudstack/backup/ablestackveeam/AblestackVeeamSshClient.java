@@ -220,6 +220,8 @@ public class AblestackVeeamSshClient {
         JSONObject result = volumeResult(Arrays.asList(
                 "$ErrorActionPreference='Stop'",
                 "Get-Command Copy-VBRComputerBackupJob -ErrorAction Stop | Out-Null",
+                "Get-Command Remove-VBRComputerBackupJob -ErrorAction Stop | Out-Null",
+                "if (-not (Get-Command Set-VBRComputerBackupJob -ErrorAction Stop).Parameters.ContainsKey('UseSnapshotlessFileLevelBackup')) { throw 'Linux staging requires snapshot-less file-level backup support' }",
                 "$jobs=@(Get-VBRComputerBackupJob -Name " + ps(templateName) + ")",
                 "if ($jobs.Count -ne 1) { throw 'Volume staging requires one existing Linux Agent template job' }",
                 "$busy=@(Get-VBRComputerBackupJobSession -Name " + ps(templateName) + " | Where-Object { [string]$_.State -ne 'Stopped' })",
@@ -275,7 +277,7 @@ public class AblestackVeeamSshClient {
             commands.add("  $submissionAttempted=$true");
             commands.add("  Copy-VBRComputerBackupJob -Job $template -Name $name -Description " + ps("Mold logical backup " + artifact.backupUuid) + " | Out-Null");
             commands.add("  $job=Get-VBRComputerBackupJob -Name $name");
-            commands.add("  Set-VBRComputerBackupJob -Job $job -BackupObject $computer -BackupType SelectedFiles -SelectedFilesOptions $files -ScriptOptions $scripts -EnableSchedule:$false | Out-Null");
+            commands.add("  Set-VBRComputerBackupJob -Job $job -BackupObject $computer -BackupType SelectedFiles -SelectedFilesOptions $files -ScriptOptions $scripts -EnableSchedule:$false -UseSnapshotlessFileLevelBackup | Out-Null");
             commands.add("}");
             commands.add("$sessions=@(Get-VBRComputerBackupJobSession -Name $name)");
             commands.add("if ($sessions.Count -eq 0) { $submissionAttempted=$true; $sessions=@(Start-VBRComputerBackupJob -Job $job -FullBackup -RunAsync) }");
@@ -333,6 +335,52 @@ public class AblestackVeeamSshClient {
         return result.getBoolean("exists");
     }
 
+    /** Remove only a completed temporary Job, preserving the exact independently deletable backup. Called after the DB commit. */
+    public void retireVolumeArtifactJob(ThirdPartyBackupManifest.Artifact artifact, boolean metadata) {
+        if (artifact == null || !artifact.completed || artifact.submissionPending || StringUtils.isNotBlank(artifact.externalFailure)
+                || StringUtils.isBlank(artifact.path)) {
+            throw new CloudRuntimeException("Veeam job retirement requires a committed successful artifact");
+        }
+        final String pointId;
+        try {
+            java.util.UUID.fromString(artifact.backupUuid);
+            java.util.UUID.fromString(artifact.jobId);
+            pointId = java.util.UUID.fromString(artifact.externalId).toString();
+        } catch (IllegalArgumentException | NullPointerException e) {
+            throw new CloudRuntimeException("Veeam job retirement requires exact backup, session and restore-point UUIDs", e);
+        }
+        JSONObject result = volumeResult(Arrays.asList(
+                "$ErrorActionPreference='Stop'",
+                "$name=" + ps(volumeJobName(artifact, metadata)),
+                "$point=" + ps(pointId),
+                "function Read-OwnedBackup {",
+                "  $backups=@(Get-VBRBackup -Name $name | Where-Object { $_.Name -ceq $name })",
+                "  if ($backups.Count -ne 1) { throw 'Temporary Job must retain one independently owned backup' }",
+                "  $points=@(Get-VBRRestorePoint -Backup $backups[0])",
+                "  if ($points.Count -ne 1 -or ([string]$points[0].Id).Trim('{}').ToLowerInvariant() -ne $point) { throw 'Temporary Job restore point differs from the committed artifact' }",
+                "  return $backups[0]",
+                "}",
+                "$before=Read-OwnedBackup",
+                "$jobs=@(Get-VBRComputerBackupJob | Where-Object { $_.Name -ceq $name })",
+                "if ($jobs.Count -gt 1) { throw 'Temporary Job name is ambiguous' }",
+                "if ($jobs.Count -eq 1) {",
+                "  $job=$jobs[0]",
+                "  if ([string]$job.Description -cne " + ps("Mold logical backup " + artifact.backupUuid) + ") { throw 'Temporary Job ownership differs from the committed artifact' }",
+                "  if ([string]::IsNullOrWhiteSpace([string]$before.JobId) -or ([string]$before.JobId).Trim('{}') -ne ([string]$job.Id).Trim('{}')) { throw 'Retained backup belongs to another Job' }",
+                "  $sessions=@(Get-VBRComputerBackupJobSession -Name $name)",
+                "  if ($sessions.Count -ne 1 -or ([string]$sessions[0].Id).Trim('{}') -ne " + ps(java.util.UUID.fromString(artifact.jobId).toString())
+                        + " -or [string]$sessions[0].State -ne 'Stopped' -or [string]$sessions[0].Result -ne 'Success') { throw 'Temporary Job must have exactly the committed successful session and no active work' }",
+                "  Remove-VBRComputerBackupJob -Job $job -Confirm:$false | Out-Null",
+                "}",
+                "if (@(Get-VBRComputerBackupJob | Where-Object { $_.Name -ceq $name }).Count -ne 0) { throw 'Temporary Job removal has not completed' }",
+                "$after=Read-OwnedBackup",
+                "if ([string]$before.Id -ne [string]$after.Id) { throw 'Retained backup identity changed during Job cleanup' }",
+                "Write-Output ('ABLESTACK_JSON:' + (@{retired=$true;externalId=$point} | ConvertTo-Json -Compress))"));
+        if (!result.optBoolean("retired", false) || !pointId.equalsIgnoreCase(result.optString("externalId"))) {
+            throw new CloudRuntimeException("Veeam did not confirm Job removal with its exact backup preserved");
+        }
+    }
+
     /** Child jobs have one independent Full restore point; never erase a template or a multi-point backup. */
     public boolean deleteVolumeArtifact(ThirdPartyBackupManifest.Artifact artifact, boolean metadata) {
         return deleteVolumeArtifact(artifact, metadata, false);
@@ -342,10 +390,12 @@ public class AblestackVeeamSshClient {
         JSONObject result = volumeResult(Arrays.asList(
                 "$ErrorActionPreference='Stop'",
                 "$name=" + ps(volumeJobName(artifact, metadata)),
-                "$jobs=@(Get-VBRComputerBackupJob -Name $name | Where-Object { $_.Name -eq $name })",
+                "$jobs=@(Get-VBRComputerBackupJob | Where-Object { $_.Name -eq $name })",
                 "if ($jobs.Count -gt 1) { throw 'Artifact job name is ambiguous' }",
-                "$busy=@(Get-VBRComputerBackupJobSession -Name $name | Where-Object { [string]$_.State -ne 'Stopped' })",
-                "if ($busy.Count -ne 0) { throw 'Artifact job is still active' }",
+                "if ($jobs.Count -eq 1) {",
+                "  $busy=@(Get-VBRComputerBackupJobSession -Name $name | Where-Object { [string]$_.State -ne 'Stopped' })",
+                "  if ($busy.Count -ne 0) { throw 'Artifact job is still active' }",
+                "}",
                 "$backups=@(Get-VBRBackup -Name $name | Where-Object { $_.Name -eq $name })",
                 "if ($backups.Count -gt 1) { throw 'Artifact backup name is ambiguous' }",
                 "if ($backups.Count -eq 0 -and " + (StringUtils.isNotBlank(artifact.externalId) ? "$true" : "$false") + ") {",
@@ -499,7 +549,7 @@ public class AblestackVeeamSshClient {
         return "'" + value.replace("'", "''") + "'";
     }
 
-    private Pair<Boolean, String> executePowerShellCommands(final List<String> cmds) {
+    protected Pair<Boolean, String> executePowerShellCommands(final List<String> cmds) {
         final String command = transformPowerShellCommandList(cmds);
         try {
             final Pair<Boolean, String> response = SshHelper.sshExecute(host, SSH_PORT, username, null, password,

@@ -280,6 +280,109 @@ public class ThirdPartyBackupArtifactPersistenceTest {
     }
 
     @Test
+    public void closedPreparationGatePublishesTheSpecificWaitingJobWithoutStartingSourceIo() throws Exception {
+        prepare("ablestack-netbackup");
+        ThirdPartyBackupVolumeService.Transfer transfer = mock(ThirdPartyBackupVolumeService.Transfer.class);
+        when(transfer.ready()).thenReturn(false);
+        when(transfer.preparationWaitReason()).thenReturn("Waiting for NetBackup bootstrap Job 83 (ACTIVE)");
+        when(agentManager.send(eq(HOST_ID), any(AblestackVolumeStagingCommand.class))).thenAnswer(invocation ->
+                new Answer(invocation.getArgument(1), true, new Gson().toJson(Map.of("gate", true, "backupUuid", JOB_ID))));
+        GlobalLock lock = mock(GlobalLock.class);
+        when(lock.lock(Mockito.anyInt())).thenReturn(true);
+        try (MockedStatic<GlobalLock> locks = Mockito.mockStatic(GlobalLock.class)) {
+            locks.when(() -> GlobalLock.getInternLock(anyString())).thenReturn(lock);
+            assertTrue(service.reconcile(backup, host, transfer));
+        }
+        assertEquals("Waiting for NetBackup bootstrap Job 83 (ACTIVE)", persisted.get(ThirdPartyBackupManifest.PREPARATION_DETAILS_KEY));
+        verify(transfer, never()).backup(any(), Mockito.anyBoolean());
+        verify(agentManager, never()).send(eq(HOST_ID), Mockito.<Command>argThat(command -> command instanceof AblestackVolumeStagingCommand
+                && "START".equals(((AblestackVolumeStagingCommand) command).getAction())));
+    }
+
+    @Test
+    public void unconfirmedPreparationQueryIsVisibleAndDoesNotCancelTheRunningPipeline() throws Exception {
+        prepare("ablestack-netbackup");
+        ThirdPartyBackupVolumeService.Transfer transfer = mock(ThirdPartyBackupVolumeService.Transfer.class);
+        when(transfer.ready()).thenThrow(new CloudRuntimeException("NetBackup artifact query failed with status 401"));
+        when(agentManager.send(eq(HOST_ID), any(AblestackVolumeStagingCommand.class))).thenAnswer(invocation ->
+                new Answer(invocation.getArgument(1), true, new Gson().toJson(Map.of("gate", true, "backupUuid", JOB_ID))));
+        GlobalLock lock = mock(GlobalLock.class);
+        when(lock.lock(Mockito.anyInt())).thenReturn(true);
+        try (MockedStatic<GlobalLock> locks = Mockito.mockStatic(GlobalLock.class)) {
+            locks.when(() -> GlobalLock.getInternLock(anyString())).thenReturn(lock);
+            assertTrue(service.reconcile(backup, host, transfer));
+        }
+        assertTrue(persisted.get(ThirdPartyBackupManifest.PREPARATION_DETAILS_KEY).contains("401"));
+        verify(transfer, never()).failed(any());
+        verify(agentManager, never()).send(eq(HOST_ID), Mockito.<Command>argThat(command -> command instanceof AblestackVolumeStagingCommand
+                && ("START".equals(((AblestackVolumeStagingCommand) command).getAction())
+                    || "CANCEL".equals(((AblestackVolumeStagingCommand) command).getAction()))));
+    }
+
+    @Test
+    public void temporaryJobRetirementFollowsCatalogCommitAndPrecedesHostAcknowledgment() throws Exception {
+        prepare("ablestack-veeam");
+        ThirdPartyBackupVolumeService.Transfer transfer = mock(ThirdPartyBackupVolumeService.Transfer.class);
+        when(transfer.backup(any(), eq(false))).thenAnswer(invocation -> {
+            ThirdPartyBackupManifest.Artifact accepted = invocation.getArgument(0);
+            accepted.jobId = "session-123";
+            accepted.externalId = "point-123";
+            accepted.completed = true;
+            return accepted;
+        });
+        doAnswer(invocation -> {
+            ThirdPartyBackupManifest.Artifact saved = ThirdPartyBackupManifest.fromJson(persisted.get(ThirdPartyBackupManifest.DETAIL_KEY))
+                    .getCurrentArtifacts().get(0);
+            assertTrue(saved.completed);
+            assertEquals("session-123", saved.jobId);
+            assertEquals("point-123", saved.externalId);
+            return null;
+        }).when(transfer).committed(any(), any(), eq(false));
+        GlobalLock lock = mock(GlobalLock.class);
+        when(lock.lock(Mockito.anyInt())).thenReturn(true);
+        try (MockedStatic<GlobalLock> locks = Mockito.mockStatic(GlobalLock.class)) {
+            locks.when(() -> GlobalLock.getInternLock(anyString())).thenReturn(lock);
+            assertTrue(service.reconcile(backup, host, transfer));
+        }
+        InOrder order = inOrder(transfer, agentManager);
+        order.verify(transfer).committed(any(), any(), eq(false));
+        order.verify(agentManager).send(eq(HOST_ID), Mockito.<Command>argThat(command -> command instanceof AblestackVolumeStagingCommand
+                && "ACK".equals(((AblestackVolumeStagingCommand) command).getAction())));
+    }
+
+    @Test
+    public void unconfirmedJobRetirementRetriesWithoutResubmittingOrUnlinkingThePayload() throws Exception {
+        prepare("ablestack-veeam");
+        ThirdPartyBackupVolumeService.Transfer transfer = mock(ThirdPartyBackupVolumeService.Transfer.class);
+        when(transfer.backup(any(), eq(false))).thenAnswer(invocation -> {
+            ThirdPartyBackupManifest.Artifact accepted = invocation.getArgument(0);
+            accepted.jobId = "session-123";
+            accepted.externalId = "point-123";
+            accepted.completed = true;
+            return accepted;
+        });
+        doThrow(new CloudRuntimeException("Temporary Job removal is unconfirmed")).doNothing()
+                .when(transfer).committed(any(), any(), eq(false));
+        GlobalLock lock = mock(GlobalLock.class);
+        when(lock.lock(Mockito.anyInt())).thenReturn(true);
+        try (MockedStatic<GlobalLock> locks = Mockito.mockStatic(GlobalLock.class)) {
+            locks.when(() -> GlobalLock.getInternLock(anyString())).thenReturn(lock);
+            assertTrue(service.reconcile(backup, host, transfer));
+            assertEquals("WAITING", persisted.get(ThirdPartyBackupManifest.CLEANUP_STATE_KEY));
+            assertTrue(ThirdPartyBackupManifest.fromJson(persisted.get(ThirdPartyBackupManifest.DETAIL_KEY))
+                    .getCurrentArtifacts().get(0).completed);
+            verify(agentManager, never()).send(eq(HOST_ID), Mockito.<Command>argThat(command -> command instanceof AblestackVolumeStagingCommand
+                    && "ACK".equals(((AblestackVolumeStagingCommand) command).getAction())));
+            assertTrue(service.reconcile(backup, host, transfer));
+        }
+        verify(transfer, Mockito.times(1)).backup(any(), eq(false));
+        verify(transfer, Mockito.times(2)).committed(any(), any(), eq(false));
+        verify(transfer, never()).failed(any());
+        verify(agentManager).send(eq(HOST_ID), Mockito.<Command>argThat(command -> command instanceof AblestackVolumeStagingCommand
+                && "ACK".equals(((AblestackVolumeStagingCommand) command).getAction())));
+    }
+
+    @Test
     public void failedIntentWriteDoesNotPublishAPhantomSubmission() throws Exception {
         prepare("ablestack-commvault");
         String original = loaded.get(ThirdPartyBackupManifest.DETAIL_KEY);
