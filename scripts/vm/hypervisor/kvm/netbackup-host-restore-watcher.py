@@ -126,8 +126,7 @@ def netbackup_get(path: str, params: Optional[dict[str, str]] = None) -> Any:
     query = f"?{urlencode(params)}" if params else ""
     request = Request(f"{base_url}{path}{query}", headers={
         "Accept": NETBACKUP_ACCEPT,
-        "Authorization": f"Bearer {api_key}",
-        "X-API-Key": api_key,
+        "Authorization": api_key,
     })
     try:
         with urlopen(request, timeout=int(CONFIG.get("NETBACKUP_REQUEST_TIMEOUT", "60")), context=netbackup_ssl_context()) as response:

@@ -538,6 +538,38 @@ QCOW2는 이전 백업 체인의 스테이징 호스트와 달라지면 새 Full
 구성 스크립트가 등록하는 NetBackup 오퍼링은 사용자 수동 백업을 허용하지 않으므로,
 기본 운영 시작점은 NetBackup 정책과 사전 백업 스크립트이다.
 
+#### NetBackup 10.5·11.1 API 호환성 확인
+
+두 버전의 연동을 확인할 때에는 제품 버전과 요청하는 API 버전을 구분한다.
+현재 클라이언트와 복원 감시기는 `application/vnd.netbackup+json;version=12.0`을 요청한다.
+각 버전의 실제 서버에서 아래 API의 응답과 백업·복원 결과를 확인해야 하며,
+모의 API 응답을 사용하는 단위 테스트만으로 실서버 호환성을 확정하지 않는다.
+
+NetBackup API key는 `Authorization: <API key>`로 전달한다. API key에 `Bearer `를 붙이지 않는다.
+관리 서버의 Java 클라이언트와 Host의 복원 감시기에 같은 형식을 적용한다.
+인증 형식은 [NetBackup API key 사용 안내](https://www.veritas.com/support/en_US/doc/150157642-170198590-0/v136631063-170198590)를 따른다.
+기준 정책 실행은 NetBackup Client를 통해 이루어지므로, 기준 정책이 성공하더라도 Mold의 REST API 인증이 통과했다는 의미는 아니다.
+
+| 확인 항목 | 요청 또는 실행 | 통과 기준 |
+| --- | --- | --- |
+| API 인증·Job 조회 | `GET /admin/jobs/` | API v12 요청이 HTTP `200`을 반환한다. `401`은 인증 실패이며 백업 시작으로 처리하지 않는다. |
+| 기준 정책 조회 | `GET /config/policies/<Host 정책명>` | `Standard`, 해당 Host Client, `Full Backup` 스케줄을 확인한다. |
+| 이미지별 정책 생성·백업 실행 | `POST /config/policies`, `POST /admin/manual-backup` | 원본 정책을 유지하면서 `ABLESTACK-<백업 UUID>-...` 작업이 실제 생성된다. |
+| 저장 완료·카탈로그 | `GET /admin/jobs/<Job ID>`, `GET /catalog/images` | 종료 상태와 명시적인 상태 코드 `0`, 해당 이미지의 카탈로그 참조를 확인한다. 숫자·문자열 상태 코드를 모두 처리한다. |
+| 볼륨별 복원 | Host의 `netbackup-volume-restore.py`가 `bprestore` 실행, REST API로 Job 조회 | 정확한 원본 Client·백업 시점·파일과 대상 경로를 사용하여 Full·증분을 각각 복원한다. |
+| 외부 UI 복원 | 메타데이터 복원 후 Host 감시기 실행 | 성공 코드 `0` 또는 검증된 부분 성공만 Mold 복원으로 연결한다. |
+| 이미지 삭제 | `POST /catalog/expire-images` | HTTP `202` 승인 대기는 삭제 완료로 처리하지 않는다. 외부 이미지 부재 확인 후 정리한다. |
+
+10.5와 11.1에서 각각 RBD·QCOW2 테스트 VM의 첫 Full, 후속 증분, 복원, 삭제를 확인하고
+실제 제품 버전·API 요청 버전·외부 Job ID·Mold 백업 UUID를 기록한다.
+API 정의의 기준은 각 Primary Server의 `https://<Primary Server>/api-docs/index.html`이다.
+볼륨별 복원에 사용하는 `bprestore`의 `-C`, `-D`, `-S`, `-s`, `-e`, `-R`, `-f`, `-print_jobid` 옵션은
+[10.5 명령 참조](https://www.veritas.com/content/support/en_US/doc/49576572-166692681-0/v14666184-166692681)와
+[11.1 명령 참조](https://www.veritas.com/content/support/zh_CN/doc/49576306-170304269-0/v14666184-170304269)에 모두 정의되어 있다.
+사전 구성 후 `NetBackup artifact query failed with status 401`이 발생하면,
+키의 유효성과 함께 **관리 서버에 반영된 Java 클라이언트의 Authorization 헤더**를 확인한다.
+`Volume pipeline was cancelled`만 남은 Host 로그보다 DB의 `thirdparty.volume.failure`와 관리 서버 로그를 먼저 확인한다.
+
 ### Veeam: `ablestack-veeam`
 
 **사전 준비**

@@ -26,7 +26,7 @@ from pathlib import Path
 import tempfile
 import time
 import unittest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 class NetBackupRestoreWatcherTest(unittest.TestCase):
@@ -99,6 +99,20 @@ class NetBackupRestoreWatcherTest(unittest.TestCase):
                                          (0, "FAILED", "FAILED"), (0, "mystery", "UNKNOWN")):
                 with self.subTest(release=release, code=code, state=state):
                     self.assertEqual(outcome, self.watcher.restore_job_outcome(self.job(code, state, release)))
+
+    def test_jobs_api_authenticates_with_the_raw_api_key(self):
+        api_key = "synthetic-netbackup-api-key"
+        response = MagicMock()
+        response.__enter__.return_value = response
+        response.read.return_value = b'{"data": []}'
+        with patch.dict(self.watcher.CONFIG, NETBACKUP_URL="https://netbackup.test/netbackup", NETBACKUP_APIKEY=api_key), \
+                patch.object(self.watcher, "urlopen", return_value=response) as transport:
+            self.assertEqual({"data": []}, self.watcher.netbackup_get("/admin/jobs"))
+        request = transport.call_args.args[0]
+        self.assertEqual(api_key, request.get_header("Authorization"))
+        self.assertFalse(request.has_header("X-api-key"))
+        self.assertEqual("https://netbackup.test/netbackup/admin/jobs", request.full_url)
+        self.assertEqual("application/vnd.netbackup+json;version=12.0", request.get_header("Accept"))
 
     def test_conflicting_status_codes_are_unknown(self):
         job = self.job(0)

@@ -925,8 +925,8 @@ public class AblestackNetBackupClient {
     }
 
     private void applyAuthenticationHeaders(final HttpRequestBase request) {
-        request.setHeader(HttpHeaders.AUTHORIZATION, "Bearer " + apiKey);
-        request.setHeader("X-API-Key", apiKey);
+        // NetBackup API keys are the Authorization value itself, without a Bearer prefix.
+        request.setHeader(HttpHeaders.AUTHORIZATION, apiKey);
     }
 
     private String extractJobState(final JSONObject response) {
