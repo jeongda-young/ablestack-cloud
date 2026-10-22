@@ -62,6 +62,7 @@ verb="${verb:-0}"
 POLICY_NAME="${POLICY_NAME:-}"
 SCHEDULE_NAME="${SCHEDULE_NAME:-}"
 CLIENT_NAME="${CLIENT_NAME:-}"
+KVM_HOSTNAME="${KVM_HOSTNAME:-}"
 SESSION_TIMESTAMP="${SESSION_TIMESTAMP:-}"
 JOB_STATUS="${JOB_STATUS:-}"
 NETBACKUP_REQUIRE_JOB_SUCCESS="${NETBACKUP_REQUIRE_JOB_SUCCESS:-true}"
@@ -563,6 +564,7 @@ load_policy_schedule_config() {
   VM_EXCLUDE=""
   VM_SCHEDULE_BACKUP=""
   NETBACKUP_PARENT_PAYLOAD_PATH=""
+  KVM_HOSTNAME=""
   MOLD_URL=""
   ADMIN_APIKEY=""
 
@@ -937,8 +939,9 @@ wait_for_mold_async_job() {
 cache_mold_virtual_machines() {
   [[ -n "${MOLD_VM_CACHE_FILE}" ]] || fail "MOLD_VM_CACHE_FILE is not initialized."
   local response
-  log -ne "Calling Mold listExternalBackupCandidates host=${CLIENT_NAME} policy=${POLICY_NAME}"
-  local -a selection_args=("provider" "ablestack-netbackup" "hostname" "$CLIENT_NAME" "policyid" "$POLICY_NAME")
+  local mold_host="${KVM_HOSTNAME:-$CLIENT_NAME}"
+  log -ne "Calling Mold listExternalBackupCandidates host=${mold_host} client=${CLIENT_NAME} policy=${POLICY_NAME}"
+  local -a selection_args=("provider" "ablestack-netbackup" "hostname" "$mold_host" "policyid" "$POLICY_NAME")
   [[ -z "${VM_SCHEDULE_BACKUP:-}" ]] || selection_args+=("vmschedulebackup" "$VM_SCHEDULE_BACKUP")
   response="$(invoke_mold_api \
     "${MOLD_LIST_NETBACKUP_CANDIDATES_API_METHOD}" \

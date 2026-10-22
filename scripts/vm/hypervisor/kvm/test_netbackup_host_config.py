@@ -39,8 +39,69 @@ class NetBackupConfigurationTest(unittest.TestCase):
         argv = ["netbackup-host-config.py", "--policy-name", "host-test", "--mold-url", "http://mold.test/client/api",
                 "--admin-apikey", "synthetic-key", "--admin-secretkey", "synthetic-secret",
                 "--netbackup-url", "https://netbackup.test/netbackup", "--netbackup-apikey", "synthetic-netbackup-key"]
-        with patch.object(sys, "argv", argv + list(options)):
+        with patch.object(sys, "argv", argv + list(options)), patch.object(config.socket, "gethostname", return_value="host-test"):
             return config.parse_args()
+
+    def test_host_context_uses_the_local_host_independently_of_the_policy_name(self):
+        args = self.arguments("--policy-name", "prod-weekly")
+        hosts = [{"name": "prod-weekly", "zoneid": "wrong-zone", "clusterid": "wrong-cluster"},
+                 {"name": "host-test", "zoneid": "zone", "clusterid": "cluster"}]
+        with patch.object(config, "invoke_mold_api", return_value={"listhostsresponse": {"host": hosts}}) as api, \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(("zone", "cluster"), config.resolve_host_context(args))
+        self.assertEqual("host-test", api.call_args.args[2]["name"])
+        self.assertEqual("prod-weekly", args.policy_name)
+
+    def test_host_ip_override_saves_the_exact_mold_host_name(self):
+        args = self.arguments("--policy-name", "prod-weekly", "--kvm-ip", "192.0.2.2")
+        hosts = [{"name": "host-test", "ipaddress": "192.0.2.1", "zoneid": "wrong-zone", "clusterid": "wrong-cluster"},
+                 {"name": "Mold-Host-2", "ipaddress": "192.0.2.2", "zoneid": "zone", "clusterid": "cluster"}]
+        with patch.object(config, "invoke_mold_api", return_value={"listhostsresponse": {"host": hosts}}), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(("zone", "cluster"), config.resolve_host_context(args))
+        self.assertEqual("Mold-Host-2", args.kvm_hostname)
+
+    def test_explicit_host_name_is_used_instead_of_the_local_name(self):
+        args = self.arguments("--policy-name", "prod-weekly", "--kvm-hostname", "mold-host")
+        host = {"name": "mold-host", "zoneid": "zone", "clusterid": "cluster"}
+        with patch.object(config, "invoke_mold_api", return_value={"listhostsresponse": {"host": host}}), \
+                contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(("zone", "cluster"), config.resolve_host_context(args))
+
+    def test_unmatched_or_ambiguous_hosts_never_fall_back_to_the_first_result(self):
+        args = self.arguments("--policy-name", "prod-weekly")
+        for names in (("prod-weekly",), ("host-test", "host-test")):
+            hosts = [{"name": name, "zoneid": "zone", "clusterid": "cluster"} for name in names]
+            with self.subTest(names=names), \
+                    patch.object(config, "invoke_mold_api", return_value={"listhostsresponse": {"host": hosts}}), \
+                    contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                config.resolve_host_context(args)
+
+    def test_runtime_selects_the_configured_mold_host_and_keeps_the_policy_name(self):
+        script = r'''
+set -euo pipefail
+source "$1"
+MOLD_VM_CACHE_FILE="$2/cache"
+KVM_HOSTNAME="$3"
+CLIENT_NAME=netbackup-client
+POLICY_NAME=prod-weekly
+VM_SCHEDULE_BACKUP=true
+log() { :; }
+invoke_mold_api() {
+  printf '%s\n' "$@" > "${MOLD_VM_CACHE_FILE}.request"
+  printf '%s\n' '{"listexternalbackupcandidatesresponse":{"externalbackupcandidates":{"selectionmode":"SCHEDULE","candidate":[]}}}'
+}
+cache_mold_virtual_machines
+cat "${MOLD_VM_CACHE_FILE}.request"
+'''
+        for host, expected in (("host-test", "host-test"), ("", "netbackup-client")):
+            with self.subTest(host=host), tempfile.TemporaryDirectory() as directory:
+                result = subprocess.run(["bash", "-c", script, "test", str(Path(__file__).with_name("netbackup-host-common.sh")),
+                                         directory, host], capture_output=True, text=True, timeout=10)
+                self.assertEqual(0, result.returncode, result.stderr)
+                params = result.stdout.splitlines()
+                self.assertEqual(expected, params[params.index("hostname") + 1])
+                self.assertEqual("prod-weekly", params[params.index("policyid") + 1])
 
     def configure(self, args, current_incremental="true", chain="8", global_incremental=None, global_plugins="ablestack-netbackup", zone_plugins="ablestack-netbackup"):
         if global_incremental is None:
@@ -114,7 +175,7 @@ class NetBackupConfigurationTest(unittest.TestCase):
         read.assert_not_called()
 
     def test_schedule_flag_and_sentinels_are_saved_together(self):
-        args = self.arguments("--vm-schedule-backup", "true")
+        args = self.arguments("--vm-schedule-backup", "true", "--policy-name", "prod-weekly")
         with patch.object(sys.stdin, "isatty", return_value=False):
             config.configure_vm_selection(args)
         with tempfile.TemporaryDirectory() as directory:
@@ -124,6 +185,8 @@ class NetBackupConfigurationTest(unittest.TestCase):
         self.assertIn("VM_SCHEDULE_BACKUP=true", text)
         self.assertIn('VM_INCLUDE="*"', text)
         self.assertIn('VM_EXCLUDE="*"', text)
+        self.assertIn("KVM_HOSTNAME=host-test", text)
+        self.assertIn("/bootstrap/prod-weekly", text)
 
     def test_schedule_mode_rejects_manual_filters(self):
         args = self.arguments("--vm-schedule-backup", "true", "--vm-include", "*")

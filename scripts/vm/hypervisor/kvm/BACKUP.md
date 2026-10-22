@@ -484,7 +484,8 @@ Mold에서 VM별 백업 스케줄을 사용하는 경우에는 아래의
    서버에서 각 Host를 Client로 인식하며 이름 또는 IP로 연결할 수 있는지 확인한다.
 2. NetBackup에 기준 정책을 준비한다. 정책 종류는 **`Standard`**, 스케줄에는 **`Full Backup`**이 필요하다.
    실제 백업 Host가 정책의 Client에 등록되어 있어야 한다.
-   현재 구성 스크립트의 정책 이름은 Mold에 등록된 Host 이름과 맞춰 사용하는 것이 좋다.
+   정책 이름은 Host 이름과 독립적으로 지정한다. 사전구성의 `--policy-name`에는 NetBackup UI의 실제 기준 정책 이름을 입력한다.
+   Mold Host는 현재 로컬 호스트명으로 정확히 조회하며, 필요하면 `--kvm-hostname` 또는 `--kvm-ip`로 별도 지정한다.
 3. NetBackup REST API 주소와 API key, 대상 Mold 서버의 관리자 API key·secret key를 준비한다.
    NetBackup API 계정에는 정책 조회·복제, 백업 실행, 상태 조회 및 복원 작업에 필요한 권한을 부여한다.
 4. 위의 공통 준비 절차에 따라 Mold의 Zone 설정과 스테이징을 활성화한다.
@@ -492,7 +493,8 @@ Mold에서 VM별 백업 스케줄을 사용하는 경우에는 아래의
 
    ```bash
    python3 /usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/netbackup-host-config.py \
-     --policy-name "<Mold Host 이름과 맞춘 NetBackup 정책 이름>" \
+     --policy-name "<NetBackup 기준 정책 이름>" \
+     --kvm-hostname "<Mold에 등록된 Host 이름>" \
      --vm-schedule-backup false \
      --vm-include "<대상 VM의 i-계열 인스턴스 이름>" \
      --mold-url "<Mold API 주소>" \
@@ -613,6 +615,11 @@ df -h /mnt/glue-gfs
 
 Backup Selections는 해당 정책의 **Client Host에 있는 경로**를 가리킨다.
 GFS2 경로를 공유하더라도 각 정책에는 대응하는 Client와 bootstrap 디렉터리를 지정한다.
+위 표는 정책명과 Host명을 같게 한 예시이며 필수 규칙은 아니다.
+예를 들어 `ablecube1` Host의 정책을 `kvm-prod-1`로 만들면
+`--policy-name kvm-prod-1 --kvm-hostname ablecube1`로 사전구성하고
+Backup Selections는 `/mnt/glue-gfs/ablestack-netbackup/bootstrap/kvm-prod-1`로 지정한다.
+정책의 Client는 실제 백업 Host인 `ablecube1`로 유지한다.
 Mold는 `/mnt/glue-gfs` 아래에 `ablestack-netbackup`을 붙이므로 root 설정에 이 하위 이름을 다시 붙이지 않는다.
 
 기준 정책은 작은 bootstrap 마커를 저장한다. 실제 이미지 파일은 이후 생성하는 별도 정책에서 백업한다.
@@ -750,6 +757,7 @@ Job 상세의 `Overview`에서 파일 목록·상태 코드를, `Details`에서 
 | 기준 Job만 있고 VM 백업 요청도 없음 | 해당 Host의 실행 중인 VM, 오퍼링 연결, `VM_SCHEDULE_BACKUP`, 예약 도래 여부와 Hook 로그를 확인한다. |
 | Mold는 `Failed`, `ABLESTACK-*` Job은 없음 | Mold 실패 상세와 관리 서버 로그를 확인한다. `thirdparty.volume.failure`에 실제 원인이 기록될 수 있다. |
 | `NetBackup artifact query failed with status 401` | API key·계정 권한과 관리 서버의 API 인증 코드 반영 여부를 확인한다. 기준 Job의 성공만으로 REST API 연결을 판단하지 않는다. |
+| 볼륨 Job은 성공했지만 `NETBACKUP_TRANSFER`에서 HTTP `400`, `Limit must be less than 100.` | `/catalog/images`의 페이지 크기를 확인한다. 수정본은 카탈로그를 `99`, Job 목록을 `1000`으로 조회한다. 아래 카탈로그 조회 오류 복구 안내를 따른다. |
 | bootstrap 경로 없음 | 해당 Host의 GFS2 마운트와 사전구성 완료 여부, 정책에 입력한 경로를 확인한다. |
 
 실제 백업을 실행한 Host에서 Hook 로그와 해당 백업 UUID의 작업 로그를 확인한다.
@@ -880,12 +888,30 @@ API 정의의 기준은 각 Primary Server의 `https://<Primary Server>/api-docs
 키의 유효성과 함께 **관리 서버에 반영된 Java 클라이언트의 Authorization 헤더**를 확인한다.
 `Volume pipeline was cancelled`만 남은 Host 로그보다 DB의 `thirdparty.volume.failure`와 관리 서버 로그를 먼저 확인한다.
 
+**카탈로그 조회 페이지 크기 오류와 기존 작업 확인**
+
+NetBackup 10.5 실서버에서 `GET /catalog/images?page[limit]=1000`은 HTTP `400`, 오류 코드 `8961`,
+`Limit must be less than 100.`을 반환했다. 수정본은 이 목록을 `page[limit]=99`로 조회하며,
+백업 완료 확인과 삭제 전 확인에 같은 제한을 적용한다. Job 목록의 `page[limit]=1000`은 유지한다.
+응답에 다음 페이지가 있거나 한 페이지를 가득 채우면 조회가 불완전한 것으로 처리하고,
+해당 응답만으로 백업 완료나 이미지 부재를 확정하지 않는다.
+이 변경도 11.1의 실제 서버에서 위 호환성 항목에 따라 확인한다.
+
+볼륨 Job이 성공해도 카탈로그 참조를 저장하지 못하면 Mold는 `NETBACKUP_TRANSFER`와 정리 `WAITING`을 유지할 수 있다.
+같은 Host의 후속 작업은 실행 슬롯을 기다리다가 `Staging queue timeout expired`로 실패할 수 있다.
+이 수정만 적용할 때는 관리 서버의 NetBackup 플러그인을 업데이트하고 `mold.service`를 재시작한다.
+Host 스크립트 변경은 없으므로 이 수정 때문에 Host 사전구성을 다시 실행할 필요는 없다.
+적용 중 새 기준 정책 실행은 중단하고 기존 스테이징 파일과 외부 볼륨 Job을 보존한다.
+적용 후 `RUNNING` 작업이 저장된 외부 Job 참조로 재조회되어 다음 볼륨과 metadata까지 완료되는지 확인한다.
+이미 대기 시간 만료로 `Failed`가 된 작업은 자동 재개 대상이 아니므로 별도 백업을 다시 요청한다.
+
 ### Veeam: `ablestack-veeam`
 
 **사전 준비**
 
 1. Veeam 백업 저장소와 Linux Agent를 준비하고 백업 Host가 Veeam에서 발견·등록되는지 확인한다.
-2. 파일 단위 백업을 사용하는 기준 Linux Agent Job을 준비한다. Mold는 이 Job을 복제해 볼륨별 파일을 저장한다.
+2. 파일 단위 백업을 사용하는 기준 Linux Agent Job을 Host마다 준비한다. Job 이름은 Host 이름과 독립적으로 지정한다.
+   예를 들어 `ablecube1` Host의 기준 Job 이름을 `veeam-ablecube1`로 정할 수 있다. Mold는 이 Job을 복제해 볼륨별 파일을 저장한다.
 3. Mold에 Veeam 접속 정보를 설정하고 서버 측 작업 명령을 실행할 수 있는 연결을 확인한다.
    공통 볼륨별 백업은 Veeam 서버의 PowerShell 작업을 SSH로 실행하는 경로를 사용한다.
 4. 공통 스테이징을 활성화하고 Host에 Veeam 연동 스크립트를 설치한다.
@@ -929,9 +955,9 @@ Full/증분 정책과 VM 선택 방식은 별개이다.
 
 | 항목 | NetBackup `netbackup-host-config.py` | Veeam `veeam-host-config.py` |
 | --- | --- | --- |
-| 외부 정책/Job 이름 | `--policy-name` 필수, Mold Host 이름과 일치시킴 | `--job-name`, 기본 현재 호스트 이름. Veeam UI Job과 일치시킴 |
+| 외부 정책/Job 이름 | `--policy-name` 필수. NetBackup UI의 실제 기준 정책 이름이며 Host명과 독립 | `--job-name`, 기본 현재 호스트 이름. Veeam UI의 실제 기준 Job 이름이며 Host명과 독립 |
 | 솔루션 서버 인증 | `--netbackup-url`, `--netbackup-apikey` | `--veeam-host`, `--veeam-password`, `--veeam-user`(기본 `administrator`) |
-| Host 자동 식별 | 정책 이름으로 Host 조회 | 현재 호스트 이름으로 정확히 조회. 필요할 때만 `--kvm-hostname` 또는 `--kvm-ip` 지정 |
+| Host 자동 식별 | 현재 호스트 이름으로 정확히 조회. 필요할 때만 `--kvm-hostname` 또는 `--kvm-ip` 지정 | 동일. 외부 정책/Job 이름을 Host 조회 키로 사용하지 않음 |
 | Zone | 조회한 Host의 Zone | 조회한 Host의 Zone, `--zone-id` 지정 시 일치 검증 |
 | 복원 감시 접속 | NetBackup API | KVM → VBR SSH. `--veeam-ssh-user` 기본 Veeam 사용자, `--veeam-ssh-key` 선택 |
 | 오퍼링 | 기본 `NetBackup` 자동 생성·재사용 | 기본 `VeeamBackup` 자동 생성·재사용. `--offering-name`은 신규 생성 이름에만 사용 |
@@ -948,7 +974,7 @@ Veeam은 Linux Agent 설치와 VBR의 SSH 접속 구성을 먼저 완료한다.
 ```bash
 # NetBackup: VM별 스케줄 사용
 python3 netbackup-host-config.py \
-  --policy-name '<Mold Host 이름과 맞춘 정책 이름>' \
+  --policy-name '<NetBackup 기준 정책 이름>' \
   --mold-url 'http://<Mold>:8080/client/api' \
   --admin-apikey '<Mold API key>' --admin-secretkey '<Mold API secret>' \
   --netbackup-url 'https://<NetBackup>/netbackup' --netbackup-apikey '<NetBackup API key>' \
@@ -956,7 +982,7 @@ python3 netbackup-host-config.py \
 
 # Veeam: VM별 스케줄 사용
 python3 veeam-host-config.py \
-  --job-name '<Veeam 부모 Host Job 이름>' \
+  --job-name '<Veeam 기준 Job 이름>' \
   --mold-url 'http://<Mold>:8080/client/api' \
   --admin-apikey '<Mold API key>' --admin-secretkey '<Mold API secret>' \
   --veeam-host '<Veeam 서버>' --veeam-password '<Veeam 암호>' \
@@ -2023,18 +2049,28 @@ tail -n 100 /var/log/netbackup-mold-restore.log
 
 **Veeam 신규 구성과 외부 UI 복원**
 
-각 KVM Host에 Veeam Linux Agent를 설치하고 Host별 Agent Job을 사용한다.
+각 KVM Host에 Veeam Linux Agent를 설치하고 Host별 기준 Agent Job을 하나씩 사용한다.
+Job 이름은 Mold Host 이름과 별도로 지정할 수 있다. 아래는 `ablecube1` Host에서 `veeam-ablecube1` Job을 사용하는 예시다.
 사전구성 진입점은 `veeam-host-config.py` 하나이다. 내부 단계별 함수로
 인증정보·Job conf·Hook·Agent timeout·복원 감시 서비스를 구성한다.
 
 ```bash
 python3 /etc/ablestack/veeam/veeam-host-config.py \
+  --job-name 'veeam-ablecube1' \
+  --kvm-hostname 'ablecube1' \
+  --mold-url 'http://<Mold>:8080/client/api' \
   --admin-apikey '<Mold Admin API key>' \
   --admin-secretkey '<Mold Admin secret key>' \
-  --job-name 'ablecube3' \
   --veeam-host '<Veeam server address>' \
-  --veeam-password '<Veeam password>'
+  --veeam-password '<Veeam password>' \
+  --vm-schedule-backup true \
+  --incremental-backup true \
+  --backup-chain-size 8
 ```
+
+위 예시는 VM별 Mold 백업 스케줄을 사용하고 증분 체인 길이를 `8`로 명시하는 구성이다.
+사전구성 완료 후 Veeam 오퍼링을 VM에 연결하고 VM별 백업 스케줄을 설정한다.
+`--backup-chain-size`는 공통 `kvm.backup.chain.size`에 반영되며, 기존 값을 유지하려면 생략한다.
 
 `--kvm-hostname`·`--kvm-ip`는 자동 조회가 맞지 않을 때만 지정한다.
 오퍼링은 기본 이름 `VeeamBackup`으로 자동 생성·재사용하고 신규 오퍼링 이름을 지정할 때만 `--offering-name`을 사용한다.
@@ -2052,8 +2088,15 @@ Veeam 서버에서 등록하는 파일 경로와 KVM에서 실행하는 경로�
 Storage → Advanced → Scripts는 Backup Server에서 실행하는 설정이므로 이 Agent Hook 등록과 구분한다.
 
 부모 Host Job의 SelectedFiles 대상은 사전구성이 출력한 `VEEAM_AGENT_PAYLOAD_PATH`이며 작은 bootstrap 사본만 백업한다.
-기본값은 `<root>/ablestack-veeam/bootstrap/<host>/<job>`이며 새 구성에서 `/tmp/mold/veeam-agent`를 기본 생성하지 않는다.
-기존 Host도 업그레이드 후 재구성하고 Veeam UI의 SelectedFiles를 출력된 경로로 한 번 변경한다.
+기본값은 `<root>/ablestack-veeam/bootstrap/<host>/<job>`이다.
+예를 들어 root가 `/mnt/glue-gfs`, Host가 `ablecube1`, Job이 `veeam-ablecube1`이면
+SelectedFiles는 `/mnt/glue-gfs/ablestack-veeam/bootstrap/ablecube1/veeam-ablecube1`로 지정한다.
+Host와 Job 이름을 모두 `ablecube1`로 지정하면 `bootstrap/ablecube1/ablecube1`이 되며,
+두 폴더는 각각 Host와 Job을 구분한다.
+기본 경로를 사용할 때는 `--agent-payload-path`를 생략한다.
+기존 Host는 진행 중인 작업이 종료된 뒤 업데이트·재구성하고 Veeam UI의 SelectedFiles가 출력된 경로와 같은지 확인한다.
+명시적 경로를 유지하려면 `--agent-payload-path`에 기존 경로를 지정한다.
+완료된 볼륨·metadata Job과 기존 복원 지점은 경로 변경 대상이 아니다.
 사전 Hook은 `createAblestackVeeamBackup`을 요청하고 Mold가 볼륨별 Job과 최종 metadata Job을 관리한다.
 사후 Hook은 부모용 마커 사본만 정리한다. 원본 마커·볼륨 staging 파일과 최종 백업 시점은 Mold가 관리한다.
 Veeam의 Active Full/Start 선택만으로 Mold의 Full/증분을 결정하지 않는다.

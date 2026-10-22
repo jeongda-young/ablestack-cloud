@@ -64,6 +64,9 @@ public class AblestackNetBackupClient {
     private static final String NETBACKUP_EXPIRE_IMAGES_PATH = "/catalog/expire-images";
     private static final String NETBACKUP_CATALOG_IMAGES_PATH = "/catalog/images";
     private static final String NETBACKUP_JOBS_PATH = "/admin/jobs/";
+    // NetBackup 10.5 rejects catalog page limits of 100 or greater.
+    private static final int NETBACKUP_CATALOG_PAGE_LIMIT = 99;
+    private static final int NETBACKUP_JOBS_PAGE_LIMIT = 1000;
     private static final String NETBACKUP_PART_CONTENT_TYPE = "multipart/vnd.netbackup+form-data;version=12.0";
     private static final String NETBACKUP_RECOVER_CONTENT_TYPE = "multipart/vnd.netbackup+form-data;version=12.0";
     private static final String NETBACKUP_EXPIRE_PART_CONTENT_TYPE = "application/vnd.netbackup+json;version=12.0";
@@ -374,7 +377,8 @@ public class AblestackNetBackupClient {
 
     /** Only an explicit 404 confirms absence; never turn empty, truncated, or failed responses into deletion. */
     private JSONObject artifactGetStrict(String path, String filter) {
-        HttpGet request = new HttpGet(resolvePath(path + (filter == null ? "" : "?page%5Blimit%5D=1000&filter=" + uriSegment(filter))));
+        int pageLimit = artifactPageLimit(path);
+        HttpGet request = new HttpGet(resolvePath(path + (filter == null ? "" : "?page%5Blimit%5D=" + pageLimit + "&filter=" + uriSegment(filter))));
         request.setHeader(HttpHeaders.ACCEPT, NETBACKUP_JSON_V12_CONTENT_TYPE);
         applyAuthenticationHeaders(request);
         try {
@@ -383,16 +387,37 @@ public class AblestackNetBackupClient {
             String body = response.getEntity() == null ? "" : EntityUtils.toString(response.getEntity(), "UTF-8");
             if (status == 404 && filter == null) { return null; }
             if (status != 200 || StringUtils.isBlank(body)) {
-                throw new CloudRuntimeException("NetBackup artifact catalog query is unconfirmed: HTTP " + status);
+                throw new CloudRuntimeException("NetBackup artifact catalog query is unconfirmed: HTTP " + status + artifactQueryContext(path, body));
             }
             JSONObject result = new JSONObject(body);
-            JSONObject links = result.optJSONObject("links");
-            Object next = links == null ? null : links.opt("next");
-            if (filter != null && (result.getJSONArray("data").length() >= 1000 || (next != null && next != JSONObject.NULL))) {
-                throw new CloudRuntimeException("NetBackup artifact catalog exceeds its page limit");
-            }
+            if (filter != null) { validateArtifactPage(result, pageLimit); }
             return result;
         } catch (IOException e) { throw new CloudRuntimeException("NetBackup artifact catalog query failed", e); }
+    }
+
+    private static int artifactPageLimit(String path) {
+        return NETBACKUP_CATALOG_IMAGES_PATH.equals(path) ? NETBACKUP_CATALOG_PAGE_LIMIT : NETBACKUP_JOBS_PAGE_LIMIT;
+    }
+
+    private static void validateArtifactPage(JSONObject result, int pageLimit) {
+        JSONObject links = result.optJSONObject("links");
+        Object next = links == null ? null : links.opt("next");
+        if (result.getJSONArray("data").length() >= pageLimit || (next != null && next != JSONObject.NULL)) {
+            throw new CloudRuntimeException("NetBackup artifact query exceeds its page limit");
+        }
+    }
+
+    private static String artifactQueryContext(String path, String body) {
+        JSONObject details = new JSONObject();
+        try {
+            JSONObject response = new JSONObject(body);
+            for (String field : new String[]{"errorCode", "errorMessage", "errorDetails"}) {
+                if (response.has(field)) { details.put(field, response.get(field)); }
+            }
+        } catch (org.json.JSONException e) {
+            // An empty or non-JSON error response must not obscure the HTTP status.
+        }
+        return " (path=" + path + (details.length() == 0 ? "" : ", response=" + StringUtils.abbreviate(details.toString(), 2048)) + ")";
     }
 
     private static String filterValue(final String value) {
@@ -407,7 +432,8 @@ public class AblestackNetBackupClient {
     }
 
     private JSONObject artifactGet(final String path, final String filter) {
-        final HttpGet request = new HttpGet(resolvePath(path + (filter == null ? "" : "?page%5Blimit%5D=1000&filter=" + uriSegment(filter))));
+        final int pageLimit = artifactPageLimit(path);
+        final HttpGet request = new HttpGet(resolvePath(path + (filter == null ? "" : "?page%5Blimit%5D=" + pageLimit + "&filter=" + uriSegment(filter))));
         request.setHeader(HttpHeaders.ACCEPT, NETBACKUP_JSON_V12_CONTENT_TYPE);
         applyAuthenticationHeaders(request);
         try {
@@ -418,12 +444,10 @@ public class AblestackNetBackupClient {
                 return null;
             }
             if (status != 200) {
-                throw new CloudRuntimeException("NetBackup artifact query failed with status " + status);
+                throw new CloudRuntimeException("NetBackup artifact query failed with status " + status + artifactQueryContext(path, body));
             }
             final JSONObject result = new JSONObject(body);
-            if (filter != null && result.getJSONArray("data").length() >= 1000) {
-                throw new CloudRuntimeException("NetBackup artifact query exceeds its page limit");
-            }
+            if (filter != null) { validateArtifactPage(result, pageLimit); }
             return result;
         } catch (IOException e) {
             LOG.warn("NetBackup artifact status is temporarily unavailable");

@@ -25,6 +25,7 @@ import os
 import re
 import shlex
 import shutil
+import socket
 import subprocess
 import sys
 import time
@@ -245,28 +246,33 @@ def append_provider_if_missing(provider_list: str, provider_name: str) -> str:
     return ",".join(items)
 
 
-def resolve_host_context(policy_name: str, mold_url: str, api_key: str, secret_key: str) -> tuple[str, str]:
+def resolve_host_context(args: argparse.Namespace) -> tuple[str, str]:
     log_step("Resolve Host Context")
-    log_info(f"Resolving zone and cluster IDs using policy/host name={policy_name}")
-    data = invoke_mold_api("GET", "listHosts", {
+    log_info(f"Resolving zone and cluster IDs using host={args.kvm_ip or args.kvm_hostname}")
+    params = {
         "listAll": "true",
         "pagesize": "500",
         "page": "1",
         "type": "Routing",
-        "keyword": policy_name,
-    }, mold_url, api_key, secret_key)
+    }
+    if not args.kvm_ip:
+        params["name"] = args.kvm_hostname
+    data = invoke_mold_api("GET", "listHosts", params, args.mold_url, args.admin_apikey, args.admin_secretkey)
     hosts = data.get("listhostsresponse", {}).get("host", [])
     if isinstance(hosts, dict):
         hosts = [hosts]
-    exact = next((host for host in hosts if str(host.get("name", "")).lower() == policy_name.lower()), None)
-    if exact is None and hosts:
-        exact = hosts[0]
-    if not exact or not exact.get("zoneid"):
-        fail(f"Unable to resolve zone ID from host/policy name '{policy_name}' via listHosts.")
+    matches = [host for host in hosts
+               if (args.kvm_ip and host.get("ipaddress") == args.kvm_ip)
+               or (not args.kvm_ip and str(host.get("name", "")).lower() == args.kvm_hostname.lower())]
+    if len(matches) != 1:
+        fail("Cannot uniquely match this KVM host in Mold; provide --kvm-hostname or --kvm-ip")
+    exact = matches[0]
+    if not exact.get("name") or not exact.get("zoneid") or not exact.get("clusterid"):
+        fail("Matched KVM host is missing its name, zone ID or cluster ID")
+    args.kvm_hostname = str(exact["name"])
     zone_id = str(exact["zoneid"])
     cluster_id = str(exact.get("clusterid", "") or "")
-    if not cluster_id:
-        fail(f"Unable to resolve cluster ID from host/policy name '{policy_name}' via listHosts.")
+    log_ok(f"Resolved Mold host: {args.kvm_hostname}")
     log_ok(f"Resolved zone ID: {zone_id}")
     log_ok(f"Resolved cluster ID: {cluster_id}")
     return zone_id, cluster_id
@@ -529,6 +535,7 @@ def write_config_file(path: Path, args: argparse.Namespace) -> None:
         "VM_EXCLUDE": args.vm_exclude,
         "MOLD_URL": args.mold_url,
         "ADMIN_APIKEY": args.admin_apikey,
+        "KVM_HOSTNAME": shlex.quote(args.kvm_hostname),
         "NETBACKUP_PARENT_PAYLOAD_PATH": shlex.quote(str(BACKUP_STAGING_ROOT / "bootstrap" / sanitize_name(args.policy_name))),
     })
     path.write_text(content, encoding="utf-8")
@@ -887,6 +894,7 @@ def generate_host_outputs(zone_id: str, args: argparse.Namespace) -> None:
     print(f"  Timer      : {WATCHER_TIMER_PATH}")
     print(f"  Logrotate  : {LOGROTATE_CONFIG_PATH}")
     print(f"  Staging dir: {BACKUP_STAGING_ROOT}")
+    print(f"  Mold Host  : {args.kvm_hostname}")
     print(f"  Parent policy Backup Selections: {parent_payload} (small bootstrap markers only)")
     print(f"  Mold config: {NETBACKUP_STAGE_ROOT_CONFIG_NAME} (provider directory: {NETBACKUP_PROVIDER_NAME})")
     print(f"  Zone ID    : {zone_id}")
@@ -900,7 +908,10 @@ def parse_boolean(value: str) -> bool:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="NetBackup configuration helper")
-    parser.add_argument("--policy-name")
+    parser.add_argument("--policy-name", help="existing NetBackup parent policy name; independent of the Mold host name")
+    parser.add_argument("--kvm-hostname", default=socket.gethostname().split(".")[0],
+                        help="Mold host name; default: current local host name")
+    parser.add_argument("--kvm-ip", help="match the Mold host by its IP instead of its name")
     parser.add_argument("--vm-schedule-backup", type=parse_boolean, metavar="true|false",
                         help="Use only Mold per-VM schedules. Otherwise ask for include/exclude (default: false).")
     parser.add_argument("--vm-include")
@@ -983,7 +994,7 @@ def main() -> None:
 
     # Fail before creating credentials, changing Mold settings or importing an offering.
     load_common_staging(args)
-    zone_id, cluster_id = resolve_host_context(args.policy_name, args.mold_url, args.admin_apikey, args.admin_secretkey)
+    zone_id, cluster_id = resolve_host_context(args)
     prepare_secret_key()
     restart_required = ensure_backup_framework_configuration(zone_id, cluster_id, args)
     if restart_required:

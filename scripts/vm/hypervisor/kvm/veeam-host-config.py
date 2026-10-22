@@ -89,7 +89,7 @@ def parse_args(argv=None):
     parser.add_argument("--mold-url", help="Mold API URL; default: management host from agent.properties")
     parser.add_argument("--admin-apikey", "--api-key", dest="admin_apikey")
     parser.add_argument("--admin-secretkey", "--api-secret", dest="admin_secretkey")
-    parser.add_argument("--job-name", default=socket.gethostname().split(".")[0])
+    parser.add_argument("--job-name", default=socket.gethostname().split(".")[0], help="parent Job name; independent of the Mold host name")
     parser.add_argument("--veeam-host", help="VBR hostname or IP; SSH must be enabled on this server")
     parser.add_argument("--veeam-user", default="administrator")
     parser.add_argument("--veeam-password")

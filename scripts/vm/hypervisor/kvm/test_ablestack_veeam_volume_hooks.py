@@ -164,6 +164,22 @@ test -f "$TEST_ROOT/source/volume.qcow2"
 ''')
         self.assertEqual(0, result.returncode, result.stderr)
 
+    def test_another_hosts_parent_path_is_rejected_before_requesting_a_backup(self):
+        result = self.run_hook(r'''
+mold_backup_load_config() { :; }
+mold_backup_notify_log() { echo "$*" >&2; }
+mold_backup_api_external_candidates() { echo UNEXPECTED_API >&2; return 1; }
+VEEAM_AGENT_PAYLOAD_MODE=COMMON
+VEEAM_HOST_BACKUP_PATH="$TEST_ROOT/stage/ablestack-veeam"
+VEEAM_AGENT_PAYLOAD_PATH="$VEEAM_HOST_BACKUP_PATH/bootstrap/another-host/parent-policy"
+KVM_HOSTNAME=host-test
+mold_backup_pre_notify host-test parent-policy default
+''')
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("Rerun veeam-host-config.py", result.stderr)
+        self.assertIn("bootstrap/host-test/parent-policy before backing up", result.stderr)
+        self.assertNotIn("UNEXPECTED_API", result.stderr)
+
     def test_common_parent_path_matches_provisioner_for_unicode_job_names(self):
         result = self.run_hook(r'''
 mold_backup_load_config() { :; }
