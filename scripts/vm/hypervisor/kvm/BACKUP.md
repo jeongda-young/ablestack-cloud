@@ -482,12 +482,14 @@ Mold에서 VM별 백업 스케줄을 사용하는 경우에는 아래의
 
 1. NetBackup Primary Server와 백업 저장소를 준비하고 백업 Host에 NetBackup Client를 설치한다.
    서버에서 각 Host를 Client로 인식하며 이름 또는 IP로 연결할 수 있는지 확인한다.
-2. NetBackup에 기준 정책을 준비한다. 정책 종류는 **`Standard`**, 스케줄에는 **`Full Backup`**이 필요하다.
+2. NetBackup에 Host별 기준 정책 하나를 준비한다. 정책 종류는 **`Standard`**이며,
+   VM 요청용 **`Full Backup`** 스케줄과 실제 전송용 **`mold-transfer` / `User Backup`** 스케줄을 함께 만든다.
    실제 백업 Host가 정책의 Client에 등록되어 있어야 한다.
    정책 이름은 Host 이름과 독립적으로 지정한다. 사전구성의 `--policy-name`에는 NetBackup UI의 실제 기준 정책 이름을 입력한다.
    Mold Host는 현재 로컬 호스트명으로 정확히 조회하며, 필요하면 `--kvm-hostname` 또는 `--kvm-ip`로 별도 지정한다.
 3. NetBackup REST API 주소와 API key, 대상 Mold 서버의 관리자 API key·secret key를 준비한다.
-   NetBackup API 계정에는 정책 조회·복제, 백업 실행, 상태 조회 및 복원 작업에 필요한 권한을 부여한다.
+   NetBackup API 계정에는 정책·Job·카탈로그 조회 및 복원·이미지 만료에 필요한 권한을 부여한다.
+   신규 백업은 Host의 `bpbackup`으로 실행하며 별도 정책을 생성하지 않는다.
 4. 위의 공통 준비 절차에 따라 Mold의 Zone 설정과 스테이징을 활성화한다.
 5. 해당 Host에서 [netbackup-host-config.py](netbackup-host-config.py)를 실행한다.
 
@@ -537,11 +539,15 @@ Mold에서 VM별 백업 스케줄을 사용하는 경우에는 아래의
 2. Host의 사전 백업 스크립트가 대상 VM을 찾아 Mold에 백업을 요청한다.
 3. 기준 정책의 작업이 종료된 뒤 Mold가 실제 볼륨별 백업과 외부 저장을 진행한다.
 4. RBD는 전체 데이터 또는 변경분을 내보내고, QCOW2는 해당 데이터를 스테이징에 복사한다.
-5. Mold가 기준 정책을 바탕으로 볼륨별 정책·작업을 만들어 해당 파일을 NetBackup에 저장한다.
+5. Mold가 Host Agent에 준비된 파일의 정확한 경로를 전달한다.
+   Agent는 같은 Host 정책의 `mold-transfer` 스케줄에 `bpbackup -f <파일 목록>`으로 전송을 요청한다.
    저장 완료를 확인한 뒤 임시 파일을 정리하고 다음 볼륨을 처리한다.
 6. 마지막으로 메타데이터를 저장하고 Mold의 VM 백업 결과를 확정한다.
 
-기준 정책은 유지되며 볼륨별 작업의 대상 파일은 Mold가 지정한다.
+기준 정책과 Backup Selections는 유지되며, 볼륨별 작업의 대상 파일은 실행 요청의 파일 목록으로 지정한다.
+`mold-transfer`의 Hook은 VM 백업 요청이나 부모 Job의 정리를 다시 실행하지 않는다.
+Mold의 Full·Incremental은 원본 볼륨에서 전체 데이터 또는 변경분을 생성하는 구분이다.
+생성한 파일 자체는 두 경우 모두 NetBackup `User Backup`으로 전송하며 NetBackup 증분 스케줄을 사용하지 않는다.
 기준 정책 하나의 성공만으로 VM 백업 완료를 판단하지 않고, Mold에서 `BackedUp`을 확인한다.
 구성 스크립트가 등록하는 NetBackup 오퍼링은 사용자 수동 백업을 허용하지 않으므로,
 기본 운영 시작점은 NetBackup 정책과 사전 백업 스크립트이다.
@@ -578,7 +584,7 @@ NetBackup Primary Server와 저장소를 준비하고 네 Host 모두에 NetBack
 관리 서버와 Host에서 NetBackup API 주소에 연결할 수 있어야 하며,
 NetBackup에서 각 Host의 Client 이름을 확인하고 해당 Host와 통신할 수 있어야 한다.
 Mold 관리자 API key·secret key와 NetBackup API key를 준비한다.
-NetBackup API 계정에는 정책 조회·생성, 백업 실행, Job·카탈로그 조회 및 운영할 복원·삭제 작업의 권한이 필요하다.
+NetBackup API 계정에는 정책·Job·카탈로그 조회 및 운영할 복원·이미지 만료 작업의 권한이 필요하다.
 
 Mold 공통 준비 절차에 따라 다음 값을 설정한다. provider 목록에는 기존 값과 함께 `ablestack-netbackup`을 포함한다.
 아래 경로는 네 Host 모두에서 실제 GFS2 마운트여야 한다.
@@ -603,8 +609,41 @@ df -h /mnt/glue-gfs
 **2. NetBackup WebUI에서 Host별 기준 정책을 준비한다.**
 
 정책 관리 화면에서 다음 네 정책을 생성한다. 초기 구성 중에는 자동 실행을 보류한다.
-각 정책은 `Standard`, 실제 백업 저장소와 `Full Backup` 유형의 스케줄 하나를 사용한다.
-스케줄 이름은 예를 들어 `schedule`로 지정하며, 이름과 Backup type을 구분한다.
+각 정책은 `Standard`, 실제 백업 저장소와 아래 두 스케줄을 사용한다.
+Client는 해당 Host 하나로 지정하고 `Allow multiple data streams`는 해제한다.
+
+| Schedule name | Backup type | 역할 / 실행 시간 |
+| --- | --- | --- |
+| `schedule` (이름 변경 가능) | `Full Backup` | bootstrap 백업과 Hook으로 VM 백업을 요청한다. 해당 Host의 VM 예약 시각에 맞춰 자동 실행한다. |
+| `mold-transfer` (고정 이름) | `User Backup` | 준비된 볼륨·메타데이터 파일을 요청받아 저장한다. Start window는 매일 `00:00–24:00`으로 열어 둔다. 시간 창 자체로 자동 반복 실행되지 않는다. |
+
+`mold-transfer`의 저장소와 Retention은 실제 VM 백업을 보관할 기준으로 설정한다.
+bootstrap용 `schedule`은 별도 Retention을 지정할 수 있다. 증분 복원에 필요한 볼륨과 부모 이미지가
+메타데이터보다 먼저 만료되지 않도록 실제 데이터의 보존기간을 설정한다.
+
+**정책·Client·저장소의 동시 실행 제한도 함께 확인한다.**
+이 흐름에서 bootstrap 작업과 `mold-transfer`는 같은 정책의 서로 다른 백업 Job이다.
+여기서 말하는 bootstrap은 Mold 요청을 시작하는 일반 Standard 백업이며,
+NetBackup 멀티스트림 기능의 자원을 소비하지 않는 제어용 parent job과 구분한다.
+
+| 위치 / 옵션 | 확인·조정 기준 |
+| --- | --- |
+| Policy Attributes / `Limit jobs per policy` | `1`도 순차 처리가 가능하므로 필수 변경은 아니다. 볼륨 전송 중 다음 bootstrap 작업도 지연 없이 실행하려면 Host당 동시 전송 수 `C`에 여유 `1`을 둔 `C+1`을 시작값으로 검토한다. 기본 Mold Host 제한 `C=1`에서는 `2`를 검토할 수 있다. |
+| Primary Host properties / Global attributes / `Maximum jobs per client` | 같은 Client의 여러 정책·스케줄이 공유하는 제한이다. 해당 Host의 의도한 병렬 수를 수용하는지 확인한다. 정책 제한만 높여도 이 값이 낮으면 계속 대기할 수 있다. |
+| Primary Host properties / Client attributes / `Maximum data streams` | Client별 override가 있으면 `Maximum jobs per client` 대신 이 값이 적용된다. 정책의 `Allow multiple data streams` 체크박스와는 다른 옵션이다. |
+| Storage unit / `Maximum concurrent jobs` | 같은 저장소를 사용하는 모든 Host·정책이 공유한다. `1`이면 Host 4대도 저장소에서는 순차 처리된다. 네 Host의 전송을 동시에 처리하려면 저장소 성능을 확인하고 `4` 이상의 필요한 슬롯과 bootstrap용 여유를 검토한다. |
+| Policy Attributes / `Allow multiple data streams` | 해제한다. 전송 한 건의 정확한 파일 목록과 Job·Backup ID를 연결하며 여러 스트림으로 나뉜 모호한 결과는 완료로 처리하지 않는다. |
+| Mold / `backup.thirdparty.staging.concurrent.jobs.per.host` | 기본 `1`이다. NetBackup 제한을 올려도 이 값이 `1`이면 Host 내 VM 스테이징은 하나씩 진행한다. 여러 볼륨을 가진 VM 한 개의 볼륨은 계속 순차 처리된다. |
+| Mold / `backup.thirdparty.staging.concurrent.jobs.per.cluster`, `.total` | 기본값은 각각 `4`, `4`이며 백업·복원과 다른 third-party 공급자도 함께 사용하는 제한이다. Host 제한·스테이징 여유 공간과 함께 조정한다. |
+| Mold / `backup.thirdparty.staging.queue.timeout`, `backup.data.operation.timeout` | 각각 스테이징 입장 대기와 실제 처리 대기·전송 시간을 고려한다. NetBackup 자원 대기로 전송이 길어지면 활성 VM이 Host 슬롯을 계속 보유하고 다음 VM은 스테이징 큐 만료로 실패할 수 있다. |
+
+한 Host에서 순차 검증할 때는 정책·Client·저장소의 제한을 모두 `1`로 유지해도 된다.
+병렬 검증은 저장소 처리량과 Mold 제한을 확인한 뒤 조정하며, 모든 제한을 무조건 최댓값으로 올리지 않는다.
+`Queued`이면 Job 상세의 대기 자원이 정책인지, Client인지, storage unit인지 먼저 확인한다.
+공식 기준은 [정책 동시 Job 제한](https://www.veritas.com/support/en_US/doc/18716246-163344127-0/v41274481-163344127)과
+[Client 동시 실행 제한·override](https://origin-www.veritas.com/content/support/en_US/doc/150157642-165999184-0/v44169007-165999184)를 참고한다.
+사전구성 도구는 정책·Client·User Backup 스케줄을 조회하고 정책 Job 제한과 Mold Host 제한을 출력한다.
+Primary의 전역·Client override와 storage unit 제한은 관리 UI에서 별도로 확인하며 자동 변경하지 않는다.
 
 | Policy name | Clients에 등록할 Host | Backup Selections에 입력할 경로 |
 | --- | --- | --- |
@@ -622,9 +661,10 @@ Backup Selections는 `/mnt/glue-gfs/ablestack-netbackup/bootstrap/kvm-prod-1`로
 정책의 Client는 실제 백업 Host인 `ablecube1`로 유지한다.
 Mold는 `/mnt/glue-gfs` 아래에 `ablestack-netbackup`을 붙이므로 root 설정에 이 하위 이름을 다시 붙이지 않는다.
 
-기준 정책은 작은 bootstrap 마커를 저장한다. 실제 이미지 파일은 이후 생성하는 별도 정책에서 백업한다.
+기준 정책의 `Full Backup` 스케줄은 작은 bootstrap 마커를 저장한다.
+실제 이미지 파일은 같은 정책의 `mold-transfer` User Backup 요청에 포함된 파일 목록으로 백업한다.
 따라서 기준 정책의 Backup Selections에는 위 bootstrap 경로 하나를 입력한다.
-저장소·보관 설정은 별도 정책의 바탕이 되므로 실제 VM 백업에 필요한 값으로 준비한다.
+볼륨이나 VM 백업본이 늘어나도 정책을 추가하거나 Backup Selections를 변경하지 않는다.
 
 **3. 각 Host에서 VM별 스케줄 모드로 사전구성한다.**
 
@@ -695,6 +735,19 @@ Mold VM 스케줄은 VM별 백업 대상 시각을 정하고, NetBackup Host 기
 | VM마다 매시 10분·30분·50분 등으로 다름 | 필요한 각 시각 이후 실행 기회를 두거나, 허용 지연에 맞춰 짧은 주기로 실행한다. |
 | VM별 시각이 다양하고 빠른 처리가 필요함 | 예를 들어 5분 주기로 대상을 확인한다. 대상이 없는 실행에서는 VM 백업을 요청하지 않는다. |
 
+대상이 없어도 bootstrap 디렉터리 백업은 Catalog에 별도 Backup ID를 만들 수 있다.
+호스트 4대가 5분마다 이미지 하나씩을 만들면 하루 `1,152개`, 30일에 `34,560개`이며 실제 VM 전송 이미지는 별도다.
+VM들이 모두 매시 50분 대상이면 매시 55분 등으로 실행 기회를 줄이고 bootstrap 보존기간도 운영 기준에 맞춰 조정한다.
+**정책 하나가 Catalog 이미지 하나를 의미하지 않는다.** 볼륨별 스테이징에서는 VM 백업 한 번에
+볼륨 수만큼의 이미지와 마지막 메타데이터 이미지가 생긴다.
+
+이미 쌓인 bootstrap 이미지는 `Catalog`에서 정책명·기간으로 조회하고,
+연결된 Job의 스케줄과 파일 목록이 bootstrap 경로만 선택했는지 확인한 뒤 `Expire`로 만료 처리한다.
+스테이징이 현재 비어 있다는 이유로 이미지를 선택하지 않는다. 정상 볼륨도 전송 완료 후 임시 파일이 삭제된다.
+실제 VM 볼륨·메타데이터는 Mold에서 백업본을 삭제하여 의존성과 정확한 Backup ID를 함께 정리한다.
+bootstrap 스케줄의 Retention을 바꾸는 것과 기존 이미지의 만료 처리는 별도 작업이다.
+절차는 [Catalog 이미지 만료 안내](https://www.veritas.com/support/en_US/doc/150157642-163367294-0/v41088127-163367294)를 참고한다.
+
 NetBackup WebUI에서 기준 정책의 스케줄을 편집하고 다음 항목을 구분하여 저장한다.
 
 | 화면 / 항목 | 설정 기준 |
@@ -725,11 +778,14 @@ Start window와 Frequency의 의미는 공식 [Start Window 안내](https://www.
 | 09:55 기준 정책 Hook 실행 | 예약 시각이 현재 이하인 두 VM을 조회하고 Mold에 백업을 요청한다. |
 | 요청 접수 | VM별 백업 작업과 bootstrap 마커를 준비한다. 접수 이후 다음 예약을 10:50으로 갱신한다. |
 | 기준 Job 종료 | bootstrap 파일 저장을 마친 뒤 실제 볼륨 파일 생성·전송 단계가 진행된다. |
-| 볼륨 파일 준비 완료 | Mold가 정확한 파일 경로를 Backup Selections로 지정한 `ABLESTACK-<백업 UUID>-...` 정책을 생성하고 실행한다. |
-| 각 볼륨 저장 후 | 다음 볼륨을 처리하고 마지막으로 `ABLESTACK-<백업 UUID>-metadata` 작업을 실행한다. |
+| 볼륨 파일 준비 완료 | Mold가 Host Agent에 정확한 파일 목록을 전달하고, 같은 `ablecube4` 정책의 `mold-transfer` User Backup을 요청한다. |
+| 각 볼륨 저장 후 | 해당 Job과 Backup ID를 확인한 뒤 임시 파일을 삭제하고 다음 볼륨을 처리한다. 마지막에는 메타데이터 디렉터리를 같은 스케줄로 전송한다. |
 | 전체 완료 | Mold에서 `BackedUp`을 확인한다. |
 
-Mold는 NetBackup REST API의 정책 생성과 수동 백업 실행 요청을 사용하며, 파일 데이터는 해당 Host의 NetBackup Client가 전송한다.
+Mold는 Host Agent를 통해 `bpbackup -p <Host 정책> -s mold-transfer -f <파일 목록>`을 실행한다.
+REST API는 Job의 정책·스케줄·Client·정확한 파일 목록을 확인하고 해당 Job의 Backup ID를 카탈로그에서 검증하는 데 사용한다.
+명령 종료 코드 `0`만으로 완료 처리하지 않으며, 요청 기록을 호스트에 저장하여 재시작 후 같은 전송을 중복 요청하지 않는다.
+요청 직전의 Job ID 경계도 함께 저장하여 오래된 전체 Job 이력을 매번 다시 읽지 않고 해당 요청 이후의 후보만 조회한다.
 VM 하나에 여러 볼륨이 있으면 여러 볼륨 Job과 마지막 메타데이터 Job이 생기므로 VM 수와 Job 수가 같을 필요는 없다.
 09:50 요청이 이미 접수된 VM은 09:55 실행에서 같은 예약으로 다시 요청하지 않는다.
 접수 후 실제 백업이 실패한 경우에도 다음 예약이 갱신되어 있으므로, 짧은 정책 주기가 같은 예약의 자동 재시도를 보장하지는 않는다.
@@ -737,14 +793,14 @@ VM 하나에 여러 볼륨이 있으면 여러 볼륨 Job과 마지막 메타데
 **7. NetBackup과 Mold에서 결과를 함께 확인한다.**
 
 NetBackup WebUI의 `Activity monitor → Jobs`에서 전체 Job을 볼 수 있는 목록과 시간 범위를 선택한다.
-`ablecube4`로 기준 Job을 찾은 뒤 정책 이름 필터를 해제하고 `ABLESTACK-` 정책의 Job도 확인한다.
+정책 이름을 `ablecube4`로 조회하고, `schedule`과 `mold-transfer` 스케줄의 Job을 구분한다.
 두 VM이 Host 4에서 실행 중이라면 다른 Host의 기준 Job에서 VM 백업 요청이 없는 것은 정상이다.
 
 | 확인 대상 | 확인할 내용 |
 | --- | --- |
 | 기준 정책 `ablecube4` | Hook 실행과 Job 종료 상태·코드를 확인한다. 기준 Job 성공은 VM 백업 전체의 완료를 의미하지 않는다. |
-| `ABLESTACK-<백업 UUID>-...` | 실제 볼륨 파일 저장 Job이 생성되고 정상 완료되는지 확인한다. |
-| `ABLESTACK-<백업 UUID>-metadata` | 마지막 메타데이터 Job이 정상 완료되는지 확인한다. |
+| `ablecube4` / `mold-transfer` 볼륨 Job | 파일 목록이 준비된 볼륨 파일 하나를 선택하며 정상 완료되는지 확인한다. |
+| `ablecube4` / `mold-transfer` 메타데이터 Job | 파일 목록이 해당 VM·백업 시각의 디렉터리를 선택하며 마지막에 정상 완료되는지 확인한다. |
 | Mold VM 백업 | 최종 상태 `BackedUp`, 카탈로그 확인과 정리 결과를 확인한다. 정리 `COMPLETED`만으로 백업 성공을 판단하지 않는다. |
 
 Job 상세의 `Overview`에서 파일 목록·상태 코드를, `Details`에서 실행 로그를 확인한다.
@@ -755,7 +811,7 @@ Job 상세의 `Overview`에서 파일 목록·상태 코드를, `Details`에서 
 | --- | --- |
 | Job이 `Queued`, storage unit의 최대 Job 수 메시지 | 저장소·Client·정책의 동시 실행 제한과 자원 할당 상태를 확인한다. |
 | 기준 Job만 있고 VM 백업 요청도 없음 | 해당 Host의 실행 중인 VM, 오퍼링 연결, `VM_SCHEDULE_BACKUP`, 예약 도래 여부와 Hook 로그를 확인한다. |
-| Mold는 `Failed`, `ABLESTACK-*` Job은 없음 | Mold 실패 상세와 관리 서버 로그를 확인한다. `thirdparty.volume.failure`에 실제 원인이 기록될 수 있다. |
+| Mold는 `Failed`, `mold-transfer` Job은 없음 | 해당 정책의 User Backup 스케줄·Start window, Host의 `bpbackup` 설치와 요청 기록, Mold 실패 상세와 관리 서버 로그를 확인한다. |
 | `NetBackup artifact query failed with status 401` | API key·계정 권한과 관리 서버의 API 인증 코드 반영 여부를 확인한다. 기준 Job의 성공만으로 REST API 연결을 판단하지 않는다. |
 | 볼륨 Job은 성공했지만 `NETBACKUP_TRANSFER`에서 HTTP `400`, `Limit must be less than 100.` | `/catalog/images`의 페이지 크기를 확인한다. 수정본은 카탈로그를 `99`, Job 목록을 `1000`으로 조회한다. 아래 카탈로그 조회 오류 복구 안내를 따른다. |
 | bootstrap 경로 없음 | 해당 Host의 GFS2 마운트와 사전구성 완료 여부, 정책에 입력한 경로를 확인한다. |
@@ -772,6 +828,32 @@ tail -n 100 '/var/lib/ablestack/backup/jobs/<백업 UUID>/job.log'
 운영 중 수정본을 적용할 때는 [기존 NetBackup 구성 환경의 업데이트](#기존-netbackup-구성-환경의-업데이트)를 따른다.
 10.5와 11.1의 실서버 검증 범위는 [API 호환성 확인](#netbackup-105111-api-호환성-확인)을 참고한다.
 
+**8. 백업 삭제와 테스트 초기화를 확인한다.**
+
+Mold에서 볼륨 스테이징 백업본을 삭제하면 **선택한 복원 지점이 소유한 볼륨·메타데이터 Backup ID를 모두 만료**하고,
+외부 이미지 부재를 확인한 다음 기록된 RBD 스냅샷 또는 QCOW2 체크포인트·스테이징·작업 기록을 정리한다.
+볼륨 두 개의 백업본이면 볼륨 이미지 두 개와 메타데이터 이미지 한 개가 대상이다.
+다른 VM의 이미지, bootstrap 이미지, 다른 복원 지점과 공유하는 부모 이미지를 정책명으로 일괄 만료하지 않는다.
+후속 증분이 참조하는 백업본은 삭제 대기하며, 강제 삭제는 미리 확인한 의존 백업 범위를 따른다.
+
+NetBackup에서 먼저 이미지를 만료한 경우에는 다음 동기화에서 저장된 정확한 Backup ID를 조회한다.
+일부 볼륨 또는 메타데이터만 없으면 `PARTIAL`로 표시하고 남은 이미지와 원본 스냅샷을 보존한다.
+해당 복원 지점이 소유한 이미지가 모두 없으면 `EXPIRED`로 표시하고,
+최초 부재 확인 후 최소 10분 뒤에도 부재가 확인되며 의존 백업·실행 중 작업이 없을 때 로컬 정리를 진행한다.
+백업 생성 후 첫 10분의 동기화 유예와 실제 조회 주기도 있으므로 NetBackup에서 지운 즉시 Mold에서 사라지는 방식은 아니다.
+API 조회 오류는 이미지 삭제로 판단하지 않는다. Host 연결·마운트·스냅샷 삭제가 확인되지 않으면 정리 `WAITING`으로 남겨 재시도한다.
+RBD는 기록된 원본 디스크의 해당 백업 체크포인트 이름만 삭제하며 VM의 다른 스냅샷을 전부 삭제하지 않는다.
+
+기존 테스트 백업본을 지우고 다시 검증할 때는 다음 순서로 진행한다.
+
+1. Host 정책의 자동 실행을 중지하고 Mold·NetBackup의 진행 중 작업을 완료한다.
+2. Mold에서 기존 VM 백업본을 삭제하고 삭제 대기·정리 오류가 없는지 확인한다.
+3. NetBackup Catalog에서 남은 테스트 이미지를 조회하고 파일 목록이 bootstrap만 포함하는지 확인한 뒤 만료 처리한다.
+4. 전체 테스트 기간으로 조회해 남은 Catalog 이미지를 확인한다. Host 기준 정책은 유지한다.
+5. 수정본 배포와 Host 사전구성을 마친 뒤 테스트 VM의 예약 시각 이후 기준 정책을 실행한다.
+
+Catalog를 비우기 위해 NetBackup 내부 DB나 이미지 파일을 파일 시스템에서 직접 삭제하지 않는다.
+
 #### 기존 NetBackup 구성 환경의 업데이트
 
 이미 사전구성을 완료한 환경에서 관리 서버의 NetBackup 플러그인이나 Host 연동 스크립트를 수정한 버전을 적용할 때는
@@ -782,6 +864,7 @@ Host에 복사·생성된 실행 파일은 패키지 업데이트 후 사전구�
 | --- | --- |
 | 관리 서버의 NetBackup Java 플러그인 | 수정본이 포함된 관리 서버 패키지를 설치하고 Mold 관리 서비스를 재시작한다. 관리 서버가 여러 대이면 모두 반영한다. |
 | Host의 `netbackup-host-restore-watcher.py` 및 사전구성에서 설치하는 파일 | 수정본이 포함된 Host 패키지를 설치하고 각 Host에서 `netbackup-host-config.py`를 다시 실행한다. |
+| Host Agent의 전송 명령 처리와 `netbackup-volume-backup.py` | 모든 백업 Host의 Agent·스크립트 패키지를 함께 업데이트하고 Agent를 재시작한다. 관리 서버 재시작만으로는 반영되지 않는다. |
 
 패키지의 감시기 원본은 `/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/netbackup-host-restore-watcher.py`이며,
 실제 service는 `/usr/local/sbin/netbackup-host-restore-watcher`를 실행한다.
@@ -810,6 +893,11 @@ GFS2 스테이징을 공유해도 실행 파일·설정은 Host 로컬에 있으
 
 **3. 각 Host에서 기존 설정으로 사전구성을 다시 실행한다.**
 
+사전구성 실행 전에 NetBackup UI에서 각 기존 Host 정책에 `mold-transfer` / `User Backup` 스케줄을 추가한다.
+Start window는 매일 전체 시간으로 열고 실제 VM 데이터의 저장소·Retention을 지정한다.
+기존 `Full Backup` 스케줄과 bootstrap Backup Selections는 유지하며, 동시 실행 제한은 위 설정 표를 확인한다.
+수정된 사전구성은 이 User Backup 스케줄이 없으면 설정 변경 전에 중단한다.
+
 아래는 기존에 VM별 스케줄과 증분 백업을 사용하던 `ablecube1`의 예시다.
 `ablecube2`~`ablecube4`에서는 각 Host의 기존 정책명으로 바꾸고, Host별로 순서대로 실행한다.
 
@@ -831,6 +919,11 @@ python3 /usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/netbackup-host-co
 관리 서버 재기동을 요구하며 중단되면 재기동 후 같은 명령을 다시 실행한다.
 감시 조회가 진행 중이라는 안내로 중단되면 조회 종료 후 다시 실행한다. 이때 timer는 중지된 상태일 수 있다.
 완료 메시지 `[ OK ] Completed NetBackup host configuration`까지 확인한다.
+
+사전구성은 전송용 `bpstart_notify.<정책>.mold-transfer`와 `bpend_notify.<정책>.mold-transfer`도 설치한다.
+업데이트 전에 시작된 작업은 저장된 기존 프로토콜로 재개한다. 기존 `ABLESTACK-<UUID>-...` 정책과
+그 Backup ID는 해당 백업본의 Mold 삭제가 완료되기 전까지 일괄 삭제하지 않는다.
+새 백업은 Host 정책만 사용하며, 새 이미지의 삭제는 저장된 정확한 Backup ID만 만료하고 Host 정책은 유지한다.
 
 기존 감시 옵션을 별도 조정했다면 생성된 `.bak`와 비교하여 필요한 값을 다시 반영한다.
 감시 상태·잠금 파일과 사용자 지정 경로 보존은
@@ -871,9 +964,9 @@ NetBackup API key는 `Authorization: <API key>`로 전달한다. API key에 `Bea
 | 확인 항목 | 요청 또는 실행 | 통과 기준 |
 | --- | --- | --- |
 | API 인증·Job 조회 | `GET /admin/jobs/` | API v12 요청이 HTTP `200`을 반환한다. `401`은 인증 실패이며 백업 시작으로 처리하지 않는다. |
-| 기준 정책 조회 | `GET /config/policies/<Host 정책명>` | `Standard`, 해당 Host Client, `Full Backup` 스케줄을 확인한다. |
-| 이미지별 정책 생성·백업 실행 | `POST /config/policies`, `POST /admin/manual-backup` | 원본 정책을 유지하면서 `ABLESTACK-<백업 UUID>-...` 작업이 실제 생성된다. |
-| 저장 완료·카탈로그 | `GET /admin/jobs/<Job ID>`, `GET /catalog/images` | 종료 상태와 명시적인 상태 코드 `0`, 해당 이미지의 카탈로그 참조를 확인한다. 숫자·문자열 상태 코드를 모두 처리한다. |
+| 기준 정책 조회 | `GET /config/policies/<Host 정책명>` | 활성 `Standard`, 해당 Host Client 하나와 `mold-transfer` / `User Backup` 스케줄을 확인한다. |
+| 준비된 파일 전송 | Host의 `netbackup-volume-backup.py` → `bpbackup -p <정책> -s mold-transfer -f <목록>` | 정책·Backup Selections 변경 없이 정확한 파일만 전송된다. 요청 기록을 남기며 재시작·응답 유실 후 중복 실행하지 않는다. |
+| 저장 완료·카탈로그 | `GET /admin/jobs/`, `GET /admin/jobs/<Job ID>/file-lists`, `GET /admin/jobs/<Job ID>`, `GET /catalog/images/<Backup ID>` | 정확한 정책·스케줄·Client·파일 목록, 명시적인 성공 코드 `0`과 그 Job의 이미지 ID를 확인한다. 공유 정책의 다른 이미지를 선택하지 않는다. |
 | 볼륨별 복원 | Host의 `netbackup-volume-restore.py`가 `bprestore` 실행, REST API로 Job 조회 | 정확한 원본 Client·백업 시점·파일과 대상 경로를 사용하여 Full·증분을 각각 복원한다. |
 | 외부 UI 복원 | 메타데이터 복원 후 Host 감시기 실행 | 성공 코드 `0` 또는 검증된 부분 성공만 Mold 복원으로 연결한다. |
 | 이미지 삭제 | `POST /catalog/expire-images` | HTTP `202` 승인 대기는 삭제 완료로 처리하지 않는다. 외부 이미지 부재 확인 후 정리한다. |
@@ -881,6 +974,11 @@ NetBackup API key는 `Authorization: <API key>`로 전달한다. API key에 `Bea
 10.5와 11.1에서 각각 RBD·QCOW2 테스트 VM의 첫 Full, 후속 증분, 복원, 삭제를 확인하고
 실제 제품 버전·API 요청 버전·외부 Job ID·Mold 백업 UUID를 기록한다.
 API 정의의 기준은 각 Primary Server의 `https://<Primary Server>/api-docs/index.html`이다.
+User Backup 전송의 `bpbackup -p`, `-s`, `-S`, `-t 0`, `-f`, `-k`, `-L` 옵션은
+[10.5 명령 참조](https://www.veritas.com/support/en_US/doc/15263389-165221817-0/v14659534-165221817)와
+[11.1 명령 참조](https://www.veritas.com/content/support/en_US/doc/15263389-170177412-0/v14659534-170177412)에 정의되어 있다.
+`-i`는 파일 목록을 받는 User Backup과 함께 사용하지 않는다.
+실제 10.5·11.1 서버에서 요청 파일 목록의 응답 형식, Client 식별, User Backup 창과 보존기간을 검증한다.
 볼륨별 복원에 사용하는 `bprestore`의 `-C`, `-D`, `-S`, `-s`, `-e`, `-R`, `-f`, `-print_jobid` 옵션은
 [10.5 명령 참조](https://www.veritas.com/content/support/en_US/doc/49576572-166692681-0/v14666184-166692681)와
 [11.1 명령 참조](https://www.veritas.com/content/support/zh_CN/doc/49576306-170304269-0/v14666184-170304269)에 모두 정의되어 있다.
@@ -892,7 +990,9 @@ API 정의의 기준은 각 Primary Server의 `https://<Primary Server>/api-docs
 
 NetBackup 10.5 실서버에서 `GET /catalog/images?page[limit]=1000`은 HTTP `400`, 오류 코드 `8961`,
 `Limit must be less than 100.`을 반환했다. 수정본은 이 목록을 `page[limit]=99`로 조회하며,
-백업 완료 확인과 삭제 전 확인에 같은 제한을 적용한다. Job 목록의 `page[limit]=1000`은 유지한다.
+기존 이미지별 정책의 백업 완료 확인과 삭제 전 확인에 같은 제한을 적용한다.
+새 User Backup은 Job에 기록된 정확한 이미지 ID를 개별 조회한다.
+Job 목록의 `page[limit]=1000`은 유지하며 공유 Host 정책은 cursor로 후속 페이지까지 조회한다.
 응답에 다음 페이지가 있거나 한 페이지를 가득 채우면 조회가 불완전한 것으로 처리하고,
 해당 응답만으로 백업 완료나 이미지 부재를 확정하지 않는다.
 이 변경도 11.1의 실제 서버에서 위 호환성 항목에 따라 확인한다.
@@ -1612,7 +1712,9 @@ Commvault는 Mold UI에서 복원을 시작한다.
 
 1. Mold에서 대상 VM을 **Stopped**로 둔다.
 2. 원하는 Mold 백업 시점에 연결된 메타데이터 작업을 확인한다.
-   외부 작업 이름은 **`ABLESTACK-<Mold 백업 UUID>-metadata`**이다.
+   Veeam과 기존 NetBackup 이미지별 정책 방식은 **`ABLESTACK-<Mold 백업 UUID>-metadata`**를 확인한다.
+   새 NetBackup 방식은 **Host 정책 / `mold-transfer`**에서 해당 Mold 백업의 메타데이터 Backup ID·시점을 선택한다.
+   파일 목록이 `<root>/ablestack-netbackup/<VM 내부 이름>/<백업 timestamp>`인 메타데이터 작업인지 확인하며 볼륨 파일 Job은 선택하지 않는다.
 3. NetBackup/Veeam UI에서 해당 작업의 복원 시점을 선택한다.
 4. 원본 메타데이터 선택은 유지하고 `resolveBackupArtifact`가 안내하는 현재 `metadatarestorepath`로 복원한다.
    최종 수신 디렉터리는 `<현재 root>/<provider>/<VM 내부 이름>/<백업 timestamp>`이며 외부 복원 전에 마운트를 확인한다.

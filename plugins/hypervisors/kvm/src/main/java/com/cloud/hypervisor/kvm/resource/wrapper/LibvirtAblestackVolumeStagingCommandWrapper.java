@@ -224,6 +224,9 @@ public class LibvirtAblestackVolumeStagingCommandWrapper
             if (!Files.isDirectory(directory)) {
                 return new Answer(command, false, "Volume staging job does not exist");
             }
+            if (java.util.Set.of("BACKUP_NETBACKUP", "BACKUP_NETBACKUP_RECOVER").contains(command.getAction())) {
+                return netBackupBackup(command, resource, directory);
+            }
             if (command.getAction().startsWith("RESTORE_")) {
                 if ("RESTORE_CANCEL".equals(command.getAction())) {
                     org.apache.cloudstack.backup.ThirdPartyBackupRestore.Plan expected = new Gson().fromJson(command.getManifest(),
@@ -382,6 +385,53 @@ public class LibvirtAblestackVolumeStagingCommandWrapper
             logger.warn("Volume staging control failed for job [{}]", command.getJobId(), e);
             return new Answer(command, false, e.getMessage());
         }
+    }
+
+    private Answer netBackupBackup(AblestackVolumeStagingCommand command, LibvirtComputingResource resource, Path directory) throws java.io.IOException {
+        var options = new Gson().fromJson(command.getManifest(), com.google.gson.JsonObject.class);
+        if (options == null || !options.has("artifact") || !options.get("artifact").isJsonObject()) {
+            return new Answer(command, false, "Missing NetBackup artifact submission plan");
+        }
+        var artifact = options.getAsJsonObject("artifact");
+        if (!command.getJobId().equals(artifact.get("backupUuid").getAsString())) {
+            return new Answer(command, false, "NetBackup submission belongs to another backup");
+        }
+        String path = artifact.get("path").getAsString();
+        String key = java.util.UUID.nameUUIDFromBytes(path.getBytes(StandardCharsets.UTF_8)).toString();
+        Path plan = directory.resolve("netbackup-backup-" + key + ".json");
+        boolean recovery = "BACKUP_NETBACKUP_RECOVER".equals(command.getAction());
+        if (Files.isRegularFile(plan)) {
+            var saved = new Gson().fromJson(Files.readString(plan), com.google.gson.JsonObject.class);
+            if (recovery && !options.has("afterJobId")) { saved.remove("afterJobId"); }
+            if (!options.equals(saved)) {
+                return new Answer(command, false, "NetBackup submission differs from the original artifact plan");
+            }
+        } else if (recovery) {
+            return new Answer(command, false, "NetBackup submission plan is unavailable; the request will not be repeated");
+        } else {
+            if (!"RUNNING".equals(LibvirtAblestackAsyncBackupRunner.getJobState(command.getJobId(), logger))) {
+                return new Answer(command, false, "NetBackup source engine is not running");
+            }
+            LibvirtAblestackVolumeRestoreHelper.atomic(plan, options.toString());
+        }
+        Path script = Path.of(resource.getAbleCvtBackupPath()).getParent().resolve("netbackup-volume-backup.py");
+        if (!Files.isRegularFile(script)) {
+            if (!recovery && !Files.exists(plan.resolveSibling("netbackup-backup-" + key + ".intent.json"))) {
+                return new Answer(command, false, "ABLESTACK_NOT_SUBMITTED=NetBackup volume backup helper is not installed");
+            }
+            return new Answer(command, false, "NetBackup volume backup helper is unavailable; submission remains unconfirmed");
+        }
+        String output = com.cloud.utils.script.Script.runSimpleBashScriptWithFullResult("python3 " + quote(script.toString())
+                + " --plan-file " + quote(plan.toString()) + (recovery ? " --recover-only" : ""), 120000);
+        if (output != null) {
+            for (String line : output.split("\\r?\\n")) {
+                if (line.startsWith("ABLESTACK_REQUEST_ID=")) {
+                    return new Answer(command, true, line.substring("ABLESTACK_REQUEST_ID=".length()).trim());
+                }
+                if (line.startsWith("ABLESTACK_NOT_SUBMITTED=")) { return new Answer(command, false, line); }
+            }
+        }
+        return new Answer(command, false, "NetBackup submission is unconfirmed; inspect " + plan);
     }
 
     private Answer netBackupRestore(AblestackVolumeStagingCommand command, LibvirtComputingResource resource,

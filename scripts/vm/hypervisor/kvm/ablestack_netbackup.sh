@@ -730,6 +730,26 @@ has_child_backup() {
   grep -R -q "^parent_checkpoint_name=$checkpoint_name$" "$(dirname "$dest")"/*/rbd-backup.meta 2>/dev/null
 }
 
+rbd_snapshot_exists() {
+  local checkpoint_name="$1"
+  local snapshots present
+  if ! snapshots="$(timeout 30s "${RBD_CMD[@]}" snap ls "$RBD_IMAGE" --format json 2>>"$logFile")"; then
+    log -ne "Failed to query RBD snapshots [$RBD_IMAGE]; cleanup remains pending"
+    return "$EXIT_CLEANUP_FAILED"
+  fi
+  if ! present="$(python3 -c '
+import json, sys
+snapshots = json.load(sys.stdin)
+if not isinstance(snapshots, list) or any(not isinstance(item, dict) or not isinstance(item.get("name"), str) for item in snapshots):
+    raise ValueError("Invalid RBD snapshot inventory")
+print("true" if any(item["name"] == sys.argv[1] for item in snapshots) else "false")
+' "$checkpoint_name" <<< "$snapshots")"; then
+    log -ne "Invalid RBD snapshot inventory [$RBD_IMAGE]; cleanup remains pending"
+    return "$EXIT_CLEANUP_FAILED"
+  fi
+  [[ "$present" == true ]]
+}
+
 delete_rbd_snapshot_if_unreferenced() {
   local disk_paths="$1"
   local checkpoint_name="$2"
@@ -738,7 +758,7 @@ delete_rbd_snapshot_if_unreferenced() {
 
   if has_child_backup "$checkpoint_name"; then
     log -ne "Skip snapshot delete [$checkpoint_name] (child exists)"
-    return 0
+    return "$EXIT_CLEANUP_FAILED"
   fi
 
   while IFS= read -r disk_path; do
@@ -746,9 +766,22 @@ delete_rbd_snapshot_if_unreferenced() {
     parse_rbd_uri "$disk_path"
     build_rbd_cmd
 
-    if timeout 30s "${RBD_CMD[@]}" snap ls "$RBD_IMAGE" 2>/dev/null | awk 'NR>1 {print $2}' | grep -Fxq "$checkpoint_name"; then
+    local inventory_status=0
+    rbd_snapshot_exists "$checkpoint_name" || inventory_status=$?
+    if [[ "$inventory_status" -eq 0 ]]; then
       log -ne "Deleting snapshot [${RBD_IMAGE}@${checkpoint_name}]"
-      "${RBD_CMD[@]}" snap rm "${RBD_IMAGE}@${checkpoint_name}" >> "$logFile" 2>&1 || true
+      if ! timeout 30s "${RBD_CMD[@]}" snap rm "${RBD_IMAGE}@${checkpoint_name}" >> "$logFile" 2>&1; then
+        log -ne "Failed to delete RBD snapshot [${RBD_IMAGE}@${checkpoint_name}]; cleanup remains pending"
+        return "$EXIT_CLEANUP_FAILED"
+      fi
+      inventory_status=0
+      rbd_snapshot_exists "$checkpoint_name" || inventory_status=$?
+      if [[ "$inventory_status" -ne 1 ]]; then
+        log -ne "RBD snapshot absence is unconfirmed [${RBD_IMAGE}@${checkpoint_name}]; cleanup remains pending"
+        return "$EXIT_CLEANUP_FAILED"
+      fi
+    elif [[ "$inventory_status" -ne 1 ]]; then
+      return "$EXIT_CLEANUP_FAILED"
     fi
   done < <(split_csv "$disk_paths")
 }

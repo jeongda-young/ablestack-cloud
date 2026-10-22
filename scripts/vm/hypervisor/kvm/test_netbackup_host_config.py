@@ -21,6 +21,7 @@
 import contextlib
 import importlib.util
 import io
+import json
 from pathlib import Path
 import shlex
 import subprocess
@@ -35,6 +36,45 @@ spec.loader.exec_module(config)
 
 
 class NetBackupConfigurationTest(unittest.TestCase):
+    def policy(self):
+        return {"policyType": "Standard", "policyAttributes": {"jobLimit": 1, "active": False},
+                "clients": [{"hostName": "host-test"}], "schedules": [
+                    {"scheduleName": "schedule", "backupType": "Full Backup"},
+                    {"scheduleName": "mold-transfer", "backupType": "User Backup",
+                     "startWindow": [{"dayOfWeek": 1, "startSeconds": 0, "durationSeconds": 604800}]}]}
+
+    def test_policy_check_uses_raw_api_auth_and_accepts_serial_limits_during_configuration(self):
+        args = self.arguments("--vm-schedule-backup", "true")
+        response = {"data": {"attributes": {"policy": self.policy()}}}
+        with patch.object(config, "urlopen", return_value=io.BytesIO(json.dumps(response).encode())) as request, \
+                patch.object(config, "get_configuration_value", return_value="1"), contextlib.redirect_stderr(io.StringIO()):
+            config.check_netbackup_policy(args)
+        self.assertEqual("synthetic-netbackup-key", request.call_args.args[0].get_header("Authorization"))
+
+    def test_policy_check_rejects_wrong_schedule_type_client_or_empty_transfer_window(self):
+        for invalid in ("type", "client", "window"):
+            policy = self.policy()
+            if invalid == "type":
+                policy["schedules"][1]["backupType"] = "Full Backup"
+            elif invalid == "client":
+                policy["clients"][0]["hostName"] = "another-host"
+            else:
+                policy["schedules"][1]["startWindow"] = []
+            response = {"data": {"attributes": {"policy": policy}}}
+            with self.subTest(invalid=invalid), patch.object(config, "urlopen", return_value=io.BytesIO(json.dumps(response).encode())), \
+                    contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                config.check_netbackup_policy(self.arguments())
+
+    def test_schedule_specific_transfer_hooks_do_not_enter_parent_hooks(self):
+        with tempfile.TemporaryDirectory() as directory, patch.object(config, "HOOK_OUTPUT_DIR", Path(directory)):
+            config.write_transfer_hooks("prod-host")
+            for name in ("bpstart_notify", "bpend_notify"):
+                file = Path(directory) / (name + ".prod-host.mold-transfer")
+                result = subprocess.run([str(file), "client", "prod-host", "mold-transfer", "UBAK", "0"],
+                                        capture_output=True, text=True, timeout=10)
+                self.assertEqual(0, result.returncode)
+                self.assertEqual("", result.stdout)
+
     def arguments(self, *options):
         argv = ["netbackup-host-config.py", "--policy-name", "host-test", "--mold-url", "http://mold.test/client/api",
                 "--admin-apikey", "synthetic-key", "--admin-secretkey", "synthetic-secret",
@@ -299,6 +339,7 @@ cat "${MOLD_VM_CACHE_FILE}.request"
                     patch.object(config, "get_configuration_value", side_effect=read_value), \
                     patch.object(config.subprocess, "run", side_effect=check_mount) as mounted, \
                     patch.object(config, "resolve_host_context", return_value=("zone-id", "cluster-id")), \
+                    patch.object(config, "check_netbackup_policy"), \
                     patch.object(config, "ensure_key", side_effect=lambda *a, **kw: events.append("key")) as key, \
                     patch.object(config, "update_configuration_value") as update, \
                     patch.object(config, "ensure_netbackup_offering") as offering, \

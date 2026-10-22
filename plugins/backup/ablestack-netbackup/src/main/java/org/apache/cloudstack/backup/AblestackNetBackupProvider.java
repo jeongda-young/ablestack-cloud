@@ -130,6 +130,8 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
     private static final String DETAIL_BACKUP_ID = "netbackup.backup.id";
     private static final String DETAIL_MEMBER_COUNT = "netbackup.backup.member.count";
     private static final String DETAIL_POLICY_NAME = "netbackup.policy.name";
+    private static final String DETAIL_TRANSFER_MODE = "netbackup.transfer.mode";
+    private static final String USER_BACKUP_TRANSFER = "USER_BACKUP";
     private static final String DETAIL_RESTORE_ROOT_JOB_ID = "netbackup.restore.root.job.id";
     private static final String DETAIL_RESTORE_CHAIN_JOB_ID = "netbackup.restore.chain.job.id";
     private static final String DETAIL_STAGING_METADATA_SYNCED = "netbackup.staging.metadata.synced";
@@ -321,6 +323,8 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
                 incrementalBackup, policyName);
         backupDetails.put(AblestackBackupFrameworkUtils.BACKUP_QUIESCE_DETAIL,
                 String.valueOf(Boolean.TRUE.equals(quiesceVM)));
+        // Persist the protocol before dispatch. In-flight backups without this detail retain their original policy ownership.
+        backupDetails.put(DETAIL_TRANSFER_MODE, USER_BACKUP_TRANSFER);
 
         final BackupVO backupVO = createBackupObject(vm, vmHost.getId(), backupPath, requestedBackupType, backupDetails);
         boolean planPersisted = false;
@@ -1124,7 +1128,10 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
         loadBackupDetailsIfNeeded(backup);
         if (ThirdPartyBackupManifest.VOLUME_MODE.equals(getBackupDetail(backup, ThirdPartyBackupManifest.MODE_KEY))) {
             return thirdPartyBackupVolumeService.deleteOwnedArtifacts(backup, (artifact, metadata, ticket, policyExpiration) ->
-                    getClient(backup.getZoneId()).deleteVolumeArtifact(artifact, metadata, ticket, policyExpiration));
+                    USER_BACKUP_TRANSFER.equals(getBackupDetail(backup, DETAIL_TRANSFER_MODE))
+                            ? getClient(backup.getZoneId()).deleteUserBackupArtifact(getBackupDetail(backup, DETAIL_POLICY_NAME),
+                                    artifact, ticket, policyExpiration)
+                            : getClient(backup.getZoneId()).deleteVolumeArtifact(artifact, metadata, ticket, policyExpiration));
         }
         if (Backup.Status.Failed.equals(backup.getStatus()) || Backup.Status.Error.equals(backup.getStatus())) {
             return cleanupFailedOrErrorBackupArtifacts(backup, forced);
@@ -2312,7 +2319,9 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
                         final AblestackNetBackupClient volumeClient = getClient(backup.getZoneId());
                         thirdPartyBackupVolumeService.reconcileCatalog(backup,
                                 artifact -> volumeAvailability.computeIfAbsent(artifact.externalId, volumeClient::backupImageExists),
-                                volumeClient::deleteVolumeArtifact);
+                                (artifact, metadata, ticket, policyExpiration) -> USER_BACKUP_TRANSFER.equals(getBackupDetail(backup, DETAIL_TRANSFER_MODE))
+                                        ? volumeClient.deleteUserBackupArtifact(getBackupDetail(backup, DETAIL_POLICY_NAME), artifact, ticket, policyExpiration)
+                                        : volumeClient.deleteVolumeArtifact(artifact, metadata, ticket, policyExpiration));
                     } catch (RuntimeException e) {
                         LOG.debug("NetBackup volume catalog sync is unavailable for backup [{}]: {}", backup.getUuid(), e.getMessage());
                     }
@@ -2418,24 +2427,37 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
 
     private ThirdPartyBackupVolumeService.Transfer volumeTransfer(final VirtualMachine vm, final Backup backup, final Host host) {
         final String policy = getBackupDetail(backup, DETAIL_POLICY_NAME);
+        final boolean userBackup = USER_BACKUP_TRANSFER.equals(getBackupDetail(backup, DETAIL_TRANSFER_MODE));
         return new ThirdPartyBackupVolumeService.Transfer() {
             @Override
             public boolean ready() {
-                return getClient(vm.getDataCenterId()).volumeSourceReady(policy);
+                if (userBackup) {
+                    getClient(vm.getDataCenterId()).validateUserBackupPolicy(policy, host.getName(), host.getPrivateIpAddress());
+                }
+                return userBackup ? getClient(vm.getDataCenterId()).userBackupSourceReady(policy)
+                        : getClient(vm.getDataCenterId()).volumeSourceReady(policy);
             }
 
             @Override
             public ThirdPartyBackupManifest.Artifact backup(final ThirdPartyBackupManifest.Artifact artifact, final boolean metadata) {
-                return getClient(vm.getDataCenterId()).backupVolumeArtifact(policy, host.getName(), host.getPrivateIpAddress(), artifact, metadata);
+                return userBackup ? transferUserBackupArtifact(backup, host, artifact, metadata, false)
+                        : getClient(vm.getDataCenterId()).backupVolumeArtifact(policy, host.getName(), host.getPrivateIpAddress(), artifact, metadata);
             }
 
             @Override
             public ThirdPartyBackupManifest.Artifact recover(ThirdPartyBackupManifest.Artifact artifact, boolean metadata) {
-                return getClient(backup.getZoneId()).recoverVolumeArtifact(artifact, metadata);
+                return userBackup ? transferUserBackupArtifact(backup, host, artifact, metadata, true)
+                        : getClient(backup.getZoneId()).recoverVolumeArtifact(artifact, metadata);
             }
 
             @Override
             public ThirdPartyBackupManifest.Artifact link(ThirdPartyBackupManifest.Artifact artifact, boolean metadata, String jobId) {
+                if (userBackup) {
+                    if (jobId == null || !jobId.matches("[0-9]+")) { throw new CloudRuntimeException("NetBackup requires a numeric Job ID"); }
+                    ThirdPartyBackupManifest.Artifact linked = new Gson().fromJson(new Gson().toJson(artifact), ThirdPartyBackupManifest.Artifact.class);
+                    linked.jobId = jobId;
+                    return getClient(backup.getZoneId()).pollUserBackupArtifact(policy, host.getName(), host.getPrivateIpAddress(), linked);
+                }
                 return getClient(backup.getZoneId()).linkVolumeArtifact(artifact, metadata, jobId, host.getName(), host.getPrivateIpAddress());
             }
 
@@ -2457,6 +2479,54 @@ public class AblestackNetBackupProvider extends AdapterBase implements BackupPro
                 sealParentBackupChainIfIncremental(current, "failed-volume-child");
             }
         };
+    }
+
+    private ThirdPartyBackupManifest.Artifact transferUserBackupArtifact(Backup backup, Host host,
+            ThirdPartyBackupManifest.Artifact artifact, boolean metadata, boolean recoveryOnly) {
+        AblestackNetBackupClient client = getClient(backup.getZoneId());
+        String policy = getBackupDetail(backup, DETAIL_POLICY_NAME);
+        if (artifact.externalTerminal && StringUtils.isNotBlank(artifact.externalFailure)) { return artifact; }
+        if (StringUtils.isNotBlank(artifact.jobId)) {
+            return client.pollUserBackupArtifact(policy, host.getName(), host.getPrivateIpAddress(), artifact);
+        }
+        String baseline = null;
+        if (!recoveryOnly) {
+            try {
+                client.validateUserBackupPolicy(policy, host.getName(), host.getPrivateIpAddress());
+                baseline = client.lastJobId();
+            }
+            catch (RuntimeException e) {
+                throw new ThirdPartyBackupSubmissionException("NetBackup User Backup preflight failed: " + e.getMessage(), e);
+            }
+        }
+        java.util.Map<String, Object> options = new java.util.LinkedHashMap<>();
+        options.put("artifact", java.util.Map.of("backupUuid", artifact.backupUuid, "path", artifact.path, "size", artifact.size));
+        options.put("metadata", metadata);
+        options.put("policy", policy);
+        options.put("schedule", AblestackNetBackupClient.USER_BACKUP_SCHEDULE);
+        options.put("server", client.getPrimaryServerName());
+        if (!recoveryOnly) { options.put("afterJobId", baseline); }
+        try {
+            Answer answer = agentManager.send(host.getId(), new AblestackVolumeStagingCommand(backup.getUuid(),
+                    recoveryOnly ? "BACKUP_NETBACKUP_RECOVER" : "BACKUP_NETBACKUP", -1, new Gson().toJson(options)));
+            if (answer != null && !answer.getResult() && StringUtils.startsWith(answer.getDetails(), "ABLESTACK_NOT_SUBMITTED=")) {
+                String failure = answer.getDetails().substring("ABLESTACK_NOT_SUBMITTED=".length());
+                if (!recoveryOnly) { throw new ThirdPartyBackupSubmissionException(failure); }
+                artifact.jobId = "not-submitted:" + AblestackNetBackupClient.userBackupRequestId(artifact);
+                artifact.externalTerminal = true;
+                artifact.externalFailure = failure;
+                return artifact;
+            }
+            String prefix = AblestackNetBackupClient.userBackupRequestId(artifact) + ":";
+            if (answer == null || !answer.getResult() || !StringUtils.startsWith(answer.getDetails(), prefix)
+                    || !answer.getDetails().substring(prefix.length()).matches("[0-9]+")) {
+                throw new CloudRuntimeException("NetBackup artifact submission is unconfirmed; inspect its Host submission receipt");
+            }
+            artifact.jobId = answer.getDetails();
+            return artifact;
+        } catch (AgentUnavailableException | OperationTimedoutException e) {
+            throw new CloudRuntimeException("NetBackup Host submission outcome is unconfirmed; the request will not be repeated", e);
+        }
     }
 
     private void sealParentBackupChainIfIncremental(final Backup backup, final String reason) {

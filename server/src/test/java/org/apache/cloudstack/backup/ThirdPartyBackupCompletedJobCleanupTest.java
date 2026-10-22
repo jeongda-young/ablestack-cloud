@@ -276,6 +276,50 @@ public class ThirdPartyBackupCompletedJobCleanupTest {
     }
 
     @Test
+    public void partialCatalogExpirationRetainsSourceSnapshotsAndRemainingImages() {
+        when(backups.createForUpdate(1L)).thenReturn(backup);
+        GlobalLock lock = mock(GlobalLock.class);
+        when(lock.lock(Mockito.anyInt())).thenReturn(true);
+        try (MockedStatic<GlobalLock> locks = Mockito.mockStatic(GlobalLock.class)) {
+            locks.when(() -> GlobalLock.getInternLock(anyString())).thenReturn(lock);
+            service.reconcileCatalog(backup, artifact -> !artifact.path.equals(manifest.getMetadata().path),
+                    (artifact, metadata, ticket, expired) -> { throw new AssertionError("Retained images must not be expired by catalog synchronization"); });
+        }
+        assertEquals("PARTIAL", gson.fromJson(details.get(ThirdPartyBackupManifest.CATALOG_KEY), ThirdPartyBackupManifest.Catalog.class).state);
+        assertEquals("RETAINED", details.get(ThirdPartyBackupManifest.CLEANUP_STATE_KEY));
+        verifyNoInteractions(agent);
+    }
+
+    @Test
+    public void firstConfirmedAbsenceWaitsForReconfirmationBeforeDeletingSnapshots() {
+        when(backups.createForUpdate(1L)).thenReturn(backup);
+        GlobalLock lock = mock(GlobalLock.class);
+        when(lock.lock(Mockito.anyInt())).thenReturn(true);
+        try (MockedStatic<GlobalLock> locks = Mockito.mockStatic(GlobalLock.class)) {
+            locks.when(() -> GlobalLock.getInternLock(anyString())).thenReturn(lock);
+            service.reconcileCatalog(backup, artifact -> false,
+                    (artifact, metadata, ticket, expired) -> { throw new AssertionError("Absence must be reconfirmed first"); });
+        }
+        assertEquals("EXPIRED", gson.fromJson(details.get(ThirdPartyBackupManifest.CATALOG_KEY), ThirdPartyBackupManifest.Catalog.class).state);
+        assertEquals("WAITING", details.get(ThirdPartyBackupManifest.CLEANUP_STATE_KEY));
+        verifyNoInteractions(agent);
+    }
+
+    @Test
+    public void rbdSnapshotCleanupUsesRecordedDisksAfterStagingAndJobFilesAreRemoved() throws Exception {
+        prepare("ablestack-netbackup");
+        details.put("netbackup.rbd.disk.paths", "rbd:pool/root,rbd:pool/data");
+        details.put(ThirdPartyBackupManifest.JOB_CLEANUP_STATE_KEY, "COMPLETED");
+        ThirdPartyBackupStagingService staging = mock(ThirdPartyBackupStagingService.class);
+        when(staging.getStageRootPath(manifest.getProvider())).thenReturn("/staging/" + manifest.getProvider());
+        ReflectionTestUtils.setField(service, "stagingService", staging);
+        ReflectionTestUtils.invokeMethod(service, "cleanupVolumeArtifacts", backup, manifest);
+        verify(agent).send(eq(4L), Mockito.<Command>argThat(command -> command instanceof AblestackDeleteBackupCommand
+                && "rbd:pool/root,rbd:pool/data".equals(((AblestackDeleteBackupCommand) command).getDiskPaths())
+                && manifest.getTimestamp().equals(((AblestackDeleteBackupCommand) command).getCheckpointName())));
+    }
+
+    @Test
     public void recordedFinalizationCanRecoverTheCatalogOnlyNoneState() {
         details.put(ThirdPartyBackupManifest.CLEANUP_STATE_KEY, "NONE");
         clean();

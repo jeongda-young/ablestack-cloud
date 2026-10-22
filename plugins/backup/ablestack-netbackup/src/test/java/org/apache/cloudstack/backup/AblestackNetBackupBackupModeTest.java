@@ -21,6 +21,7 @@ import java.util.Date;
 import java.util.HashMap;
 import java.util.List;
 import org.apache.cloudstack.backup.dao.BackupDao;
+import org.apache.cloudstack.backup.dao.BackupOfferingDao;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStore;
 import org.apache.cloudstack.engine.subsystem.api.storage.DataStoreManager;
 import org.apache.cloudstack.framework.config.ConfigKey;
@@ -47,6 +48,10 @@ import org.junit.Before;
 import org.junit.Test;
 import org.mockito.ArgumentCaptor;
 import org.springframework.test.util.ReflectionTestUtils;
+
+import static com.github.tomakehurst.wiremock.client.WireMock.aResponse;
+import static com.github.tomakehurst.wiremock.client.WireMock.get;
+import static com.github.tomakehurst.wiremock.client.WireMock.urlEqualTo;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNull;
@@ -183,6 +188,47 @@ public class AblestackNetBackupBackupModeTest {
         assertEquals("source-policy", command.getPolicyId());
     }
 
+    @Test public void catalogSynchronizationUsesExactImageDeletionForUserBackups() throws Exception {
+        com.github.tomakehurst.wiremock.WireMockServer server = new com.github.tomakehurst.wiremock.WireMockServer(
+                com.github.tomakehurst.wiremock.core.WireMockConfiguration.wireMockConfig().dynamicPort());
+        server.start();
+        try {
+            when(depot.getConfigStringValue("backup.plugin.netbackup.url", ConfigKey.Scope.Zone, 1L))
+                    .thenReturn("http://localhost:" + server.port() + "/netbackup");
+            when(depot.getConfigStringValue("backup.plugin.netbackup.apikey", ConfigKey.Scope.Zone, 1L)).thenReturn("synthetic-key");
+            BackupOfferingDao offerings = mock(BackupOfferingDao.class);
+            BackupOfferingVO offering = mock(BackupOfferingVO.class);
+            when(offering.getProvider()).thenReturn("ablestack-netbackup");
+            when(offerings.findById(2L)).thenReturn(offering);
+            ReflectionTestUtils.setField(provider, "backupOfferingDao", offerings);
+            ReflectionTestUtils.setField(provider, "backupDeletionService", mock(BackupDeletionService.class));
+            BackupVO point = new BackupVO();
+            point.setVmId(10L);
+            point.setZoneId(1L);
+            point.setBackupOfferingId(2L);
+            point.setDate(new Date(System.currentTimeMillis() - 1200000));
+            point.setStatus(Backup.Status.BackedUp);
+            point.setDetails(new HashMap<>());
+            point.getDetails().put(ThirdPartyBackupManifest.MODE_KEY, ThirdPartyBackupManifest.VOLUME_MODE);
+            point.getDetails().put("netbackup.transfer.mode", "USER_BACKUP");
+            point.getDetails().put("netbackup.policy.name", "source-policy");
+            when(backups.listByVmId(1L, 10L)).thenReturn(List.of(point));
+            provider.syncBackups(vm);
+            ArgumentCaptor<ThirdPartyBackupVolumeService.ArtifactCleanup> cleanup = ArgumentCaptor.forClass(ThirdPartyBackupVolumeService.ArtifactCleanup.class);
+            verify(jobs).reconcileCatalog(eq(point), any(), cleanup.capture());
+            ThirdPartyBackupManifest.Artifact artifact = new ThirdPartyBackupManifest.Artifact();
+            artifact.backupUuid = point.getUuid();
+            artifact.path = "/mnt/staging/ablestack-netbackup/i-2-10-VM/point/root.raw";
+            artifact.sourceHost = "host-test";
+            artifact.completed = true;
+            artifact.jobId = "42";
+            artifact.externalId = "host-test_1792636130";
+            server.stubFor(get(urlEqualTo("/netbackup/admin/jobs/42")).willReturn(aResponse().withStatus(404)));
+            server.stubFor(get(urlEqualTo("/netbackup/catalog/images/" + artifact.externalId)).willReturn(aResponse().withStatus(404)));
+            assertTrue(cleanup.getValue().delete(artifact, false, null, true).completed);
+        } finally { server.stop(); }
+    }
+
     private void enabled() {
         when(depot.getConfigStringValue("kvm.incremental.backup", ConfigKey.Scope.Cluster, 40L)).thenReturn("true");
     }
@@ -190,6 +236,7 @@ public class AblestackNetBackupBackupModeTest {
     private AblestackNetBackupTakeBackupCommand start(boolean mold) {
         Pair<Boolean, Backup> result = mold ? provider.takeBackup(vm, false, false, null) : provider.takeNetBackup(vm, "source-policy");
         assertTrue(result.first());
+        assertEquals("USER_BACKUP", result.second().getDetail("netbackup.transfer.mode"));
         ArgumentCaptor<AblestackNetBackupTakeBackupCommand> command = ArgumentCaptor.forClass(AblestackNetBackupTakeBackupCommand.class);
         verify(jobs).dispatchBackup(any(BackupVO.class), eq(host), command.capture(), any());
         return command.getValue();
