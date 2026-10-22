@@ -27,6 +27,8 @@ under the License.
 - [운영자용 백업 구성 요약](#운영자용-백업-구성-요약)
 - [공통 스테이징 경로 변경](#공통-스테이징-경로-변경)
 - [백업 솔루션별 준비와 실행 순서](#백업-솔루션별-준비와-실행-순서)
+- [NetBackup VM별 스케줄 구성 시나리오](#netbackup-vm별-스케줄-구성-시나리오)
+- [기존 NetBackup 구성 환경의 업데이트](#기존-netbackup-구성-환경의-업데이트)
 - [NetBackup·Veeam 사전 구성 파라미터 비교](#netbackupveeam-사전-구성-파라미터-비교)
 - [Full 및 증분 백업 운영](#full-및-증분-백업-운영)
 - [작업 상태와 제어](#작업-상태와-제어)
@@ -472,6 +474,10 @@ QCOW2는 이전 백업 체인의 스테이징 호스트와 달라지면 새 Full
 
 ### NetBackup: `ablestack-netbackup`
 
+Mold에서 VM별 백업 스케줄을 사용하는 경우에는 아래의
+[NetBackup VM별 스케줄 구성 시나리오](#netbackup-vm별-스케줄-구성-시나리오)를 순서대로 따른다.
+공통 사전구성과 호스트 필터 방식의 옵션은 다음 사전 구성 흐름을 참고한다.
+
 **사전 구성 흐름**
 
 1. NetBackup Primary Server와 백업 저장소를 준비하고 백업 Host에 NetBackup Client를 설치한다.
@@ -537,6 +543,310 @@ QCOW2는 이전 백업 체인의 스테이징 호스트와 달라지면 새 Full
 기준 정책 하나의 성공만으로 VM 백업 완료를 판단하지 않고, Mold에서 `BackedUp`을 확인한다.
 구성 스크립트가 등록하는 NetBackup 오퍼링은 사용자 수동 백업을 허용하지 않으므로,
 기본 운영 시작점은 NetBackup 정책과 사전 백업 스크립트이다.
+
+#### NetBackup VM별 스케줄 구성 시나리오
+
+**Mold에서 가상머신마다 백업 스케줄을 설정하는 경우**의 예시다.
+Host 사전구성은 `--vm-schedule-backup true`로 실행하고, VM에 NetBackup 오퍼링과 백업 스케줄을 연결한다.
+호스트 필터 방식은 [NetBackup·Veeam 호스트 정책의 VM 대상 선택](#netbackupveeam-호스트-정책의-vm-대상-선택)을 참고한다.
+
+예시 환경은 다음과 같다. 서버 주소·정책명·백업 시각은 실제 환경에 맞춰 바꾼다.
+
+| 항목 | 예시 |
+| --- | --- |
+| KVM Host / NetBackup 기준 정책 | `ablecube1`, `ablecube2`, `ablecube3`, `ablecube4` |
+| 공통 스테이징 | GFS2, mount와 root 모두 `/mnt/glue-gfs` |
+| 대상 VM | `ablecube4`에서 실행 중인 RBD VM 1개와 QCOW2 VM 1개 |
+| Mold VM 백업 스케줄 | 두 VM 모두 매시 `50`분, 시간대 `Asia/Seoul` |
+| Full/증분 | 증분 사용, 체인 길이 `8`; 최초 백업은 Full |
+| 기준 정책 실행 계획 | 해당 Host의 VM 스케줄과 허용 지연에 맞춰 결정; 5분 주기는 필수가 아님 |
+
+전체 구성 순서는 다음과 같다.
+
+```text
+서버·Client·GFS2 준비 → Mold 스테이징 활성화
+  → Host별 기준 정책 준비(자동 실행 보류) → 각 Host 사전구성 및 오퍼링 등록
+  → VM에 오퍼링·스케줄 연결 → 기준 정책의 실행 시간 설정·활성화
+  → 기준 Job 확인 → 볼륨·메타데이터 Job 확인 → Mold BackedUp 확인
+```
+
+**1. NetBackup 연결과 Mold 공통 스테이징을 준비한다.**
+
+NetBackup Primary Server와 저장소를 준비하고 네 Host 모두에 NetBackup Client를 설치한다.
+관리 서버와 Host에서 NetBackup API 주소에 연결할 수 있어야 하며,
+NetBackup에서 각 Host의 Client 이름을 확인하고 해당 Host와 통신할 수 있어야 한다.
+Mold 관리자 API key·secret key와 NetBackup API key를 준비한다.
+NetBackup API 계정에는 정책 조회·생성, 백업 실행, Job·카탈로그 조회 및 운영할 복원·삭제 작업의 권한이 필요하다.
+
+Mold 공통 준비 절차에 따라 다음 값을 설정한다. provider 목록에는 기존 값과 함께 `ablestack-netbackup`을 포함한다.
+아래 경로는 네 Host 모두에서 실제 GFS2 마운트여야 한다.
+
+| 설정 | 값 |
+| --- | --- |
+| Zone의 `backup.framework.enabled` | `true` |
+| Zone의 `backup.framework.provider.plugin` | 기존 목록에 `ablestack-netbackup` 포함 |
+| 글로벌 `backup.thirdparty.staging.storage.type` | `GFS2` |
+| 글로벌 `backup.thirdparty.staging.mount.path` | `/mnt/glue-gfs` |
+| 글로벌 `backup.thirdparty.staging.root.path` | `/mnt/glue-gfs` |
+| 글로벌 `backup.thirdparty.staging.enable` | 경로 입력 후 `true`로 활성화 |
+
+각 Host에서 마운트와 여유 공간을 확인하고 Mold의 활성화 검사를 통과한다.
+스테이징 공간 산정은 [공통 준비](#commvaultnetbackupveeam-공통-준비)의 기준을 따른다.
+
+```bash
+findmnt -rn --mountpoint /mnt/glue-gfs -o SOURCE,TARGET,FSTYPE
+df -h /mnt/glue-gfs
+```
+
+**2. NetBackup WebUI에서 Host별 기준 정책을 준비한다.**
+
+정책 관리 화면에서 다음 네 정책을 생성한다. 초기 구성 중에는 자동 실행을 보류한다.
+각 정책은 `Standard`, 실제 백업 저장소와 `Full Backup` 유형의 스케줄 하나를 사용한다.
+스케줄 이름은 예를 들어 `schedule`로 지정하며, 이름과 Backup type을 구분한다.
+
+| Policy name | Clients에 등록할 Host | Backup Selections에 입력할 경로 |
+| --- | --- | --- |
+| `ablecube1` | `ablecube1` | `/mnt/glue-gfs/ablestack-netbackup/bootstrap/ablecube1` |
+| `ablecube2` | `ablecube2` | `/mnt/glue-gfs/ablestack-netbackup/bootstrap/ablecube2` |
+| `ablecube3` | `ablecube3` | `/mnt/glue-gfs/ablestack-netbackup/bootstrap/ablecube3` |
+| `ablecube4` | `ablecube4` | `/mnt/glue-gfs/ablestack-netbackup/bootstrap/ablecube4` |
+
+Backup Selections는 해당 정책의 **Client Host에 있는 경로**를 가리킨다.
+GFS2 경로를 공유하더라도 각 정책에는 대응하는 Client와 bootstrap 디렉터리를 지정한다.
+Mold는 `/mnt/glue-gfs` 아래에 `ablestack-netbackup`을 붙이므로 root 설정에 이 하위 이름을 다시 붙이지 않는다.
+
+기준 정책은 작은 bootstrap 마커를 저장한다. 실제 이미지 파일은 이후 생성하는 별도 정책에서 백업한다.
+따라서 기준 정책의 Backup Selections에는 위 bootstrap 경로 하나를 입력한다.
+저장소·보관 설정은 별도 정책의 바탕이 되므로 실제 VM 백업에 필요한 값으로 준비한다.
+
+**3. 각 Host에서 VM별 스케줄 모드로 사전구성한다.**
+
+아래는 `ablecube1`에서 실행하는 예시다. 나머지 Host에서는 `--policy-name`을 각 Host의 정책명으로 바꿔 순서대로 실행한다.
+`--vm-schedule-backup true`일 때는 `--vm-include`·`--vm-exclude`를 지정하지 않는다.
+
+```bash
+python3 /usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/netbackup-host-config.py \
+  --policy-name 'ablecube1' \
+  --mold-url 'http://<Mold>:8080/client/api' \
+  --admin-apikey '<Mold 관리자 API key>' \
+  --admin-secretkey '<Mold 관리자 secret key>' \
+  --netbackup-url 'https://<NetBackup>:1556/netbackup' \
+  --netbackup-apikey '<NetBackup API key>' \
+  --vm-schedule-backup true \
+  --incremental-backup true \
+  --backup-chain-size 8
+```
+
+스크립트는 Mold 연결 설정과 증분 설정을 확인하고 해당 Zone의 NetBackup 오퍼링을 등록하거나 기존 오퍼링을 사용한다.
+체인 길이 `8`은 전역 설정이므로 기존 환경에서는 현재 운영 값을 확인하여 지정한다.
+비동적 설정 변경으로 중단되면 **Mold 관리 서버에서** 다음 명령으로 재시작하고,
+Host에서 같은 사전구성 명령을 다시 실행한다.
+
+```bash
+systemctl restart mold.service
+```
+
+최종적으로 `[ OK ] Completed NetBackup host configuration`과 출력된 `Parent policy Backup Selections`를 확인한다.
+스크립트가 해당 Host의 bootstrap 디렉터리를 생성하므로 이 단계까지 완료한 뒤 정책을 실행한다.
+예를 들어 `ablecube4`에서는 다음 항목을 확인한다.
+
+```bash
+ls -ld /mnt/glue-gfs/ablestack-netbackup/bootstrap/ablecube4
+test -x /usr/openv/netbackup/bin/bpstart_notify.ablecube4
+test -x /usr/openv/netbackup/bin/bpend_notify.ablecube4
+systemctl is-active netbackup-host-restore-watcher.timer
+```
+
+bootstrap 디렉터리에 JSON 파일이 없는 시점도 정상이다. 마커는 대상 VM의 백업 요청 때 생성되고 이후 정리된다.
+디렉터리 자체는 유지하며, 경로가 없다면 마운트와 사전구성 완료 여부를 확인한다.
+
+**4. Mold에서 각 VM에 오퍼링과 매시 50분 스케줄을 연결한다.**
+
+사전구성에서 등록한 NetBackup 오퍼링을 두 VM에 각각 할당한다.
+각 VM의 백업 스케줄 설정에서 다음 값을 저장한다.
+
+| 항목 | 입력 값 |
+| --- | --- |
+| 간격 유형 | `HOURLY` / 매시간 |
+| 시간(매시 몇 분) | `50` |
+| 시간대 | `Asia/Seoul` |
+| 보관 개수 | 운영 보관 정책에 맞는 값; 증분 의존성에 따라 추가 보존될 수 있음 |
+
+이 예시는 두 VM이 `ablecube4`에서 실행 중인 경우다. 예약 시각이 되면 `ablecube4`의 기준 정책이 대상 VM을 조회한다.
+VM이 이동할 수 있다면 이동 대상 Host도 사전구성하고 기준 정책을 운영한다.
+VM별 스케줄 모드의 자동 대상은 실행 중인 VM이므로 첫 검증 시 두 VM의 실행 상태도 확인한다.
+스케줄을 매시 50분이 지난 뒤 새로 등록했다면 최초 예약은 다음 시간의 50분이 될 수 있다.
+
+**5. VM 스케줄에 맞춰 기준 정책의 Start window와 실행 주기를 설정한다.**
+
+Mold VM 스케줄은 VM별 백업 대상 시각을 정하고, NetBackup Host 기준 정책은 그 대상을 조회·요청하는 실행 계기가 된다.
+**Host 정책을 반드시 5분마다 실행할 필요는 없다.** 해당 Host에 있는 VM들의 백업 시각과 허용 지연을 보고 결정한다.
+
+| 해당 Host의 VM 스케줄 | 기준 정책 실행 계획 |
+| --- | --- |
+| 모든 VM이 매시 50분 | 매시 50분 이후 한 번씩 실행되도록 계획한다. 예를 들어 매시 55분을 목표로 시간 창과 주기를 맞추고 실제 실행 시각을 확인한다. |
+| VM마다 매시 10분·30분·50분 등으로 다름 | 필요한 각 시각 이후 실행 기회를 두거나, 허용 지연에 맞춰 짧은 주기로 실행한다. |
+| VM별 시각이 다양하고 빠른 처리가 필요함 | 예를 들어 5분 주기로 대상을 확인한다. 대상이 없는 실행에서는 VM 백업을 요청하지 않는다. |
+
+NetBackup WebUI에서 기준 정책의 스케줄을 편집하고 다음 항목을 구분하여 저장한다.
+
+| 화면 / 항목 | 설정 기준 |
+| --- | --- |
+| Attributes / Backup type | `Full Backup` |
+| Attributes / Frequency | VM 스케줄과 허용 지연에 맞춰 선택한다. 모두 매시 50분인 경우에는 1시간 단위를 검토할 수 있고, 짧은 확인 주기가 필요하면 예를 들어 `5 minutes`로 지정한다. |
+| Start window | 정책의 자동 시작을 허용할 시간대다. VM 예약 시각 이후 실행 기회를 포함한다. 상시 확인 방식이라면 일~토 각 요일의 `00:00`~`24:00` 전체를 열 수 있다. |
+| Start window / Resolution | 시간 창을 편집하는 눈금 간격이다. `5 minutes`를 선택해도 정책 실행 주기가 5분이 되지는 않는다. |
+| Exclude dates | 실행해야 할 날짜가 제외되어 있지 않은지 확인한다. |
+
+`Frequency = 1 hour`는 매시 55분 같은 고정 분 실행을 보장하는 설정이 아니다.
+Start window도 그 안에서 시작할 수 있다는 뜻이므로, 목표 시각에 맞춘 창과 빈도를 구성한 뒤 여러 회차의 실제 시작 시각을 확인한다.
+예를 들어 기준 정책이 매시 45분에만 실행되면 50분에 도래한 VM 백업은 다음 시간 45분까지 기다릴 수 있다.
+자원 대기·작업 소요 시간도 영향을 주므로 VM 스케줄 이후 허용 지연 안에 기준 Hook이 실행되는지 검증한다.
+
+기준 정책을 저장하고 활성화한다. 네 Host의 정책 주기는 각 Host의 VM 스케줄에 맞춰 정한다.
+Start window와 Frequency의 의미는 공식 [Start Window 안내](https://www.veritas.com/content/support/en_US/doc/18716246-165970620-0/v42545421-165970620)와
+[Frequency 안내](https://www.veritas.com/content/support/en_US/doc/18716246-165970620-0/v41780165-165970620)를 참고한다.
+
+**6. 예약 시각 이후 기준 정책과 실제 VM 백업이 이어지는지 확인한다.**
+
+다음은 09:50 예약을 아직 접수하지 않았고 `ablecube4` 기준 정책의 Hook이 09:55에 실행되는 예시다.
+시간은 모두 `Asia/Seoul`이며, 09:55는 설명을 위한 실제 실행 시각이다.
+
+| 시점 | 동작 |
+| --- | --- |
+| 09:50 | 두 VM의 Mold 스케줄이 실행 대상 시각에 도달한다. |
+| 09:55 기준 정책 Hook 실행 | 예약 시각이 현재 이하인 두 VM을 조회하고 Mold에 백업을 요청한다. |
+| 요청 접수 | VM별 백업 작업과 bootstrap 마커를 준비한다. 접수 이후 다음 예약을 10:50으로 갱신한다. |
+| 기준 Job 종료 | bootstrap 파일 저장을 마친 뒤 실제 볼륨 파일 생성·전송 단계가 진행된다. |
+| 볼륨 파일 준비 완료 | Mold가 정확한 파일 경로를 Backup Selections로 지정한 `ABLESTACK-<백업 UUID>-...` 정책을 생성하고 실행한다. |
+| 각 볼륨 저장 후 | 다음 볼륨을 처리하고 마지막으로 `ABLESTACK-<백업 UUID>-metadata` 작업을 실행한다. |
+| 전체 완료 | Mold에서 `BackedUp`을 확인한다. |
+
+Mold는 NetBackup REST API의 정책 생성과 수동 백업 실행 요청을 사용하며, 파일 데이터는 해당 Host의 NetBackup Client가 전송한다.
+VM 하나에 여러 볼륨이 있으면 여러 볼륨 Job과 마지막 메타데이터 Job이 생기므로 VM 수와 Job 수가 같을 필요는 없다.
+09:50 요청이 이미 접수된 VM은 09:55 실행에서 같은 예약으로 다시 요청하지 않는다.
+접수 후 실제 백업이 실패한 경우에도 다음 예약이 갱신되어 있으므로, 짧은 정책 주기가 같은 예약의 자동 재시도를 보장하지는 않는다.
+
+**7. NetBackup과 Mold에서 결과를 함께 확인한다.**
+
+NetBackup WebUI의 `Activity monitor → Jobs`에서 전체 Job을 볼 수 있는 목록과 시간 범위를 선택한다.
+`ablecube4`로 기준 Job을 찾은 뒤 정책 이름 필터를 해제하고 `ABLESTACK-` 정책의 Job도 확인한다.
+두 VM이 Host 4에서 실행 중이라면 다른 Host의 기준 Job에서 VM 백업 요청이 없는 것은 정상이다.
+
+| 확인 대상 | 확인할 내용 |
+| --- | --- |
+| 기준 정책 `ablecube4` | Hook 실행과 Job 종료 상태·코드를 확인한다. 기준 Job 성공은 VM 백업 전체의 완료를 의미하지 않는다. |
+| `ABLESTACK-<백업 UUID>-...` | 실제 볼륨 파일 저장 Job이 생성되고 정상 완료되는지 확인한다. |
+| `ABLESTACK-<백업 UUID>-metadata` | 마지막 메타데이터 Job이 정상 완료되는지 확인한다. |
+| Mold VM 백업 | 최종 상태 `BackedUp`, 카탈로그 확인과 정리 결과를 확인한다. 정리 `COMPLETED`만으로 백업 성공을 판단하지 않는다. |
+
+Job 상세의 `Overview`에서 파일 목록·상태 코드를, `Details`에서 실행 로그를 확인한다.
+정상 성공 코드 `0`을 확인하고, `1` 등 비정상·부분 성공은 상세 사유를 확인한다.
+화면 확인 방법은 공식 [Job 조회 안내](https://www.veritas.com/support/en_US/doc/150157642-165935937-0/v152286338-165935937)를 참고한다.
+
+| 증상 | 먼저 확인할 항목 |
+| --- | --- |
+| Job이 `Queued`, storage unit의 최대 Job 수 메시지 | 저장소·Client·정책의 동시 실행 제한과 자원 할당 상태를 확인한다. |
+| 기준 Job만 있고 VM 백업 요청도 없음 | 해당 Host의 실행 중인 VM, 오퍼링 연결, `VM_SCHEDULE_BACKUP`, 예약 도래 여부와 Hook 로그를 확인한다. |
+| Mold는 `Failed`, `ABLESTACK-*` Job은 없음 | Mold 실패 상세와 관리 서버 로그를 확인한다. `thirdparty.volume.failure`에 실제 원인이 기록될 수 있다. |
+| `NetBackup artifact query failed with status 401` | API key·계정 권한과 관리 서버의 API 인증 코드 반영 여부를 확인한다. 기준 Job의 성공만으로 REST API 연결을 판단하지 않는다. |
+| bootstrap 경로 없음 | 해당 Host의 GFS2 마운트와 사전구성 완료 여부, 정책에 입력한 경로를 확인한다. |
+
+실제 백업을 실행한 Host에서 Hook 로그와 해당 백업 UUID의 작업 로그를 확인한다.
+GFS2를 공유해도 아래 로그는 Host 로컬 파일이다.
+
+```bash
+tail -n 100 /var/log/netbackup-mold-hook.log
+tail -n 100 '/var/lib/ablestack/backup/jobs/<백업 UUID>/job.log'
+```
+
+첫 Full과 후속 증분이 완료된 뒤 테스트 복원까지 확인한다.
+운영 중 수정본을 적용할 때는 [기존 NetBackup 구성 환경의 업데이트](#기존-netbackup-구성-환경의-업데이트)를 따른다.
+10.5와 11.1의 실서버 검증 범위는 [API 호환성 확인](#netbackup-105111-api-호환성-확인)을 참고한다.
+
+#### 기존 NetBackup 구성 환경의 업데이트
+
+이미 사전구성을 완료한 환경에서 관리 서버의 NetBackup 플러그인이나 Host 연동 스크립트를 수정한 버전을 적용할 때는
+아래 절차를 따른다. 관리 서버의 Java 코드는 서비스 재시작으로 반영하고,
+Host에 복사·생성된 실행 파일은 패키지 업데이트 후 사전구성을 다시 실행하여 반영한다.
+
+| 수정 대상 | 업데이트 후 필요한 작업 |
+| --- | --- |
+| 관리 서버의 NetBackup Java 플러그인 | 수정본이 포함된 관리 서버 패키지를 설치하고 Mold 관리 서비스를 재시작한다. 관리 서버가 여러 대이면 모두 반영한다. |
+| Host의 `netbackup-host-restore-watcher.py` 및 사전구성에서 설치하는 파일 | 수정본이 포함된 Host 패키지를 설치하고 각 Host에서 `netbackup-host-config.py`를 다시 실행한다. |
+
+패키지의 감시기 원본은 `/usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/netbackup-host-restore-watcher.py`이며,
+실제 service는 `/usr/local/sbin/netbackup-host-restore-watcher`를 실행한다.
+**RPM 업데이트나 Agent 재시작만으로는 이 복사본이 교체되지 않는다.**
+사전구성을 다시 실행하면 감시기 복사본과 Hook·구성·service·timer 파일을 갱신하고 timer를 활성화한다.
+
+**1. 새 작업 유입을 중단하고 기존 작업을 완료한다.**
+
+NetBackup 기준 정책(예: `ablecube1`~`ablecube4`)의 자동 실행을 일시 중지하고 수동 백업·복원 요청도 중단한다.
+기준 정책의 종료뿐 아니라 Mold의 VM 백업·복원과 외부 UI 복원 작업까지 완료됐는지 확인한다.
+사전구성은 `bp.conf` 갱신 시 NetBackup Client를 재시작할 수 있으므로 진행 중인 작업이 없는 시간에 수행한다.
+기존 정책명, 인증정보, VM 스케줄 모드, include/exclude, 증분 설정과 별도 조정한 감시 설정을 보관한다.
+
+**2. 관리 서버와 Host 패키지를 업데이트한다.**
+
+수정본이 포함된 관리 서버 패키지를 설치한 뒤 해당 서버에서 관리 서비스를 재시작한다.
+Mold 관리 서비스는 다음과 같이 재시작하고 상태를 확인한다.
+
+```bash
+systemctl restart mold.service
+systemctl is-active mold.service
+```
+
+각 대상 Host에도 수정본이 포함된 Host 패키지를 설치한다.
+GFS2 스테이징을 공유해도 실행 파일·설정은 Host 로컬에 있으므로 백업·복원을 수행할 모든 Host에 반영한다.
+
+**3. 각 Host에서 기존 설정으로 사전구성을 다시 실행한다.**
+
+아래는 기존에 VM별 스케줄과 증분 백업을 사용하던 `ablecube1`의 예시다.
+`ablecube2`~`ablecube4`에서는 각 Host의 기존 정책명으로 바꾸고, Host별로 순서대로 실행한다.
+
+```bash
+python3 /usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/netbackup-host-config.py \
+  --policy-name 'ablecube1' \
+  --mold-url 'http://<Mold>:8080/client/api' \
+  --admin-apikey '<기존 Mold 관리자 API key>' \
+  --admin-secretkey '<기존 Mold 관리자 secret key>' \
+  --netbackup-url 'https://<NetBackup>:1556/netbackup' \
+  --netbackup-apikey '<기존 NetBackup API key>' \
+  --vm-schedule-backup true \
+  --incremental-backup true
+```
+
+`--vm-schedule-backup`과 `--incremental-backup`은 기존 운영 값으로 명시한다.
+호스트 필터 방식이면 `--vm-schedule-backup false`와 기존 `--vm-include`·`--vm-exclude`도 지정한다.
+`--backup-chain-size`는 변경할 때만 지정하며, 위 예시처럼 생략하면 기존 체인 길이를 유지한다.
+관리 서버 재기동을 요구하며 중단되면 재기동 후 같은 명령을 다시 실행한다.
+감시 조회가 진행 중이라는 안내로 중단되면 조회 종료 후 다시 실행한다. 이때 timer는 중지된 상태일 수 있다.
+완료 메시지 `[ OK ] Completed NetBackup host configuration`까지 확인한다.
+
+기존 감시 옵션을 별도 조정했다면 생성된 `.bak`와 비교하여 필요한 값을 다시 반영한다.
+감시 상태·잠금 파일과 사용자 지정 경로 보존은
+[NetBackup 및 Veeam 서비스 운영](#netbackup-및-veeam-서비스-운영)의 기존 NetBackup 상시 서비스 전환 안내를 따른다.
+
+**4. 실행 파일과 감시 상태를 확인하고 스케줄을 재개한다.**
+
+각 Host에서 기본 설치 경로 기준으로 원본과 실행 파일이 같은지 확인한다.
+`cmp`가 출력 없이 종료 코드 `0`으로 끝나면 동일한 파일이다.
+
+```bash
+cmp /usr/share/cloudstack-common/scripts/vm/hypervisor/kvm/netbackup-host-restore-watcher.py \
+  /usr/local/sbin/netbackup-host-restore-watcher
+systemctl is-enabled netbackup-host-restore-watcher.timer
+systemctl is-active netbackup-host-restore-watcher.timer
+systemctl start netbackup-host-restore-watcher.service
+journalctl -u netbackup-host-restore-watcher.service -n 100 --no-pager
+```
+
+timer는 `enabled`·`active`인지 확인한다. service는 한 번 조회한 뒤 종료하므로 조회 사이에 `inactive`인 것은 정상이다.
+로그에서 조회 오류가 없는지 확인하고, NetBackup 기준 정책을 수동 실행하여 Mold의 VM 백업이 `BackedUp`으로 완료되는지 검증한다.
+VM별 스케줄 모드에서는 테스트 VM의 예약 시각이 지난 뒤 기준 정책을 실행한다.
+증분 사용 환경은 후속 증분과 복원을 확인하고, 외부 UI 복원을 운영한다면 감시기를 통한 Mold 복원 연결도 확인한다.
+검증 후 중지했던 기준 정책 스케줄을 재개한다.
 
 #### NetBackup 10.5·11.1 API 호환성 확인
 
@@ -1632,6 +1942,9 @@ RBD·QCOW2 모두 같은 서비스를 통해 메타데이터 복원 완료를 Mo
   기존 `bp.conf`를 갱신한 경우 Client 서비스를 재시작한다.
 
 **기존 NetBackup 상시 서비스에서 전환**
+
+일반적인 수정 버전 반영 순서는 [기존 NetBackup 구성 환경의 업데이트](#기존-netbackup-구성-환경의-업데이트)를 따른다.
+아래는 구형 상시 서비스 전환과 재구성 시 감시 설정을 보존하기 위한 추가 사항이다.
 
 RPM 업데이트만으로 `/usr/local/sbin`에 복사된 감시 프로그램과 호스트의 기존 unit 파일은 전환되지 않는다.
 실행 중인 백업·복원과 외부 UI 복원 요청을 먼저 완료하고, 각 Host에서
