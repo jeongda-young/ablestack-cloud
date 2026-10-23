@@ -301,7 +301,7 @@ public class ThirdPartyBackupStagingServiceImpl extends ManagerBase implements T
         Snapshot current = null;
         List<BackupVO> legacy = new ArrayList<>();
         for (BackupDetailVO detail : backupDetailsDao.findDetails(ThirdPartyBackupManifest.MODE_KEY,
-                ThirdPartyBackupManifest.VOLUME_MODE, false)) {
+                ThirdPartyBackupManifest.VOLUME_MODE, null)) {
             BackupVO backup = backupDao.findById(detail.getResourceId());
             if (backup == null) { continue; }
             backupDao.loadDetails(backup);

@@ -229,6 +229,15 @@ fi
         self.expected["matched"] = False
         self.assert_blocked()
 
+    def test_running_vm_is_skipped_without_retrying_the_same_restore_session(self):
+        self.expected["restoreallowed"] = False
+        self.expected["reason"] = "The original VM must be Stopped before restoring metadata in the external UI"
+        output = self.watch(result="Success", twice=True)
+        self.assertEqual(1, output.count("API resolveBackupArtifact"))
+        self.assertNotIn("API restoreBackupArtifact", output)
+        self.assertIn(self.expected["reason"], output)
+        self.assertTrue((self.base / "seen").exists())
+
     def test_direct_callback_requeries_result_instead_of_trusting_success_text(self):
         self.assert_blocked(result="Failed", direct=True)
         self.assertIn("API restoreBackupArtifact", self.watch(result="Success", direct=True))

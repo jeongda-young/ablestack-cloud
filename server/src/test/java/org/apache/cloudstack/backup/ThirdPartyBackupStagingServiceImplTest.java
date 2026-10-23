@@ -248,6 +248,20 @@ public class ThirdPartyBackupStagingServiceImplTest {
     }
 
     @Test
+    public void queuedBackupsBlockLocationChangesForEveryProviderRegardlessOfDetailVisibility() {
+        for (String provider : List.of("ablestack-commvault", "ablestack-netbackup", "ablestack-veeam")) {
+            for (boolean display : List.of(false, true)) {
+                Map<String, String> details = legacyBackup(provider, display);
+                details.put(ThirdPartyBackupAdmission.BACKUP_KEY, "{\"jobId\":\"queued\",\"state\":\"WAITING\"}");
+                assertThrows(provider + " display=" + display, CloudRuntimeException.class,
+                        () -> service.updateConfiguration(BackupManager.ThirdPartyStagingRootPath.key(),
+                                "/mnt/new/jobs", saveConfiguration));
+            }
+        }
+        verify(saveConfiguration, never()).get();
+    }
+
+    @Test
     public void recordedCleanupUsesOriginalMountAfterActiveRootMoves() throws Exception {
         ThirdPartyBackupStagingService.Snapshot original = service.captureConfiguration();
         settings.put(BackupManager.ThirdPartyStagingRootPath.key(), "/mnt/new/jobs");
@@ -272,21 +286,30 @@ public class ThirdPartyBackupStagingServiceImplTest {
     }
 
     private Map<String, String> legacyBackup() {
+        return legacyBackup("ablestack-veeam", true);
+    }
+
+    private Map<String, String> legacyBackup(String provider, boolean visible) {
         Map<String, String> details = new HashMap<>();
         details.put(ThirdPartyBackupManifest.MODE_KEY, ThirdPartyBackupManifest.VOLUME_MODE);
         details.put(ThirdPartyBackupManifest.CLEANUP_STATE_KEY, "COMPLETED");
-        details.put(ThirdPartyBackupManifest.DETAIL_KEY, "{\"provider\":\"ablestack-veeam\",\"backupUuid\":\"backup-old\","
+        details.put(ThirdPartyBackupManifest.DETAIL_KEY, "{\"provider\":\"" + provider + "\",\"backupUuid\":\"backup-old\","
                 + "\"vmName\":\"i-2-1-VM\",\"timestamp\":\"2026.10.20\",\"backupType\":\"FULL\",\"volumes\":[{"
                 + "\"uuid\":\"volume\",\"provisionedBytes\":100,\"engine\":\"QCOW2\",\"chain\":[{\"backupUuid\":\"backup-old\","
-                + "\"path\":\"/mnt/staging/jobs/ablestack-veeam/i-2-1-VM/2026.10.20/root.volume.qcow2\"}]}]}");
+                + "\"path\":\"/mnt/staging/jobs/" + provider + "/i-2-1-VM/2026.10.20/root.volume.qcow2\"}]}]}");
         BackupVO backup = mock(BackupVO.class);
         when(backup.getId()).thenReturn(7L);
         when(backup.getUuid()).thenReturn("backup-old");
         when(backup.getStatus()).thenReturn(Backup.Status.BackedUp);
         when(backup.getDetail(any(String.class))).thenAnswer(invocation -> details.get(invocation.getArgument(0)));
         when(backupDao.findById(7L)).thenReturn(backup);
-        when(backupDetailsDao.findDetails(ThirdPartyBackupManifest.MODE_KEY, ThirdPartyBackupManifest.VOLUME_MODE, false))
-                .thenReturn(List.of(new BackupDetailVO(7L, ThirdPartyBackupManifest.MODE_KEY, ThirdPartyBackupManifest.VOLUME_MODE, false)));
+        // BackupDaoImpl.saveDetails persists this mode with display=true.
+        BackupDetailVO mode = new BackupDetailVO(7L, ThirdPartyBackupManifest.MODE_KEY, ThirdPartyBackupManifest.VOLUME_MODE, visible);
+        when(backupDetailsDao.findDetails(eq(ThirdPartyBackupManifest.MODE_KEY), eq(ThirdPartyBackupManifest.VOLUME_MODE),
+                org.mockito.ArgumentMatchers.nullable(Boolean.class))).thenAnswer(invocation -> {
+                    Boolean display = invocation.getArgument(2);
+                    return display == null || mode.isDisplay() == display ? List.of(mode) : List.of();
+                });
         return details;
     }
 

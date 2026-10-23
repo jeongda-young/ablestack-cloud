@@ -358,6 +358,20 @@ class NetBackupRestoreWatcherTest(unittest.TestCase):
             self.assertEqual(0, self.watcher.main([]))
         notify.assert_called_once_with("host-test_1792458000", "200")
 
+    def test_running_vm_skip_is_recorded_without_retrying_the_same_restore_job(self):
+        reason = "The original VM must be Stopped before restoring metadata in the external UI"
+        result = MagicMock(returncode=0, stdout="SKIPPED restoreBackupArtifact reason=" + reason, stderr="")
+        state = {}
+        with patch.dict(self.watcher.CONFIG, RESTORE_NOTIFY_SCRIPT="synthetic-restore-notify"), \
+                patch.object(self.watcher, "fetch_restore_jobs", return_value=[self.job(0)]), \
+                patch.object(self.watcher, "candidate_restore_identifiers", return_value=["host-test_1792458000"]), \
+                patch.object(self.watcher.subprocess, "run", return_value=result) as notify:
+            self.watcher.poll_once(state)
+            self.watcher.poll_once(state)
+        notify.assert_called_once()
+        self.assertEqual("skipped", self.watcher.load_state()["processed"]["200"]["status"])
+        self.assertIn(reason, (self.base / "watcher.log").read_text())
+
     def test_baseline_failure_exits_with_error_without_polling_and_can_retry(self):
         with patch.object(self.watcher, "fetch_restore_jobs", side_effect=RuntimeError("API unavailable")), \
                 patch.object(self.watcher, "poll_once") as poll:

@@ -1906,6 +1906,15 @@ Commvault는 Mold UI에서 복원을 시작한다.
 외부 UI의 파일 복원 완료와 Mold의 VM 복원 완료는 별도 단계다.
 외부 복원 완료 알림이 반복되어도 같은 작업으로 새 VM 복원을 반복 요청하지 않는다.
 
+실행 중인 VM의 복원 차단을 테스트할 때는 외부 파일 복원 Job과 Mold VM 복원을 구분한다.
+NetBackup·Veeam의 메타데이터 파일 복원은 성공해도, Mold는 `resolveBackupArtifact`에서
+`matched=true`, `restoreallowed=false`와 VM 정지 필요 사유를 반환하여 실제 VM 복원을 시작하지 않는다.
+NetBackup 감시 로그의 `SKIPPED restoreBackupArtifact` 또는 Veeam 이벤트의
+`mold.restore.skipped.volume-pipeline`과 해당 Job·세션 ID를 확인한다.
+원본 백업은 `BackedUp`을 유지하며, VM 정지 후 정상 복원을 테스트하려면 새 외부 복원 Job을 실행한다.
+`matched=false`나 백업 ID 조회 오류는 VM 상태 차단이 아니므로 별도로 확인한다.
+Commvault의 Mold UI 전체 VM 복원도 실행 중인 VM은 공통 사전 검사에서 거부한다.
+
 Veeam 외부 UI의 `Warning` 결과는 정상 성공과 구분한다. 정확한 세션을 다시 조회하여 종료 시각과 상세 로그를 확인하고,
 권한·소유자·시간 속성 설정 경고만 남은 경우에 한해 메타데이터를 검증한다. 선택한 백업의 원래 경로 또는 현재 수신 경로에서
 `backup-manifest.json`, `domain-config.xml`, `.staging.complete`가 해당 복원 작업 이후 기록된 정상 파일인지 확인하고,

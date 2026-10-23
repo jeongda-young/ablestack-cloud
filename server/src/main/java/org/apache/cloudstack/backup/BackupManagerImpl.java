@@ -1978,7 +1978,8 @@ public class BackupManagerImpl extends ManagerBase implements BackupManager {
             catch (IllegalArgumentException e) { return new org.apache.cloudstack.api.response.BackupArtifactResolutionResponse(); }
         }
         org.apache.cloudstack.api.response.BackupArtifactResolutionResponse match = null;
-        for (BackupDetailVO detail : backupDetailsDao.findDetails(ThirdPartyBackupManifest.MODE_KEY, ThirdPartyBackupManifest.VOLUME_MODE, false)) {
+        // BackupDao saves plan details with display=true; visibility must not filter recovery points.
+        for (BackupDetailVO detail : backupDetailsDao.findDetails(ThirdPartyBackupManifest.MODE_KEY, ThirdPartyBackupManifest.VOLUME_MODE, null)) {
             BackupVO backup = backupDao.findById(detail.getResourceId());
             if (backup == null || (vmId != null && !vmId.equals(backup.getVmId()))) { continue; }
             backupDao.loadDetails(backup);

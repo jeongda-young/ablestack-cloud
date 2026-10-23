@@ -451,8 +451,13 @@ public class BackupManagerTest {
         when(backup.getStatus()).thenReturn(Backup.Status.BackedUp);
         when(backup.getDetail(anyString())).thenAnswer(invocation -> details.get(invocation.getArgument(0)));
         when(backupDao.findById(1L)).thenReturn(backup);
-        when(backupDetailsDao.findDetails(ThirdPartyBackupManifest.MODE_KEY, ThirdPartyBackupManifest.VOLUME_MODE, false))
-                .thenReturn(List.of(new BackupDetailVO(1L, ThirdPartyBackupManifest.MODE_KEY, ThirdPartyBackupManifest.VOLUME_MODE, false)));
+        List<BackupDetailVO> modes = new ArrayList<>();
+        when(backupDetailsDao.findDetails(eq(ThirdPartyBackupManifest.MODE_KEY), eq(ThirdPartyBackupManifest.VOLUME_MODE),
+                ArgumentMatchers.nullable(Boolean.class))).thenAnswer(invocation -> {
+                    Boolean display = invocation.getArgument(2);
+                    return modes.stream().filter(detail -> display == null || detail.isDisplay() == display)
+                            .collect(java.util.stream.Collectors.toList());
+                });
         when(backupDetailsDao.listDetails(1L)).thenReturn(Collections.emptyList());
         when(vmInstanceDao.findByIdIncludingRemoved(2L)).thenReturn(vm);
         when(vm.getUuid()).thenReturn("vm-2");
@@ -487,20 +492,29 @@ public class BackupManagerTest {
                     manifest.setComplete(true);
                     details.clear();
                     details.put(ThirdPartyBackupManifest.DETAIL_KEY, manifest.toJson());
-                    org.apache.cloudstack.api.response.BackupArtifactResolutionResponse resolved = backupManager.resolveBackupArtifact(
-                            provider, metadata.externalId, "ablestack-netbackup".equals(provider) ? "123"
-                                    : "b81acbeb-6cfa-424b-95b2-f4d26280a8c0", null);
-                    assertTrue(provider + " " + engine + " " + type, resolved.restoreallowed);
-                    assertEquals("METADATA", resolved.artifacttype);
-                    assertEquals("/new-staging/" + provider + "/i-2-25-VM/2026.10.12.15.00.00.000", resolved.metadatarestorepath);
-                    assertEquals(metadata.path, resolved.metadatapath);
-                    assertTrue(backupManager.resolveBackupArtifact(provider, resolved.metadatarestorepath, null, null).restoreallowed);
-                    assertFalse(backupManager.resolveBackupArtifact(provider, volume.externalId, null, null).restoreallowed);
-                    when(vm.getState()).thenReturn(VirtualMachine.State.Running);
-                    assertFalse(backupManager.resolveBackupArtifact(provider, metadata.externalId, null, null).restoreallowed);
-                    when(vm.getState()).thenReturn(VirtualMachine.State.Stopped);
-                    details.put(ThirdPartyBackupManifest.CATALOG_FAILURE_KEY, "Required Full artifact expired");
-                    assertFalse(backupManager.resolveBackupArtifact(provider, metadata.externalId, null, null).restoreallowed);
+                    for (boolean display : List.of(false, true)) {
+                        modes.clear();
+                        modes.add(new BackupDetailVO(1L, ThirdPartyBackupManifest.MODE_KEY, ThirdPartyBackupManifest.VOLUME_MODE, display));
+                        details.remove(ThirdPartyBackupManifest.CATALOG_FAILURE_KEY);
+                        org.apache.cloudstack.api.response.BackupArtifactResolutionResponse resolved = backupManager.resolveBackupArtifact(
+                                provider, metadata.externalId, "ablestack-netbackup".equals(provider) ? "123"
+                                        : "b81acbeb-6cfa-424b-95b2-f4d26280a8c0", null);
+                        assertTrue(provider + " " + engine + " " + type + " display=" + display, resolved.matched);
+                        assertTrue(resolved.restoreallowed);
+                        assertEquals("METADATA", resolved.artifacttype);
+                        assertEquals("/new-staging/" + provider + "/i-2-25-VM/2026.10.12.15.00.00.000", resolved.metadatarestorepath);
+                        assertEquals(metadata.path, resolved.metadatapath);
+                        assertTrue(backupManager.resolveBackupArtifact(provider, resolved.metadatarestorepath, null, null).restoreallowed);
+                        assertFalse(backupManager.resolveBackupArtifact(provider, volume.externalId, null, null).restoreallowed);
+                        when(vm.getState()).thenReturn(VirtualMachine.State.Running);
+                        resolved = backupManager.resolveBackupArtifact(provider, metadata.externalId, null, null);
+                        assertTrue(resolved.matched);
+                        assertFalse(resolved.restoreallowed);
+                        assertEquals("The original VM must be Stopped before restoring metadata in the external UI", resolved.reason);
+                        when(vm.getState()).thenReturn(VirtualMachine.State.Stopped);
+                        details.put(ThirdPartyBackupManifest.CATALOG_FAILURE_KEY, "Required Full artifact expired");
+                        assertFalse(backupManager.resolveBackupArtifact(provider, metadata.externalId, null, null).restoreallowed);
+                    }
                 }
             }
         }
