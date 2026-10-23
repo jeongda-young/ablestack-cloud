@@ -244,6 +244,36 @@ test('updates the backup wait reason from polling and removes it when source pre
   wrapper.unmount()
 })
 
+test.each(['poll', 'list refresh'])('finishes a backup without showing or tracking a restore after %s', async mode => {
+  const running = { status: 'BackingUp', state: 'RUNNING', step: 'FINALIZING', progress: 95 }
+  const completed = { status: 'BackedUp', state: 'COMPLETED', step: 'COMPLETED', progress: 100 }
+  getAPI.mockResolvedValue({ getbackupjobstatusresponse: running })
+  const wrapper = shallowMount(BackupProgress, {
+    props: { record: { id: 'backup-1', status: 'BackingUp', provider: 'ablestack-netbackup' } },
+    global: {
+      stubs: { Status: statusWithTooltip },
+      mocks: { $t: key => key, $store: { getters: { apis: { getBackupJobStatus: {}, getBackupRestoreJobStatus: {} } } } }
+    }
+  })
+
+  for (let i = 0; i < 5; i++) await Promise.resolve()
+  expect(wrapper.vm.displayStep).toBe('FINALIZING')
+  if (mode === 'poll') {
+    getAPI.mockResolvedValueOnce({ getbackupjobstatusresponse: completed })
+    wrapper.vm.fetchStatus()
+  } else {
+    await wrapper.setProps({ record: { id: 'backup-1', status: 'BackedUp', catalogstate: 'PENDING', cleanupstate: 'COMPLETED' } })
+  }
+  for (let i = 0; i < 5; i++) await Promise.resolve()
+
+  expect(wrapper.find('.status-text').text()).toBe('BackedUp')
+  expect(wrapper.vm.hasTrackedRestoreJob).toBe(false)
+  expect(wrapper.vm.shouldPoll()).toBe(false)
+  expect(wrapper.emitted('restore-finished')).toBeUndefined()
+  expect(getAPI.mock.calls.every(([api]) => api === 'getBackupJobStatus')).toBe(true)
+  wrapper.unmount()
+})
+
 test.each(['PREPARE_SOURCE', 'RESTORE_PREPARE_TARGET', 'RESTORE_CONVERT'])('shows the restore phase %s as an English code in the Korean UI', step => {
   const wrapper = shallowMount(BackupProgress, {
     props: { record: { id: 'backup-1', status: 'Restoring', restorejobstate: 'RUNNING', restorejobstep: step } },
@@ -415,6 +445,9 @@ test.each(['poll', 'reload'])('shows the completed restore result without stale 
   expect(wrapper.vm.volumeIndex).toBeNull()
   expect(wrapper.vm.volumeCount).toBeNull()
   expect(wrapper.vm.progress).toBeNull()
+  if (mode === 'poll') {
+    expect(wrapper.emitted('restore-finished')).toEqual([['COMPLETED']])
+  }
   wrapper.unmount()
 })
 

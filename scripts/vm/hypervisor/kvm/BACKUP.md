@@ -254,6 +254,9 @@ Veeam은 [veeam-host-config.py](veeam-host-config.py)를 기존 정책/Job과 �
   기존 백업 이미지나 복원 시점에 저장된 원본 파일 경로는 변경하지 않는다.
 
 구성 도구가 비동적 설정 변경으로 Mold 재기동을 요구하면 안내에 따라 재기동하고 같은 명령을 재실행한다.
+`backup.framework.enabled`와 `kvm.incremental.backup`의 대상 범위 값이 모두 요청값과 같으면
+업데이트를 건너뛰고 관리 서버 재기동 안내 없이 오퍼링·Host 구성을 계속한다.
+전역값이 같더라도 대상 Zone·Cluster 값이 달라 실제로 변경하면 재기동 안내가 나올 수 있다.
 NetBackup은 `bp.conf`를 갱신하면서 Client를 재시작할 수 있고,
 Veeam은 Agent 설정이 바뀌면 Agent 서비스를 재시작할 수 있다.
 두 도구 모두 복원 감시를 다시 활성화하므로 모든 Host 구성이 끝나기 전에는 외부 UI 복원을 새로 시작하지 않는다.
@@ -2473,7 +2476,8 @@ Watcher는 설치된 모든 Job `.conf`를 조회하므로 사용자 지정 Job 
 
 1. 입력값, Agent 설치, Host/Zone/Cluster, 공통 staging 마운트를 확인한다.
 2. Global/Zone의 백업 프레임워크와 공급자를 확인하고 선택한 증분 정책을 Global/Cluster에 반영한다.
-3. 비동적 설정이 변경되면 관리 서버 재기동을 안내하고 중단한다. 재기동 후 같은 명령을 다시 실행한다.
+3. `backup.framework.enabled` 또는 `kvm.incremental.backup`을 실제로 변경한 경우에만 관리 서버 재기동을 안내하고 중단한다.
+   재기동 후 같은 명령을 다시 실행한다. 대상 범위의 값이 모두 같아 변경을 건너뛰면 안내 없이 다음 단계로 진행한다.
 4. 같은 Zone·`ablestack-veeam`·`externalid=veeam` 오퍼링이 있으면 재사용한다. 없으면 생성하고 완료를 확인한다.
 5. 런타임, 암호화한 API secret, Job conf, Pre/Post Hook과 업로드용 래퍼를 기록한다.
 6. Agent의 `timeoutPrePost`를 설정하고 변경 시 Agent 서비스를 재시작한다.

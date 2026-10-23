@@ -426,19 +426,17 @@ export default {
       if (wasRestoring && response.state) {
         this.restoreJobState = response.state
       }
-      if (this.isTerminalJobState(response.state)) {
+      if (wasRestoring && this.isTerminalJobState(response.state)) {
         this.restoreFinished = true
         this.restorePending = false
-        if (wasRestoring) {
-          this.progress = null
-          this.volumeIndex = null
-          this.volumeCount = null
-          this.step = ''
-          this.jobDetails = ''
-          this.logPath = ''
-        }
+        this.progress = null
+        this.volumeIndex = null
+        this.volumeCount = null
+        this.step = ''
+        this.jobDetails = ''
+        this.logPath = ''
         this.$emit('restore-finished', response.state)
-      } else if (['starting', 'running'].includes(String(response.state || '').toLowerCase())) {
+      } else if (wasRestoring && ['starting', 'running'].includes(String(response.state || '').toLowerCase())) {
         this.restoreFinished = false
         this.restorePending = true
       }

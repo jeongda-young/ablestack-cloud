@@ -99,10 +99,12 @@ class VeeamHostConfigTest(unittest.TestCase):
     def test_second_run_reuses_remote_resources_and_identical_files(self):
         result, output = self.run_config()
         self.assertEqual(0, result, output)
+        self.assertNotIn("Restart the management server", output)
         before = {p: (p.read_bytes(), p.stat().st_mtime_ns) for p in self.root.rglob("*") if p.is_file()}
         self.api.calls.clear()
         result, output = self.run_config()
         self.assertEqual(0, result, output)
+        self.assertNotIn("Restart the management server", output)
         self.assertFalse(any(cmd in ("updateConfiguration", "importBackupOffering") for cmd, _ in self.api.calls))
         for path, expected in before.items():
             self.assertEqual(expected, (path.read_bytes(), path.stat().st_mtime_ns), str(path))
@@ -190,7 +192,11 @@ class VeeamHostConfigTest(unittest.TestCase):
         self.assertEqual([{"name": "kvm.incremental.backup", "value": "false"},
                           {"name": "kvm.incremental.backup", "value": "false", "clusterid": "cluster"}], updates)
         self.assertFalse(self.api.offers)
-        self.assertEqual(0, self.run_config(self.options + ["--incremental-backup", "false"])[0])
+        self.api.calls.clear()
+        result, output = self.run_config(self.options + ["--incremental-backup", "false"])
+        self.assertEqual(0, result, output)
+        self.assertNotIn("Restart the management server", output)
+        self.assertFalse(any(cmd == "updateConfiguration" for cmd, _ in self.api.calls))
 
     def test_provider_lists_preserve_others_in_both_scopes(self):
         self.api.settings[("backup.framework.provider.plugin", "")] = "ablestack-nas"
